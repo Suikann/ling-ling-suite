@@ -6,6 +6,7 @@
 """
 from typing import Callable, List, Optional
 import customtkinter as ctk
+from core.locale import t
 from core.models import FileInfo
 
 
@@ -55,7 +56,7 @@ class FileListWidget(ctk.CTkFrame):
             widget.destroy()
         if not self._files:
             ctk.CTkLabel(
-                self._scroll, text="尚無檔案", text_color="gray",
+                self._scroll, text=t("file_list.empty"), text_color="gray",
             ).pack(pady=8)
             return
         for i, file_info in enumerate(self._files):

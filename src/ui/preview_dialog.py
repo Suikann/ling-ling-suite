@@ -7,6 +7,7 @@
 import os
 from typing import Callable, Dict, List, Optional
 import customtkinter as ctk
+from core.locale import t
 from core.models import RenameEntry
 
 
@@ -22,7 +23,7 @@ class PreviewDialog(ctk.CTkToplevel):
         **kwargs,
     ):
         super().__init__(master, **kwargs)
-        self.title("預覽重新命名")
+        self.title(t("preview.title"))
         self.geometry("800x600")
         self.minsize(600, 400)
         self._plan = plan
@@ -40,7 +41,7 @@ class PreviewDialog(ctk.CTkToplevel):
             warn_frame.pack(fill="x", padx=8, pady=(8, 4))
             ctk.CTkLabel(
                 warn_frame,
-                text=f"偵測到 {conflict_count} 個檔名衝突！選擇「繼續」將自動加後綴區分。",
+                text=t("preview.conflict_warning", count=conflict_count),
                 text_color="white",
                 font=ctk.CTkFont(size=13, weight="bold"),
             ).pack(padx=12, pady=8)
@@ -48,7 +49,7 @@ class PreviewDialog(ctk.CTkToplevel):
         for originals in self._conflicts.values():
             conflict_paths.update(originals)
         ctk.CTkLabel(
-            self, text=f"共 {len(self._plan)} 個檔案",
+            self, text=t("preview.file_count", count=len(self._plan)),
             font=ctk.CTkFont(size=13),
         ).pack(padx=8, pady=(4, 2))
         scroll = ctk.CTkScrollableFrame(self)
@@ -74,20 +75,20 @@ class PreviewDialog(ctk.CTkToplevel):
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=8, pady=8)
         cancel_btn = ctk.CTkButton(
-            btn_frame, text="取消", width=100,
+            btn_frame, text=t("preview.cancel"), width=100,
             fg_color="gray", hover_color="gray30",
             command=self.destroy,
         )
         cancel_btn.pack(side="right", padx=4)
         if has_conflicts:
             exec_btn = ctk.CTkButton(
-                btn_frame, text="繼續（自動加後綴）", width=160,
+                btn_frame, text=t("preview.execute_with_suffix"), width=160,
                 fg_color="#e67e22", hover_color="#d35400",
                 command=self._execute_with_suffix,
             )
         else:
             exec_btn = ctk.CTkButton(
-                btn_frame, text="執行重新命名", width=140,
+                btn_frame, text=t("preview.execute"), width=140,
                 command=self._execute,
             )
         exec_btn.pack(side="right", padx=4)

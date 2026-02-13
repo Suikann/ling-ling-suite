@@ -8,6 +8,7 @@ import os
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List
+from core.locale import t
 from core.models import Project, RenameEntry, UndoMapping, UndoRecord
 from core.template_engine import build_variables_for_file, substitute_template
 from services.file_service import FileService
@@ -118,7 +119,7 @@ class RenameService:
         """
         record = UndoRecord(
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-            description=f"重新命名 {len(plan)} 個檔案",
+            description=t("rename.undo_description", count=len(plan)),
         )
         created_dirs = set()
         for entry in plan:

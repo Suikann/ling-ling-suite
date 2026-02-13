@@ -7,7 +7,7 @@
 import os
 import re
 from typing import Dict, List
-from core.constants import VARIABLE_NAMES
+from core.constants import ALL_VARIABLE_NAMES, TEMPLATE_VARIABLES
 from core.models import Group
 
 
@@ -32,7 +32,7 @@ def build_variables_for_file(
     group: Group,
     instruments: List[str],
 ) -> Dict[str, str]:
-    """為單一檔案組合所有模板變數
+    """為單一檔案組合所有模板變數（同時產生中英文鍵名）
 
     Args:
         file_index: 檔案在群組中的索引（從 0 開始）
@@ -40,7 +40,7 @@ def build_variables_for_file(
         instruments: 完整樂器表
 
     Returns:
-        變數名稱到值的對應字典
+        變數名稱到值的對應字典（包含中英文鍵名）
     """
     selected = group.selected_instruments
     total = len(selected)
@@ -52,13 +52,19 @@ def build_variables_for_file(
         if instrument_index < len(instruments)
         else ""
     )
-    return {
+    values = {
         "序號": sequence_number,
         "樂器": instrument_name,
         "曲名": group.piece_name,
         "樂章編號": group.movement_number,
         "樂章名稱": group.movement_name,
     }
+    en_mapping = {tv.name: tv.name_en for tv in TEMPLATE_VARIABLES}
+    for zh_name, val in list(values.items()):
+        en_name = en_mapping.get(zh_name)
+        if en_name:
+            values[en_name] = val
+    return values
 
 
 def detect_piece_name(filenames: List[str]) -> str:
@@ -130,7 +136,7 @@ def _detect_by_common_tokens(basenames: List[str]) -> str:
 
 
 def validate_template(template: str) -> List[str]:
-    """驗證模板中的變數是否合法
+    """驗證模板中的變數是否合法（中英文變數名皆可辨識）
 
     Args:
         template: 模板字串
@@ -139,5 +145,5 @@ def validate_template(template: str) -> List[str]:
         未知變數名稱清單，空清單表示所有變數皆合法
     """
     found = re.findall(r'\{([^}]+)\}', template)
-    unknown = [name for name in found if name not in VARIABLE_NAMES]
+    unknown = [name for name in found if name not in ALL_VARIABLE_NAMES]
     return unknown

@@ -6,6 +6,7 @@
 """
 from typing import Callable, List, Optional
 import customtkinter as ctk
+from core.locale import t
 
 
 class InstrumentListEditor(ctk.CTkFrame):
@@ -23,17 +24,17 @@ class InstrumentListEditor(ctk.CTkFrame):
         self._build_ui()
 
     def _build_ui(self):
-        title = ctk.CTkLabel(self, text="樂器表", font=ctk.CTkFont(size=14, weight="bold"))
+        title = ctk.CTkLabel(self, text=t("instrument.title"), font=ctk.CTkFont(size=14, weight="bold"))
         title.pack(padx=8, pady=(8, 4))
         self._scroll_frame = ctk.CTkScrollableFrame(self, width=210)
         self._scroll_frame.pack(fill="both", expand=True, padx=4, pady=4)
         input_frame = ctk.CTkFrame(self, fg_color="transparent")
         input_frame.pack(fill="x", padx=4, pady=(0, 8))
-        self._entry = ctk.CTkEntry(input_frame, placeholder_text="輸入樂器名稱...")
+        self._entry = ctk.CTkEntry(input_frame, placeholder_text=t("instrument.placeholder"))
         self._entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
         self._entry.bind("<Return>", lambda e: self._add_instrument())
         add_btn = ctk.CTkButton(
-            input_frame, text="新增", width=50, command=self._add_instrument,
+            input_frame, text=t("instrument.add"), width=50, command=self._add_instrument,
         )
         add_btn.pack(side="right", padx=(0, 4))
 
