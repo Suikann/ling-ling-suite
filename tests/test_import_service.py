@@ -89,6 +89,14 @@ class TestImportService(unittest.TestCase):
         self.assertEqual(len(ungrouped), 0)
         self.assertEqual(len(groups[0].files), 2)
 
+    def test_import_folder_no_fallback_to_dirname(self):
+        """偵測失敗時 piece_name 應為空，不回退到資料夾名稱"""
+        self._create_file("Flute.pdf")
+        self._create_file("Oboe.pdf")
+        groups, ungrouped = self.import_service.import_folder(self.temp_dir)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].piece_name, "")
+
     def test_import_folder_only_pdf_files(self):
         self._create_file("a.pdf")
         self._create_file("b.txt")

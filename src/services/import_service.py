@@ -60,7 +60,7 @@ class ImportService:
             files = self.import_files(pdfs)
             dir_name = os.path.basename(subdir)
             filenames = [f.display_name for f in files]
-            detected_name = detect_piece_name(filenames) or dir_name
+            detected_name = detect_piece_name(filenames)
             sub_groups.append(Group(
                 name=dir_name,
                 files=files,
@@ -75,7 +75,7 @@ class ImportService:
             files = self.import_files(root_pdfs)
             dir_name = os.path.basename(folder)
             filenames = [f.display_name for f in files]
-            detected_name = detect_piece_name(filenames) or dir_name
+            detected_name = detect_piece_name(filenames)
             groups.append(Group(
                 name=dir_name,
                 files=files,

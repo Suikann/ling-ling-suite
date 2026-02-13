@@ -300,6 +300,20 @@ class GroupTabContent(ctk.CTkFrame):
         )
         self._refresh_instruments()
         self._refresh_file_list()
+        self._auto_detect_if_empty()
+
+    def _auto_detect_if_empty(self):
+        """曲名欄位為空時自動偵測一次"""
+        if self._piece_name_entry.get().strip():
+            return
+        if not self._group.files:
+            return
+        filenames = [f.display_name for f in self._group.files]
+        detected = detect_piece_name(filenames)
+        if detected:
+            self._piece_name_entry.delete(0, "end")
+            self._piece_name_entry.insert(0, detected)
+            self._group.piece_name = detected
 
     def _refresh_instruments(self):
         for widget in self._instrument_scroll.winfo_children():
@@ -424,6 +438,7 @@ class GroupTabContent(ctk.CTkFrame):
         self._group.files.extend(files)
         self._refresh_file_list()
         self._check_mismatch()
+        self._auto_detect_if_empty()
         self.main_window._mark_modified()
 
     def _auto_detect_piece_name(self):

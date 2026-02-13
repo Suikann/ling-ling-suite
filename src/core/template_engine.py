@@ -64,7 +64,9 @@ def build_variables_for_file(
 def detect_piece_name(filenames: List[str]) -> str:
     """從檔名清單偵測共同的曲名
 
-    使用共同前綴法，去除副檔名後取共同前綴，再移除尾端的分隔符號。
+    依序嘗試兩種策略：
+    1. 共同前綴法：取所有檔名的 commonprefix，清除尾端分隔符號
+    2. 共同詞彙法：將檔名拆為詞彙，取所有檔案共有的詞彙，按原始順序組合
 
     Args:
         filenames: 檔案名稱清單（不含路徑）
@@ -77,10 +79,54 @@ def detect_piece_name(filenames: List[str]) -> str:
     basenames = [os.path.splitext(f)[0] for f in filenames]
     if len(basenames) == 1:
         return basenames[0].strip()
+    result = _detect_by_common_prefix(basenames)
+    if result:
+        return result
+    return _detect_by_common_tokens(basenames)
+
+
+def _detect_by_common_prefix(basenames: List[str]) -> str:
+    """使用共同前綴法偵測曲名
+
+    Args:
+        basenames: 去除副檔名後的檔名清單
+
+    Returns:
+        偵測到的曲名
+    """
     prefix = os.path.commonprefix(basenames)
     prefix = re.sub(r'[\s\-_.,;:]+$', '', prefix)
     prefix = re.sub(r'[\s\-_.,;:]\d+$', '', prefix)
-    return prefix.strip()
+    result = prefix.strip()
+    if result.isdigit():
+        return ""
+    return result
+
+
+def _detect_by_common_tokens(basenames: List[str]) -> str:
+    """使用共同詞彙法偵測曲名
+
+    將每個檔名拆為詞彙，找出所有檔案共有的非數字詞彙，
+    按照第一個檔名中的出現順序組合。
+
+    Args:
+        basenames: 去除副檔名後的檔名清單
+
+    Returns:
+        偵測到的曲名
+    """
+    tokenized = [re.split(r'[\s\-_.,;:]+', name) for name in basenames]
+    if not tokenized:
+        return ""
+    token_sets = [set(tokens) for tokens in tokenized]
+    common = token_sets[0]
+    for s in token_sets[1:]:
+        common = common & s
+    common = {t for t in common if t and not t.isdigit()}
+    if not common:
+        return ""
+    ordered = [t for t in tokenized[0] if t in common]
+    return " ".join(ordered).strip()
 
 
 def validate_template(template: str) -> List[str]:
