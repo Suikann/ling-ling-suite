@@ -38,8 +38,11 @@ class ImportService:
     def import_folder(self, folder: str) -> Tuple[List[Group], List[FileInfo]]:
         """匯入資料夾
 
-        無子資料夾：所有 PDF 歸為一個群組。
-        有子資料夾：每個含 PDF 的子資料夾各建立一個群組。
+        以「是否有含 PDF 的子資料夾」決定模式：
+        - 有：每個含 PDF 的子資料夾各建立一個群組，根目錄 PDF 歸入未分組
+        - 無：根目錄所有 PDF 歸為一個群組
+
+        僅掃描一層子資料夾，不遞迴深入。僅處理 .pdf 檔案。
 
         Args:
             folder: 資料夾路徑
@@ -49,35 +52,33 @@ class ImportService:
         """
         groups = []
         ungrouped = []
-        if self.file_service.has_subdirectories(folder):
-            root_pdfs = self.file_service.list_pdf_files(folder)
+        sub_groups = []
+        for subdir in self.file_service.list_subdirectories(folder):
+            pdfs = self.file_service.list_pdf_files(subdir)
+            if not pdfs:
+                continue
+            files = self.import_files(pdfs)
+            dir_name = os.path.basename(subdir)
+            filenames = [f.display_name for f in files]
+            detected_name = detect_piece_name(filenames) or dir_name
+            sub_groups.append(Group(
+                name=dir_name,
+                files=files,
+                piece_name=detected_name,
+            ))
+        root_pdfs = self.file_service.list_pdf_files(folder)
+        if sub_groups:
+            groups.extend(sub_groups)
             if root_pdfs:
                 ungrouped.extend(self.import_files(root_pdfs))
-            for subdir in self.file_service.list_subdirectories(folder):
-                pdfs = self.file_service.list_pdf_files(subdir)
-                if not pdfs:
-                    continue
-                files = self.import_files(pdfs)
-                dir_name = os.path.basename(subdir)
-                filenames = [f.display_name for f in files]
-                detected_name = detect_piece_name(filenames) or dir_name
-                group = Group(
-                    name=dir_name,
-                    files=files,
-                    piece_name=detected_name,
-                )
-                groups.append(group)
-        else:
-            pdfs = self.file_service.list_pdf_files(folder)
-            if pdfs:
-                files = self.import_files(pdfs)
-                dir_name = os.path.basename(folder)
-                filenames = [f.display_name for f in files]
-                detected_name = detect_piece_name(filenames) or dir_name
-                group = Group(
-                    name=dir_name,
-                    files=files,
-                    piece_name=detected_name,
-                )
-                groups.append(group)
+        elif root_pdfs:
+            files = self.import_files(root_pdfs)
+            dir_name = os.path.basename(folder)
+            filenames = [f.display_name for f in files]
+            detected_name = detect_piece_name(filenames) or dir_name
+            groups.append(Group(
+                name=dir_name,
+                files=files,
+                piece_name=detected_name,
+            ))
         return groups, ungrouped

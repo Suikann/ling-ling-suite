@@ -78,6 +78,17 @@ class TestImportService(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0].name, "has_pdf")
 
+    def test_import_folder_hidden_subdirs_ignored(self):
+        """含隱藏子資料夾（無 PDF）時，根目錄 PDF 應歸為一個群組"""
+        os.makedirs(os.path.join(self.temp_dir, ".hidden"))
+        os.makedirs(os.path.join(self.temp_dir, "$RECYCLE.BIN"))
+        self._create_file("Song - Flute.pdf")
+        self._create_file("Song - Oboe.pdf")
+        groups, ungrouped = self.import_service.import_folder(self.temp_dir)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(ungrouped), 0)
+        self.assertEqual(len(groups[0].files), 2)
+
     def test_import_folder_only_pdf_files(self):
         self._create_file("a.pdf")
         self._create_file("b.txt")
