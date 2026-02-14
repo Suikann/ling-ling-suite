@@ -42,6 +42,6 @@
 
 **執行方式:**
 ```bash
-git clone [https://github.com/Suikann/ling-ling-suite.git](https://github.com/Suikann/ling-ling-suite.git)
+git clone https://github.com/Suikann/ling-ling-suite.git
 cd ling-ling-suite
 python src/main.py
