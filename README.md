@@ -16,8 +16,8 @@ This tool moves beyond simple batch renaming by introducing a **Logic-Based Temp
 
 ### 1. Template-Driven Renaming
 Define your own filename structures using dynamic variables.
-* **Example Template:** `{Number}. {Instrument} ({Title}).pdf`
-* **Result:** `01. Flute (Beethoven Sym.5).pdf`
+* **Example Template:** `{Number}. {Instrument} - {PieceName}.pdf`
+* **Result:** `01. Flute - Beethoven Sym.5.pdf`
 
 ### 2. Dual-Layer Logic (Master vs. Specific)
 The application handles complex concert programs where different pieces require different naming conventions.
@@ -25,29 +25,37 @@ The application handles complex concert programs where different pieces require 
 * **Master Template (Global):**
     Sets a default rule for all files in the working directory.
     * *Use case:* General rehearsal parts.
-    
+
 * **Track-Specific Templates (Override):**
     You can select specific groups of files and apply a unique "Small Template" to them.
     * **Independent Override:** When a track-specific template is applied, it completely ignores the Master Template for those files.
     * *Use case:* A concert program containing a Symphony (Template A) and a Concerto (Template B).
+
+### 3. Project Save & Load
+Save your template settings, group configurations, and file mappings as a project file (`.llproj`) for later use.
+
+### 4. Undo
+Every rename operation is automatically recorded. You can revert the last operation at any time.
 
 ## Download & Usage
 
 1.  Download the latest `LingLingSuite.exe` from the **[Releases](../../releases)** page.
 2.  Launch the application.
 3.  **Import:** Select the folder containing your raw split parts.
-4.  **Configure Master Template:** Set the default naming rule (e.g., `[Orch] {Instrument}`).
-5.  **Apply Specific Templates:** (Optional) Select a subset of files (e.g., for a specific piece) and apply a different template.
-6.  **Run:** Click "Process Files" to rename everything in one go.
+4.  **Configure Master Template:** Set the default naming rule (e.g., `{Number}. {Instrument}`).
+5.  **Apply Specific Templates:** (Optional) Create groups for different pieces and assign a unique template to each.
+6.  **Run:** Preview the results, then execute the rename.
 
 ## Development
 
 **Requirements:**
 * Python 3.8+
-* tkinter
+* customtkinter
 
 **Build from Source:**
 ```bash
 git clone https://github.com/Suikann/ling-ling-suite.git
 cd ling-ling-suite
+pip install -r requirements.txt
 python src/main.py
+```
