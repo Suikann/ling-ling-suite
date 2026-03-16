@@ -40,3 +40,69 @@ TEMPLATE_VARIABLES: List[TemplateVariable] = [
 VARIABLE_NAMES: List[str] = [v.name for v in TEMPLATE_VARIABLES]
 VARIABLE_NAMES_EN: List[str] = [v.name_en for v in TEMPLATE_VARIABLES]
 ALL_VARIABLE_NAMES: List[str] = VARIABLE_NAMES + VARIABLE_NAMES_EN
+
+
+@dataclass(frozen=True)
+class InstrumentPreset:
+    """預設編制表"""
+    name: str
+    name_en: str
+    instruments: tuple
+
+
+INSTRUMENT_PRESETS: List[InstrumentPreset] = [
+    InstrumentPreset(
+        name="管弦樂團",
+        name_en="Orchestra",
+        instruments=(
+            "Flute 1", "Flute 2",
+            "Oboe 1", "Oboe 2",
+            "Clarinet in Bb 1", "Clarinet in Bb 2",
+            "Bassoon 1", "Bassoon 2",
+            "Horn in F 1", "Horn in F 2", "Horn in F 3", "Horn in F 4",
+            "Trumpet in Bb 1", "Trumpet in Bb 2",
+            "Trombone 1", "Trombone 2", "Bass Trombone",
+            "Tuba",
+            "Timpani",
+            "Percussion",
+            "Violin I", "Violin II",
+            "Viola",
+            "Violoncello",
+            "Contrabass",
+        ),
+    ),
+    InstrumentPreset(
+        name="管樂團",
+        name_en="Concert Band",
+        instruments=(
+            "Piccolo",
+            "Flute 1", "Flute 2",
+            "Oboe",
+            "English Horn",
+            "Clarinet in Bb 1", "Clarinet in Bb 2", "Clarinet in Bb 3",
+            "Bass Clarinet",
+            "Bassoon",
+            "Alto Saxophone 1", "Alto Saxophone 2",
+            "Tenor Saxophone",
+            "Baritone Saxophone",
+            "Trumpet in Bb 1", "Trumpet in Bb 2", "Trumpet in Bb 3",
+            "Horn in F 1", "Horn in F 2", "Horn in F 3", "Horn in F 4",
+            "Trombone 1", "Trombone 2", "Bass Trombone",
+            "Euphonium",
+            "Tuba",
+            "String Bass",
+            "Timpani",
+            "Percussion 1", "Percussion 2",
+        ),
+    ),
+    InstrumentPreset(
+        name="弦樂團",
+        name_en="String Orchestra",
+        instruments=(
+            "Violin I", "Violin II",
+            "Viola",
+            "Violoncello",
+            "Contrabass",
+        ),
+    ),
+]

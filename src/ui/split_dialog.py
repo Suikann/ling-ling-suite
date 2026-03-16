@@ -8,7 +8,8 @@ PDF 分割對話框
 import os
 from typing import Callable, Dict, List, Optional, Set, Tuple
 import customtkinter as ctk
-from core.locale import t
+from core.constants import INSTRUMENT_PRESETS
+from core.locale import t, get_locale
 from core.models import FileInfo
 
 SECTION_COLORS = [
@@ -48,6 +49,11 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._section_name_vars: Dict[int, ctk.StringVar] = {}
         self._output_dir: Optional[str] = None
         self._file_map: Dict[str, str] = {}
+        self._active_instruments: List[str] = (
+            list(project.instruments) if project and project.instruments else []
+        )
+        self._preview_win: Optional[ctk.CTkToplevel] = None
+        self._preview_page_idx = 0
         self._build_ui()
         self.grab_set()
 
@@ -124,17 +130,25 @@ class SplitPdfDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11), text_color="gray",
             wraplength=260, justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 4))
+        preset_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        preset_frame.pack(fill="x", padx=8, pady=(4, 4))
+        ctk.CTkLabel(
+            preset_frame, text=t("split.load_names"),
+            font=ctk.CTkFont(size=11),
+        ).pack(anchor="w")
+        preset_options = self._build_preset_options()
+        self._preset_menu = ctk.CTkOptionMenu(
+            preset_frame, values=preset_options,
+            command=self._on_preset_selected,
+            dynamic_resizing=False,
+        )
+        if self._project and self._project.instruments:
+            self._preset_menu.set(t("split.preset_project"))
+        else:
+            self._preset_menu.set(t("split.preset_manual"))
+        self._preset_menu.pack(fill="x", pady=(2, 0))
         self._assign_scroll = ctk.CTkScrollableFrame(parent)
         self._assign_scroll.pack(fill="both", expand=True, padx=4, pady=4)
-        if self._project and self._project.instruments:
-            self._use_project_var = ctk.BooleanVar(value=True)
-            ctk.CTkCheckBox(
-                parent, text=t("split.use_project_instruments"),
-                variable=self._use_project_var,
-                command=self._refresh_assignment_names,
-            ).pack(anchor="w", padx=8, pady=4)
-        else:
-            self._use_project_var = None
         out_frame = ctk.CTkFrame(parent, fg_color="transparent")
         out_frame.pack(fill="x", padx=8, pady=(4, 8))
         ctk.CTkLabel(
@@ -151,6 +165,17 @@ class SplitPdfDialog(ctk.CTkToplevel):
         ctk.CTkButton(
             dir_row, text="...", width=32, command=self._browse_dir,
         ).pack(side="right")
+
+    def _build_preset_options(self) -> List[str]:
+        """建構預設編制表選項清單"""
+        options = [t("split.preset_manual")]
+        if self._project and self._project.instruments:
+            options.append(t("split.preset_project"))
+        locale = get_locale()
+        for preset in INSTRUMENT_PRESETS:
+            name = preset.name_en if locale == "en" else preset.name
+            options.append(name)
+        return options
 
     def _build_bottom_bar(self):
         bottom = ctk.CTkFrame(self, fg_color="transparent")
@@ -264,7 +289,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
             )
             lbl.bind(
                 "<Button-3>",
-                lambda e, idx=page_idx: self._on_page_right_click(idx),
+                lambda e, idx=page_idx: self._open_preview(idx),
             )
             num_lbl = ctk.CTkLabel(
                 inner, text=str(page_idx + 1),
@@ -301,26 +326,83 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._render_page_grid()
         self._update_assignment_panel()
 
-    def _on_page_right_click(self, page_idx: int):
-        """右鍵顯示頁面放大預覽"""
+    # --- 頁面放大預覽 ---
+
+    def _open_preview(self, page_idx: int, _event=None):
+        """開啟頁面放大預覽視窗（含翻頁）"""
+        if self._preview_win and self._preview_win.winfo_exists():
+            self._preview_win.destroy()
+        self.grab_release()
+        preview = ctk.CTkToplevel(self)
+        preview.transient(self)
+        self._preview_win = preview
+        self._preview_page_idx = page_idx
+        nav = ctk.CTkFrame(preview, fg_color="transparent")
+        nav.pack(fill="x", padx=8, pady=(8, 4))
+        self._prev_btn = ctk.CTkButton(
+            nav, text="\u25C0", width=40,
+            command=self._preview_prev,
+        )
+        self._prev_btn.pack(side="left")
+        self._preview_page_label = ctk.CTkLabel(
+            nav, text="", font=ctk.CTkFont(size=13),
+        )
+        self._preview_page_label.pack(side="left", fill="x", expand=True)
+        self._next_btn = ctk.CTkButton(
+            nav, text="\u25B6", width=40,
+            command=self._preview_next,
+        )
+        self._next_btn.pack(side="right")
+        self._preview_scroll = ctk.CTkScrollableFrame(preview)
+        self._preview_scroll.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+        self._preview_img_label = ctk.CTkLabel(self._preview_scroll, text="")
+        self._preview_img_label.pack(padx=4, pady=4)
+        preview.geometry("660x900")
+        self._render_preview_page(page_idx)
+        preview.grab_set()
+        preview.protocol("WM_DELETE_WINDOW", self._close_preview)
+        preview.bind("<Left>", lambda e: self._preview_prev())
+        preview.bind("<Right>", lambda e: self._preview_next())
+        preview.bind("<Escape>", lambda e: self._close_preview())
+
+    def _render_preview_page(self, page_idx: int):
+        """算繪並顯示指定頁面"""
         try:
             from services.pdf_service import render_single_page
             pil_img = render_single_page(self._pdf_path, page_idx, max_width=600)
         except Exception:
             return
-        preview = ctk.CTkToplevel(self)
-        preview.title(t("split.page_label", num=page_idx + 1))
         ctk_img = ctk.CTkImage(
             light_image=pil_img, dark_image=pil_img,
             size=(pil_img.width, pil_img.height),
         )
-        preview._img_ref = ctk_img
-        scroll = ctk.CTkScrollableFrame(preview)
-        scroll.pack(fill="both", expand=True)
-        ctk.CTkLabel(scroll, image=ctk_img, text="").pack(padx=4, pady=4)
-        w = min(pil_img.width + 40, 800)
-        h = min(pil_img.height + 60, 900)
-        preview.geometry(f"{w}x{h}")
+        self._preview_win._img_ref = ctk_img
+        self._preview_img_label.configure(image=ctk_img)
+        self._preview_page_idx = page_idx
+        self._preview_win.title(t("split.page_label", num=page_idx + 1))
+        self._preview_page_label.configure(
+            text=f"{page_idx + 1} / {self._page_count}",
+        )
+        self._prev_btn.configure(
+            state="normal" if page_idx > 0 else "disabled",
+        )
+        self._next_btn.configure(
+            state="normal" if page_idx < self._page_count - 1 else "disabled",
+        )
+
+    def _preview_prev(self):
+        if self._preview_page_idx > 0:
+            self._render_preview_page(self._preview_page_idx - 1)
+
+    def _preview_next(self):
+        if self._preview_page_idx < self._page_count - 1:
+            self._render_preview_page(self._preview_page_idx + 1)
+
+    def _close_preview(self):
+        if self._preview_win and self._preview_win.winfo_exists():
+            self._preview_win.destroy()
+        self._preview_win = None
+        self.grab_set()
 
     # --- 分譜指派面板 ---
 
@@ -332,7 +414,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
             child.destroy()
         sections = self._get_sections()
         self._section_name_vars = {}
-        instruments = self._get_instrument_suggestions()
+        instruments = self._active_instruments
         for sec_idx, (start, end) in enumerate(sections):
             color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
             row = ctk.CTkFrame(self._assign_scroll, fg_color="transparent")
@@ -364,22 +446,30 @@ class SplitPdfDialog(ctk.CTkToplevel):
                 font=ctk.CTkFont(size=11), text_color="gray",
             ).pack(side="left", padx=(6, 0))
 
-    def _get_instrument_suggestions(self) -> List[str]:
-        if self._use_project_var and self._use_project_var.get():
-            if self._project and self._project.instruments:
-                return list(self._project.instruments)
-        return []
-
-    def _refresh_assignment_names(self):
+    def _on_preset_selected(self, choice: str):
+        """切換預設編制表"""
+        if choice == t("split.preset_manual"):
+            self._active_instruments = []
+        elif choice == t("split.preset_project"):
+            self._active_instruments = (
+                list(self._project.instruments)
+                if self._project else []
+            )
+        else:
+            locale = get_locale()
+            for preset in INSTRUMENT_PRESETS:
+                name = preset.name_en if locale == "en" else preset.name
+                if name == choice:
+                    self._active_instruments = list(preset.instruments)
+                    break
         sections = self._get_sections()
-        instruments = self._get_instrument_suggestions()
         for sec_idx in range(len(sections)):
             var = self._section_name_vars.get(sec_idx)
             if not var:
                 continue
-            if sec_idx < len(instruments):
-                var.set(instruments[sec_idx])
-            elif not instruments:
+            if sec_idx < len(self._active_instruments):
+                var.set(self._active_instruments[sec_idx])
+            else:
                 var.set(t("split.part_default", index=sec_idx + 1))
 
     # --- 輸出 ---
