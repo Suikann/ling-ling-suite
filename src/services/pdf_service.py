@@ -2,7 +2,7 @@
 """
 PDF 工具服務
 
-提供 PDF 檔案的頁面分割與旋轉功能。
+提供 PDF 檔案的頁面分割、旋轉與縮圖算繪功能。
 """
 import os
 from typing import List, Tuple
@@ -108,6 +108,65 @@ def split_pdf_into_single_pages(
         產生的檔案路徑清單
     """
     return split_pdf_every_n_pages(pdf_path, 1, output_dir)
+
+
+def render_page_thumbnails(pdf_path: str, max_width: int = 160) -> List:
+    """將 PDF 各頁面算繪為 PIL Image 縮圖
+
+    Args:
+        pdf_path: PDF 檔案路徑
+        max_width: 縮圖最大寬度（像素）
+
+    Returns:
+        PIL Image 物件清單，每頁一張
+    """
+    try:
+        import fitz
+    except ImportError as err:
+        raise ImportError(
+            "缺少 PyMuPDF 套件。請執行 pip install PyMuPDF 安裝。",
+        ) from err
+    from PIL import Image
+
+    doc = fitz.open(pdf_path)
+    thumbnails = []
+    for page in doc:
+        scale = max_width / page.rect.width
+        mat = fitz.Matrix(scale, scale)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        thumbnails.append(img)
+    doc.close()
+    return thumbnails
+
+
+def render_single_page(pdf_path: str, page_index: int, max_width: int = 600):
+    """算繪單一頁面為較大的 PIL Image
+
+    Args:
+        pdf_path: PDF 檔案路徑
+        page_index: 頁面索引（從 0 開始）
+        max_width: 輸出最大寬度（像素）
+
+    Returns:
+        PIL Image 物件
+    """
+    try:
+        import fitz
+    except ImportError as err:
+        raise ImportError(
+            "缺少 PyMuPDF 套件。請執行 pip install PyMuPDF 安裝。",
+        ) from err
+    from PIL import Image
+
+    doc = fitz.open(pdf_path)
+    page = doc[page_index]
+    scale = max_width / page.rect.width
+    mat = fitz.Matrix(scale, scale)
+    pix = page.get_pixmap(matrix=mat, alpha=False)
+    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    doc.close()
+    return img
 
 
 def rotate_pdf(

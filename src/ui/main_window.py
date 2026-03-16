@@ -87,6 +87,11 @@ class MainWindow(ctk.CTkFrame):
         # 工具選單
         tools_menu = tk.Menu(self._menubar, tearoff=0)
         tools_menu.add_command(
+            label=t("menu.tools.visual_split_pdf"),
+            command=self._open_visual_split_pdf,
+        )
+        tools_menu.add_separator()
+        tools_menu.add_command(
             label=t("menu.tools.split_pdf"), command=self._open_split_pdf,
         )
         tools_menu.add_command(
@@ -563,6 +568,10 @@ class MainWindow(ctk.CTkFrame):
 
     def _set_status(self, text: str):
         self._status_label.configure(text=text)
+
+    def _open_visual_split_pdf(self):
+        from ui.visual_split_dialog import VisualSplitDialog
+        VisualSplitDialog(self.master_window, project=self.project)
 
     def _open_split_pdf(self):
         from ui.split_dialog import SplitPdfDialog
