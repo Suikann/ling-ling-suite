@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-PDF 分割服務
+PDF 工具服務
 
-提供 PDF 檔案的頁面分割功能。
+提供 PDF 檔案的頁面分割與旋轉功能。
 """
 import os
 from typing import List, Tuple
@@ -108,3 +108,41 @@ def split_pdf_into_single_pages(
         產生的檔案路徑清單
     """
     return split_pdf_every_n_pages(pdf_path, 1, output_dir)
+
+
+def rotate_pdf(
+    pdf_path: str,
+    angle: int,
+    page_ranges: List[Tuple[int, int]],
+    output_path: str,
+) -> str:
+    """旋轉 PDF 指定頁面
+
+    Args:
+        pdf_path: 來源 PDF 檔案路徑
+        angle: 旋轉角度，90、180 或 270（順時針）
+        page_ranges: 要旋轉的頁面範圍清單（從 1 開始），
+                     空清單表示旋轉所有頁面
+        output_path: 輸出檔案路徑
+
+    Returns:
+        輸出檔案路徑
+    """
+    reader = PdfReader(pdf_path)
+    writer = PdfWriter()
+    total = len(reader.pages)
+    pages_to_rotate = set()
+    if page_ranges:
+        for start, end in page_ranges:
+            for p in range(max(1, start), min(total, end) + 1):
+                pages_to_rotate.add(p)
+    else:
+        pages_to_rotate = set(range(1, total + 1))
+    for i, page in enumerate(reader.pages):
+        if (i + 1) in pages_to_rotate:
+            page.rotate(angle)
+        writer.add_page(page)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "wb") as f:
+        writer.write(f)
+    return output_path

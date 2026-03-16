@@ -89,6 +89,9 @@ class MainWindow(ctk.CTkFrame):
         tools_menu.add_command(
             label=t("menu.tools.split_pdf"), command=self._open_split_pdf,
         )
+        tools_menu.add_command(
+            label=t("menu.tools.rotate_pdf"), command=self._open_rotate_pdf,
+        )
         self._menubar.add_cascade(label=t("menu.tools"), menu=tools_menu)
         # 檢視選單
         view_menu = tk.Menu(self._menubar, tearoff=0)
@@ -564,6 +567,10 @@ class MainWindow(ctk.CTkFrame):
     def _open_split_pdf(self):
         from ui.split_dialog import SplitPdfDialog
         SplitPdfDialog(self.master_window)
+
+    def _open_rotate_pdf(self):
+        from ui.rotate_dialog import RotatePdfDialog
+        RotatePdfDialog(self.master_window)
 
     def set_group_panel(self, panel):
         """設定群組面板參考
