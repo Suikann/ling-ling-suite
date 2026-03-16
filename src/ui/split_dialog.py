@@ -65,14 +65,14 @@ class SplitPdfDialog(ctk.CTkToplevel):
         project_files = self._collect_project_files()
         labels = [label for label, _ in project_files]
         self._file_map = {label: path for label, path in project_files}
-        self._file_combo = ctk.CTkComboBox(
-            top, values=labels, width=500,
-            state="readonly" if labels else "disabled",
+        self._file_combo = ctk.CTkOptionMenu(
+            top, values=labels or [t("split.no_project_files")],
+            width=500,
+            state="normal" if labels else "disabled",
             command=self._on_file_selected,
+            dynamic_resizing=False,
         )
-        if not labels:
-            self._file_combo.set(t("split.no_project_files"))
-        else:
+        if labels:
             self._file_combo.set(t("split.no_file"))
         self._file_combo.pack(side="left", padx=(8, 8), fill="x", expand=True)
         self._page_info_label = ctk.CTkLabel(
