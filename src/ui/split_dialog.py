@@ -23,6 +23,11 @@ SECTION_COLORS = [
     "#F97316",
 ]
 
+_NAV_DIM_FG = ("gray93", "gray16")
+_NAV_DIM_TEXT = ("gray82", "gray25")
+_NAV_BRIGHT_FG = ("gray68", "gray40")
+_NAV_BRIGHT_TEXT = ("gray15", "gray95")
+
 
 class SplitPdfDialog(ctk.CTkToplevel):
     """PDF 分割對話框"""
@@ -54,6 +59,8 @@ class SplitPdfDialog(ctk.CTkToplevel):
         )
         self._preview_win: Optional[ctk.CTkToplevel] = None
         self._preview_page_idx = 0
+        self._prev_visible = False
+        self._next_visible = False
         self._build_ui()
         self.grab_set()
 
@@ -329,7 +336,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
     # --- 頁面放大預覽 ---
 
     def _open_preview(self, page_idx: int, _event=None):
-        """開啟頁面放大預覽視窗（含翻頁）"""
+        """開啟頁面放大預覽視窗"""
         if self._preview_win and self._preview_win.winfo_exists():
             self._preview_win.destroy()
         self.grab_release()
@@ -337,33 +344,96 @@ class SplitPdfDialog(ctk.CTkToplevel):
         preview.transient(self)
         self._preview_win = preview
         self._preview_page_idx = page_idx
-        nav = ctk.CTkFrame(preview, fg_color="transparent")
-        nav.pack(fill="x", padx=8, pady=(8, 4))
-        self._prev_btn = ctk.CTkButton(
-            nav, text="\u25C0", width=40,
-            command=self._preview_prev,
-        )
-        self._prev_btn.pack(side="left")
-        self._preview_page_label = ctk.CTkLabel(
-            nav, text="", font=ctk.CTkFont(size=13),
-        )
-        self._preview_page_label.pack(side="left", fill="x", expand=True)
-        self._next_btn = ctk.CTkButton(
-            nav, text="\u25B6", width=40,
-            command=self._preview_next,
-        )
-        self._next_btn.pack(side="right")
+        self._prev_visible = False
+        self._next_visible = False
+        # 頁面內容
         self._preview_scroll = ctk.CTkScrollableFrame(preview)
-        self._preview_scroll.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+        self._preview_scroll.pack(fill="both", expand=True)
         self._preview_img_label = ctk.CTkLabel(self._preview_scroll, text="")
         self._preview_img_label.pack(padx=4, pady=4)
+        # 浮動：頁碼指示（頂部中央）
+        self._preview_page_label = ctk.CTkLabel(
+            preview, text="",
+            font=ctk.CTkFont(size=13),
+            fg_color=("gray85", "gray25"),
+            text_color=("gray30", "gray80"),
+            corner_radius=14,
+            height=28,
+        )
+        self._preview_page_label.place(relx=0.5, y=8, anchor="n")
+        # 浮動：上一頁（左側中央，幾乎透明）
+        self._prev_btn = ctk.CTkButton(
+            preview, text="\u25C0", width=44, height=80,
+            corner_radius=8, border_width=0,
+            fg_color=_NAV_DIM_FG, text_color=_NAV_DIM_TEXT,
+            hover_color=_NAV_DIM_FG,
+            font=ctk.CTkFont(size=22),
+            command=self._preview_prev,
+        )
+        self._prev_btn.place(x=6, rely=0.5, anchor="w")
+        # 浮動：下一頁（右側中央，幾乎透明）
+        self._next_btn = ctk.CTkButton(
+            preview, text="\u25B6", width=44, height=80,
+            corner_radius=8, border_width=0,
+            fg_color=_NAV_DIM_FG, text_color=_NAV_DIM_TEXT,
+            hover_color=_NAV_DIM_FG,
+            font=ctk.CTkFont(size=22),
+            command=self._preview_next,
+        )
+        self._next_btn.place(relx=1.0, x=-6, rely=0.5, anchor="e")
+        # 浮動：分割點切換（底部中央）
+        self._split_toggle_btn = ctk.CTkButton(
+            preview, text="", width=180, height=34,
+            corner_radius=17,
+            font=ctk.CTkFont(size=12),
+            text_color="white",
+            command=self._preview_toggle_split,
+        )
+        self._split_toggle_btn.place(relx=0.5, rely=1.0, y=-16, anchor="s")
+        # 確保浮動元件在最上層
+        self._preview_page_label.lift()
+        self._prev_btn.lift()
+        self._next_btn.lift()
+        self._split_toggle_btn.lift()
+        # 算繪初始頁面
         preview.geometry("660x900")
         self._render_preview_page(page_idx)
-        preview.grab_set()
-        preview.protocol("WM_DELETE_WINDOW", self._close_preview)
+        # 啟動滑鼠接近偵測
+        self._poll_nav_proximity()
+        # 鍵盤綁定
         preview.bind("<Left>", lambda e: self._preview_prev())
         preview.bind("<Right>", lambda e: self._preview_next())
         preview.bind("<Escape>", lambda e: self._close_preview())
+        preview.bind("<space>", lambda e: self._preview_toggle_split())
+        preview.grab_set()
+        preview.protocol("WM_DELETE_WINDOW", self._close_preview)
+
+    def _poll_nav_proximity(self):
+        """定期檢查滑鼠位置，接近邊緣時顯示導航按鈕"""
+        if not self._preview_win or not self._preview_win.winfo_exists():
+            return
+        try:
+            mx = self._preview_win.winfo_pointerx() - self._preview_win.winfo_rootx()
+            w = self._preview_win.winfo_width()
+            near_left = 0 <= mx < w * 0.18
+            if near_left != self._prev_visible:
+                self._prev_visible = near_left
+                fg = _NAV_BRIGHT_FG if near_left else _NAV_DIM_FG
+                txt = _NAV_BRIGHT_TEXT if near_left else _NAV_DIM_TEXT
+                self._prev_btn.configure(
+                    fg_color=fg, text_color=txt, hover_color=fg,
+                )
+            near_right = mx > w * 0.82
+            if near_right != self._next_visible:
+                self._next_visible = near_right
+                fg = _NAV_BRIGHT_FG if near_right else _NAV_DIM_FG
+                txt = _NAV_BRIGHT_TEXT if near_right else _NAV_DIM_TEXT
+                self._next_btn.configure(
+                    fg_color=fg, text_color=txt, hover_color=fg,
+                )
+        except Exception:
+            pass
+        self._preview_win.after(150, self._poll_nav_proximity)
 
     def _render_preview_page(self, page_idx: int):
         """算繪並顯示指定頁面"""
@@ -381,7 +451,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._preview_page_idx = page_idx
         self._preview_win.title(t("split.page_label", num=page_idx + 1))
         self._preview_page_label.configure(
-            text=f"{page_idx + 1} / {self._page_count}",
+            text=f"  {page_idx + 1} / {self._page_count}  ",
         )
         self._prev_btn.configure(
             state="normal" if page_idx > 0 else "disabled",
@@ -389,6 +459,53 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._next_btn.configure(
             state="normal" if page_idx < self._page_count - 1 else "disabled",
         )
+        self._update_preview_split_indicator()
+
+    def _update_preview_split_indicator(self):
+        """更新預覽視窗的分割點指示按鈕"""
+        idx = self._preview_page_idx
+        is_split = idx in self._split_starts
+        sec_idx = self._get_section_for_page(idx)
+        color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
+        if idx == 0:
+            self._split_toggle_btn.configure(
+                text=t("split.mark_split"),
+                state="disabled",
+                fg_color=color, hover_color=color,
+            )
+        elif is_split:
+            self._split_toggle_btn.configure(
+                text=t("split.remove_split"),
+                state="normal",
+                fg_color=color, hover_color=color,
+            )
+        else:
+            self._split_toggle_btn.configure(
+                text=t("split.mark_split"),
+                state="normal",
+                fg_color=color, hover_color=color,
+            )
+
+    def _get_section_for_page(self, page_idx: int) -> int:
+        """取得頁面所屬的分譜索引"""
+        sections = self._get_sections()
+        for sec_idx, (start, end) in enumerate(sections):
+            if start <= page_idx <= end:
+                return sec_idx
+        return 0
+
+    def _preview_toggle_split(self):
+        """在預覽中切換分割點"""
+        idx = self._preview_page_idx
+        if idx == 0:
+            return
+        if idx in self._split_starts:
+            self._split_starts.discard(idx)
+        else:
+            self._split_starts.add(idx)
+        self._render_page_grid()
+        self._update_assignment_panel()
+        self._update_preview_split_indicator()
 
     def _preview_prev(self):
         if self._preview_page_idx > 0:

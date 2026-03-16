@@ -168,6 +168,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "split.load_names": "載入編制表：",
         "split.preset_manual": "（手動輸入）",
         "split.preset_project": "專案樂器表",
+        "split.mark_split": "標記為分割點",
+        "split.remove_split": "移除分割點",
         # PDF 旋轉
         "rotate.title": "PDF 旋轉",
         "rotate.select_file": "選擇 PDF 檔案",
@@ -346,6 +348,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "split.load_names": "Load instrument list:",
         "split.preset_manual": "(Manual)",
         "split.preset_project": "Project Instruments",
+        "split.mark_split": "Mark split point",
+        "split.remove_split": "Remove split point",
         # PDF 旋轉
         "rotate.title": "Rotate PDF",
         "rotate.select_file": "Select PDF File",
