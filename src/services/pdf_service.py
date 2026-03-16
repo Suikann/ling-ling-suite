@@ -1,0 +1,110 @@
+# -*- coding: utf-8 -*-
+"""
+PDF 分割服務
+
+提供 PDF 檔案的頁面分割功能。
+"""
+import os
+from typing import List, Tuple
+
+from PyPDF2 import PdfReader, PdfWriter
+
+
+def get_page_count(pdf_path: str) -> int:
+    """取得 PDF 檔案的總頁數
+
+    Args:
+        pdf_path: PDF 檔案路徑
+
+    Returns:
+        總頁數
+    """
+    reader = PdfReader(pdf_path)
+    return len(reader.pages)
+
+
+def split_pdf(
+    pdf_path: str,
+    ranges: List[Tuple[int, int]],
+    output_dir: str,
+    name_pattern: str = "",
+) -> List[str]:
+    """依指定頁面範圍分割 PDF
+
+    Args:
+        pdf_path: 來源 PDF 檔案路徑
+        ranges: 頁面範圍清單，每項為 (起始頁, 結束頁)，從 1 開始
+        output_dir: 輸出資料夾路徑
+        name_pattern: 輸出檔名模式，含 {index} 與 {pages} 變數；
+                      空字串時使用預設 "原檔名_part{index}.pdf"
+
+    Returns:
+        產生的檔案路徑清單
+    """
+    reader = PdfReader(pdf_path)
+    total_pages = len(reader.pages)
+    base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+    os.makedirs(output_dir, exist_ok=True)
+    output_files = []
+    for idx, (start, end) in enumerate(ranges, 1):
+        start_idx = max(0, start - 1)
+        end_idx = min(total_pages, end)
+        if start_idx >= end_idx:
+            continue
+        writer = PdfWriter()
+        for page_num in range(start_idx, end_idx):
+            writer.add_page(reader.pages[page_num])
+        if name_pattern:
+            filename = name_pattern.replace(
+                "{index}", str(idx),
+            ).replace(
+                "{pages}", f"{start}-{end}",
+            )
+            if not filename.lower().endswith(".pdf"):
+                filename += ".pdf"
+        else:
+            filename = f"{base_name}_part{idx}.pdf"
+        output_path = os.path.join(output_dir, filename)
+        with open(output_path, "wb") as f:
+            writer.write(f)
+        output_files.append(output_path)
+    return output_files
+
+
+def split_pdf_every_n_pages(
+    pdf_path: str,
+    n: int,
+    output_dir: str,
+) -> List[str]:
+    """每 N 頁分割一個檔案
+
+    Args:
+        pdf_path: 來源 PDF 檔案路徑
+        n: 每個檔案的頁數
+        output_dir: 輸出資料夾路徑
+
+    Returns:
+        產生的檔案路徑清單
+    """
+    total = get_page_count(pdf_path)
+    ranges = []
+    for start in range(1, total + 1, n):
+        end = min(start + n - 1, total)
+        ranges.append((start, end))
+    return split_pdf(pdf_path, ranges, output_dir)
+
+
+def split_pdf_into_single_pages(
+    pdf_path: str,
+    output_dir: str,
+) -> List[str]:
+    """將 PDF 分割為逐頁獨立檔案
+
+    Args:
+        pdf_path: 來源 PDF 檔案路徑
+        output_dir: 輸出資料夾路徑
+
+    Returns:
+        產生的檔案路徑清單
+    """
+    return split_pdf_every_n_pages(pdf_path, 1, output_dir)

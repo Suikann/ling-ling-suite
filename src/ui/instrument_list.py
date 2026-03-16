@@ -4,9 +4,12 @@
 
 提供樂器新增、刪除、排序的 UI 元件。
 """
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, TYPE_CHECKING
 import customtkinter as ctk
 from core.locale import t
+
+if TYPE_CHECKING:
+    from core.models import Project
 
 
 class InstrumentListEditor(ctk.CTkFrame):
@@ -16,11 +19,13 @@ class InstrumentListEditor(ctk.CTkFrame):
         self,
         master,
         on_instruments_changed: Optional[Callable[[List[str]], None]] = None,
+        project: Optional["Project"] = None,
         **kwargs,
     ):
         super().__init__(master, **kwargs)
         self._instruments: List[str] = []
         self._on_changed = on_instruments_changed
+        self._project = project
         self._build_ui()
 
     def _build_ui(self):
@@ -37,6 +42,10 @@ class InstrumentListEditor(ctk.CTkFrame):
             input_frame, text=t("instrument.add"), width=50, command=self._add_instrument,
         )
         add_btn.pack(side="right", padx=(0, 4))
+        extract_btn = ctk.CTkButton(
+            self, text=t("instrument.auto_extract"), command=self._auto_extract,
+        )
+        extract_btn.pack(fill="x", padx=8, pady=(0, 8))
 
     def _add_instrument(self):
         name = self._entry.get().strip()
@@ -101,6 +110,39 @@ class InstrumentListEditor(ctk.CTkFrame):
     def _notify_changed(self):
         if self._on_changed:
             self._on_changed(list(self._instruments))
+
+    def _auto_extract(self):
+        """從已匯入的檔名中自動擷取樂器名稱"""
+        from tkinter import messagebox
+        if not self._project:
+            messagebox.showinfo(t("dialog.info"), t("instrument.auto_extract.empty"))
+            return
+        all_filenames = []
+        for group in self._project.groups:
+            all_filenames.extend([f.display_name for f in group.files])
+        all_filenames.extend([f.display_name for f in self._project.ungrouped_files])
+        if not all_filenames:
+            messagebox.showinfo(t("dialog.info"), t("instrument.auto_extract.empty"))
+            return
+        from core.template_engine import extract_instruments_from_filenames
+        extracted = extract_instruments_from_filenames(all_filenames)
+        seen = set()
+        unique = []
+        for inst in extracted:
+            if inst not in seen:
+                seen.add(inst)
+                unique.append(inst)
+        if not unique:
+            messagebox.showinfo(t("dialog.info"), t("instrument.auto_extract.empty"))
+            return
+        preview = "\n".join(f"  {i+1}. {name}" for i, name in enumerate(unique))
+        if messagebox.askyesno(
+            t("instrument.auto_extract.title"),
+            t("instrument.auto_extract.confirm", instruments=preview),
+        ):
+            self._instruments = unique
+            self._refresh_list()
+            self._notify_changed()
 
     def get_instruments(self) -> List[str]:
         """取得目前樂器清單"""

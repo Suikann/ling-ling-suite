@@ -135,6 +135,64 @@ def _detect_by_common_tokens(basenames: List[str]) -> str:
     return " ".join(ordered).strip()
 
 
+def convert_template_language(template: str, to_locale: str) -> str:
+    """將模板中的變數名稱轉換為目標語言
+
+    Args:
+        template: 模板字串
+        to_locale: 目標語言代碼，"zh_TW" 或 "en"
+
+    Returns:
+        轉換後的模板字串
+    """
+    if to_locale == "en":
+        for tv in TEMPLATE_VARIABLES:
+            template = template.replace(f"{{{tv.name}}}", f"{{{tv.name_en}}}")
+    else:
+        for tv in TEMPLATE_VARIABLES:
+            template = template.replace(f"{{{tv.name_en}}}", f"{{{tv.name}}}")
+    return template
+
+
+def extract_instruments_from_filenames(filenames: List[str]) -> List[str]:
+    """從檔名清單中提取樂器名稱
+
+    策略：找出共同前綴與共同後綴（以分隔符為邊界），
+    取出中間不同的部分作為樂器名稱。
+
+    Args:
+        filenames: 檔案名稱清單（不含路徑）
+
+    Returns:
+        提取出的樂器名稱清單（保持原始順序）
+    """
+    if not filenames:
+        return []
+    basenames = [os.path.splitext(f)[0] for f in filenames]
+    if len(basenames) == 1:
+        name = re.sub(r'^\d+[\s.\-_]*', '', basenames[0]).strip()
+        return [name] if name else basenames
+    prefix = os.path.commonprefix(basenames)
+    prefix = re.sub(r'[^\s.\-_,;:]+$', '', prefix)
+    reversed_names = [n[::-1] for n in basenames]
+    suffix_rev = os.path.commonprefix(reversed_names)
+    suffix_rev = re.sub(r'[^\s.\-_,;:]+$', '', suffix_rev)
+    suffix = suffix_rev[::-1]
+    instruments = []
+    for name in basenames:
+        start = len(prefix)
+        end = len(name) - len(suffix) if suffix else len(name)
+        middle = name[start:end] if end > start else name
+        middle = re.sub(r'^[\s.\-_,;:]+', '', middle)
+        middle = re.sub(r'[\s.\-_,;:]+$', '', middle)
+        middle = re.sub(r'^\d+[\s.\-_]*', '', middle)
+        if middle:
+            instruments.append(middle)
+        else:
+            instruments.append(name.strip())
+    return instruments
+
+
 def validate_template(template: str) -> List[str]:
     """驗證模板中的變數是否合法（中英文變數名皆可辨識）
 

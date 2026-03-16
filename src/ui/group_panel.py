@@ -32,15 +32,21 @@ class GroupPanel(ctk.CTkFrame):
         self._build_ui()
 
     def _build_ui(self):
-        top_bar = ctk.CTkFrame(self, fg_color="transparent")
-        top_bar.pack(fill="x", padx=4, pady=(4, 0))
-        add_btn = ctk.CTkButton(
-            top_bar, text=t("group.add"), width=100,
-            command=self._add_group,
-        )
-        add_btn.pack(side="right")
         self._tabview = ctk.CTkTabview(self, anchor="nw")
         self._tabview.pack(fill="both", expand=True, padx=4, pady=4)
+        # 工作區內的操作按鈕列
+        btn_bar = ctk.CTkFrame(self, fg_color="transparent")
+        btn_bar.pack(fill="x", padx=8, pady=(0, 4))
+        add_btn = ctk.CTkButton(
+            btn_bar, text=t("group.add"), width=100,
+            command=self._add_group,
+        )
+        add_btn.pack(side="left")
+        link_btn = ctk.CTkButton(
+            btn_bar, text=t("group.link_movements"), width=140,
+            command=self._link_as_movements,
+        )
+        link_btn.pack(side="left", padx=(8, 0))
         self._tabview.add(self._ungrouped_tab_name)
         ungrouped_content = UngroupedTabContent(
             self._tabview.tab(self._ungrouped_tab_name),
@@ -90,6 +96,32 @@ class GroupPanel(ctk.CTkFrame):
         self._tabview.set(self._ungrouped_tab_name)
         self.refresh_ungrouped()
         self.main_window._mark_modified()
+
+    def _link_as_movements(self):
+        """將多個群組連結為同一曲目的不同樂章"""
+        if len(self.project.groups) < 2:
+            from tkinter import messagebox
+            messagebox.showinfo(t("dialog.info"), t("group.link_movements.need_two"))
+            return
+        from ui.merge_dialog import LinkMovementsDialog
+        LinkMovementsDialog(
+            self.winfo_toplevel(),
+            self.project.groups,
+            on_confirm=self._on_link_confirmed,
+        )
+
+    def _on_link_confirmed(self, selected_groups: list, piece_name: str):
+        """連結確認後更新群組資料"""
+        for i, group in enumerate(selected_groups):
+            group.piece_name = piece_name
+            group.movement_number = str(i + 1)
+            if not group.movement_name:
+                group.movement_name = group.name
+        self.reload_all()
+        self.main_window._mark_modified()
+        self.main_window._set_status(
+            t("group.link_movements.done", count=len(selected_groups), piece=piece_name),
+        )
 
     def on_instruments_changed(self, instruments: List[str]):
         """樂器表變更時更新所有群組的勾選框"""

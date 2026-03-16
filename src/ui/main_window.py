@@ -84,6 +84,12 @@ class MainWindow(ctk.CTkFrame):
             label=t("menu.import.folder"), command=self._import_folder,
         )
         self._menubar.add_cascade(label=t("menu.import"), menu=import_menu)
+        # 工具選單
+        tools_menu = tk.Menu(self._menubar, tearoff=0)
+        tools_menu.add_command(
+            label=t("menu.tools.split_pdf"), command=self._open_split_pdf,
+        )
+        self._menubar.add_cascade(label=t("menu.tools"), menu=tools_menu)
         # 檢視選單
         view_menu = tk.Menu(self._menubar, tearoff=0)
         appearance_menu = tk.Menu(view_menu, tearoff=0)
@@ -124,6 +130,20 @@ class MainWindow(ctk.CTkFrame):
     def _set_language(self, lang_code: str):
         if lang_code == get_locale():
             return
+        if self._group_panel:
+            self._group_panel.sync_to_project()
+        from core.template_engine import convert_template_language
+        self.project.master_template = convert_template_language(
+            self._master_template_entry.get(), lang_code,
+        )
+        self.project.subfolder_template = convert_template_language(
+            self._subfolder_template_entry.get(), lang_code,
+        )
+        for group in self.project.groups:
+            if group.small_template:
+                group.small_template = convert_template_language(
+                    group.small_template, lang_code,
+                )
         set_locale(lang_code)
         self._preferences.set("language", lang_code)
         self._preferences.save()
@@ -131,10 +151,7 @@ class MainWindow(ctk.CTkFrame):
 
     def _rebuild_ui(self):
         """銷毀並重建所有 UI 面板，用於語言切換"""
-        # 先同步群組面板的狀態
-        if self._group_panel:
-            self._group_panel.sync_to_project()
-        # 記住目前值
+        # 狀態已在 _set_language() 中同步，此處僅讀取 project
         current_master_template = self.project.master_template
         current_subfolder_template = self.project.subfolder_template
         current_use_subfolders = self.project.use_subfolders
@@ -147,8 +164,12 @@ class MainWindow(ctk.CTkFrame):
         self._create_menu()
         # 重建佈局
         self._create_layout()
-        # 還原樂器表
+        # 還原樂器表（暫時移除回呼避免觸發空群組面板通知）
+        saved_cb = self._instrument_editor._on_changed
+        self._instrument_editor._on_changed = None
         self._instrument_editor.set_instruments(current_instruments)
+        self.project.instruments = current_instruments
+        self._instrument_editor._on_changed = saved_cb
         # 還原模板值
         self._master_template_entry.delete(0, "end")
         self._master_template_entry.insert(0, current_master_template)
@@ -158,8 +179,9 @@ class MainWindow(ctk.CTkFrame):
         # 更新視窗標題
         self.master_window.title(t("app.title"))
         self._update_title()
-        # 延遲重建群組面板
-        self.master_window.after(50, self._rebuild_group_panel)
+        # 確保佈局計算完畢後立即重建群組面板
+        self.update_idletasks()
+        self._rebuild_group_panel()
 
     def _rebuild_group_panel(self):
         """重建群組面板"""
@@ -182,6 +204,7 @@ class MainWindow(ctk.CTkFrame):
         self._instrument_editor = InstrumentListEditor(
             self._left_panel,
             on_instruments_changed=self._on_instruments_changed,
+            project=self.project,
         )
         self._instrument_editor.pack(fill="both", expand=True)
         right_area = ctk.CTkFrame(self, fg_color="transparent")
@@ -537,6 +560,10 @@ class MainWindow(ctk.CTkFrame):
 
     def _set_status(self, text: str):
         self._status_label.configure(text=text)
+
+    def _open_split_pdf(self):
+        from ui.split_dialog import SplitPdfDialog
+        SplitPdfDialog(self.master_window)
 
     def set_group_panel(self, panel):
         """設定群組面板參考
