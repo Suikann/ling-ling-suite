@@ -723,8 +723,11 @@ class SplitPdfDialog(ctk.CTkToplevel):
                     original_path=output_path,
                     display_name=os.path.basename(output_path),
                 ))
-                if sec_idx < len(self._project.instruments):
-                    split_selected.append(sec_idx)
+                try:
+                    inst_idx = self._project.instruments.index(name)
+                    split_selected.append(inst_idx)
+                except ValueError:
+                    pass
             if not split_files:
                 messagebox.showinfo(t("dialog.info"), t("dialog.info.no_files"))
                 return
