@@ -1,108 +1,70 @@
 # -*- coding: utf-8 -*-
 """
-預覽對話框
-
-顯示重新命名計畫的預覽，包含衝突警告。
+預覽對話框（PySide6）
 """
-import os
-from typing import Callable, Dict, List, Optional
-import customtkinter as ctk
+from typing import Callable, Dict, List
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QWidget,
+)
 from core.locale import t
 from core.models import RenameEntry
 
 
-class PreviewDialog(ctk.CTkToplevel):
-    """重新命名預覽對話框"""
+class PreviewDialog(QDialog):
+    """預覽重新命名對話框"""
 
-    def __init__(
-        self,
-        master,
-        plan: List[RenameEntry],
-        conflicts: Dict[str, List[str]],
-        on_execute: Optional[Callable[[List[RenameEntry]], None]] = None,
-        **kwargs,
-    ):
-        super().__init__(master, **kwargs)
-        self.title(t("preview.title"))
-        self.geometry("800x600")
-        self.minsize(600, 400)
+    def __init__(self, plan: List[RenameEntry], conflicts: Dict, on_execute: Callable, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(t("preview.title"))
+        self.resize(700, 500)
         self._plan = plan
         self._conflicts = conflicts
         self._on_execute = on_execute
         self._build_ui()
-        self.transient(master)
-        self.focus_set()
 
     def _build_ui(self):
-        has_conflicts = bool(self._conflicts)
-        if has_conflicts:
-            conflict_count = sum(len(v) for v in self._conflicts.values())
-            warn_frame = ctk.CTkFrame(self, fg_color="#c0392b")
-            warn_frame.pack(fill="x", padx=8, pady=(8, 4))
-            ctk.CTkLabel(
-                warn_frame,
-                text=t("preview.conflict_warning", count=conflict_count),
-                text_color="white",
-                font=ctk.CTkFont(size=13, weight="bold"),
-            ).pack(padx=12, pady=8)
-        conflict_paths = set()
-        for originals in self._conflicts.values():
-            conflict_paths.update(originals)
-        ctk.CTkLabel(
-            self, text=t("preview.file_count", count=len(self._plan)),
-            font=ctk.CTkFont(size=13),
-        ).pack(padx=8, pady=(4, 2))
-        scroll = ctk.CTkScrollableFrame(self)
-        scroll.pack(fill="both", expand=True, padx=8, pady=4)
+        layout = QVBoxLayout(self)
+        if self._conflicts:
+            warn = QLabel(t("preview.conflict_warning", count=len(self._conflicts)))
+            warn.setStyleSheet("color: #e74c3c; font-weight: bold;")
+            layout.addWidget(warn)
+        layout.addWidget(QLabel(t("preview.file_count", count=len(self._plan))))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        cl = QVBoxLayout(container)
         for entry in self._plan:
-            is_conflict = entry.original_path in conflict_paths
-            row = ctk.CTkFrame(scroll, fg_color="transparent")
-            row.pack(fill="x", pady=1)
-            old_name = os.path.basename(entry.original_path)
-            new_name = os.path.basename(entry.new_path)
-            new_dir = os.path.dirname(entry.new_path)
-            original_dir = os.path.dirname(entry.original_path)
-            if new_dir != original_dir:
-                rel_dir = os.path.relpath(new_dir, original_dir)
-                display_new = os.path.join(rel_dir, new_name)
-            else:
-                display_new = new_name
-            text_color = "#e74c3c" if is_conflict else None
-            ctk.CTkLabel(
-                row, text=f"{old_name}  \u2192  {display_new}",
-                anchor="w", text_color=text_color,
-            ).pack(side="left", fill="x", expand=True, padx=4)
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=8, pady=8)
-        cancel_btn = ctk.CTkButton(
-            btn_frame, text=t("preview.cancel"), width=100,
-            fg_color="gray", hover_color="gray30",
-            command=self.destroy,
-        )
-        cancel_btn.pack(side="right", padx=4)
-        if has_conflicts:
-            exec_btn = ctk.CTkButton(
-                btn_frame, text=t("preview.execute_with_suffix"), width=160,
-                fg_color="#e67e22", hover_color="#d35400",
-                command=self._execute_with_suffix,
-            )
+            row = QLabel(f"{entry.original_path}\n  \u2192 {entry.new_path}")
+            row.setWordWrap(True)
+            if entry.new_path.lower() in {k.lower() for k in self._conflicts}:
+                row.setStyleSheet("color: #e74c3c;")
+            cl.addWidget(row)
+        cl.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll, stretch=1)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cancel_btn = QPushButton(t("preview.cancel"))
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        if self._conflicts:
+            exec_btn = QPushButton(t("preview.execute_with_suffix"))
+            exec_btn.clicked.connect(self._execute_with_suffix)
         else:
-            exec_btn = ctk.CTkButton(
-                btn_frame, text=t("preview.execute"), width=140,
-                command=self._execute,
-            )
-        exec_btn.pack(side="right", padx=4)
+            exec_btn = QPushButton(t("preview.execute"))
+            exec_btn.clicked.connect(self._execute)
+        exec_btn.setStyleSheet("font-weight: bold;")
+        btn_row.addWidget(exec_btn)
+        layout.addLayout(btn_row)
 
     def _execute(self):
-        if self._on_execute:
-            self._on_execute(self._plan)
-        self.destroy()
+        self._on_execute(self._plan)
+        self.accept()
 
     def _execute_with_suffix(self):
-        if self._on_execute:
-            from services.rename_service import RenameService
-            from services.file_service import FileService
-            svc = RenameService(FileService())
-            fixed_plan = svc.apply_auto_suffix(self._plan)
-            self._on_execute(fixed_plan)
-        self.destroy()
+        from services.rename_service import RenameService
+        from services.file_service import FileService
+        plan = RenameService(FileService()).apply_auto_suffix(self._plan)
+        self._on_execute(plan)
+        self.accept()
