@@ -66,6 +66,12 @@ class MainWindow(QMainWindow):
         self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf)
         tools_menu.addSeparator()
         self._add_action(tools_menu, t("menu.tools.rotate_pdf"), self._open_rotate_pdf)
+        view_menu = mb.addMenu(t("menu.view"))
+        lang_menu = view_menu.addMenu(t("menu.view.language"))
+        for code, label_key in [("zh_TW", "menu.view.language.zh_TW"), ("en", "menu.view.language.en")]:
+            action = QAction(t(label_key), self)
+            action.triggered.connect(lambda checked=False, c=code: self._set_language(c))
+            lang_menu.addAction(action)
 
     def _add_action(self, menu, text, callback, shortcut=None):
         action = QAction(text, self)
@@ -88,8 +94,22 @@ class MainWindow(QMainWindow):
         self._instrument_editor.setFixedWidth(260)
         self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
         splitter.addWidget(self._instrument_editor)
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(4)
+        btn_bar = QHBoxLayout()
+        add_group_btn = QPushButton(t("group.add"))
+        add_group_btn.clicked.connect(self._add_group)
+        btn_bar.addWidget(add_group_btn)
+        link_btn = QPushButton(t("group.link_movements"))
+        link_btn.clicked.connect(self._link_as_movements)
+        btn_bar.addWidget(link_btn)
+        btn_bar.addStretch()
+        right_layout.addLayout(btn_bar)
         self._tab_widget = QTabWidget()
-        splitter.addWidget(self._tab_widget)
+        right_layout.addWidget(self._tab_widget)
+        splitter.addWidget(right_panel)
         splitter.setStretchFactor(1, 1)
         self._build_bottom_panel(main_layout)
         self._rebuild_tabs()
@@ -159,6 +179,30 @@ class MainWindow(QMainWindow):
         from ui.group_panel import GroupTab
         tab = GroupTab(group, self.project, self)
         self._tab_widget.addTab(tab, group.name or group.id[:8])
+
+    def _add_group(self):
+        group = Group(name=t("group.new_name", number=len(self.project.groups) + 1))
+        self.project.groups.append(group)
+        self._mark_modified()
+        self._rebuild_tabs()
+        self._tab_widget.setCurrentIndex(self._tab_widget.count() - 1)
+
+    def _link_as_movements(self):
+        if len(self.project.groups) < 2:
+            QMessageBox.information(self, t("dialog.info"), t("group.link_movements.need_two"))
+            return
+        from ui.merge_dialog import LinkMovementsDialog
+        dialog = LinkMovementsDialog(self.project.groups, self._on_link_confirmed, self)
+        dialog.exec()
+
+    def _on_link_confirmed(self, selected_groups, piece_name):
+        for i, group in enumerate(selected_groups):
+            group.piece_name = piece_name
+            group.movement_number = str(i + 1)
+            if not group.movement_name:
+                group.movement_name = group.name
+        self._mark_modified()
+        self._rebuild_tabs()
 
     def _on_tab_changed(self, index: int):
         widget = self._tab_widget.widget(index)
@@ -400,7 +444,20 @@ class MainWindow(QMainWindow):
         self._set_status(t("split.files_added", count=len(files)))
 
     def _open_rotate_pdf(self):
-        pass  # TODO: port rotate dialog
+        from ui.rotate_dialog import RotatePdfDialog
+        dialog = RotatePdfDialog(self)
+        dialog.exec()
+
+    def _set_language(self, lang_code: str):
+        if lang_code == get_locale():
+            return
+        set_locale(lang_code)
+        self._preferences.set("language", lang_code)
+        self._preferences.save()
+        QMessageBox.information(
+            self, t("dialog.info"),
+            "Language changed. Please restart the application.",
+        )
 
     # --- 輔助 ---
 

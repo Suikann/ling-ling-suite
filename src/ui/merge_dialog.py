@@ -1,84 +1,65 @@
 # -*- coding: utf-8 -*-
 """
-連結樂章對話框
-
-提供將多個群組連結為同一曲目的不同樂章的 UI。
+連結樂章對話框（PySide6）
 """
 from typing import Callable, List
-import customtkinter as ctk
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QCheckBox, QScrollArea, QWidget, QMessageBox,
+)
 from core.locale import t
 from core.models import Group
 
 
-class LinkMovementsDialog(ctk.CTkToplevel):
+class LinkMovementsDialog(QDialog):
     """連結群組為樂章的對話框"""
 
-    def __init__(
-        self,
-        master,
-        groups: List[Group],
-        on_confirm: Callable[[list, str], None],
-    ):
-        super().__init__(master)
-        self.title(t("group.link_movements.title"))
-        self.geometry("500x520")
-        self.resizable(False, False)
+    def __init__(self, groups: List[Group], on_confirm: Callable, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(t("group.link_movements.title"))
+        self.resize(500, 420)
         self._groups = groups
         self._on_confirm = on_confirm
-        self._check_vars = []
-        self._order_list = []
+        self._checks: list = []
         self._build_ui()
-        self.grab_set()
 
     def _build_ui(self):
-        ctk.CTkLabel(
-            self, text=t("group.link_movements.select"),
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", padx=16, pady=(16, 8))
-        self._check_frame = ctk.CTkScrollableFrame(self, height=180)
-        self._check_frame.pack(fill="x", padx=16, pady=(0, 8))
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(t("group.link_movements.select")))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        cl = QVBoxLayout(container)
         for group in self._groups:
-            var = ctk.BooleanVar(value=False)
-            cb = ctk.CTkCheckBox(
-                self._check_frame,
-                text=group.name or group.id[:8],
-                variable=var,
-            )
-            cb.pack(anchor="w", padx=4, pady=2)
-            self._check_vars.append((group, var))
-        name_frame = ctk.CTkFrame(self, fg_color="transparent")
-        name_frame.pack(fill="x", padx=16, pady=8)
-        ctk.CTkLabel(
-            name_frame, text=t("group.link_movements.piece_name"),
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(side="left")
-        self._piece_name_entry = ctk.CTkEntry(name_frame, width=280)
-        self._piece_name_entry.pack(side="left", padx=(8, 0), fill="x", expand=True)
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=(16, 16))
-        ctk.CTkButton(
-            btn_frame, text=t("group.link_movements.cancel"),
-            width=100, command=self.destroy,
-        ).pack(side="right", padx=(8, 0))
-        ctk.CTkButton(
-            btn_frame, text=t("group.link_movements.confirm"),
-            width=100, command=self._confirm,
-        ).pack(side="right")
+            cb = QCheckBox(group.name or group.id[:8])
+            cl.addWidget(cb)
+            self._checks.append((group, cb))
+        cl.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll, stretch=1)
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel(t("group.link_movements.piece_name")))
+        self._piece_entry = QLineEdit()
+        name_row.addWidget(self._piece_entry, stretch=1)
+        layout.addLayout(name_row)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cancel_btn = QPushButton(t("group.link_movements.cancel"))
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        confirm_btn = QPushButton(t("group.link_movements.confirm"))
+        confirm_btn.setStyleSheet("font-weight: bold;")
+        confirm_btn.clicked.connect(self._confirm)
+        btn_row.addWidget(confirm_btn)
+        layout.addLayout(btn_row)
 
     def _confirm(self):
-        selected = [g for g, var in self._check_vars if var.get()]
+        selected = [g for g, cb in self._checks if cb.isChecked()]
         if len(selected) < 2:
-            from tkinter import messagebox
-            messagebox.showinfo(
-                t("dialog.info"), t("group.link_movements.need_two"),
-            )
+            QMessageBox.information(self, t("dialog.info"), t("group.link_movements.need_two"))
             return
-        piece_name = self._piece_name_entry.get().strip()
+        piece_name = self._piece_entry.text().strip()
         if not piece_name:
-            from tkinter import messagebox
-            messagebox.showinfo(
-                t("dialog.info"), t("group.link_movements.piece_name"),
-            )
             return
-        self.destroy()
         self._on_confirm(selected, piece_name)
+        self.accept()
