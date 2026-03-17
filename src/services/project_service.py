@@ -87,6 +87,7 @@ class ProjectService:
                  "display_name": group.score_file.display_name}
                 if group.score_file else None
             ),
+            "score_label": group.score_label,
             "selected_instruments": group.selected_instruments,
             "piece_name": group.piece_name,
             "movement_number": group.movement_number,
@@ -116,6 +117,7 @@ class ProjectService:
             id=data.get("id", ""),
             name=data.get("name", ""),
             score_file=score_file,
+            score_label=data.get("score_label", ""),
             selected_instruments=data.get("selected_instruments", []),
             piece_name=data.get("piece_name", ""),
             movement_number=data.get("movement_number", ""),

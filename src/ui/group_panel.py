@@ -4,6 +4,7 @@
 
 提供群組標籤管理、樂器勾選與群組變數輸入。
 """
+import os
 from typing import List, Optional, TYPE_CHECKING
 import customtkinter as ctk
 from core.locale import t
@@ -381,26 +382,37 @@ class GroupTabContent(ctk.CTkFrame):
         self._mismatch_label.pack(padx=4, pady=2)
         right_col = ctk.CTkFrame(middle)
         right_col.pack(side="left", fill="both", expand=True, padx=(4, 0))
-        score_frame = ctk.CTkFrame(right_col, fg_color="transparent")
-        score_frame.pack(fill="x", padx=4, pady=(4, 2))
+        score_row1 = ctk.CTkFrame(right_col, fg_color="transparent")
+        score_row1.pack(fill="x", padx=4, pady=(4, 0))
         ctk.CTkLabel(
-            score_frame, text=t("group.score_file"),
+            score_row1, text=t("group.score_file"),
             font=ctk.CTkFont(weight="bold"),
         ).pack(side="left")
-        self._score_label = ctk.CTkLabel(
-            score_frame, text=t("group.score_file.none"),
+        self._score_file_label = ctk.CTkLabel(
+            score_row1, text=t("group.score_file.none"),
             text_color="gray", anchor="w",
         )
-        self._score_label.pack(side="left", fill="x", expand=True, padx=4)
+        self._score_file_label.pack(side="left", fill="x", expand=True, padx=4)
         ctk.CTkButton(
-            score_frame, text=t("group.score_file.clear"), width=50, height=24,
+            score_row1, text=t("group.score_file.clear"), width=50, height=24,
             fg_color=("gray75", "gray35"), hover_color=("gray65", "gray45"),
             command=self._clear_score_file,
         ).pack(side="right", padx=1)
         ctk.CTkButton(
-            score_frame, text=t("group.score_file.set"), width=80, height=24,
+            score_row1, text=t("group.score_file.set"), width=80, height=24,
             command=self._set_score_file,
         ).pack(side="right", padx=1)
+        score_row2 = ctk.CTkFrame(right_col, fg_color="transparent")
+        score_row2.pack(fill="x", padx=4, pady=(2, 2))
+        ctk.CTkLabel(
+            score_row2, text=t("group.score_file.label"),
+            font=ctk.CTkFont(size=11),
+        ).pack(side="left")
+        self._score_label_entry = ctk.CTkEntry(score_row2, width=120, height=24)
+        self._score_label_entry.pack(side="left", padx=4)
+        self._score_label_entry.insert(
+            0, self._group.score_label or t("group.score_label"),
+        )
         self._update_score_display()
         ctk.CTkLabel(right_col, text=t("group.file_list"), font=ctk.CTkFont(weight="bold")).pack(pady=(4, 2))
         self._file_scroll = ctk.CTkScrollableFrame(right_col)
@@ -429,17 +441,18 @@ class GroupTabContent(ctk.CTkFrame):
         )
         self._refresh_instruments()
         self._refresh_file_list()
+        self._auto_detect_score()
         self._auto_detect_if_empty()
 
     def _update_score_display(self):
         """更新總譜顯示"""
         if self._group.score_file:
-            self._score_label.configure(
+            self._score_file_label.configure(
                 text=self._group.score_file.display_name,
                 text_color=("black", "white"),
             )
         else:
-            self._score_label.configure(
+            self._score_file_label.configure(
                 text=t("group.score_file.none"),
                 text_color="gray",
             )
@@ -478,6 +491,22 @@ class GroupTabContent(ctk.CTkFrame):
             self._refresh_file_list()
             self._check_mismatch()
             self.main_window._mark_modified()
+
+    _SCORE_KEYWORDS = (
+        "score", "full score", "conductor",
+        "總譜", "指揮譜", "full",
+    )
+
+    def _auto_detect_score(self):
+        """自動從檔案清單偵測總譜"""
+        if self._group.score_file:
+            return
+        for i, f in enumerate(self._group.files):
+            name_lower = os.path.splitext(f.display_name)[0].lower()
+            for kw in self._SCORE_KEYWORDS:
+                if kw in name_lower:
+                    self._do_set_score(i)
+                    return
 
     def _auto_detect_if_empty(self):
         """曲名欄位為空時自動偵測一次"""
@@ -704,3 +733,4 @@ class GroupTabContent(ctk.CTkFrame):
         self._group.selected_instruments = [
             i for i, var in enumerate(self._instrument_vars) if var.get()
         ]
+        self._group.score_label = self._score_label_entry.get().strip()
