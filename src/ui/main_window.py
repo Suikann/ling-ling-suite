@@ -689,23 +689,29 @@ class MainWindow(ctk.CTkFrame):
 
     def _on_split_complete(self, group, instruments=None):
         """分割完成回呼，合併樂器表並建立群組"""
+        merged = None
         if instruments:
-            existing = list(self.project.instruments)
+            merged = list(self.project.instruments)
             for inst in instruments:
-                if inst not in existing:
-                    existing.append(inst)
+                if inst not in merged:
+                    merged.append(inst)
             remapped = []
             for old_idx in group.selected_instruments:
                 if old_idx < len(instruments):
                     name = instruments[old_idx]
                     try:
-                        remapped.append(existing.index(name))
+                        remapped.append(merged.index(name))
                     except ValueError:
                         pass
             group.selected_instruments = remapped
-            self._instrument_editor.set_instruments(existing)
+            self.project.instruments = merged
         self.project.groups.append(group)
         self._mark_modified()
+        if merged:
+            saved_cb = self._instrument_editor._on_changed
+            self._instrument_editor._on_changed = None
+            self._instrument_editor.set_instruments(merged)
+            self._instrument_editor._on_changed = saved_cb
         if self._group_panel:
             self._group_panel.reload_all()
         self._set_status(t("split.files_added", count=len(group.files)))
