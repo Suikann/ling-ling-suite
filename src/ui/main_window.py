@@ -505,19 +505,7 @@ class MainWindow(ctk.CTkFrame):
         self._project_path = None
         self._suggested_name = ""
         self._modified = False
-        self._instrument_editor.set_instruments([])
-        self._master_template_entry.delete(0, "end")
-        self._master_template_entry.insert(0, self.project.master_template)
-        self._subfolder_var.set(False)
-        self._subfolder_template_entry.delete(0, "end")
-        self._subfolder_template_entry.insert(0, self.project.subfolder_template)
-        self._output_dir_label.configure(
-            text=t("panel.output_dir_hint"), text_color="gray",
-        )
-        self.project.output_directory = ""
-        if self._group_panel:
-            self._group_panel.project = self.project
-            self._group_panel.reload_all()
+        self._sync_ui_from_project()
         self._update_title()
 
     def _open_project(self):
@@ -545,24 +533,7 @@ class MainWindow(ctk.CTkFrame):
             self._project_path = path
             self._suggested_name = ""
             self._modified = False
-            self._instrument_editor.set_instruments(self.project.instruments)
-            self._master_template_entry.delete(0, "end")
-            self._master_template_entry.insert(0, self.project.master_template)
-            self._subfolder_var.set(self.project.use_subfolders)
-            self._subfolder_template_entry.delete(0, "end")
-            self._subfolder_template_entry.insert(0, self.project.subfolder_template)
-            if self.project.output_directory:
-                self._output_dir_label.configure(
-                    text=self.project.output_directory,
-                    text_color=("black", "white"),
-                )
-            else:
-                self._output_dir_label.configure(
-                    text=t("panel.output_dir_hint"), text_color="gray",
-                )
-            if self._group_panel:
-                self._group_panel.project = self.project
-                self._group_panel.reload_all()
+            self._sync_ui_from_project()
             self._update_title()
             self._set_status(t("status.opened", path=path))
             self._add_recent_project(path)
@@ -607,6 +578,28 @@ class MainWindow(ctk.CTkFrame):
             messagebox.showerror(
                 t("dialog.error"), t("dialog.error.save_failed", error=e),
             )
+
+    def _sync_ui_from_project(self):
+        """將所有 UI 元件的 project 參考同步至 self.project"""
+        self._instrument_editor._project = self.project
+        self._instrument_editor.set_instruments(self.project.instruments)
+        self._master_template_entry.delete(0, "end")
+        self._master_template_entry.insert(0, self.project.master_template)
+        self._subfolder_var.set(self.project.use_subfolders)
+        self._subfolder_template_entry.delete(0, "end")
+        self._subfolder_template_entry.insert(0, self.project.subfolder_template)
+        if self.project.output_directory:
+            self._output_dir_label.configure(
+                text=self.project.output_directory,
+                text_color=("black", "white"),
+            )
+        else:
+            self._output_dir_label.configure(
+                text=t("panel.output_dir_hint"), text_color="gray",
+            )
+        if self._group_panel:
+            self._group_panel.project = self.project
+            self._group_panel.reload_all()
 
     def _mark_modified(self):
         if not self._modified:
@@ -670,24 +663,7 @@ class MainWindow(ctk.CTkFrame):
             self._project_path = path
             self._suggested_name = ""
             self._modified = False
-            self._instrument_editor.set_instruments(self.project.instruments)
-            self._master_template_entry.delete(0, "end")
-            self._master_template_entry.insert(0, self.project.master_template)
-            self._subfolder_var.set(self.project.use_subfolders)
-            self._subfolder_template_entry.delete(0, "end")
-            self._subfolder_template_entry.insert(0, self.project.subfolder_template)
-            if self.project.output_directory:
-                self._output_dir_label.configure(
-                    text=self.project.output_directory,
-                    text_color=("black", "white"),
-                )
-            else:
-                self._output_dir_label.configure(
-                    text=t("panel.output_dir_hint"), text_color="gray",
-                )
-            if self._group_panel:
-                self._group_panel.project = self.project
-                self._group_panel.reload_all()
+            self._sync_ui_from_project()
             self._update_title()
             self._set_status(t("status.opened", path=path))
             self._add_recent_project(path)
