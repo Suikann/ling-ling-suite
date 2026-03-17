@@ -542,6 +542,14 @@ class SplitPdfDialog(ctk.CTkToplevel):
 
     # --- 分譜指派面板 ---
 
+    def _get_project_skip_set(self) -> set:
+        """取得專案中已有的樂器（選用預設編制表時應跳過）"""
+        if not self._project or not self._project.instruments:
+            return set()
+        if self._active_instruments == list(self._project.instruments):
+            return set()
+        return set(self._project.instruments)
+
     def _next_unused_instrument(self, used: set, start_after: int = -1) -> str:
         """取得下一個未使用的樂器名稱
 
@@ -597,7 +605,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         sections = self._get_sections()
         self._section_name_vars = {}
         instruments = self._active_instruments
-        used_names: Set[str] = set()
+        used_names: Set[str] = set(self._get_project_skip_set())
         last_inst_idx = -1
         for sec_idx, (start, end) in enumerate(sections):
             color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
@@ -668,16 +676,8 @@ class SplitPdfDialog(ctk.CTkToplevel):
                 if name == choice:
                     self._active_instruments = list(preset.instruments)
                     break
-        sections = self._get_sections()
-        for sec_idx in range(len(sections)):
-            var = self._section_name_vars.get(sec_idx)
-            if not var:
-                continue
-            if sec_idx < len(self._active_instruments):
-                var.set(self._active_instruments[sec_idx])
-            else:
-                var.set(t("split.part_default", index=sec_idx + 1))
-        # 重建面板以顯示/隱藏上下樂器按鈕
+        # 重建面板（會自動跳過專案已有樂器）
+        self._section_name_vars = {}
         self._update_assignment_panel()
 
     # --- 輸出 ---
