@@ -21,7 +21,10 @@ PREFERENCES_FILE = os.path.join(APPDATA_DIR, "preferences.json")
 _DEFAULTS: Dict[str, Any] = {
     "language": "zh_TW",
     "appearance_mode": "Dark",
+    "recent_projects": [],
 }
+
+MAX_RECENT = 8
 
 
 class PreferencesService:
@@ -69,3 +72,15 @@ class PreferencesService:
             value: 偏好值
         """
         self._data[key] = value
+
+    def add_recent_project(self, path: str):
+        """將路徑加入最近專案清單頂部，自動去重與截斷
+
+        Args:
+            path: 專案檔路徑
+        """
+        recent = self._data.get("recent_projects", [])
+        path = os.path.normpath(path)
+        recent = [p for p in recent if os.path.normpath(p) != path]
+        recent.insert(0, path)
+        self._data["recent_projects"] = recent[:MAX_RECENT]

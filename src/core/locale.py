@@ -25,6 +25,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "menu.file.open": "開啟專案...",
         "menu.file.save": "儲存專案",
         "menu.file.save_as": "另存新檔...",
+        "menu.file.recent": "最近開啟的專案",
+        "menu.file.recent.empty": "（無）",
         # 選單 - 編輯
         "menu.edit": "編輯",
         "menu.edit.undo": "復原上次操作",
@@ -210,6 +212,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "menu.file.open": "Open Project...",
         "menu.file.save": "Save Project",
         "menu.file.save_as": "Save As...",
+        "menu.file.recent": "Recent Projects",
+        "menu.file.recent.empty": "(None)",
         # 選單 - 編輯
         "menu.edit": "Edit",
         "menu.edit.undo": "Undo Last Operation",

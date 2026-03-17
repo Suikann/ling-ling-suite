@@ -61,6 +61,11 @@ class MainWindow(ctk.CTkFrame):
         file_menu.add_command(
             label=t("menu.file.open"), command=self._open_project, accelerator="Ctrl+O",
         )
+        self._recent_menu = tk.Menu(file_menu, tearoff=0)
+        file_menu.add_cascade(
+            label=t("menu.file.recent"), menu=self._recent_menu,
+        )
+        self._refresh_recent_menu()
         file_menu.add_separator()
         file_menu.add_command(
             label=t("menu.file.save"), command=self._save_project, accelerator="Ctrl+S",
@@ -468,6 +473,7 @@ class MainWindow(ctk.CTkFrame):
         self._subfolder_template_entry.delete(0, "end")
         self._subfolder_template_entry.insert(0, self.project.subfolder_template)
         if self._group_panel:
+            self._group_panel.project = self.project
             self._group_panel.reload_all()
         self._update_title()
 
@@ -502,9 +508,11 @@ class MainWindow(ctk.CTkFrame):
             self._subfolder_template_entry.delete(0, "end")
             self._subfolder_template_entry.insert(0, self.project.subfolder_template)
             if self._group_panel:
+                self._group_panel.project = self.project
                 self._group_panel.reload_all()
             self._update_title()
             self._set_status(t("status.opened", path=path))
+            self._add_recent_project(path)
         except Exception as e:
             from tkinter import messagebox
             messagebox.showerror(
@@ -540,6 +548,7 @@ class MainWindow(ctk.CTkFrame):
             self._modified = False
             self._update_title()
             self._set_status(t("status.saved", path=path))
+            self._add_recent_project(path)
         except Exception as e:
             from tkinter import messagebox
             messagebox.showerror(
@@ -563,6 +572,71 @@ class MainWindow(ctk.CTkFrame):
 
     def _set_status(self, text: str):
         self._status_label.configure(text=text)
+
+    def _refresh_recent_menu(self):
+        """重建最近專案子選單"""
+        self._recent_menu.delete(0, "end")
+        recent = self._preferences.get("recent_projects") or []
+        if not recent:
+            self._recent_menu.add_command(
+                label=t("menu.file.recent.empty"), state="disabled",
+            )
+            return
+        for path in recent:
+            label = os.path.basename(path)
+            self._recent_menu.add_command(
+                label=label,
+                command=lambda p=path: self._open_recent_project(p),
+            )
+
+    def _open_recent_project(self, path: str):
+        """從最近專案清單開啟指定專案"""
+        if not os.path.isfile(path):
+            from tkinter import messagebox
+            messagebox.showerror(
+                t("dialog.error"),
+                t("dialog.missing_files.header", count=1) + f"\n{path}",
+            )
+            return
+        if self._modified:
+            from tkinter import messagebox
+            result = messagebox.askyesnocancel(
+                t("dialog.unsaved"), t("dialog.unsaved.message"),
+            )
+            if result is None:
+                return
+            if result:
+                self._save_project()
+        try:
+            if not self._project_service:
+                from services.project_service import ProjectService
+                self._project_service = ProjectService()
+            self.project = self._project_service.load_project(path)
+            self._project_path = path
+            self._modified = False
+            self._instrument_editor.set_instruments(self.project.instruments)
+            self._master_template_entry.delete(0, "end")
+            self._master_template_entry.insert(0, self.project.master_template)
+            self._subfolder_var.set(self.project.use_subfolders)
+            self._subfolder_template_entry.delete(0, "end")
+            self._subfolder_template_entry.insert(0, self.project.subfolder_template)
+            if self._group_panel:
+                self._group_panel.project = self.project
+                self._group_panel.reload_all()
+            self._update_title()
+            self._set_status(t("status.opened", path=path))
+            self._add_recent_project(path)
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror(
+                t("dialog.error"), t("dialog.error.open_failed", error=e),
+            )
+
+    def _add_recent_project(self, path: str):
+        """記錄最近專案並更新選單"""
+        self._preferences.add_recent_project(path)
+        self._preferences.save()
+        self._refresh_recent_menu()
 
     def _open_split_pdf(self):
         from ui.split_dialog import SplitPdfDialog
