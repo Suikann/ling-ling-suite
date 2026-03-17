@@ -712,9 +712,22 @@ class MainWindow(ctk.CTkFrame):
         )
 
     def _on_split_complete(self, group, instruments=None):
-        """分割完成回呼，建立群組並同步樂器表"""
+        """分割完成回呼，合併樂器表並建立群組"""
         if instruments:
-            self._instrument_editor.set_instruments(list(instruments))
+            existing = list(self.project.instruments)
+            for inst in instruments:
+                if inst not in existing:
+                    existing.append(inst)
+            remapped = []
+            for old_idx in group.selected_instruments:
+                if old_idx < len(instruments):
+                    name = instruments[old_idx]
+                    try:
+                        remapped.append(existing.index(name))
+                    except ValueError:
+                        pass
+            group.selected_instruments = remapped
+            self._instrument_editor.set_instruments(existing)
         self.project.groups.append(group)
         self._mark_modified()
         if self._group_panel:
