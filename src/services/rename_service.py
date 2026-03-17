@@ -47,7 +47,7 @@ class RenameService:
                 else project.master_template
             )
             if group.score_file:
-                label = group.score_label or t("group.score_label")
+                label = getattr(group, "score_label", "") or t("group.score_label")
                 score_vars = {
                     "序號": "00", "Number": "00",
                     "樂器": label,
