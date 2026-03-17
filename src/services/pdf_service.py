@@ -110,6 +110,33 @@ def split_pdf_into_single_pages(
     return split_pdf_every_n_pages(pdf_path, 1, output_dir)
 
 
+def extract_pages(
+    pdf_path: str,
+    page_indices: List[int],
+    output_path: str,
+) -> str:
+    """從 PDF 擷取指定頁面（0-based）至新檔案
+
+    Args:
+        pdf_path: 來源 PDF 檔案路徑
+        page_indices: 要擷取的頁面索引清單（從 0 開始）
+        output_path: 輸出檔案路徑
+
+    Returns:
+        輸出檔案路徑
+    """
+    reader = PdfReader(pdf_path)
+    writer = PdfWriter()
+    total = len(reader.pages)
+    for idx in page_indices:
+        if 0 <= idx < total:
+            writer.add_page(reader.pages[idx])
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "wb") as f:
+        writer.write(f)
+    return output_path
+
+
 def render_page_thumbnails(pdf_path: str, max_width: int = 160) -> List:
     """將 PDF 各頁面算繪為 PIL Image 縮圖
 

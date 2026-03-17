@@ -23,10 +23,8 @@ SECTION_COLORS = [
     "#F97316",
 ]
 
-_NAV_DIM_FG = ("gray93", "gray16")
-_NAV_DIM_TEXT = ("gray82", "gray25")
-_NAV_BRIGHT_FG = ("gray68", "gray40")
-_NAV_BRIGHT_TEXT = ("gray15", "gray95")
+_NAV_DIM = ("gray82", "gray25")
+_NAV_BRIGHT = ("gray15", "gray95")
 
 
 class SplitPdfDialog(ctk.CTkToplevel):
@@ -51,6 +49,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._page_count = 0
         self._ctk_images: List[ctk.CTkImage] = []
         self._split_starts: Set[int] = {0}
+        self._deleted_pages: Set[int] = set()
         self._section_name_vars: Dict[int, ctk.StringVar] = {}
         self._output_dir: Optional[str] = None
         self._file_map: Dict[str, str] = {}
@@ -235,6 +234,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
                 for img in pil_images
             ]
             self._split_starts = {0}
+            self._deleted_pages = set()
             self._render_page_grid()
             self._update_assignment_panel()
             self._execute_btn.configure(state="normal")
@@ -261,13 +261,18 @@ class SplitPdfDialog(ctk.CTkToplevel):
     def _build_section_header(
         self, sec_idx: int, start: int, end: int, color: str,
     ):
+        total = end - start + 1
+        actual = sum(
+            1 for p in range(start, end + 1) if p not in self._deleted_pages
+        )
         if start == end:
             page_str = f"p.{start + 1}"
         else:
             page_str = f"p.{start + 1}-{end + 1}"
+        count_str = f"({actual}/{total})" if actual < total else f"({total})"
         ctk.CTkLabel(
             self._page_scroll,
-            text=f"  {sec_idx + 1}  |  {page_str}  ({end - start + 1})",
+            text=f"  {sec_idx + 1}  |  {page_str}  {count_str}",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color=color,
         ).pack(anchor="w", padx=4, pady=(4, 2))
@@ -281,7 +286,9 @@ class SplitPdfDialog(ctk.CTkToplevel):
                     self._page_scroll, fg_color="transparent",
                 )
                 row_frame.pack(anchor="w", padx=4, pady=1)
-            outer = ctk.CTkFrame(row_frame, fg_color=color, corner_radius=6)
+            is_deleted = page_idx in self._deleted_pages
+            border_color = "gray50" if is_deleted else color
+            outer = ctk.CTkFrame(row_frame, fg_color=border_color, corner_radius=6)
             outer.pack(side="left", padx=3, pady=2)
             inner = ctk.CTkFrame(outer, corner_radius=4)
             inner.pack(padx=2, pady=2)
@@ -298,9 +305,12 @@ class SplitPdfDialog(ctk.CTkToplevel):
                 "<Button-3>",
                 lambda e, idx=page_idx: self._open_preview(idx),
             )
+            num_text = f"{page_idx + 1} X" if is_deleted else str(page_idx + 1)
+            num_color = "gray50" if is_deleted else None
             num_lbl = ctk.CTkLabel(
-                inner, text=str(page_idx + 1),
+                inner, text=num_text,
                 font=ctk.CTkFont(size=10),
+                text_color=num_color,
             )
             num_lbl.pack(pady=(0, 2))
             num_lbl.bind(
@@ -351,60 +361,67 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._preview_scroll.pack(fill="both", expand=True)
         self._preview_img_label = ctk.CTkLabel(self._preview_scroll, text="")
         self._preview_img_label.pack(padx=4, pady=4)
-        # 浮動：頁碼指示（頂部中央）
+        # 浮動頁碼（頂部中央，無背景）
         self._preview_page_label = ctk.CTkLabel(
             preview, text="",
             font=ctk.CTkFont(size=13),
-            fg_color=("gray85", "gray25"),
-            text_color=("gray30", "gray80"),
-            corner_radius=14,
-            height=28,
+            fg_color="transparent",
+            text_color=("gray40", "gray70"),
         )
         self._preview_page_label.place(relx=0.5, y=8, anchor="n")
-        # 浮動：上一頁（左側中央，幾乎透明）
+        # 浮動導航（無背景，僅文字）
         self._prev_btn = ctk.CTkButton(
             preview, text="\u25C0", width=44, height=80,
-            corner_radius=8, border_width=0,
-            fg_color=_NAV_DIM_FG, text_color=_NAV_DIM_TEXT,
-            hover_color=_NAV_DIM_FG,
-            font=ctk.CTkFont(size=22),
+            corner_radius=0, border_width=0,
+            fg_color="transparent", hover_color="transparent",
+            text_color=_NAV_DIM,
+            font=ctk.CTkFont(size=24),
             command=self._preview_prev,
         )
-        self._prev_btn.place(x=6, rely=0.5, anchor="w")
-        # 浮動：下一頁（右側中央，幾乎透明）
+        self._prev_btn.place(x=0, rely=0.5, anchor="w")
         self._next_btn = ctk.CTkButton(
             preview, text="\u25B6", width=44, height=80,
-            corner_radius=8, border_width=0,
-            fg_color=_NAV_DIM_FG, text_color=_NAV_DIM_TEXT,
-            hover_color=_NAV_DIM_FG,
-            font=ctk.CTkFont(size=22),
+            corner_radius=0, border_width=0,
+            fg_color="transparent", hover_color="transparent",
+            text_color=_NAV_DIM,
+            font=ctk.CTkFont(size=24),
             command=self._preview_next,
         )
-        self._next_btn.place(relx=1.0, x=-6, rely=0.5, anchor="e")
-        # 浮動：分割點切換（底部中央）
+        self._next_btn.place(relx=1.0, x=0, rely=0.5, anchor="e")
+        # 浮動操作列（底部中央，無背景）
+        bottom_bar = ctk.CTkFrame(preview, fg_color="transparent")
+        bottom_bar.place(relx=0.5, rely=1.0, y=-12, anchor="s")
         self._split_toggle_btn = ctk.CTkButton(
-            preview, text="", width=180, height=34,
-            corner_radius=17,
-            font=ctk.CTkFont(size=12),
-            text_color="white",
+            bottom_bar, text="", width=140, height=30,
+            corner_radius=0, border_width=0,
+            fg_color="transparent", hover_color="transparent",
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self._preview_toggle_split,
         )
-        self._split_toggle_btn.place(relx=0.5, rely=1.0, y=-16, anchor="s")
+        self._split_toggle_btn.pack(side="left", padx=8)
+        self._delete_toggle_btn = ctk.CTkButton(
+            bottom_bar, text="", width=100, height=30,
+            corner_radius=0, border_width=0,
+            fg_color="transparent", hover_color="transparent",
+            font=ctk.CTkFont(size=12),
+            command=self._preview_toggle_delete,
+        )
+        self._delete_toggle_btn.pack(side="left", padx=8)
         # 確保浮動元件在最上層
         self._preview_page_label.lift()
         self._prev_btn.lift()
         self._next_btn.lift()
-        self._split_toggle_btn.lift()
-        # 算繪初始頁面
+        bottom_bar.lift()
+        # 算繪
         preview.geometry("660x900")
         self._render_preview_page(page_idx)
-        # 啟動滑鼠接近偵測
         self._poll_nav_proximity()
-        # 鍵盤綁定
+        # 鍵盤
         preview.bind("<Left>", lambda e: self._preview_prev())
         preview.bind("<Right>", lambda e: self._preview_next())
         preview.bind("<Escape>", lambda e: self._close_preview())
         preview.bind("<space>", lambda e: self._preview_toggle_split())
+        preview.bind("<Delete>", lambda e: self._preview_toggle_delete())
         preview.grab_set()
         preview.protocol("WM_DELETE_WINDOW", self._close_preview)
 
@@ -418,18 +435,14 @@ class SplitPdfDialog(ctk.CTkToplevel):
             near_left = 0 <= mx < w * 0.18
             if near_left != self._prev_visible:
                 self._prev_visible = near_left
-                fg = _NAV_BRIGHT_FG if near_left else _NAV_DIM_FG
-                txt = _NAV_BRIGHT_TEXT if near_left else _NAV_DIM_TEXT
                 self._prev_btn.configure(
-                    fg_color=fg, text_color=txt, hover_color=fg,
+                    text_color=_NAV_BRIGHT if near_left else _NAV_DIM,
                 )
             near_right = mx > w * 0.82
             if near_right != self._next_visible:
                 self._next_visible = near_right
-                fg = _NAV_BRIGHT_FG if near_right else _NAV_DIM_FG
-                txt = _NAV_BRIGHT_TEXT if near_right else _NAV_DIM_TEXT
                 self._next_btn.configure(
-                    fg_color=fg, text_color=txt, hover_color=fg,
+                    text_color=_NAV_BRIGHT if near_right else _NAV_DIM,
                 )
         except Exception:
             pass
@@ -451,7 +464,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._preview_page_idx = page_idx
         self._preview_win.title(t("split.page_label", num=page_idx + 1))
         self._preview_page_label.configure(
-            text=f"  {page_idx + 1} / {self._page_count}  ",
+            text=f"{page_idx + 1} / {self._page_count}",
         )
         self._prev_btn.configure(
             state="normal" if page_idx > 0 else "disabled",
@@ -460,30 +473,43 @@ class SplitPdfDialog(ctk.CTkToplevel):
             state="normal" if page_idx < self._page_count - 1 else "disabled",
         )
         self._update_preview_split_indicator()
+        self._update_preview_delete_indicator()
 
     def _update_preview_split_indicator(self):
-        """更新預覽視窗的分割點指示按鈕"""
+        """更新分割點指示"""
         idx = self._preview_page_idx
         is_split = idx in self._split_starts
         sec_idx = self._get_section_for_page(idx)
         color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
         if idx == 0:
             self._split_toggle_btn.configure(
-                text=t("split.mark_split"),
-                state="disabled",
-                fg_color=color, hover_color=color,
+                text=t("split.mark_split"), state="disabled",
+                text_color=color,
             )
         elif is_split:
             self._split_toggle_btn.configure(
-                text=t("split.remove_split"),
-                state="normal",
-                fg_color=color, hover_color=color,
+                text=t("split.remove_split"), state="normal",
+                text_color=color,
             )
         else:
             self._split_toggle_btn.configure(
-                text=t("split.mark_split"),
-                state="normal",
-                fg_color=color, hover_color=color,
+                text=t("split.mark_split"), state="normal",
+                text_color=color,
+            )
+
+    def _update_preview_delete_indicator(self):
+        """更新刪除頁面指示"""
+        idx = self._preview_page_idx
+        is_deleted = idx in self._deleted_pages
+        if is_deleted:
+            self._delete_toggle_btn.configure(
+                text=t("split.restore_page"),
+                text_color=("#2563EB", "#60A5FA"),
+            )
+        else:
+            self._delete_toggle_btn.configure(
+                text=t("split.delete_page"),
+                text_color=("#DC2626", "#F87171"),
             )
 
     def _get_section_for_page(self, page_idx: int) -> int:
@@ -507,6 +533,17 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._update_assignment_panel()
         self._update_preview_split_indicator()
 
+    def _preview_toggle_delete(self):
+        """在預覽中切換頁面刪除"""
+        idx = self._preview_page_idx
+        if idx in self._deleted_pages:
+            self._deleted_pages.discard(idx)
+        else:
+            self._deleted_pages.add(idx)
+        self._render_page_grid()
+        self._update_assignment_panel()
+        self._update_preview_delete_indicator()
+
     def _preview_prev(self):
         if self._preview_page_idx > 0:
             self._render_preview_page(self._preview_page_idx - 1)
@@ -523,6 +560,27 @@ class SplitPdfDialog(ctk.CTkToplevel):
 
     # --- 分譜指派面板 ---
 
+    def _next_unused_instrument(self, used: set) -> str:
+        """取得下一個未使用的樂器名稱"""
+        for inst in self._active_instruments:
+            if inst not in used:
+                return inst
+        return t("split.part_default", index=len(used) + 1)
+
+    def _cycle_instrument(self, sec_idx: int, direction: int):
+        """切換指定分譜的樂器（上一個/下一個）"""
+        var = self._section_name_vars.get(sec_idx)
+        if not var or not self._active_instruments:
+            return
+        current = var.get()
+        instruments = self._active_instruments
+        try:
+            idx = instruments.index(current)
+        except ValueError:
+            idx = -1 if direction > 0 else len(instruments)
+        new_idx = (idx + direction) % len(instruments)
+        var.set(instruments[new_idx])
+
     def _update_assignment_panel(self):
         old_names = {
             idx: var.get() for idx, var in self._section_name_vars.items()
@@ -532,6 +590,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         sections = self._get_sections()
         self._section_name_vars = {}
         instruments = self._active_instruments
+        used_names: Set[str] = set()
         for sec_idx, (start, end) in enumerate(sections):
             color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
             row = ctk.CTkFrame(self._assign_scroll, fg_color="transparent")
@@ -540,28 +599,46 @@ class SplitPdfDialog(ctk.CTkToplevel):
                 row, width=14, height=14,
                 fg_color=color, corner_radius=7,
             )
-            dot.pack(side="left", padx=(0, 6))
+            dot.pack(side="left", padx=(0, 4))
             dot.pack_propagate(False)
             var = ctk.StringVar()
             if sec_idx in old_names:
-                var.set(old_names[sec_idx])
-            elif sec_idx < len(instruments):
-                var.set(instruments[sec_idx])
+                name = old_names[sec_idx]
+            elif instruments:
+                name = self._next_unused_instrument(used_names)
             else:
-                var.set(t("split.part_default", index=sec_idx + 1))
+                name = t("split.part_default", index=sec_idx + 1)
+            used_names.add(name)
+            var.set(name)
             self._section_name_vars[sec_idx] = var
+            if instruments:
+                ctk.CTkButton(
+                    row, text="\u25C0", width=24, height=24,
+                    fg_color="transparent", hover_color=("gray80", "gray30"),
+                    command=lambda i=sec_idx: self._cycle_instrument(i, -1),
+                ).pack(side="left", padx=1)
             ctk.CTkEntry(
-                row, textvariable=var, width=140, height=28,
+                row, textvariable=var, width=110, height=28,
             ).pack(side="left")
+            if instruments:
+                ctk.CTkButton(
+                    row, text="\u25B6", width=24, height=24,
+                    fg_color="transparent", hover_color=("gray80", "gray30"),
+                    command=lambda i=sec_idx: self._cycle_instrument(i, 1),
+                ).pack(side="left", padx=1)
+            actual = sum(
+                1 for p in range(start, end + 1) if p not in self._deleted_pages
+            )
+            total = end - start + 1
             if start == end:
                 range_text = f"p.{start + 1}"
             else:
                 range_text = f"p.{start + 1}-{end + 1}"
-            n_pages = end - start + 1
+            count_str = f"({actual}/{total})" if actual < total else f"({total})"
             ctk.CTkLabel(
-                row, text=f"{range_text} ({n_pages})",
+                row, text=f"{range_text} {count_str}",
                 font=ctk.CTkFont(size=11), text_color="gray",
-            ).pack(side="left", padx=(6, 0))
+            ).pack(side="left", padx=(4, 0))
 
     def _on_preset_selected(self, choice: str):
         """切換預設編制表"""
@@ -588,6 +665,8 @@ class SplitPdfDialog(ctk.CTkToplevel):
                 var.set(self._active_instruments[sec_idx])
             else:
                 var.set(t("split.part_default", index=sec_idx + 1))
+        # 重建面板以顯示/隱藏上下樂器按鈕
+        self._update_assignment_panel()
 
     # --- 輸出 ---
 
@@ -607,19 +686,24 @@ class SplitPdfDialog(ctk.CTkToplevel):
         output_dir = self._output_dir or os.path.dirname(self._pdf_path)
         sections = self._get_sections()
         try:
-            from services.pdf_service import split_pdf
+            from services.pdf_service import extract_pages
+            os.makedirs(output_dir, exist_ok=True)
             output_files: List[str] = []
             for sec_idx, (start, end) in enumerate(sections):
+                pages = [
+                    p for p in range(start, end + 1)
+                    if p not in self._deleted_pages
+                ]
+                if not pages:
+                    continue
                 var = self._section_name_vars.get(sec_idx)
                 name = var.get().strip() if var else f"Part {sec_idx + 1}"
                 safe_name = _sanitize_filename(name)
-                files = split_pdf(
-                    self._pdf_path,
-                    [(start + 1, end + 1)],
-                    output_dir,
-                    name_pattern=safe_name,
-                )
-                output_files.extend(files)
+                if not safe_name.lower().endswith(".pdf"):
+                    safe_name += ".pdf"
+                output_path = os.path.join(output_dir, safe_name)
+                extract_pages(self._pdf_path, pages, output_path)
+                output_files.append(output_path)
             new_file_infos = [
                 FileInfo(
                     original_path=path,
@@ -627,8 +711,11 @@ class SplitPdfDialog(ctk.CTkToplevel):
                 )
                 for path in output_files
             ]
-            if self._on_split_complete and new_file_infos:
-                self._on_split_complete(new_file_infos)
+            if self._on_split_complete:
+                self._on_split_complete(
+                    new_file_infos,
+                    self._active_instruments or None,
+                )
             messagebox.showinfo(
                 t("dialog.complete"),
                 t("split.done", count=len(output_files)),

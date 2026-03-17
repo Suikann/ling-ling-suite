@@ -572,9 +572,11 @@ class MainWindow(ctk.CTkFrame):
             on_split_complete=self._on_split_complete,
         )
 
-    def _on_split_complete(self, new_files):
-        """分割完成回呼，將新檔案加入未分組清單"""
+    def _on_split_complete(self, new_files, instruments=None):
+        """分割完成回呼，將新檔案加入未分組清單並同步樂器表"""
         self.project.ungrouped_files.extend(new_files)
+        if instruments:
+            self._instrument_editor.set_instruments(list(instruments))
         self._mark_modified()
         if self._group_panel:
             self._group_panel.refresh_ungrouped()

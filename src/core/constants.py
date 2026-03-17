@@ -14,8 +14,8 @@ APP_VERSION = "1.0.0"
 APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), APP_NAME)
 UNDO_DIR = os.path.join(APPDATA_DIR, "undo")
 PROJECT_EXTENSION = ".llproj"
-DEFAULT_MASTER_TEMPLATE = "{序號}. {樂器} - {曲名}.pdf"
-DEFAULT_MASTER_TEMPLATE_EN = "{Number}. {Instrument} - {PieceName}.pdf"
+DEFAULT_MASTER_TEMPLATE = "{序號}-{曲名}-{樂器}.pdf"
+DEFAULT_MASTER_TEMPLATE_EN = "{Number}-{PieceName}-{Instrument}.pdf"
 DEFAULT_SUBFOLDER_TEMPLATE = "{曲名} - 第{樂章編號}樂章"
 DEFAULT_SUBFOLDER_TEMPLATE_EN = "{PieceName} - Movement {MovementNum}"
 
