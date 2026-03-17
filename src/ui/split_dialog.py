@@ -361,27 +361,34 @@ class SplitPdfDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=13),
         )
         self._preview_page_label.pack(expand=True)
-        # 中間：左翻頁 + 譜面 + 右翻頁
-        middle = ctk.CTkFrame(preview, fg_color="transparent")
-        middle.pack(fill="both", expand=True, padx=4, pady=4)
-        left_nav = ctk.CTkFrame(middle, fg_color="transparent")
-        left_nav.pack(side="left", fill="y")
-        self._prev_btn = ctk.CTkButton(
-            left_nav, text="\u25C0", width=36, height=60,
-            command=self._preview_prev,
-        )
-        self._prev_btn.pack(expand=True)
-        self._preview_scroll = ctk.CTkScrollableFrame(middle)
-        self._preview_scroll.pack(side="left", fill="both", expand=True, padx=4)
-        right_nav = ctk.CTkFrame(middle, fg_color="transparent")
-        right_nav.pack(side="right", fill="y")
-        self._next_btn = ctk.CTkButton(
-            right_nav, text="\u25B6", width=36, height=60,
-            command=self._preview_next,
-        )
-        self._next_btn.pack(expand=True)
+        # 中間：譜面
+        self._preview_scroll = ctk.CTkScrollableFrame(preview)
+        self._preview_scroll.pack(fill="both", expand=True, padx=4, pady=4)
         self._preview_img_label = ctk.CTkLabel(self._preview_scroll, text="")
         self._preview_img_label.pack(padx=4, pady=4)
+        # 浮動翻頁（CTkLabel 無方形殘影）
+        self._prev_nav = ctk.CTkLabel(
+            preview, text="\u25C0",
+            fg_color="transparent",
+            text_color=("gray78", "gray30"),
+            font=ctk.CTkFont(size=28),
+            cursor="hand2",
+        )
+        self._prev_nav.place(x=10, rely=0.5, anchor="w")
+        self._prev_nav.bind("<Button-1>", lambda e: self._preview_prev())
+        self._next_nav = ctk.CTkLabel(
+            preview, text="\u25B6",
+            fg_color="transparent",
+            text_color=("gray78", "gray30"),
+            font=ctk.CTkFont(size=28),
+            cursor="hand2",
+        )
+        self._next_nav.place(relx=1.0, x=-10, rely=0.5, anchor="e")
+        self._next_nav.bind("<Button-1>", lambda e: self._preview_next())
+        self._prev_nav.lift()
+        self._next_nav.lift()
+        self._prev_visible = False
+        self._next_visible = False
         # 底部列：分割點 + 刪除
         bottom_bar = ctk.CTkFrame(preview, fg_color="transparent", height=36)
         bottom_bar.pack(fill="x", padx=8, pady=(0, 6))
@@ -403,6 +410,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         # 算繪
         preview.geometry("660x900")
         self._render_preview_page(page_idx)
+        self._poll_nav_proximity()
         # 鍵盤
         preview.bind("<Left>", lambda e: self._preview_prev())
         preview.bind("<Right>", lambda e: self._preview_next())
@@ -430,12 +438,14 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._preview_page_label.configure(
             text=f"{page_idx + 1} / {self._page_count}",
         )
-        self._prev_btn.configure(
-            state="normal" if page_idx > 0 else "disabled",
-        )
-        self._next_btn.configure(
-            state="normal" if page_idx < self._page_count - 1 else "disabled",
-        )
+        if page_idx > 0:
+            self._prev_nav.place(x=10, rely=0.5, anchor="w")
+        else:
+            self._prev_nav.place_forget()
+        if page_idx < self._page_count - 1:
+            self._next_nav.place(relx=1.0, x=-10, rely=0.5, anchor="e")
+        else:
+            self._next_nav.place_forget()
         self._update_preview_split_indicator()
         self._update_preview_delete_indicator()
 
@@ -485,6 +495,27 @@ class SplitPdfDialog(ctk.CTkToplevel):
             if start <= page_idx <= end:
                 return sec_idx
         return 0
+
+    def _poll_nav_proximity(self):
+        """定期檢查滑鼠位置，接近邊緣時顯示翻頁箭頭"""
+        if not self._preview_win or not self._preview_win.winfo_exists():
+            return
+        try:
+            mx = self._preview_win.winfo_pointerx() - self._preview_win.winfo_rootx()
+            w = self._preview_win.winfo_width()
+            dim = ("gray78", "gray30")
+            bright = ("gray15", "gray95")
+            near_left = 0 <= mx < w * 0.18
+            if near_left != self._prev_visible:
+                self._prev_visible = near_left
+                self._prev_nav.configure(text_color=bright if near_left else dim)
+            near_right = mx > w * 0.82
+            if near_right != self._next_visible:
+                self._next_visible = near_right
+                self._next_nav.configure(text_color=bright if near_right else dim)
+        except Exception:
+            pass
+        self._preview_win.after(150, self._poll_nav_proximity)
 
     def _preview_toggle_split(self):
         """在預覽中切換分割點"""
