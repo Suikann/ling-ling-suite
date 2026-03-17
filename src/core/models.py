@@ -23,6 +23,7 @@ class Group:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     name: str = ""
     files: List[FileInfo] = field(default_factory=list)
+    instruments: List[str] = field(default_factory=list)
     selected_instruments: List[int] = field(default_factory=list)
     piece_name: str = ""
     movement_number: str = ""

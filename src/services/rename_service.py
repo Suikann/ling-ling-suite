@@ -77,7 +77,7 @@ class RenameService:
                 if i >= len(group.selected_instruments):
                     break
                 variables = build_variables_for_file(
-                    i, group, project.instruments,
+                    i, group, project.instruments or None,
                 )
                 new_name = _sanitize_name(substitute_template(template, variables))
                 base_dir = (

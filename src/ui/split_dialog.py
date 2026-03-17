@@ -775,7 +775,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
             from services.pdf_service import extract_pages
             os.makedirs(output_dir, exist_ok=True)
             split_files: List[FileInfo] = []
-            split_selected: List[int] = []
+            split_instruments: List[str] = []
             for sec_idx, (start, end) in enumerate(sections):
                 pages = [
                     p for p in range(start, end + 1)
@@ -794,18 +794,14 @@ class SplitPdfDialog(ctk.CTkToplevel):
                     original_path=output_path,
                     display_name=os.path.basename(output_path),
                 ))
-                try:
-                    inst_idx = self._project.instruments.index(name)
-                    split_selected.append(inst_idx)
-                except ValueError:
-                    pass
+                split_instruments.append(name)
             if not split_files:
                 messagebox.showinfo(t("dialog.info"), t("dialog.info.no_files"))
                 return
             if self._on_split_complete:
                 self._on_split_complete(
                     split_files,
-                    split_selected,
+                    split_instruments,
                     self._source_group,
                     self._pdf_path,
                 )

@@ -30,28 +30,42 @@ def substitute_template(template: str, variables: Dict[str, str]) -> str:
 def build_variables_for_file(
     file_index: int,
     group: Group,
-    instruments: List[str],
+    instruments: List[str] = None,
 ) -> Dict[str, str]:
     """為單一檔案組合所有模板變數（同時產生中英文鍵名）
 
     Args:
         file_index: 檔案在群組中的索引（從 0 開始）
         group: 所屬群組
-        instruments: 完整樂器表
+        instruments: 樂器表（未提供時使用 group.instruments）
 
     Returns:
         變數名稱到值的對應字典（包含中英文鍵名）
     """
+    group_instruments = getattr(group, "instruments", []) or []
     selected = group.selected_instruments
-    total = len(selected)
-    pad_width = len(str(total)) if total > 0 else 1
-    instrument_index = selected[file_index] if file_index < len(selected) else 0
-    sequence_number = str(instrument_index + 1).zfill(pad_width)
-    instrument_name = (
-        instruments[instrument_index]
-        if instrument_index < len(instruments)
-        else ""
-    )
+    if group_instruments and selected:
+        total = len(selected)
+        pad_width = len(str(total)) if total > 0 else 1
+        inst_idx = selected[file_index] if file_index < len(selected) else 0
+        sequence_number = str(inst_idx + 1).zfill(pad_width)
+        instrument_name = (
+            group_instruments[inst_idx]
+            if inst_idx < len(group_instruments)
+            else ""
+        )
+    elif instruments and selected:
+        total = len(selected)
+        pad_width = len(str(total)) if total > 0 else 1
+        inst_idx = selected[file_index] if file_index < len(selected) else 0
+        sequence_number = str(inst_idx + 1).zfill(pad_width)
+        instrument_name = (
+            instruments[inst_idx] if inst_idx < len(instruments) else ""
+        )
+    else:
+        pad_width = len(str(len(group.files))) if group.files else 1
+        sequence_number = str(file_index + 1).zfill(pad_width)
+        instrument_name = ""
     values = {
         "序號": sequence_number,
         "樂器": instrument_name,

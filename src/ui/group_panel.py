@@ -33,7 +33,9 @@ class GroupPanel(ctk.CTkFrame):
         self._build_ui()
 
     def _build_ui(self):
-        self._tabview = ctk.CTkTabview(self, anchor="nw")
+        self._tabview = ctk.CTkTabview(
+            self, anchor="nw", command=self._on_tab_changed,
+        )
         self._tabview.pack(fill="both", expand=True, padx=4, pady=4)
         # 工作區內的操作按鈕列
         btn_bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -124,10 +126,27 @@ class GroupPanel(ctk.CTkFrame):
             t("group.link_movements.done", count=len(selected_groups), piece=piece_name),
         )
 
+    def _on_tab_changed(self):
+        """分頁切換時通知主視窗更新左側樂器表"""
+        group = self.get_active_group()
+        self.main_window._sync_instrument_editor_to_group(group)
+
+    def get_active_group(self):
+        """取得目前活動分頁的群組（未分組回傳 None）"""
+        active = self._tabview.get()
+        content = self._tab_contents.get(active)
+        if content and hasattr(content, '_group'):
+            return content._group
+        return None
+
     def on_instruments_changed(self, instruments: List[str]):
-        """樂器表變更時更新所有群組的勾選框"""
-        for name, content in self._tab_contents.items():
-            if hasattr(content, 'on_instruments_changed'):
+        """樂器表變更時更新活動群組"""
+        group = self.get_active_group()
+        if group:
+            group.instruments = list(instruments)
+            active = self._tabview.get()
+            content = self._tab_contents.get(active)
+            if content and hasattr(content, 'on_instruments_changed'):
                 content.on_instruments_changed(instruments)
 
     def refresh_ungrouped(self):
@@ -564,7 +583,7 @@ class GroupTabContent(ctk.CTkFrame):
         for widget in self._instrument_scroll.winfo_children():
             widget.destroy()
         self._instrument_vars = []
-        instruments = self.project.instruments
+        instruments = self._group.instruments
         if not instruments:
             ctk.CTkLabel(
                 self._instrument_scroll, text=t("group.no_instruments"),
@@ -638,7 +657,7 @@ class GroupTabContent(ctk.CTkFrame):
                 self._file_scroll, text=t("file_list.empty"), text_color="gray",
             ).pack(pady=8)
         else:
-            instruments = self.project.instruments
+            instruments = self._group.instruments
             selected = self._group.selected_instruments
             for i, file_info in enumerate(self._group.files):
                 self._create_file_row(i, file_info, instruments, selected)
@@ -793,7 +812,8 @@ class GroupTabContent(ctk.CTkFrame):
         self.main_window._mark_modified()
 
     def on_instruments_changed(self, instruments: List[str]):
-        """樂器表變更時重新建立勾選框"""
+        """樂器表變更時更新群組樂器並重建勾選框"""
+        self._group.instruments = list(instruments)
         valid = set(range(len(instruments)))
         self._group.selected_instruments = [
             i for i in self._group.selected_instruments if i in valid

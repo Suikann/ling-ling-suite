@@ -64,6 +64,9 @@ class ProjectService:
             self._deserialize_group(g)
             for g in data.get("groups", [])
         ]
+        for group in project.groups:
+            if not group.instruments and project.instruments:
+                group.instruments = list(project.instruments)
         return project
 
     def _serialize_group(self, group: Group) -> dict:
@@ -87,6 +90,7 @@ class ProjectService:
                  "display_name": group.score_file.display_name}
                 if group.score_file else None
             ),
+            "instruments": group.instruments,
             "score_label": group.score_label,
             "selected_instruments": group.selected_instruments,
             "piece_name": group.piece_name,
@@ -117,6 +121,7 @@ class ProjectService:
             id=data.get("id", ""),
             name=data.get("name", ""),
             score_file=score_file,
+            instruments=data.get("instruments", []),
             score_label=data.get("score_label", ""),
             selected_instruments=data.get("selected_instruments", []),
             piece_name=data.get("piece_name", ""),

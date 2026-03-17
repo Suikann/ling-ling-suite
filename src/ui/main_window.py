@@ -336,6 +336,14 @@ class MainWindow(ctk.CTkFrame):
         self.project.subfolder_template = self._subfolder_template_entry.get()
         self._mark_modified()
 
+    def _sync_instrument_editor_to_group(self, group):
+        """切換分頁時更新左側樂器表"""
+        if group:
+            saved_cb = self._instrument_editor._on_changed
+            self._instrument_editor._on_changed = None
+            self._instrument_editor.set_instruments(group.instruments)
+            self._instrument_editor._on_changed = saved_cb
+
     def _on_instruments_changed(self, instruments):
         self.project.instruments = instruments
         self._mark_modified()
@@ -695,21 +703,24 @@ class MainWindow(ctk.CTkFrame):
             initial_group=current_group,
         )
 
-    def _on_split_complete(self, files, selected, source_group, source_path):
+    def _on_split_complete(self, files, instruments, source_group, source_path):
         """分割完成回呼，將檔案放回來源群組或建立新群組"""
         from core.models import Group
+        selected = list(range(len(files)))
         if source_group:
             source_group.files = [
                 f for f in source_group.files
                 if f.original_path != source_path
             ]
             source_group.files.extend(files)
+            source_group.instruments = instruments
             source_group.selected_instruments = selected
         else:
             source_name = os.path.splitext(os.path.basename(source_path))[0]
             new_group = Group(
                 name=source_name,
                 files=files,
+                instruments=instruments,
                 selected_instruments=selected,
             )
             self.project.groups.append(new_group)
