@@ -205,7 +205,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
             )
             return
         try:
-            from services.pdf_service import get_page_count, render_page_thumbnails
+            from services.pdf_service import get_page_count
         except ImportError:
             messagebox.showerror(
                 t("dialog.error"), t("split.missing_dependency"),
@@ -217,28 +217,63 @@ class SplitPdfDialog(ctk.CTkToplevel):
             self._page_info_label.configure(
                 text=t("split.page_count", count=self._page_count),
             )
-            pil_images = render_page_thumbnails(path, max_width=self._THUMB_WIDTH)
-            self._ctk_images = [
-                ctk.CTkImage(
-                    light_image=img, dark_image=img,
-                    size=(img.width, img.height),
-                )
-                for img in pil_images
-            ]
-            self._split_starts = {0}
-            self._deleted_pages = set()
-            self._render_page_grid()
-            self._update_assignment_panel()
-            self._execute_btn.configure(state="normal")
+            self._execute_btn.configure(state="disabled")
+            for child in self._page_scroll.winfo_children():
+                child.destroy()
+            ctk.CTkLabel(
+                self._page_scroll,
+                text=t("split.loading", count=self._page_count),
+                font=ctk.CTkFont(size=14), text_color="gray",
+            ).pack(expand=True, pady=40)
+            import threading
+            threading.Thread(
+                target=self._render_thumbnails_bg,
+                args=(path,),
+                daemon=True,
+            ).start()
         except Exception as e:
             messagebox.showerror(t("dialog.error"), str(e))
+
+    def _render_thumbnails_bg(self, path: str):
+        """背景執行緒算繪縮圖"""
+        try:
+            from services.pdf_service import render_page_thumbnails
+            pil_images = render_page_thumbnails(path, max_width=self._THUMB_WIDTH)
+            self.after(0, self._on_thumbnails_ready, pil_images)
+        except Exception as e:
+            self.after(0, self._on_thumbnails_error, str(e))
+
+    def _on_thumbnails_ready(self, pil_images):
+        """縮圖算繪完成，更新 UI"""
+        self._ctk_images = [
+            ctk.CTkImage(
+                light_image=img, dark_image=img,
+                size=(img.width, img.height),
+            )
+            for img in pil_images
+        ]
+        self._split_starts = {0}
+        self._deleted_pages = set()
+        self._render_page_grid()
+        self._update_assignment_panel()
+        self._execute_btn.configure(state="normal")
+
+    def _on_thumbnails_error(self, error_msg: str):
+        """縮圖算繪失敗"""
+        from tkinter import messagebox
+        messagebox.showerror(t("dialog.error"), error_msg)
+        for child in self._page_scroll.winfo_children():
+            child.destroy()
 
     # --- 頁面縮圖顯示 ---
 
     def _render_page_grid(self):
+        pack_info = self._page_scroll.pack_info()
+        self._page_scroll.pack_forget()
         for child in self._page_scroll.winfo_children():
             child.destroy()
         if not self._ctk_images:
+            self._page_scroll.pack(**pack_info)
             return
         sections = self._get_sections()
         for sec_idx, (start, end) in enumerate(sections):
@@ -249,6 +284,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
                 ).pack(fill="x", padx=8, pady=(10, 2))
             self._build_section_header(sec_idx, start, end, color)
             self._build_section_pages(start, end, color)
+        self._page_scroll.pack(**pack_info)
 
     def _build_section_header(
         self, sec_idx: int, start: int, end: int, color: str,

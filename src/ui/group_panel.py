@@ -193,6 +193,8 @@ class UngroupedTabContent(ctk.CTkFrame):
         self._refresh_list()
 
     def _refresh_list(self):
+        pack_info = self._scroll.pack_info()
+        self._scroll.pack_forget()
         for widget in self._scroll.winfo_children():
             widget.destroy()
         self._check_vars = []
@@ -202,9 +204,10 @@ class UngroupedTabContent(ctk.CTkFrame):
                 self._scroll, text=t("ungrouped.empty"),
                 font=ctk.CTkFont(size=13), text_color="gray",
             ).pack(expand=True, pady=40)
-            return
-        for i, file_info in enumerate(self.project.ungrouped_files):
-            self._create_ungrouped_row(i, file_info)
+        else:
+            for i, file_info in enumerate(self.project.ungrouped_files):
+                self._create_ungrouped_row(i, file_info)
+        self._scroll.pack(**pack_info)
 
     def _create_ungrouped_row(self, index: int, file_info: FileInfo):
         row = ctk.CTkFrame(self._scroll, fg_color="transparent")
@@ -417,6 +420,8 @@ class GroupTabContent(ctk.CTkFrame):
             self._group.piece_name = detected
 
     def _refresh_instruments(self):
+        pack_info = self._instrument_scroll.pack_info()
+        self._instrument_scroll.pack_forget()
         for widget in self._instrument_scroll.winfo_children():
             widget.destroy()
         self._instrument_vars = []
@@ -426,16 +431,17 @@ class GroupTabContent(ctk.CTkFrame):
                 self._instrument_scroll, text=t("group.no_instruments"),
                 text_color="gray",
             ).pack(pady=8)
-            return
-        for i, name in enumerate(instruments):
-            var = ctk.BooleanVar(value=(i in self._group.selected_instruments))
-            cb = ctk.CTkCheckBox(
-                self._instrument_scroll, text=name,
-                variable=var,
-                command=self._on_instrument_check_changed,
-            )
-            cb.pack(anchor="w", padx=4, pady=1)
-            self._instrument_vars.append(var)
+        else:
+            for i, name in enumerate(instruments):
+                var = ctk.BooleanVar(value=(i in self._group.selected_instruments))
+                cb = ctk.CTkCheckBox(
+                    self._instrument_scroll, text=name,
+                    variable=var,
+                    command=self._on_instrument_check_changed,
+                )
+                cb.pack(anchor="w", padx=4, pady=1)
+                self._instrument_vars.append(var)
+        self._instrument_scroll.pack(**pack_info)
         self._check_mismatch()
 
     def _on_instrument_check_changed(self):
@@ -462,17 +468,20 @@ class GroupTabContent(ctk.CTkFrame):
             self._mismatch_label.configure(text_color=("green", "#2ecc71"))
 
     def _refresh_file_list(self):
+        pack_info = self._file_scroll.pack_info()
+        self._file_scroll.pack_forget()
         for widget in self._file_scroll.winfo_children():
             widget.destroy()
         if not self._group.files:
             ctk.CTkLabel(
                 self._file_scroll, text=t("file_list.empty"), text_color="gray",
             ).pack(pady=8)
-            return
-        instruments = self.project.instruments
-        selected = self._group.selected_instruments
-        for i, file_info in enumerate(self._group.files):
-            self._create_file_row(i, file_info, instruments, selected)
+        else:
+            instruments = self.project.instruments
+            selected = self._group.selected_instruments
+            for i, file_info in enumerate(self._group.files):
+                self._create_file_row(i, file_info, instruments, selected)
+        self._file_scroll.pack(**pack_info)
 
     def _create_file_row(self, index, file_info, instruments, selected):
         row = ctk.CTkFrame(self._file_scroll, fg_color="transparent")

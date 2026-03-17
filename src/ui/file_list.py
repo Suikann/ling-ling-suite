@@ -76,15 +76,18 @@ class FileListWidget(ctk.CTkFrame):
         ).pack(side="left", padx=1)
 
     def _refresh(self):
+        pack_info = self._scroll.pack_info()
+        self._scroll.pack_forget()
         for widget in self._scroll.winfo_children():
             widget.destroy()
         if not self._files:
             ctk.CTkLabel(
                 self._scroll, text=t("file_list.empty"), text_color="gray",
             ).pack(pady=8)
-            return
-        for i, file_info in enumerate(self._files):
-            self._create_row(i, file_info)
+        else:
+            for i, file_info in enumerate(self._files):
+                self._create_row(i, file_info)
+        self._scroll.pack(**pack_info)
 
     def _move_up(self, index: int):
         if index <= 0:

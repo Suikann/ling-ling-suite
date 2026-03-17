@@ -119,10 +119,13 @@ class InstrumentListEditor(ctk.CTkFrame):
             self._notify_changed()
 
     def _refresh_list(self):
+        pack_info = self._scroll_frame.pack_info()
+        self._scroll_frame.pack_forget()
         for widget in self._scroll_frame.winfo_children():
             widget.destroy()
         for i, name in enumerate(self._instruments):
             self._create_row(i, name)
+        self._scroll_frame.pack(**pack_info)
 
     def _notify_changed(self):
         if self._on_changed:
