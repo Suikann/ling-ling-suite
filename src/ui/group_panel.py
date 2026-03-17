@@ -575,41 +575,61 @@ class GroupTabContent(ctk.CTkFrame):
             self._group.piece_name = detected
 
     def _refresh_instruments(self):
-        try:
-            pack_info = self._instrument_scroll.pack_info()
-            self._instrument_scroll.pack_forget()
-        except Exception:
-            pack_info = None
-        for widget in self._instrument_scroll.winfo_children():
-            widget.destroy()
-        self._instrument_vars = []
         instruments = self._group.instruments
+        existing = self._instrument_scroll.winfo_children()
         if not instruments:
+            for w in existing:
+                w.destroy()
+            self._instrument_vars = []
+            self._instrument_cbs = []
             ctk.CTkLabel(
                 self._instrument_scroll, text=t("group.no_instruments"),
                 text_color="gray",
             ).pack(pady=8)
-        else:
+            return
+        has_sa = hasattr(self, '_select_all_inst_var') and len(existing) > 0
+        if not has_sa or (existing and not hasattr(existing[0], '_is_sa')):
+            for w in existing:
+                w.destroy()
+            self._instrument_vars = []
+            self._instrument_cbs = []
             self._select_all_inst_var = ctk.BooleanVar(value=False)
-            ctk.CTkCheckBox(
+            sa = ctk.CTkCheckBox(
                 self._instrument_scroll,
                 text=t("group.select_all_instruments"),
                 variable=self._select_all_inst_var,
                 command=self._toggle_select_all_instruments,
-            ).pack(anchor="w", padx=4, pady=(1, 4))
-            for i, name in enumerate(instruments):
-                var = ctk.BooleanVar(value=(i in self._group.selected_instruments))
-                cb = ctk.CTkCheckBox(
-                    self._instrument_scroll, text=name,
-                    variable=var,
-                    command=self._on_instrument_check_changed,
-                )
-                cb.pack(anchor="w", padx=4, pady=1)
-                self._instrument_vars.append(var)
-            all_checked = len(self._group.selected_instruments) == len(instruments)
-            self._select_all_inst_var.set(all_checked)
-        if pack_info:
-            self._instrument_scroll.pack(**pack_info)
+            )
+            sa._is_sa = True
+            sa.pack(anchor="w", padx=4, pady=(1, 4))
+            existing = []
+        else:
+            existing = existing[1:]
+        target = len(instruments)
+        cur = len(existing)
+        for i in range(min(cur, target)):
+            existing[i].configure(text=instruments[i])
+            if i < len(self._instrument_vars):
+                self._instrument_vars[i].set(i in self._group.selected_instruments)
+        for i in range(cur, target):
+            var = ctk.BooleanVar(value=(i in self._group.selected_instruments))
+            cb = ctk.CTkCheckBox(
+                self._instrument_scroll, text=instruments[i],
+                variable=var,
+                command=self._on_instrument_check_changed,
+            )
+            cb.pack(anchor="w", padx=4, pady=1)
+            self._instrument_vars.append(var)
+            if not hasattr(self, '_instrument_cbs'):
+                self._instrument_cbs = []
+            self._instrument_cbs.append(cb)
+        for i in range(target, cur):
+            existing[i].destroy()
+        self._instrument_vars = self._instrument_vars[:target]
+        if hasattr(self, '_instrument_cbs'):
+            self._instrument_cbs = self._instrument_cbs[:target]
+        all_checked = len(self._group.selected_instruments) == target and target > 0
+        self._select_all_inst_var.set(all_checked)
         self._check_mismatch()
 
     def _toggle_select_all_instruments(self):
@@ -645,29 +665,43 @@ class GroupTabContent(ctk.CTkFrame):
             self._mismatch_label.configure(text_color=("green", "#2ecc71"))
 
     def _refresh_file_list(self):
-        try:
-            pack_info = self._file_scroll.pack_info()
-            self._file_scroll.pack_forget()
-        except Exception:
-            pack_info = None
-        for widget in self._file_scroll.winfo_children():
-            widget.destroy()
-        if not self._group.files:
+        existing = self._file_scroll.winfo_children()
+        target = len(self._group.files)
+        if target == 0:
+            for w in existing:
+                w.destroy()
+            self._file_rows = []
             ctk.CTkLabel(
                 self._file_scroll, text=t("file_list.empty"), text_color="gray",
             ).pack(pady=8)
-        else:
-            instruments = self._group.instruments
-            selected = self._group.selected_instruments
-            for i, file_info in enumerate(self._group.files):
-                self._create_file_row(i, file_info, instruments, selected)
-        if pack_info:
-            self._file_scroll.pack(**pack_info)
+            return
+        if existing and not hasattr(existing[0], '_idx'):
+            for w in existing:
+                w.destroy()
+            existing = []
+            self._file_rows = []
+        if not hasattr(self, '_file_rows'):
+            self._file_rows = list(existing)
+        instruments = self._group.instruments
+        selected = self._group.selected_instruments
+        cur = len(self._file_rows)
+        for i in range(min(cur, target)):
+            row = self._file_rows[i]
+            row._idx = i
+            row._file_label.configure(text=self._group.files[i].display_name)
+        for i in range(cur, target):
+            self._create_file_row(i, self._group.files[i], instruments, selected)
+        for i in range(target, cur):
+            self._file_rows[i].destroy()
+        self._file_rows = self._file_rows[:target]
 
     def _create_file_row(self, index, file_info, instruments, selected):
         row = ctk.CTkFrame(self._file_scroll, fg_color="transparent")
         row._idx = index
         row.pack(fill="x", pady=1)
+        if not hasattr(self, '_file_rows'):
+            self._file_rows = []
+        self._file_rows.append(row)
         if index < len(selected) and selected[index] < len(instruments):
             inst_text = instruments[selected[index]]
             ctk.CTkLabel(

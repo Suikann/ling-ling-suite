@@ -26,6 +26,7 @@ class InstrumentListEditor(ctk.CTkFrame):
         self._instruments: List[str] = []
         self._on_changed = on_instruments_changed
         self._project = project
+        self._rows: List[ctk.CTkFrame] = []
         self._build_ui()
 
     def _build_ui(self):
@@ -54,7 +55,7 @@ class InstrumentListEditor(ctk.CTkFrame):
         )
         extract_btn.pack(fill="x", padx=8, pady=(0, 8))
 
-    def _create_row(self, index: int, name: str):
+    def _create_row(self, index: int, name: str) -> ctk.CTkFrame:
         """建立單一樂器列"""
         row = ctk.CTkFrame(self._scroll_frame, fg_color="transparent")
         row._idx = index
@@ -76,6 +77,8 @@ class InstrumentListEditor(ctk.CTkFrame):
             fg_color="#c0392b", hover_color="#e74c3c",
             command=lambda r=row: self._remove(r._idx),
         ).pack(side="left", padx=1)
+        self._rows.append(row)
+        return row
 
     def _add_instrument(self):
         name = self._entry.get().strip()
@@ -92,7 +95,8 @@ class InstrumentListEditor(ctk.CTkFrame):
         self._instruments[index], self._instruments[index - 1] = (
             self._instruments[index - 1], self._instruments[index]
         )
-        self._swap_row_text(index, index - 1)
+        self._rows[index].winfo_children()[0].configure(text=self._instruments[index])
+        self._rows[index - 1].winfo_children()[0].configure(text=self._instruments[index - 1])
         self._notify_changed()
 
     def _move_down(self, index: int):
@@ -101,42 +105,31 @@ class InstrumentListEditor(ctk.CTkFrame):
         self._instruments[index], self._instruments[index + 1] = (
             self._instruments[index + 1], self._instruments[index]
         )
-        self._swap_row_text(index, index + 1)
+        self._rows[index].winfo_children()[0].configure(text=self._instruments[index])
+        self._rows[index + 1].winfo_children()[0].configure(text=self._instruments[index + 1])
         self._notify_changed()
-
-    def _swap_row_text(self, idx_a: int, idx_b: int):
-        """交換兩列的顯示文字，不重建元件"""
-        rows = self._scroll_frame.winfo_children()
-        if idx_a < len(rows) and idx_b < len(rows):
-            rows[idx_a].winfo_children()[0].configure(
-                text=self._instruments[idx_a],
-            )
-            rows[idx_b].winfo_children()[0].configure(
-                text=self._instruments[idx_b],
-            )
 
     def _remove(self, index: int):
         if 0 <= index < len(self._instruments):
             self._instruments.pop(index)
-            rows = self._scroll_frame.winfo_children()
-            if index < len(rows):
-                rows[index].destroy()
-            for i, row in enumerate(self._scroll_frame.winfo_children()):
-                row._idx = i
+            self._rows[index].destroy()
+            self._rows.pop(index)
+            for i in range(index, len(self._rows)):
+                self._rows[i]._idx = i
             self._notify_changed()
 
     def _refresh_list(self):
-        try:
-            pack_info = self._scroll_frame.pack_info()
-            self._scroll_frame.pack_forget()
-        except Exception:
-            pack_info = None
-        for widget in self._scroll_frame.winfo_children():
-            widget.destroy()
-        for i, name in enumerate(self._instruments):
-            self._create_row(i, name)
-        if pack_info:
-            self._scroll_frame.pack(**pack_info)
+        """重建或更新樂器清單（盡量重用既有元件）"""
+        target = len(self._instruments)
+        existing = len(self._rows)
+        for i in range(min(existing, target)):
+            self._rows[i]._idx = i
+            self._rows[i].winfo_children()[0].configure(text=self._instruments[i])
+        for i in range(existing, target):
+            self._create_row(i, self._instruments[i])
+        for i in range(target, existing):
+            self._rows[i].destroy()
+        self._rows = self._rows[:target]
 
     def _notify_changed(self):
         if self._on_changed:
@@ -204,11 +197,7 @@ class InstrumentListEditor(ctk.CTkFrame):
         return list(self._instruments)
 
     def set_instruments(self, instruments: List[str]):
-        """設定樂器清單
-
-        Args:
-            instruments: 樂器名稱清單
-        """
+        """設定樂器清單"""
         self._instruments = list(instruments)
         self._refresh_list()
         self._notify_changed()
