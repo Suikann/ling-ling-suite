@@ -547,26 +547,51 @@ class SplitPdfDialog(ctk.CTkToplevel):
 
     # --- 分譜指派面板 ---
 
-    def _next_unused_instrument(self, used: set) -> str:
-        """取得下一個未使用的樂器名稱"""
-        for inst in self._active_instruments:
-            if inst not in used:
-                return inst
+    def _next_unused_instrument(self, used: set, start_after: int = -1) -> str:
+        """取得下一個未使用的樂器名稱
+
+        Args:
+            used: 已使用的樂器名稱集合
+            start_after: 從此索引之後開始搜尋（-1 表示從頭）
+        """
+        instruments = self._active_instruments
+        for i in range(start_after + 1, len(instruments)):
+            if instruments[i] not in used:
+                return instruments[i]
         return t("split.part_default", index=len(used) + 1)
 
     def _cycle_instrument(self, sec_idx: int, direction: int):
-        """切換指定分譜的樂器（上一個/下一個）"""
+        """切換指定分譜的樂器，後續分譜連鎖更新"""
         var = self._section_name_vars.get(sec_idx)
         if not var or not self._active_instruments:
             return
         current = var.get()
         instruments = self._active_instruments
         try:
-            idx = instruments.index(current)
+            cur_idx = instruments.index(current)
         except ValueError:
-            idx = -1 if direction > 0 else len(instruments)
-        new_idx = (idx + direction) % len(instruments)
+            cur_idx = -1 if direction > 0 else len(instruments)
+        new_idx = (cur_idx + direction) % len(instruments)
         var.set(instruments[new_idx])
+        # 連鎖：從變更點之後依序重新指派
+        used: Set[str] = set()
+        for i in range(sec_idx + 1):
+            v = self._section_name_vars.get(i)
+            if v:
+                used.add(v.get())
+        search_from = new_idx
+        sections = self._get_sections()
+        for i in range(sec_idx + 1, len(sections)):
+            v = self._section_name_vars.get(i)
+            if not v:
+                continue
+            name = self._next_unused_instrument(used, start_after=search_from)
+            v.set(name)
+            used.add(name)
+            try:
+                search_from = instruments.index(name)
+            except ValueError:
+                search_from = len(instruments)
 
     def _update_assignment_panel(self):
         old_names = {
@@ -578,6 +603,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._section_name_vars = {}
         instruments = self._active_instruments
         used_names: Set[str] = set()
+        last_inst_idx = -1
         for sec_idx, (start, end) in enumerate(sections):
             color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
             row = ctk.CTkFrame(self._assign_scroll, fg_color="transparent")
@@ -592,10 +618,14 @@ class SplitPdfDialog(ctk.CTkToplevel):
             if sec_idx in old_names:
                 name = old_names[sec_idx]
             elif instruments:
-                name = self._next_unused_instrument(used_names)
+                name = self._next_unused_instrument(used_names, start_after=last_inst_idx)
             else:
                 name = t("split.part_default", index=sec_idx + 1)
             used_names.add(name)
+            try:
+                last_inst_idx = instruments.index(name)
+            except (ValueError, AttributeError):
+                pass
             var.set(name)
             self._section_name_vars[sec_idx] = var
             if instruments:
