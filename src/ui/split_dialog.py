@@ -130,6 +130,12 @@ class SplitPdfDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11), text_color="gray",
             wraplength=260, justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 4))
+        ctk.CTkButton(
+            parent, text=t("split.clear_splits"), height=24,
+            fg_color="transparent", border_width=1,
+            text_color=("gray40", "gray70"),
+            command=self._clear_all_splits,
+        ).pack(anchor="w", padx=8, pady=(0, 4))
         self._assign_scroll = ctk.CTkScrollableFrame(parent)
         self._assign_scroll.pack(fill="both", expand=True, padx=4, pady=4)
         subfolder_row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -351,6 +357,13 @@ class SplitPdfDialog(ctk.CTkToplevel):
         return sections
 
     # --- 頁面互動 ---
+
+    def _clear_all_splits(self):
+        """移除所有分割點，回到單一區段"""
+        self._split_starts = {0}
+        self._render_page_grid()
+        self._section_name_vars = {}
+        self._update_assignment_panel()
 
     def _on_page_click(self, page_idx: int):
         """左鍵切換分割點"""

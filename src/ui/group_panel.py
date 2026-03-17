@@ -468,7 +468,7 @@ class GroupTabContent(ctk.CTkFrame):
                 label=f.display_name,
                 command=lambda idx=i: self._do_set_score(idx),
             )
-        btn = self._score_label
+        btn = self._score_file_label
         menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
 
     def _do_set_score(self, file_index: int):
@@ -537,6 +537,14 @@ class GroupTabContent(ctk.CTkFrame):
                 text_color="gray",
             ).pack(pady=8)
         else:
+            self._select_all_inst_var = ctk.BooleanVar(value=False)
+            ctk.CTkCheckBox(
+                self._instrument_scroll,
+                text=t("group.select_all_instruments"),
+                variable=self._select_all_inst_var,
+                command=self._toggle_select_all_instruments,
+                font=ctk.CTkFont(size=11),
+            ).pack(anchor="w", padx=4, pady=(1, 4))
             for i, name in enumerate(instruments):
                 var = ctk.BooleanVar(value=(i in self._group.selected_instruments))
                 cb = ctk.CTkCheckBox(
@@ -546,9 +554,17 @@ class GroupTabContent(ctk.CTkFrame):
                 )
                 cb.pack(anchor="w", padx=4, pady=1)
                 self._instrument_vars.append(var)
+            all_checked = len(self._group.selected_instruments) == len(instruments)
+            self._select_all_inst_var.set(all_checked)
         if pack_info:
             self._instrument_scroll.pack(**pack_info)
         self._check_mismatch()
+
+    def _toggle_select_all_instruments(self):
+        val = self._select_all_inst_var.get()
+        for var in self._instrument_vars:
+            var.set(val)
+        self._on_instrument_check_changed()
 
     def _on_instrument_check_changed(self):
         self._group.selected_instruments = [

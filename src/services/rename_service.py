@@ -14,6 +14,16 @@ from core.template_engine import build_variables_for_file, substitute_template
 from services.file_service import FileService
 
 
+_ILLEGAL_CHARS = '<>:"/\\|?*'
+
+
+def _sanitize_name(name: str) -> str:
+    """替換檔名中的非法字元"""
+    for ch in _ILLEGAL_CHARS:
+        name = name.replace(ch, "_")
+    return name.strip()
+
+
 class RenameService:
     """批次重新命名服務"""
 
@@ -49,7 +59,7 @@ class RenameService:
                     "樂章名稱": group.movement_name,
                     "MovementName": group.movement_name,
                 }
-                score_name = substitute_template(template, score_vars)
+                score_name = _sanitize_name(substitute_template(template, score_vars))
                 base_dir = (
                     project.output_directory
                     if project.output_directory
@@ -69,16 +79,16 @@ class RenameService:
                 variables = build_variables_for_file(
                     i, group, project.instruments,
                 )
-                new_name = substitute_template(template, variables)
+                new_name = _sanitize_name(substitute_template(template, variables))
                 base_dir = (
                     project.output_directory
                     if project.output_directory
                     else os.path.dirname(file_info.original_path)
                 )
                 if project.use_subfolders and project.subfolder_template:
-                    subfolder_name = substitute_template(
+                    subfolder_name = _sanitize_name(substitute_template(
                         project.subfolder_template, variables,
-                    )
+                    ))
                     target_dir = os.path.join(base_dir, subfolder_name)
                 else:
                     target_dir = base_dir
