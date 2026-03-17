@@ -376,7 +376,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._prev_btn = ctk.CTkButton(
             preview, text="\u25C0", width=44, height=80,
             corner_radius=0, border_width=0,
-            fg_color="transparent", hover_color="transparent",
+            fg_color="transparent", hover_color=("gray95", "gray14"),
             text_color=_NAV_DIM,
             font=ctk.CTkFont(size=24),
             command=self._preview_prev,
@@ -385,7 +385,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._next_btn = ctk.CTkButton(
             preview, text="\u25B6", width=44, height=80,
             corner_radius=0, border_width=0,
-            fg_color="transparent", hover_color="transparent",
+            fg_color="transparent", hover_color=("gray95", "gray14"),
             text_color=_NAV_DIM,
             font=ctk.CTkFont(size=24),
             command=self._preview_next,
@@ -397,7 +397,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._split_toggle_btn = ctk.CTkButton(
             bottom_bar, text="", width=140, height=30,
             corner_radius=0, border_width=0,
-            fg_color="transparent", hover_color="transparent",
+            fg_color="transparent", hover_color=("gray95", "gray14"),
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._preview_toggle_split,
         )
@@ -405,7 +405,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._delete_toggle_btn = ctk.CTkButton(
             bottom_bar, text="", width=100, height=30,
             corner_radius=0, border_width=0,
-            fg_color="transparent", hover_color="transparent",
+            fg_color="transparent", hover_color=("gray95", "gray14"),
             font=ctk.CTkFont(size=12),
             command=self._preview_toggle_delete,
         )
