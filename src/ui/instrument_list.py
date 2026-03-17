@@ -62,7 +62,7 @@ class InstrumentListEditor(ctk.CTkFrame):
         self._instruments[index], self._instruments[index - 1] = (
             self._instruments[index - 1], self._instruments[index]
         )
-        self._refresh_list()
+        self._swap_row_text(index, index - 1)
         self._notify_changed()
 
     def _move_down(self, index: int):
@@ -71,8 +71,19 @@ class InstrumentListEditor(ctk.CTkFrame):
         self._instruments[index], self._instruments[index + 1] = (
             self._instruments[index + 1], self._instruments[index]
         )
-        self._refresh_list()
+        self._swap_row_text(index, index + 1)
         self._notify_changed()
+
+    def _swap_row_text(self, idx_a: int, idx_b: int):
+        """交換兩列的顯示文字，不重建元件"""
+        rows = self._scroll_frame.winfo_children()
+        if idx_a < len(rows) and idx_b < len(rows):
+            rows[idx_a].winfo_children()[0].configure(
+                text=self._instruments[idx_a],
+            )
+            rows[idx_b].winfo_children()[0].configure(
+                text=self._instruments[idx_b],
+            )
 
     def _remove(self, index: int):
         if 0 <= index < len(self._instruments):
@@ -91,12 +102,12 @@ class InstrumentListEditor(ctk.CTkFrame):
             btn_frame = ctk.CTkFrame(row, fg_color="transparent")
             btn_frame.pack(side="right")
             up_btn = ctk.CTkButton(
-                btn_frame, text="\u25B2", width=28, height=24,
+                btn_frame, text="\u25B2", width=28, height=28,
                 command=lambda idx=i: self._move_up(idx),
             )
             up_btn.pack(side="left", padx=1)
             down_btn = ctk.CTkButton(
-                btn_frame, text="\u25BC", width=28, height=24,
+                btn_frame, text="\u25BC", width=28, height=28,
                 command=lambda idx=i: self._move_down(idx),
             )
             down_btn.pack(side="left", padx=1)
