@@ -193,8 +193,11 @@ class UngroupedTabContent(ctk.CTkFrame):
         self._refresh_list()
 
     def _refresh_list(self):
-        pack_info = self._scroll.pack_info()
-        self._scroll.pack_forget()
+        try:
+            pack_info = self._scroll.pack_info()
+            self._scroll.pack_forget()
+        except Exception:
+            pack_info = None
         for widget in self._scroll.winfo_children():
             widget.destroy()
         self._check_vars = []
@@ -207,7 +210,8 @@ class UngroupedTabContent(ctk.CTkFrame):
         else:
             for i, file_info in enumerate(self.project.ungrouped_files):
                 self._create_ungrouped_row(i, file_info)
-        self._scroll.pack(**pack_info)
+        if pack_info:
+            self._scroll.pack(**pack_info)
 
     def _create_ungrouped_row(self, index: int, file_info: FileInfo):
         row = ctk.CTkFrame(self._scroll, fg_color="transparent")
@@ -420,8 +424,11 @@ class GroupTabContent(ctk.CTkFrame):
             self._group.piece_name = detected
 
     def _refresh_instruments(self):
-        pack_info = self._instrument_scroll.pack_info()
-        self._instrument_scroll.pack_forget()
+        try:
+            pack_info = self._instrument_scroll.pack_info()
+            self._instrument_scroll.pack_forget()
+        except Exception:
+            pack_info = None
         for widget in self._instrument_scroll.winfo_children():
             widget.destroy()
         self._instrument_vars = []
@@ -441,7 +448,8 @@ class GroupTabContent(ctk.CTkFrame):
                 )
                 cb.pack(anchor="w", padx=4, pady=1)
                 self._instrument_vars.append(var)
-        self._instrument_scroll.pack(**pack_info)
+        if pack_info:
+            self._instrument_scroll.pack(**pack_info)
         self._check_mismatch()
 
     def _on_instrument_check_changed(self):
@@ -468,8 +476,11 @@ class GroupTabContent(ctk.CTkFrame):
             self._mismatch_label.configure(text_color=("green", "#2ecc71"))
 
     def _refresh_file_list(self):
-        pack_info = self._file_scroll.pack_info()
-        self._file_scroll.pack_forget()
+        try:
+            pack_info = self._file_scroll.pack_info()
+            self._file_scroll.pack_forget()
+        except Exception:
+            pack_info = None
         for widget in self._file_scroll.winfo_children():
             widget.destroy()
         if not self._group.files:
@@ -481,7 +492,8 @@ class GroupTabContent(ctk.CTkFrame):
             selected = self._group.selected_instruments
             for i, file_info in enumerate(self._group.files):
                 self._create_file_row(i, file_info, instruments, selected)
-        self._file_scroll.pack(**pack_info)
+        if pack_info:
+            self._file_scroll.pack(**pack_info)
 
     def _create_file_row(self, index, file_info, instruments, selected):
         row = ctk.CTkFrame(self._file_scroll, fg_color="transparent")

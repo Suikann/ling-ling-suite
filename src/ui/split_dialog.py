@@ -268,12 +268,16 @@ class SplitPdfDialog(ctk.CTkToplevel):
     # --- 頁面縮圖顯示 ---
 
     def _render_page_grid(self):
-        pack_info = self._page_scroll.pack_info()
-        self._page_scroll.pack_forget()
+        try:
+            pack_info = self._page_scroll.pack_info()
+            self._page_scroll.pack_forget()
+        except Exception:
+            pack_info = None
         for child in self._page_scroll.winfo_children():
             child.destroy()
         if not self._ctk_images:
-            self._page_scroll.pack(**pack_info)
+            if pack_info:
+                self._page_scroll.pack(**pack_info)
             return
         sections = self._get_sections()
         for sec_idx, (start, end) in enumerate(sections):
@@ -284,7 +288,8 @@ class SplitPdfDialog(ctk.CTkToplevel):
                 ).pack(fill="x", padx=8, pady=(10, 2))
             self._build_section_header(sec_idx, start, end, color)
             self._build_section_pages(start, end, color)
-        self._page_scroll.pack(**pack_info)
+        if pack_info:
+            self._page_scroll.pack(**pack_info)
 
     def _build_section_header(
         self, sec_idx: int, start: int, end: int, color: str,
