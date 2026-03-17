@@ -51,9 +51,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._section_name_vars: Dict[int, ctk.StringVar] = {}
         self._output_dir: Optional[str] = None
         self._file_map: Dict[str, str] = {}
-        self._active_instruments: List[str] = (
-            list(project.instruments) if project and project.instruments else []
-        )
+        self._active_instruments: List[str] = []
         self._preview_win: Optional[ctk.CTkToplevel] = None
         self._preview_page_idx: int = 0
         self._render_width: int = 560
@@ -145,10 +143,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
             command=self._on_preset_selected,
             dynamic_resizing=False,
         )
-        if self._project and self._project.instruments:
-            self._preset_menu.set(t("split.preset_project"))
-        else:
-            self._preset_menu.set(t("split.preset_manual"))
+        self._preset_menu.set(t("split.preset_manual"))
         self._preset_menu.pack(fill="x", pady=(2, 0))
         self._assign_scroll = ctk.CTkScrollableFrame(parent)
         self._assign_scroll.pack(fill="both", expand=True, padx=4, pady=4)
