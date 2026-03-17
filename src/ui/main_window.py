@@ -681,10 +681,18 @@ class MainWindow(ctk.CTkFrame):
 
     def _open_split_pdf(self):
         from ui.split_dialog import SplitPdfDialog
+        current_group = None
+        if self._group_panel:
+            active_tab = self._group_panel._tabview.get()
+            for name, content in self._group_panel._tab_contents.items():
+                if name == active_tab and hasattr(content, '_group'):
+                    current_group = content._group
+                    break
         SplitPdfDialog(
             self.master_window,
             project=self.project,
             on_split_complete=self._on_split_complete,
+            initial_group=current_group,
         )
 
     def _on_split_complete(self, files, selected, source_group, source_path):

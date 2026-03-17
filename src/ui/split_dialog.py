@@ -35,6 +35,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         master,
         project,
         on_split_complete: Optional[Callable] = None,
+        initial_group=None,
     ):
         super().__init__(master)
         self.title(t("split.title"))
@@ -51,6 +52,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._output_dir: Optional[str] = None
         self._file_map: Dict[str, tuple] = {}
         self._source_group = None
+        self._filter_group = initial_group
         self._preview_win: Optional[ctk.CTkToplevel] = None
         self._preview_page_idx: int = 0
         self._render_width: int = 560
@@ -67,41 +69,80 @@ class SplitPdfDialog(ctk.CTkToplevel):
     def _build_top_bar(self):
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=12, pady=(12, 4))
-        ctk.CTkLabel(top, text=t("split.select_file")).pack(side="left")
-        project_files = self._collect_project_files()
-        labels = [label for label, _, _ in project_files]
-        self._file_map = {label: (path, group) for label, path, group in project_files}
+        filter_options = self._build_group_filter_options()
+        self._group_filter = ctk.CTkOptionMenu(
+            top, values=filter_options, width=160,
+            command=self._on_group_filter_changed,
+            dynamic_resizing=False,
+        )
+        initial_name = self._get_group_filter_name(self._filter_group)
+        self._group_filter.set(initial_name)
+        self._group_filter.pack(side="left")
         self._file_combo = ctk.CTkOptionMenu(
-            top, values=labels or [t("split.no_project_files")],
-            width=500,
-            state="normal" if labels else "disabled",
+            top, values=[t("split.no_file")], width=400,
+            state="disabled",
             command=self._on_file_selected,
             dynamic_resizing=False,
         )
-        if labels:
-            self._file_combo.set(t("split.no_file"))
         self._file_combo.pack(side="left", padx=(8, 8), fill="x", expand=True)
         self._page_info_label = ctk.CTkLabel(
             top, text="", font=ctk.CTkFont(size=12),
         )
         self._page_info_label.pack(side="right")
+        self._refresh_file_combo()
+
+    _ALL_GROUPS_KEY = "__all__"
+
+    def _build_group_filter_options(self) -> List[str]:
+        """建構群組過濾選項"""
+        options = [t("group.ungrouped")]
+        if self._project:
+            for group in self._project.groups:
+                options.append(group.name or group.id[:8])
+        return options
+
+    def _get_group_filter_name(self, group) -> str:
+        if group is None:
+            return t("group.ungrouped")
+        return group.name or group.id[:8]
+
+    def _on_group_filter_changed(self, choice: str):
+        """群組過濾變更"""
+        if choice == t("group.ungrouped"):
+            self._filter_group = None
+        elif self._project:
+            for g in self._project.groups:
+                if (g.name or g.id[:8]) == choice:
+                    self._filter_group = g
+                    break
+        self._refresh_file_combo()
+
+    def _refresh_file_combo(self):
+        """依群組過濾重建檔案下拉"""
+        files = self._collect_project_files()
+        labels = [label for label, _, _ in files]
+        self._file_map = {label: (path, group) for label, path, group in files}
+        if labels:
+            self._file_combo.configure(values=labels, state="normal")
+            self._file_combo.set(t("split.no_file"))
+        else:
+            self._file_combo.configure(
+                values=[t("split.no_project_files")], state="disabled",
+            )
 
     def _collect_project_files(self) -> List[Tuple[str, str, object]]:
-        """蒐集專案內所有 PDF 檔案，回傳 (標籤, 路徑, 群組或 None)"""
+        """蒐集專案內的 PDF 檔案，依 _filter_group 過濾"""
         files: List[Tuple[str, str, object]] = []
         if not self._project:
             return files
-        ungrouped_label = t("group.ungrouped")
-        for f in self._project.ungrouped_files:
-            if f.original_path.lower().endswith(".pdf"):
-                label = f"{f.display_name}  [{ungrouped_label}]"
-                files.append((label, f.original_path, None))
-        for group in self._project.groups:
-            group_name = group.name or group.id[:8]
-            for f in group.files:
+        if self._filter_group is None:
+            for f in self._project.ungrouped_files:
                 if f.original_path.lower().endswith(".pdf"):
-                    label = f"{f.display_name}  [{group_name}]"
-                    files.append((label, f.original_path, group))
+                    files.append((f.display_name, f.original_path, None))
+        else:
+            for f in self._filter_group.files:
+                if f.original_path.lower().endswith(".pdf"):
+                    files.append((f.display_name, f.original_path, self._filter_group))
         return files
 
     def _build_content(self):
