@@ -133,6 +133,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "ungrouped.move_selected": "移至群組...",
         "ungrouped.new_group_from_selected": "建立新群組",
         # 檔案清單
+        "file.delete_from_disk": "刪除檔案",
+        "file.confirm_delete": "確定要將以下檔案移至資源回收桶？\n\n{name}",
+        "file.deleted": "已移至資源回收桶",
         "file_list.empty": "尚無檔案",
         # 樂器表
         "instrument.title": "樂器表",
@@ -334,6 +337,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "ungrouped.move_selected": "Move to Group...",
         "ungrouped.new_group_from_selected": "Create New Group",
         # 檔案清單
+        "file.delete_from_disk": "Delete File",
+        "file.confirm_delete": "Move this file to the recycle bin?\n\n{name}",
+        "file.deleted": "Moved to recycle bin",
         "file_list.empty": "No files",
         # 樂器表
         "instrument.title": "Instruments",

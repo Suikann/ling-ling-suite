@@ -227,10 +227,15 @@ class UngroupedTabContent(ctk.CTkFrame):
             side="left", fill="x", expand=True, padx=2,
         )
         ctk.CTkButton(
-            row, text="\u00D7", width=28, height=28,
+            row, text="\u2421", width=28, height=28,
             fg_color="#c0392b", hover_color="#e74c3c",
+            command=lambda r=row: self._delete_file_from_disk(r._idx),
+        ).pack(side="right", padx=(2, 2))
+        ctk.CTkButton(
+            row, text="\u00D7", width=28, height=28,
+            fg_color=("gray75", "gray35"), hover_color=("gray65", "gray45"),
             command=lambda r=row: self._remove_file(r._idx),
-        ).pack(side="right", padx=2)
+        ).pack(side="right", padx=0)
 
     def _toggle_select_all(self):
         val = self._select_all_var.get()
@@ -292,6 +297,35 @@ class UngroupedTabContent(ctk.CTkFrame):
 
     def _remove_file(self, index: int):
         if 0 <= index < len(self.project.ungrouped_files):
+            self.project.ungrouped_files.pop(index)
+            if index < len(self._check_vars):
+                self._check_vars.pop(index)
+            rows = self._scroll.winfo_children()
+            if index < len(rows):
+                rows[index].destroy()
+            if not self.project.ungrouped_files:
+                self._refresh_list()
+            else:
+                for i, row in enumerate(self._scroll.winfo_children()):
+                    row._idx = i
+            self.main_window._mark_modified()
+
+    def _delete_file_from_disk(self, index: int):
+        """將檔案移至資源回收桶並從專案移除"""
+        if 0 <= index < len(self.project.ungrouped_files):
+            from tkinter import messagebox
+            f = self.project.ungrouped_files[index]
+            if not messagebox.askyesno(
+                t("file.delete_from_disk"),
+                t("file.confirm_delete", name=f.display_name),
+            ):
+                return
+            try:
+                from services.file_service import FileService
+                FileService().delete_file(f.original_path)
+            except Exception as e:
+                messagebox.showerror(t("dialog.error"), str(e))
+                return
             self.project.ungrouped_files.pop(index)
             if index < len(self._check_vars):
                 self._check_vars.pop(index)
@@ -641,6 +675,39 @@ class GroupTabContent(ctk.CTkFrame):
             hover_color=("gray65", "gray45"),
             command=lambda r=row: self._remove_file(r._idx),
         ).pack(side="left", padx=1)
+        ctk.CTkButton(
+            btn_frame, text="\u2421", width=28, height=28,
+            fg_color="#c0392b", hover_color="#e74c3c",
+            command=lambda r=row: self._delete_file_from_disk(r._idx),
+        ).pack(side="left", padx=1)
+
+    def _delete_file_from_disk(self, index: int):
+        """將群組檔案移至資源回收桶"""
+        if 0 <= index < len(self._group.files):
+            from tkinter import messagebox
+            f = self._group.files[index]
+            if not messagebox.askyesno(
+                t("file.delete_from_disk"),
+                t("file.confirm_delete", name=f.display_name),
+            ):
+                return
+            try:
+                from services.file_service import FileService
+                FileService().delete_file(f.original_path)
+            except Exception as e:
+                messagebox.showerror(t("dialog.error"), str(e))
+                return
+            self._group.files.pop(index)
+            rows = self._file_scroll.winfo_children()
+            if index < len(rows):
+                rows[index].destroy()
+            if not self._group.files:
+                self._refresh_file_list()
+            else:
+                for i, row in enumerate(self._file_scroll.winfo_children()):
+                    row._idx = i
+            self._check_mismatch()
+            self.main_window._mark_modified()
 
     def _move_file_up(self, index: int):
         if index <= 0:

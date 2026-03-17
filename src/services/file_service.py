@@ -86,6 +86,15 @@ class FileService:
         dirs.sort(key=lambda p: os.path.basename(p).lower())
         return dirs
 
+    def delete_file(self, path: str) -> None:
+        """將檔案移至資源回收桶
+
+        Args:
+            path: 檔案路徑
+        """
+        from send2trash import send2trash
+        send2trash(path)
+
     def remove_empty_directory(self, path: str) -> None:
         """移除空目錄（若為空）
 
