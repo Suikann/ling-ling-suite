@@ -23,8 +23,6 @@ SECTION_COLORS = [
     "#F97316",
 ]
 
-_NAV_DIM = ("gray82", "gray25")
-_NAV_BRIGHT = ("gray15", "gray95")
 
 
 class SplitPdfDialog(ctk.CTkToplevel):
@@ -58,8 +56,6 @@ class SplitPdfDialog(ctk.CTkToplevel):
         )
         self._preview_win: Optional[ctk.CTkToplevel] = None
         self._preview_page_idx = 0
-        self._prev_visible = False
-        self._next_visible = False
         self._build_ui()
         self.grab_set()
 
@@ -357,68 +353,50 @@ class SplitPdfDialog(ctk.CTkToplevel):
         preview.transient(self)
         self._preview_win = preview
         self._preview_page_idx = page_idx
-        self._prev_visible = False
-        self._next_visible = False
-        # 頁面內容
-        self._preview_scroll = ctk.CTkScrollableFrame(preview)
-        self._preview_scroll.pack(fill="both", expand=True)
-        self._preview_img_label = ctk.CTkLabel(self._preview_scroll, text="")
-        self._preview_img_label.pack(padx=4, pady=4)
-        # 浮動頁碼（頂部中央，無背景）
-        self._preview_page_label = ctk.CTkLabel(
-            preview, text="",
-            font=ctk.CTkFont(size=13),
-            fg_color="transparent",
-            text_color=("gray40", "gray70"),
-        )
-        self._preview_page_label.place(relx=0.5, y=8, anchor="n")
-        # 浮動導航（無背景，僅文字）
+        # 頂部列：翻頁 + 頁碼
+        top_bar = ctk.CTkFrame(preview, fg_color="transparent", height=36)
+        top_bar.pack(fill="x", padx=8, pady=(6, 0))
         self._prev_btn = ctk.CTkButton(
-            preview, text="\u25C0", width=44, height=80,
-            corner_radius=0, border_width=0,
-            fg_color="transparent", hover_color=("gray95", "gray14"),
-            text_color=_NAV_DIM,
-            font=ctk.CTkFont(size=24),
+            top_bar, text="\u25C0", width=36, height=28,
             command=self._preview_prev,
         )
-        self._prev_btn.place(x=0, rely=0.5, anchor="w")
+        self._prev_btn.pack(side="left")
+        self._preview_page_label = ctk.CTkLabel(
+            top_bar, text="",
+            font=ctk.CTkFont(size=13),
+        )
+        self._preview_page_label.pack(side="left", fill="x", expand=True)
         self._next_btn = ctk.CTkButton(
-            preview, text="\u25B6", width=44, height=80,
-            corner_radius=0, border_width=0,
-            fg_color="transparent", hover_color=("gray95", "gray14"),
-            text_color=_NAV_DIM,
-            font=ctk.CTkFont(size=24),
+            top_bar, text="\u25B6", width=36, height=28,
             command=self._preview_next,
         )
-        self._next_btn.place(relx=1.0, x=0, rely=0.5, anchor="e")
-        # 浮動操作列（底部中央，無背景）
-        bottom_bar = ctk.CTkFrame(preview, fg_color="transparent")
-        bottom_bar.place(relx=0.5, rely=1.0, y=-12, anchor="s")
+        self._next_btn.pack(side="right")
+        # 中間：純淨譜面
+        self._preview_scroll = ctk.CTkScrollableFrame(preview)
+        self._preview_scroll.pack(fill="both", expand=True, padx=4, pady=4)
+        self._preview_img_label = ctk.CTkLabel(self._preview_scroll, text="")
+        self._preview_img_label.pack(padx=4, pady=4)
+        # 底部列：分割點 + 刪除
+        bottom_bar = ctk.CTkFrame(preview, fg_color="transparent", height=36)
+        bottom_bar.pack(fill="x", padx=8, pady=(0, 6))
         self._split_toggle_btn = ctk.CTkButton(
-            bottom_bar, text="", width=140, height=30,
-            corner_radius=0, border_width=0,
-            fg_color="transparent", hover_color=("gray95", "gray14"),
+            bottom_bar, text="", width=160, height=28,
+            corner_radius=14,
             font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="white",
             command=self._preview_toggle_split,
         )
-        self._split_toggle_btn.pack(side="left", padx=8)
+        self._split_toggle_btn.pack(side="left", padx=(0, 8))
         self._delete_toggle_btn = ctk.CTkButton(
-            bottom_bar, text="", width=100, height=30,
-            corner_radius=0, border_width=0,
-            fg_color="transparent", hover_color=("gray95", "gray14"),
+            bottom_bar, text="", width=120, height=28,
+            corner_radius=14,
             font=ctk.CTkFont(size=12),
             command=self._preview_toggle_delete,
         )
-        self._delete_toggle_btn.pack(side="left", padx=8)
-        # 確保浮動元件在最上層
-        self._preview_page_label.lift()
-        self._prev_btn.lift()
-        self._next_btn.lift()
-        bottom_bar.lift()
+        self._delete_toggle_btn.pack(side="left")
         # 算繪
         preview.geometry("660x900")
         self._render_preview_page(page_idx)
-        self._poll_nav_proximity()
         # 鍵盤
         preview.bind("<Left>", lambda e: self._preview_prev())
         preview.bind("<Right>", lambda e: self._preview_next())
@@ -427,29 +405,6 @@ class SplitPdfDialog(ctk.CTkToplevel):
         preview.bind("<Delete>", lambda e: self._preview_toggle_delete())
         preview.focus_force()
         preview.protocol("WM_DELETE_WINDOW", self._close_preview)
-
-    def _poll_nav_proximity(self):
-        """定期檢查滑鼠位置，接近邊緣時顯示導航按鈕"""
-        if not self._preview_win or not self._preview_win.winfo_exists():
-            return
-        try:
-            mx = self._preview_win.winfo_pointerx() - self._preview_win.winfo_rootx()
-            w = self._preview_win.winfo_width()
-            near_left = 0 <= mx < w * 0.18
-            if near_left != self._prev_visible:
-                self._prev_visible = near_left
-                self._prev_btn.configure(
-                    text_color=_NAV_BRIGHT if near_left else _NAV_DIM,
-                )
-            near_right = mx > w * 0.82
-            if near_right != self._next_visible:
-                self._next_visible = near_right
-                self._next_btn.configure(
-                    text_color=_NAV_BRIGHT if near_right else _NAV_DIM,
-                )
-        except Exception:
-            pass
-        self._preview_win.after(150, self._poll_nav_proximity)
 
     def _render_preview_page(self, page_idx: int):
         """算繪並顯示指定頁面"""
@@ -487,17 +442,17 @@ class SplitPdfDialog(ctk.CTkToplevel):
         if idx == 0:
             self._split_toggle_btn.configure(
                 text=t("split.mark_split"), state="disabled",
-                text_color=color,
+                fg_color=color, hover_color=color,
             )
         elif is_split:
             self._split_toggle_btn.configure(
                 text=t("split.remove_split"), state="normal",
-                text_color=color,
+                fg_color=color, hover_color=color,
             )
         else:
             self._split_toggle_btn.configure(
                 text=t("split.mark_split"), state="normal",
-                text_color=color,
+                fg_color=color, hover_color=color,
             )
 
     def _update_preview_delete_indicator(self):
@@ -507,12 +462,14 @@ class SplitPdfDialog(ctk.CTkToplevel):
         if is_deleted:
             self._delete_toggle_btn.configure(
                 text=t("split.restore_page"),
-                text_color=("#2563EB", "#60A5FA"),
+                fg_color=("#2563EB", "#1D4ED8"),
+                hover_color=("#3B82F6", "#2563EB"),
             )
         else:
             self._delete_toggle_btn.configure(
                 text=t("split.delete_page"),
-                text_color=("#DC2626", "#F87171"),
+                fg_color=("#DC2626", "#991B1B"),
+                hover_color=("#EF4444", "#DC2626"),
             )
 
     def _get_section_for_page(self, page_idx: int) -> int:
