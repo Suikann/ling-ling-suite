@@ -570,6 +570,9 @@ class GroupTabContent(ctk.CTkFrame):
         self._group.selected_instruments = [
             i for i, var in enumerate(self._instrument_vars) if var.get()
         ]
+        if hasattr(self, '_select_all_inst_var'):
+            all_checked = len(self._group.selected_instruments) == len(self._instrument_vars)
+            self._select_all_inst_var.set(all_checked)
         self._check_mismatch()
         self._refresh_file_list()
         self.main_window._mark_modified()
