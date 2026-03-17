@@ -354,61 +354,62 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._preview_win = preview
         self._preview_page_idx = page_idx
         # 頂部列：頁碼
-        top_bar = ctk.CTkFrame(preview, fg_color="transparent", height=28)
-        top_bar.pack(fill="x", padx=8, pady=(6, 0))
+        top_bar = ctk.CTkFrame(preview, fg_color="transparent")
+        top_bar.pack(fill="x", padx=8, pady=(4, 0))
         self._preview_page_label = ctk.CTkLabel(
             top_bar, text="",
             font=ctk.CTkFont(size=13),
         )
         self._preview_page_label.pack(expand=True)
-        # 中間：譜面
+        # 中間：譜面（不被任何元件遮擋）
         self._preview_scroll = ctk.CTkScrollableFrame(preview)
-        self._preview_scroll.pack(fill="both", expand=True, padx=4, pady=4)
+        self._preview_scroll.pack(fill="both", expand=True, padx=4, pady=2)
         self._preview_img_label = ctk.CTkLabel(self._preview_scroll, text="")
         self._preview_img_label.pack(padx=4, pady=4)
-        # 浮動翻頁（CTkLabel 無方形殘影）
+        # 浮動翻頁箭頭（CTkLabel，真正透明無殘影）
+        # 預設只有淡色箭頭貼齊邊緣；接近時浮現半透明背景
+        nav_font = ctk.CTkFont(size=36)
+        dim_text = ("gray75", "gray35")
         self._prev_nav = ctk.CTkLabel(
-            preview, text="\u25C0",
-            fg_color="transparent",
-            text_color=("gray78", "gray30"),
-            font=ctk.CTkFont(size=28),
-            cursor="hand2",
+            preview, text="\u276E", width=48, height=120,
+            fg_color="transparent", corner_radius=12,
+            text_color=dim_text, font=nav_font, cursor="hand2",
         )
-        self._prev_nav.place(x=10, rely=0.5, anchor="w")
+        self._prev_nav.place(x=0, rely=0.5, anchor="w")
         self._prev_nav.bind("<Button-1>", lambda e: self._preview_prev())
         self._next_nav = ctk.CTkLabel(
-            preview, text="\u25B6",
-            fg_color="transparent",
-            text_color=("gray78", "gray30"),
-            font=ctk.CTkFont(size=28),
-            cursor="hand2",
+            preview, text="\u276F", width=48, height=120,
+            fg_color="transparent", corner_radius=12,
+            text_color=dim_text, font=nav_font, cursor="hand2",
         )
-        self._next_nav.place(relx=1.0, x=-10, rely=0.5, anchor="e")
+        self._next_nav.place(relx=1.0, rely=0.5, anchor="e")
         self._next_nav.bind("<Button-1>", lambda e: self._preview_next())
         self._prev_nav.lift()
         self._next_nav.lift()
         self._prev_visible = False
         self._next_visible = False
-        # 底部列：分割點 + 刪除
-        bottom_bar = ctk.CTkFrame(preview, fg_color="transparent", height=36)
-        bottom_bar.pack(fill="x", padx=8, pady=(0, 6))
+        # 底部列：分割點 + 刪除（統一高度）
+        bottom_bar = ctk.CTkFrame(preview, fg_color="transparent")
+        bottom_bar.pack(fill="x", padx=12, pady=(0, 8))
         self._split_toggle_btn = ctk.CTkButton(
-            bottom_bar, text="", width=160, height=28,
-            corner_radius=14,
+            bottom_bar, text="", height=32,
+            corner_radius=16,
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color="white",
             command=self._preview_toggle_split,
         )
         self._split_toggle_btn.pack(side="left", padx=(0, 8))
         self._delete_toggle_btn = ctk.CTkButton(
-            bottom_bar, text="", width=120, height=28,
-            corner_radius=14,
+            bottom_bar, text="", height=32,
+            corner_radius=16,
             font=ctk.CTkFont(size=12),
             command=self._preview_toggle_delete,
         )
         self._delete_toggle_btn.pack(side="left")
-        # 算繪
-        preview.geometry("660x900")
+        # 算繪（視窗大小足以完整顯示 A4）
+        screen_h = preview.winfo_screenheight()
+        win_h = min(int(screen_h * 0.88), 1000)
+        preview.geometry(f"700x{win_h}")
         self._render_preview_page(page_idx)
         self._poll_nav_proximity()
         # 鍵盤
@@ -497,22 +498,29 @@ class SplitPdfDialog(ctk.CTkToplevel):
         return 0
 
     def _poll_nav_proximity(self):
-        """定期檢查滑鼠位置，接近邊緣時顯示翻頁箭頭"""
+        """定期檢查滑鼠位置，接近邊緣時浮現翻頁箭頭背景"""
         if not self._preview_win or not self._preview_win.winfo_exists():
             return
         try:
             mx = self._preview_win.winfo_pointerx() - self._preview_win.winfo_rootx()
             w = self._preview_win.winfo_width()
-            dim = ("gray78", "gray30")
-            bright = ("gray15", "gray95")
-            near_left = 0 <= mx < w * 0.18
+            dim_text = ("gray75", "gray35")
+            bright_text = ("gray10", "gray98")
+            bg_on = ("gray88", "gray28")
+            near_left = 0 <= mx < w * 0.15
             if near_left != self._prev_visible:
                 self._prev_visible = near_left
-                self._prev_nav.configure(text_color=bright if near_left else dim)
-            near_right = mx > w * 0.82
+                self._prev_nav.configure(
+                    fg_color=bg_on if near_left else "transparent",
+                    text_color=bright_text if near_left else dim_text,
+                )
+            near_right = mx > w * 0.85
             if near_right != self._next_visible:
                 self._next_visible = near_right
-                self._next_nav.configure(text_color=bright if near_right else dim)
+                self._next_nav.configure(
+                    fg_color=bg_on if near_right else "transparent",
+                    text_color=bright_text if near_right else dim_text,
+                )
         except Exception:
             pass
         self._preview_win.after(150, self._poll_nav_proximity)
