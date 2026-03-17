@@ -47,13 +47,36 @@ class InstrumentListEditor(ctk.CTkFrame):
         )
         extract_btn.pack(fill="x", padx=8, pady=(0, 8))
 
+    def _create_row(self, index: int, name: str):
+        """建立單一樂器列"""
+        row = ctk.CTkFrame(self._scroll_frame, fg_color="transparent")
+        row._idx = index
+        row.pack(fill="x", pady=1)
+        label = ctk.CTkLabel(row, text=name, anchor="w")
+        label.pack(side="left", fill="x", expand=True, padx=4)
+        btn_frame = ctk.CTkFrame(row, fg_color="transparent")
+        btn_frame.pack(side="right")
+        ctk.CTkButton(
+            btn_frame, text="\u2191", width=28, height=28,
+            command=lambda r=row: self._move_up(r._idx),
+        ).pack(side="left", padx=1)
+        ctk.CTkButton(
+            btn_frame, text="\u2193", width=28, height=28,
+            command=lambda r=row: self._move_down(r._idx),
+        ).pack(side="left", padx=1)
+        ctk.CTkButton(
+            btn_frame, text="\u00D7", width=28, height=28,
+            fg_color="#c0392b", hover_color="#e74c3c",
+            command=lambda r=row: self._remove(r._idx),
+        ).pack(side="left", padx=1)
+
     def _add_instrument(self):
         name = self._entry.get().strip()
         if not name:
             return
         self._instruments.append(name)
         self._entry.delete(0, "end")
-        self._refresh_list()
+        self._create_row(len(self._instruments) - 1, name)
         self._notify_changed()
 
     def _move_up(self, index: int):
@@ -88,35 +111,18 @@ class InstrumentListEditor(ctk.CTkFrame):
     def _remove(self, index: int):
         if 0 <= index < len(self._instruments):
             self._instruments.pop(index)
-            self._refresh_list()
+            rows = self._scroll_frame.winfo_children()
+            if index < len(rows):
+                rows[index].destroy()
+            for i, row in enumerate(self._scroll_frame.winfo_children()):
+                row._idx = i
             self._notify_changed()
 
     def _refresh_list(self):
         for widget in self._scroll_frame.winfo_children():
             widget.destroy()
         for i, name in enumerate(self._instruments):
-            row = ctk.CTkFrame(self._scroll_frame, fg_color="transparent")
-            row.pack(fill="x", pady=1)
-            label = ctk.CTkLabel(row, text=name, anchor="w")
-            label.pack(side="left", fill="x", expand=True, padx=4)
-            btn_frame = ctk.CTkFrame(row, fg_color="transparent")
-            btn_frame.pack(side="right")
-            up_btn = ctk.CTkButton(
-                btn_frame, text="\u25B2", width=28, height=28,
-                command=lambda idx=i: self._move_up(idx),
-            )
-            up_btn.pack(side="left", padx=1)
-            down_btn = ctk.CTkButton(
-                btn_frame, text="\u25BC", width=28, height=28,
-                command=lambda idx=i: self._move_down(idx),
-            )
-            down_btn.pack(side="left", padx=1)
-            del_btn = ctk.CTkButton(
-                btn_frame, text="\u00D7", width=28, height=28,
-                fg_color="#c0392b", hover_color="#e74c3c",
-                command=lambda idx=i: self._remove(idx),
-            )
-            del_btn.pack(side="left", padx=1)
+            self._create_row(i, name)
 
     def _notify_changed(self):
         if self._on_changed:
