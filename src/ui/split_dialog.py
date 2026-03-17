@@ -353,27 +353,33 @@ class SplitPdfDialog(ctk.CTkToplevel):
         preview.transient(self)
         self._preview_win = preview
         self._preview_page_idx = page_idx
-        # 頂部列：翻頁 + 頁碼
-        top_bar = ctk.CTkFrame(preview, fg_color="transparent", height=36)
+        # 頂部列：頁碼
+        top_bar = ctk.CTkFrame(preview, fg_color="transparent", height=28)
         top_bar.pack(fill="x", padx=8, pady=(6, 0))
-        self._prev_btn = ctk.CTkButton(
-            top_bar, text="\u25C0", width=36, height=28,
-            command=self._preview_prev,
-        )
-        self._prev_btn.pack(side="left")
         self._preview_page_label = ctk.CTkLabel(
             top_bar, text="",
             font=ctk.CTkFont(size=13),
         )
-        self._preview_page_label.pack(side="left", fill="x", expand=True)
+        self._preview_page_label.pack(expand=True)
+        # 中間：左翻頁 + 譜面 + 右翻頁
+        middle = ctk.CTkFrame(preview, fg_color="transparent")
+        middle.pack(fill="both", expand=True, padx=4, pady=4)
+        left_nav = ctk.CTkFrame(middle, fg_color="transparent")
+        left_nav.pack(side="left", fill="y")
+        self._prev_btn = ctk.CTkButton(
+            left_nav, text="\u25C0", width=36, height=60,
+            command=self._preview_prev,
+        )
+        self._prev_btn.pack(expand=True)
+        self._preview_scroll = ctk.CTkScrollableFrame(middle)
+        self._preview_scroll.pack(side="left", fill="both", expand=True, padx=4)
+        right_nav = ctk.CTkFrame(middle, fg_color="transparent")
+        right_nav.pack(side="right", fill="y")
         self._next_btn = ctk.CTkButton(
-            top_bar, text="\u25B6", width=36, height=28,
+            right_nav, text="\u25B6", width=36, height=60,
             command=self._preview_next,
         )
-        self._next_btn.pack(side="right")
-        # 中間：純淨譜面
-        self._preview_scroll = ctk.CTkScrollableFrame(preview)
-        self._preview_scroll.pack(fill="both", expand=True, padx=4, pady=4)
+        self._next_btn.pack(expand=True)
         self._preview_img_label = ctk.CTkLabel(self._preview_scroll, text="")
         self._preview_img_label.pack(padx=4, pady=4)
         # 底部列：分割點 + 刪除
