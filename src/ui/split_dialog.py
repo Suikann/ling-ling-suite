@@ -349,7 +349,10 @@ class SplitPdfDialog(ctk.CTkToplevel):
         """開啟頁面放大預覽視窗"""
         if self._preview_win and self._preview_win.winfo_exists():
             self._preview_win.destroy()
-        self.grab_release()
+        try:
+            self.grab_release()
+        except Exception:
+            pass
         preview = ctk.CTkToplevel(self)
         preview.transient(self)
         self._preview_win = preview
@@ -556,7 +559,10 @@ class SplitPdfDialog(ctk.CTkToplevel):
         if self._preview_win and self._preview_win.winfo_exists():
             self._preview_win.destroy()
         self._preview_win = None
-        self.grab_set()
+        try:
+            self.grab_set()
+        except Exception:
+            pass
 
     # --- 分譜指派面板 ---
 
