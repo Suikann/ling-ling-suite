@@ -132,8 +132,18 @@ class SplitPdfDialog(ctk.CTkToplevel):
         ).pack(anchor="w", padx=8, pady=(0, 4))
         self._assign_scroll = ctk.CTkScrollableFrame(parent)
         self._assign_scroll.pack(fill="both", expand=True, padx=4, pady=4)
+        subfolder_row = ctk.CTkFrame(parent, fg_color="transparent")
+        subfolder_row.pack(fill="x", padx=8, pady=(4, 2))
+        self._subfolder_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            subfolder_row, text=t("split.use_subfolder"),
+            variable=self._subfolder_var,
+        ).pack(side="left")
+        self._subfolder_entry = ctk.CTkEntry(subfolder_row, width=80)
+        self._subfolder_entry.pack(side="left", padx=(8, 0))
+        self._subfolder_entry.insert(0, t("split.subfolder_default"))
         out_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        out_frame.pack(fill="x", padx=8, pady=(4, 8))
+        out_frame.pack(fill="x", padx=8, pady=(2, 8))
         ctk.CTkLabel(
             out_frame, text=t("split.output_dir"),
             font=ctk.CTkFont(size=11),
@@ -698,7 +708,14 @@ class SplitPdfDialog(ctk.CTkToplevel):
         from tkinter import messagebox
         if not self._pdf_path:
             return
-        output_dir = self._output_dir or os.path.dirname(self._pdf_path)
+        base_dir = self._output_dir or os.path.dirname(self._pdf_path)
+        if self._subfolder_var.get():
+            subfolder_name = self._subfolder_entry.get().strip()
+            if not subfolder_name:
+                subfolder_name = t("split.subfolder_default")
+            output_dir = os.path.join(base_dir, subfolder_name)
+        else:
+            output_dir = base_dir
         sections = self._get_sections()
         try:
             from services.pdf_service import extract_pages
