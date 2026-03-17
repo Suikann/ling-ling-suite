@@ -64,3 +64,4 @@ class Project:
     ungrouped_files: List[FileInfo] = field(default_factory=list)
     use_subfolders: bool = False
     subfolder_template: str = DEFAULT_SUBFOLDER_TEMPLATE
+    output_directory: str = ""

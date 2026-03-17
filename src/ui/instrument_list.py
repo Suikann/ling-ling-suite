@@ -101,7 +101,7 @@ class InstrumentListEditor(ctk.CTkFrame):
             )
             down_btn.pack(side="left", padx=1)
             del_btn = ctk.CTkButton(
-                btn_frame, text="\u2715", width=28, height=24,
+                btn_frame, text="\u00D7", width=28, height=28,
                 fg_color="#c0392b", hover_color="#e74c3c",
                 command=lambda idx=i: self._remove(idx),
             )

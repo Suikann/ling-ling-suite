@@ -25,6 +25,7 @@ class ProjectService:
             "master_template": project.master_template,
             "use_subfolders": project.use_subfolders,
             "subfolder_template": project.subfolder_template,
+            "output_directory": project.output_directory,
             "ungrouped_files": [
                 {"original_path": f.original_path, "display_name": f.display_name}
                 for f in project.ungrouped_files
@@ -50,6 +51,7 @@ class ProjectService:
             master_template=data.get("master_template", ""),
             use_subfolders=data.get("use_subfolders", False),
             subfolder_template=data.get("subfolder_template", ""),
+            output_directory=data.get("output_directory", ""),
         )
         project.ungrouped_files = [
             FileInfo(

@@ -40,6 +40,7 @@ class MainWindow(ctk.CTkFrame):
         self.file_service = FileService()
         self.import_service = ImportService(self.file_service)
         self._project_path: Optional[str] = None
+        self._suggested_name: str = ""
         self._modified = False
         self._group_panel = None
         self._rename_service = None
@@ -256,6 +257,23 @@ class MainWindow(ctk.CTkFrame):
         self._subfolder_template_entry.pack(side="left", fill="x", expand=True, padx=4)
         self._subfolder_template_entry.insert(0, self.project.subfolder_template)
         self._subfolder_template_entry.bind("<KeyRelease>", self._on_subfolder_template_changed)
+        outdir_row = ctk.CTkFrame(bottom, fg_color="transparent")
+        outdir_row.pack(fill="x", padx=8, pady=2)
+        ctk.CTkLabel(outdir_row, text=t("panel.output_dir")).pack(side="left")
+        self._output_dir_label = ctk.CTkLabel(
+            outdir_row, text=t("panel.output_dir_hint"),
+            text_color="gray", anchor="w",
+        )
+        self._output_dir_label.pack(side="left", fill="x", expand=True, padx=4)
+        ctk.CTkButton(
+            outdir_row, text="\u00D7", width=28, height=28,
+            fg_color="transparent", hover_color=("gray80", "gray30"),
+            command=self._clear_output_dir,
+        ).pack(side="right", padx=(0, 2))
+        ctk.CTkButton(
+            outdir_row, text="...", width=32,
+            command=self._browse_output_dir,
+        ).pack(side="right")
         action_row = ctk.CTkFrame(bottom, fg_color="transparent")
         action_row.pack(fill="x", padx=8, pady=(4, 8))
         self._preview_btn = ctk.CTkButton(
@@ -297,6 +315,23 @@ class MainWindow(ctk.CTkFrame):
         self.project.use_subfolders = self._subfolder_var.get()
         self._mark_modified()
 
+    def _browse_output_dir(self):
+        from tkinter import filedialog
+        folder = filedialog.askdirectory(title=t("panel.output_dir"))
+        if folder:
+            self.project.output_directory = folder
+            self._output_dir_label.configure(
+                text=folder, text_color=("black", "white"),
+            )
+            self._mark_modified()
+
+    def _clear_output_dir(self):
+        self.project.output_directory = ""
+        self._output_dir_label.configure(
+            text=t("panel.output_dir_hint"), text_color="gray",
+        )
+        self._mark_modified()
+
     def _on_subfolder_template_changed(self, event=None):
         self.project.subfolder_template = self._subfolder_template_entry.get()
         self._mark_modified()
@@ -334,6 +369,9 @@ class MainWindow(ctk.CTkFrame):
         self._mark_modified()
         if self._group_panel:
             self._group_panel.reload_all()
+        if not self._project_path and not self._suggested_name:
+            self._suggested_name = os.path.basename(folder)
+            self._update_title()
         self._set_status(
             t("status.imported_groups", groups=len(groups), files=len(ungrouped)),
         )
@@ -465,6 +503,7 @@ class MainWindow(ctk.CTkFrame):
         self.project.master_template = default_master
         self.project.subfolder_template = default_subfolder
         self._project_path = None
+        self._suggested_name = ""
         self._modified = False
         self._instrument_editor.set_instruments([])
         self._master_template_entry.delete(0, "end")
@@ -472,6 +511,10 @@ class MainWindow(ctk.CTkFrame):
         self._subfolder_var.set(False)
         self._subfolder_template_entry.delete(0, "end")
         self._subfolder_template_entry.insert(0, self.project.subfolder_template)
+        self._output_dir_label.configure(
+            text=t("panel.output_dir_hint"), text_color="gray",
+        )
+        self.project.output_directory = ""
         if self._group_panel:
             self._group_panel.project = self.project
             self._group_panel.reload_all()
@@ -500,6 +543,7 @@ class MainWindow(ctk.CTkFrame):
                 self._project_service = ProjectService()
             self.project = self._project_service.load_project(path)
             self._project_path = path
+            self._suggested_name = ""
             self._modified = False
             self._instrument_editor.set_instruments(self.project.instruments)
             self._master_template_entry.delete(0, "end")
@@ -507,6 +551,15 @@ class MainWindow(ctk.CTkFrame):
             self._subfolder_var.set(self.project.use_subfolders)
             self._subfolder_template_entry.delete(0, "end")
             self._subfolder_template_entry.insert(0, self.project.subfolder_template)
+            if self.project.output_directory:
+                self._output_dir_label.configure(
+                    text=self.project.output_directory,
+                    text_color=("black", "white"),
+                )
+            else:
+                self._output_dir_label.configure(
+                    text=t("panel.output_dir_hint"), text_color="gray",
+                )
             if self._group_panel:
                 self._group_panel.project = self.project
                 self._group_panel.reload_all()
@@ -564,6 +617,8 @@ class MainWindow(ctk.CTkFrame):
         title = t("app.title")
         if self._project_path:
             title += f" - {os.path.basename(self._project_path)}"
+        elif self._suggested_name:
+            title += f" - {self._suggested_name}"
         else:
             title += f" - {t('app.unsaved_project')}"
         if self._modified:
@@ -613,6 +668,7 @@ class MainWindow(ctk.CTkFrame):
                 self._project_service = ProjectService()
             self.project = self._project_service.load_project(path)
             self._project_path = path
+            self._suggested_name = ""
             self._modified = False
             self._instrument_editor.set_instruments(self.project.instruments)
             self._master_template_entry.delete(0, "end")
@@ -620,6 +676,15 @@ class MainWindow(ctk.CTkFrame):
             self._subfolder_var.set(self.project.use_subfolders)
             self._subfolder_template_entry.delete(0, "end")
             self._subfolder_template_entry.insert(0, self.project.subfolder_template)
+            if self.project.output_directory:
+                self._output_dir_label.configure(
+                    text=self.project.output_directory,
+                    text_color=("black", "white"),
+                )
+            else:
+                self._output_dir_label.configure(
+                    text=t("panel.output_dir_hint"), text_color="gray",
+                )
             if self._group_panel:
                 self._group_panel.project = self.project
                 self._group_panel.reload_all()

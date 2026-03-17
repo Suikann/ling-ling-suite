@@ -18,7 +18,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "zh_TW": {
         # 應用程式
         "app.title": "泠靈小工具",
-        "app.unsaved_project": "未儲存的專案",
+        "app.unsaved_project": "未命名",
         # 選單 - 檔案
         "menu.file": "檔案",
         "menu.file.new": "新增專案",
@@ -98,6 +98,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "panel.insert_variable": "插入變數",
         "panel.subfolder": "建立子資料夾",
         "panel.subfolder_template": "  資料夾模板：",
+        "panel.output_dir": "輸出至：",
+        "panel.output_dir_hint": "（檔案原始位置）",
         "panel.preview_rename": "預覽並重新命名",
         # 群組面板
         "group.add": "+ 新增群組",
@@ -205,7 +207,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "en": {
         # 應用程式
         "app.title": "Ling Ling Suite",
-        "app.unsaved_project": "Unsaved Project",
+        "app.unsaved_project": "Untitled",
         # 選單 - 檔案
         "menu.file": "File",
         "menu.file.new": "New Project",
@@ -285,6 +287,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "panel.insert_variable": "Insert Variable",
         "panel.subfolder": "Create Subfolders",
         "panel.subfolder_template": "  Folder Template:",
+        "panel.output_dir": "Output to:",
+        "panel.output_dir_hint": "(Original location)",
         "panel.preview_rename": "Preview & Rename",
         # 群組面板
         "group.add": "+ Add Group",

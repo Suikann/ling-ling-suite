@@ -45,14 +45,18 @@ class RenameService:
                     i, group, project.instruments,
                 )
                 new_name = substitute_template(template, variables)
-                original_dir = os.path.dirname(file_info.original_path)
+                base_dir = (
+                    project.output_directory
+                    if project.output_directory
+                    else os.path.dirname(file_info.original_path)
+                )
                 if project.use_subfolders and project.subfolder_template:
                     subfolder_name = substitute_template(
                         project.subfolder_template, variables,
                     )
-                    target_dir = os.path.join(original_dir, subfolder_name)
+                    target_dir = os.path.join(base_dir, subfolder_name)
                 else:
-                    target_dir = original_dir
+                    target_dir = base_dir
                 new_path = os.path.join(target_dir, new_name)
                 plan.append(RenameEntry(
                     original_path=file_info.original_path,

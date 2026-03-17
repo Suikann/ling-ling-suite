@@ -215,7 +215,7 @@ class UngroupedTabContent(ctk.CTkFrame):
                 side="left", fill="x", expand=True, padx=2,
             )
             ctk.CTkButton(
-                row, text="\u2715", width=28, height=24,
+                row, text="\u00D7", width=28, height=28,
                 fg_color="#c0392b", hover_color="#e74c3c",
                 command=lambda idx=i: self._remove_file(idx),
             ).pack(side="right", padx=2)
@@ -473,16 +473,17 @@ class GroupTabContent(ctk.CTkFrame):
             btn_frame = ctk.CTkFrame(row, fg_color="transparent")
             btn_frame.pack(side="right")
             ctk.CTkButton(
-                btn_frame, text="\u25B2", width=28, height=24,
+                btn_frame, text="\u25B2", width=28, height=28,
                 command=lambda idx=i: self._move_file_up(idx),
             ).pack(side="left", padx=1)
             ctk.CTkButton(
-                btn_frame, text="\u25BC", width=28, height=24,
+                btn_frame, text="\u25BC", width=28, height=28,
                 command=lambda idx=i: self._move_file_down(idx),
             ).pack(side="left", padx=1)
             ctk.CTkButton(
-                btn_frame, text="\u2715", width=28, height=24,
-                fg_color="#c0392b", hover_color="#e74c3c",
+                btn_frame, text="\u2190", width=28, height=28,
+                fg_color=("gray75", "gray35"),
+                hover_color=("gray65", "gray45"),
                 command=lambda idx=i: self._remove_file(idx),
             ).pack(side="left", padx=1)
 
