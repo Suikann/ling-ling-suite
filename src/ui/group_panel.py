@@ -158,6 +158,7 @@ class GroupTab(QWidget):
         left_col.addWidget(QLabel(t("group.instrument_check")))
         self._select_all_cb = QCheckBox(t("group.select_all_instruments"))
         self._select_all_cb.toggled.connect(self._toggle_select_all)
+        self._select_all_cb.setContentsMargins(4, 0, 0, 0)
         left_col.addWidget(self._select_all_cb)
         self._inst_scroll = QScrollArea()
         self._inst_scroll.setWidgetResizable(True)
