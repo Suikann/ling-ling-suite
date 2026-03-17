@@ -118,6 +118,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "group.move_to_group": "移至群組...",
         # 未分組
         "ungrouped.empty": "沒有未分組的檔案。\n使用「匯入」選單加入 PDF 檔案。",
+        "ungrouped.select_all": "全選",
+        "ungrouped.move_selected": "移至群組...",
+        "ungrouped.new_group_from_selected": "建立新群組",
         # 檔案清單
         "file_list.empty": "尚無檔案",
         # 樂器表
@@ -300,6 +303,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "group.move_to_group": "Move to Group...",
         # 未分組
         "ungrouped.empty": "No ungrouped files.\nUse the Import menu to add PDF files.",
+        "ungrouped.select_all": "Select All",
+        "ungrouped.move_selected": "Move to Group...",
+        "ungrouped.new_group_from_selected": "Create New Group",
         # 檔案清單
         "file_list.empty": "No files",
         # 樂器表

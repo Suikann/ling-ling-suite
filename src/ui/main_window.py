@@ -572,15 +572,15 @@ class MainWindow(ctk.CTkFrame):
             on_split_complete=self._on_split_complete,
         )
 
-    def _on_split_complete(self, new_files, instruments=None):
-        """分割完成回呼，將新檔案加入未分組清單並同步樂器表"""
-        self.project.ungrouped_files.extend(new_files)
+    def _on_split_complete(self, group, instruments=None):
+        """分割完成回呼，建立群組並同步樂器表"""
         if instruments:
             self._instrument_editor.set_instruments(list(instruments))
+        self.project.groups.append(group)
         self._mark_modified()
         if self._group_panel:
-            self._group_panel.refresh_ungrouped()
-        self._set_status(t("split.files_added", count=len(new_files)))
+            self._group_panel.reload_all()
+        self._set_status(t("split.files_added", count=len(group.files)))
 
     def _open_rotate_pdf(self):
         from ui.rotate_dialog import RotatePdfDialog

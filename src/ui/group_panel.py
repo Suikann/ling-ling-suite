@@ -161,15 +161,33 @@ class GroupPanel(ctk.CTkFrame):
 
 
 class UngroupedTabContent(ctk.CTkFrame):
-    """未分組標籤內容"""
+    """未分組標籤內容（支援多選批次操作）"""
 
     def __init__(self, master, project: Project, main_window: "MainWindow", **kwargs):
         super().__init__(master, **kwargs)
         self.project = project
         self.main_window = main_window
+        self._check_vars: List = []
         self._build_ui()
 
     def _build_ui(self):
+        action_bar = ctk.CTkFrame(self, fg_color="transparent")
+        action_bar.pack(fill="x", padx=4, pady=(4, 2))
+        self._select_all_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            action_bar, text=t("ungrouped.select_all"),
+            variable=self._select_all_var,
+            command=self._toggle_select_all,
+        ).pack(side="left")
+        self._move_btn = ctk.CTkButton(
+            action_bar, text=t("ungrouped.move_selected"),
+            width=120, command=self._move_selected,
+        )
+        self._move_btn.pack(side="left", padx=(8, 4))
+        ctk.CTkButton(
+            action_bar, text=t("ungrouped.new_group_from_selected"),
+            width=160, command=self._new_group_from_selected,
+        ).pack(side="left", padx=4)
         self._scroll = ctk.CTkScrollableFrame(self)
         self._scroll.pack(fill="both", expand=True, padx=4, pady=4)
         self._refresh_list()
@@ -177,6 +195,8 @@ class UngroupedTabContent(ctk.CTkFrame):
     def _refresh_list(self):
         for widget in self._scroll.winfo_children():
             widget.destroy()
+        self._check_vars = []
+        self._select_all_var.set(False)
         if not self.project.ungrouped_files:
             ctk.CTkLabel(
                 self._scroll, text=t("ungrouped.empty"),
@@ -186,40 +206,52 @@ class UngroupedTabContent(ctk.CTkFrame):
         for i, file_info in enumerate(self.project.ungrouped_files):
             row = ctk.CTkFrame(self._scroll, fg_color="transparent")
             row.pack(fill="x", pady=1)
+            var = ctk.BooleanVar(value=False)
+            self._check_vars.append(var)
+            ctk.CTkCheckBox(
+                row, text="", variable=var, width=24,
+            ).pack(side="left", padx=(4, 2))
             ctk.CTkLabel(row, text=file_info.display_name, anchor="w").pack(
-                side="left", fill="x", expand=True, padx=4,
+                side="left", fill="x", expand=True, padx=2,
             )
-            move_btn = ctk.CTkButton(
-                row, text=t("group.move_to_group"), width=90,
-                command=lambda idx=i: self._move_to_group(idx),
-            )
-            move_btn.pack(side="right", padx=2)
-            del_btn = ctk.CTkButton(
+            ctk.CTkButton(
                 row, text="\u2715", width=28, height=24,
                 fg_color="#c0392b", hover_color="#e74c3c",
                 command=lambda idx=i: self._remove_file(idx),
-            )
-            del_btn.pack(side="right", padx=2)
+            ).pack(side="right", padx=2)
 
-    def _move_to_group(self, file_index: int):
+    def _toggle_select_all(self):
+        val = self._select_all_var.get()
+        for var in self._check_vars:
+            var.set(val)
+
+    def _get_selected_indices(self) -> List[int]:
+        return [i for i, var in enumerate(self._check_vars) if var.get()]
+
+    def _move_selected(self):
+        selected = self._get_selected_indices()
+        if not selected:
+            return
         if not self.project.groups:
             from tkinter import messagebox
             messagebox.showinfo(t("dialog.info"), t("dialog.info.create_group_first"))
             return
-        file_info = self.project.ungrouped_files[file_index]
-        menu = __import__('tkinter').Menu(self, tearoff=0)
+        import tkinter as tk
+        menu = tk.Menu(self, tearoff=0)
         for group in self.project.groups:
             menu.add_command(
                 label=group.name or group.id[:8],
-                command=lambda g=group, fi=file_info, idx=file_index: self._do_move(fi, g, idx),
+                command=lambda g=group: self._do_batch_move(g),
             )
-        widget = self._scroll.winfo_children()[file_index] if file_index < len(self._scroll.winfo_children()) else self._scroll
-        menu.tk_popup(widget.winfo_rootx(), widget.winfo_rooty())
+        btn = self._move_btn
+        menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
 
-    def _do_move(self, file_info: FileInfo, group: Group, index: int):
-        if 0 <= index < len(self.project.ungrouped_files):
-            self.project.ungrouped_files.pop(index)
-        group.files.append(file_info)
+    def _do_batch_move(self, group: Group):
+        selected = self._get_selected_indices()
+        files_to_move = [self.project.ungrouped_files[i] for i in selected]
+        for i in sorted(selected, reverse=True):
+            self.project.ungrouped_files.pop(i)
+        group.files.extend(files_to_move)
         self._refresh_list()
         self.main_window._mark_modified()
         group_panel = self.main_window._group_panel
@@ -227,6 +259,24 @@ class UngroupedTabContent(ctk.CTkFrame):
             for name, content in group_panel._tab_contents.items():
                 if hasattr(content, '_group') and content._group is group:
                     content.refresh_file_list()
+
+    def _new_group_from_selected(self):
+        selected = self._get_selected_indices()
+        if not selected:
+            return
+        files_to_move = [self.project.ungrouped_files[i] for i in selected]
+        for i in sorted(selected, reverse=True):
+            self.project.ungrouped_files.pop(i)
+        new_group = Group(
+            name=t("group.new_name", number=len(self.project.groups) + 1),
+            files=files_to_move,
+        )
+        self.project.groups.append(new_group)
+        self._refresh_list()
+        self.main_window._mark_modified()
+        group_panel = self.main_window._group_panel
+        if group_panel:
+            group_panel._create_group_tab(new_group)
 
     def _remove_file(self, index: int):
         if 0 <= index < len(self.project.ungrouped_files):

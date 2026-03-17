@@ -422,7 +422,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
         preview.bind("<Escape>", lambda e: self._close_preview())
         preview.bind("<space>", lambda e: self._preview_toggle_split())
         preview.bind("<Delete>", lambda e: self._preview_toggle_delete())
-        preview.grab_set()
+        preview.focus_force()
         preview.protocol("WM_DELETE_WINDOW", self._close_preview)
 
     def _poll_nav_proximity(self):
@@ -681,6 +681,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
 
     def _execute_split(self):
         from tkinter import messagebox
+        from core.models import Group
         if not self._pdf_path:
             return
         output_dir = self._output_dir or os.path.dirname(self._pdf_path)
@@ -688,7 +689,8 @@ class SplitPdfDialog(ctk.CTkToplevel):
         try:
             from services.pdf_service import extract_pages
             os.makedirs(output_dir, exist_ok=True)
-            output_files: List[str] = []
+            group_files: List[FileInfo] = []
+            group_selected: List[int] = []
             for sec_idx, (start, end) in enumerate(sections):
                 pages = [
                     p for p in range(start, end + 1)
@@ -703,22 +705,29 @@ class SplitPdfDialog(ctk.CTkToplevel):
                     safe_name += ".pdf"
                 output_path = os.path.join(output_dir, safe_name)
                 extract_pages(self._pdf_path, pages, output_path)
-                output_files.append(output_path)
-            new_file_infos = [
-                FileInfo(
-                    original_path=path,
-                    display_name=os.path.basename(path),
-                )
-                for path in output_files
-            ]
+                group_files.append(FileInfo(
+                    original_path=output_path,
+                    display_name=os.path.basename(output_path),
+                ))
+                if sec_idx < len(self._active_instruments):
+                    group_selected.append(sec_idx)
+            if not group_files:
+                messagebox.showinfo(t("dialog.info"), t("dialog.info.no_files"))
+                return
+            source_name = os.path.splitext(os.path.basename(self._pdf_path))[0]
+            new_group = Group(
+                name=source_name,
+                files=group_files,
+                selected_instruments=group_selected,
+            )
             if self._on_split_complete:
                 self._on_split_complete(
-                    new_file_infos,
+                    new_group,
                     self._active_instruments or None,
                 )
             messagebox.showinfo(
                 t("dialog.complete"),
-                t("split.done", count=len(output_files)),
+                t("split.done", count=len(group_files)),
             )
             self.destroy()
         except Exception as e:
