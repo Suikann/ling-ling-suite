@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame, QMessageBox, QMenu, QFileDialog,
     QAbstractItemView,
 )
+from ui.widgets import DragListWidget
 from PySide6.QtCore import Qt
 from core.locale import t
 from core.models import Group, Project, FileInfo
@@ -194,8 +195,7 @@ class GroupTab(QWidget):
         score_label_row.addStretch()
         right_col.addLayout(score_label_row)
         right_col.addWidget(QLabel(t("group.file_list")))
-        self._file_list = QListWidget()
-        self._file_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self._file_list = DragListWidget()
         self._file_list.model().rowsMoved.connect(self._on_files_reordered)
         right_col.addWidget(self._file_list)
         file_btn_row = QHBoxLayout()

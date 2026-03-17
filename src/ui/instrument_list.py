@@ -6,10 +6,10 @@
 """
 from typing import List, Optional, TYPE_CHECKING
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
+    QWidget, QVBoxLayout, QHBoxLayout, QListWidgetItem,
     QLineEdit, QPushButton, QComboBox, QLabel, QMessageBox,
-    QAbstractItemView,
 )
+from ui.widgets import DragListWidget
 from PySide6.QtCore import Signal
 from core.locale import t
 
@@ -39,8 +39,7 @@ class InstrumentListEditor(QWidget):
         self._preset_combo.addItems(self._build_preset_options())
         self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
         layout.addWidget(self._preset_combo)
-        self._list = QListWidget()
-        self._list.setDragDropMode(QAbstractItemView.InternalMove)
+        self._list = DragListWidget()
         self._list.model().rowsMoved.connect(self._on_rows_moved)
         layout.addWidget(self._list)
         input_row = QHBoxLayout()

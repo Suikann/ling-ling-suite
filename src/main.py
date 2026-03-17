@@ -109,14 +109,17 @@ QComboBox QAbstractItemView::item { padding: 4px 8px; }
 QListWidget {
     border: 1px solid #3e3630; border-radius: 5px;
     background: #28211d; outline: none;
+    padding: 4px;
 }
 QListWidget::item {
     padding: 5px 10px; border-radius: 3px; color: #ded8d0;
+    margin: 1px 0;
 }
 QListWidget::item:selected {
     background: #6b4e1a; color: #fff8ee;
 }
 QListWidget::item:hover:!selected { background: #342c26; }
+QListWidget::indicator { width: 0; height: 0; }
 QCheckBox { spacing: 8px; }
 QCheckBox::indicator {
     width: 18px; height: 18px; border-radius: 4px;
