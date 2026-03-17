@@ -31,6 +31,13 @@ class InstrumentListEditor(ctk.CTkFrame):
     def _build_ui(self):
         title = ctk.CTkLabel(self, text=t("instrument.title"), font=ctk.CTkFont(size=14, weight="bold"))
         title.pack(padx=8, pady=(8, 4))
+        self._preset_menu = ctk.CTkOptionMenu(
+            self, values=self._build_preset_options(),
+            command=self._on_preset_selected,
+            dynamic_resizing=False,
+        )
+        self._preset_menu.set(t("instrument.load_preset"))
+        self._preset_menu.pack(fill="x", padx=8, pady=(0, 4))
         self._scroll_frame = ctk.CTkScrollableFrame(self, width=210)
         self._scroll_frame.pack(fill="both", expand=True, padx=4, pady=4)
         input_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -134,6 +141,30 @@ class InstrumentListEditor(ctk.CTkFrame):
     def _notify_changed(self):
         if self._on_changed:
             self._on_changed(list(self._instruments))
+
+    def _build_preset_options(self) -> list:
+        """建構預設編制表選項"""
+        from core.constants import INSTRUMENT_PRESETS
+        from core.locale import get_locale
+        locale = get_locale()
+        return [
+            preset.name_en if locale == "en" else preset.name
+            for preset in INSTRUMENT_PRESETS
+        ]
+
+    def _on_preset_selected(self, choice: str):
+        """載入預設編制表"""
+        from core.constants import INSTRUMENT_PRESETS
+        from core.locale import get_locale
+        locale = get_locale()
+        for preset in INSTRUMENT_PRESETS:
+            name = preset.name_en if locale == "en" else preset.name
+            if name == choice:
+                self._instruments = list(preset.instruments)
+                self._refresh_list()
+                self._notify_changed()
+                self._preset_menu.set(t("instrument.load_preset"))
+                break
 
     def _auto_extract(self):
         """從已匯入的檔名中自動擷取樂器名稱"""

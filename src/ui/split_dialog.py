@@ -8,8 +8,7 @@ PDF 分割對話框
 import os
 from typing import Callable, Dict, List, Optional, Set, Tuple
 import customtkinter as ctk
-from core.constants import INSTRUMENT_PRESETS
-from core.locale import t, get_locale
+from core.locale import t
 from core.models import FileInfo
 
 SECTION_COLORS = [
@@ -50,8 +49,8 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._deleted_pages: Set[int] = set()
         self._section_name_vars: Dict[int, ctk.StringVar] = {}
         self._output_dir: Optional[str] = None
-        self._file_map: Dict[str, str] = {}
-        self._active_instruments: List[str] = []
+        self._file_map: Dict[str, tuple] = {}
+        self._source_group = None
         self._preview_win: Optional[ctk.CTkToplevel] = None
         self._preview_page_idx: int = 0
         self._render_width: int = 560
@@ -70,8 +69,8 @@ class SplitPdfDialog(ctk.CTkToplevel):
         top.pack(fill="x", padx=12, pady=(12, 4))
         ctk.CTkLabel(top, text=t("split.select_file")).pack(side="left")
         project_files = self._collect_project_files()
-        labels = [label for label, _ in project_files]
-        self._file_map = {label: path for label, path in project_files}
+        labels = [label for label, _, _ in project_files]
+        self._file_map = {label: (path, group) for label, path, group in project_files}
         self._file_combo = ctk.CTkOptionMenu(
             top, values=labels or [t("split.no_project_files")],
             width=500,
@@ -87,22 +86,22 @@ class SplitPdfDialog(ctk.CTkToplevel):
         )
         self._page_info_label.pack(side="right")
 
-    def _collect_project_files(self) -> List[Tuple[str, str]]:
-        """蒐集專案內所有 PDF 檔案"""
-        files: List[Tuple[str, str]] = []
+    def _collect_project_files(self) -> List[Tuple[str, str, object]]:
+        """蒐集專案內所有 PDF 檔案，回傳 (標籤, 路徑, 群組或 None)"""
+        files: List[Tuple[str, str, object]] = []
         if not self._project:
             return files
         ungrouped_label = t("group.ungrouped")
         for f in self._project.ungrouped_files:
             if f.original_path.lower().endswith(".pdf"):
                 label = f"{f.display_name}  [{ungrouped_label}]"
-                files.append((label, f.original_path))
+                files.append((label, f.original_path, None))
         for group in self._project.groups:
             group_name = group.name or group.id[:8]
             for f in group.files:
                 if f.original_path.lower().endswith(".pdf"):
                     label = f"{f.display_name}  [{group_name}]"
-                    files.append((label, f.original_path))
+                    files.append((label, f.original_path, group))
         return files
 
     def _build_content(self):
@@ -131,20 +130,6 @@ class SplitPdfDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11), text_color="gray",
             wraplength=260, justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 4))
-        preset_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        preset_frame.pack(fill="x", padx=8, pady=(4, 4))
-        ctk.CTkLabel(
-            preset_frame, text=t("split.load_names"),
-            font=ctk.CTkFont(size=11),
-        ).pack(anchor="w")
-        preset_options = self._build_preset_options()
-        self._preset_menu = ctk.CTkOptionMenu(
-            preset_frame, values=preset_options,
-            command=self._on_preset_selected,
-            dynamic_resizing=False,
-        )
-        self._preset_menu.set(t("split.preset_manual"))
-        self._preset_menu.pack(fill="x", pady=(2, 0))
         self._assign_scroll = ctk.CTkScrollableFrame(parent)
         self._assign_scroll.pack(fill="both", expand=True, padx=4, pady=4)
         out_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -164,16 +149,6 @@ class SplitPdfDialog(ctk.CTkToplevel):
             dir_row, text="...", width=32, command=self._browse_dir,
         ).pack(side="right")
 
-    def _build_preset_options(self) -> List[str]:
-        """建構預設編制表選項清單"""
-        options = [t("split.preset_manual")]
-        if self._project and self._project.instruments:
-            options.append(t("split.preset_project"))
-        locale = get_locale()
-        for preset in INSTRUMENT_PRESETS:
-            name = preset.name_en if locale == "en" else preset.name
-            options.append(name)
-        return options
 
     def _build_bottom_bar(self):
         bottom = ctk.CTkFrame(self, fg_color="transparent")
@@ -192,8 +167,10 @@ class SplitPdfDialog(ctk.CTkToplevel):
     # --- 檔案載入 ---
 
     def _on_file_selected(self, choice: str):
-        path = self._file_map.get(choice)
-        if path:
+        entry = self._file_map.get(choice)
+        if entry:
+            path, group = entry
+            self._source_group = group
             self._load_pdf(path)
 
     def _load_pdf(self, path: str):
@@ -583,13 +560,17 @@ class SplitPdfDialog(ctk.CTkToplevel):
 
     # --- 分譜指派面板 ---
 
-    def _get_project_skip_set(self) -> set:
-        """取得專案中已有的樂器（選用預設編制表時應跳過）"""
-        if not self._project or not self._project.instruments:
-            return set()
-        if self._active_instruments == list(self._project.instruments):
-            return set()
-        return set(self._project.instruments)
+    def _get_used_instruments(self) -> set:
+        """取得專案中已指派給群組的樂器名稱"""
+        used = set()
+        if not self._project:
+            return used
+        instruments = self._project.instruments
+        for group in self._project.groups:
+            for idx in group.selected_instruments:
+                if idx < len(instruments):
+                    used.add(instruments[idx])
+        return used
 
     def _next_unused_instrument(self, used: set, start_after: int = -1) -> str:
         """取得下一個未使用的樂器名稱
@@ -598,7 +579,7 @@ class SplitPdfDialog(ctk.CTkToplevel):
             used: 已使用的樂器名稱集合
             start_after: 從此索引之後開始搜尋（-1 表示從頭）
         """
-        instruments = self._active_instruments
+        instruments = self._project.instruments
         for i in range(start_after + 1, len(instruments)):
             if instruments[i] not in used:
                 return instruments[i]
@@ -607,10 +588,10 @@ class SplitPdfDialog(ctk.CTkToplevel):
     def _cycle_instrument(self, sec_idx: int, direction: int):
         """切換指定分譜的樂器，後續分譜連鎖更新"""
         var = self._section_name_vars.get(sec_idx)
-        if not var or not self._active_instruments:
+        if not var or not self._project.instruments:
             return
         current = var.get()
-        instruments = self._active_instruments
+        instruments = self._project.instruments
         try:
             cur_idx = instruments.index(current)
         except ValueError:
@@ -645,8 +626,8 @@ class SplitPdfDialog(ctk.CTkToplevel):
             child.destroy()
         sections = self._get_sections()
         self._section_name_vars = {}
-        instruments = self._active_instruments
-        used_names: Set[str] = set(self._get_project_skip_set())
+        instruments = self._project.instruments
+        used_names: Set[str] = set(self._get_used_instruments())
         last_inst_idx = -1
         for sec_idx, (start, end) in enumerate(sections):
             color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
@@ -701,25 +682,6 @@ class SplitPdfDialog(ctk.CTkToplevel):
                 font=ctk.CTkFont(size=11), text_color="gray",
             ).pack(side="left", padx=(4, 0))
 
-    def _on_preset_selected(self, choice: str):
-        """切換預設編制表"""
-        if choice == t("split.preset_manual"):
-            self._active_instruments = []
-        elif choice == t("split.preset_project"):
-            self._active_instruments = (
-                list(self._project.instruments)
-                if self._project else []
-            )
-        else:
-            locale = get_locale()
-            for preset in INSTRUMENT_PRESETS:
-                name = preset.name_en if locale == "en" else preset.name
-                if name == choice:
-                    self._active_instruments = list(preset.instruments)
-                    break
-        # 重建面板（會自動跳過專案已有樂器）
-        self._section_name_vars = {}
-        self._update_assignment_panel()
 
     # --- 輸出 ---
 
@@ -734,7 +696,6 @@ class SplitPdfDialog(ctk.CTkToplevel):
 
     def _execute_split(self):
         from tkinter import messagebox
-        from core.models import Group
         if not self._pdf_path:
             return
         output_dir = self._output_dir or os.path.dirname(self._pdf_path)
@@ -742,8 +703,8 @@ class SplitPdfDialog(ctk.CTkToplevel):
         try:
             from services.pdf_service import extract_pages
             os.makedirs(output_dir, exist_ok=True)
-            group_files: List[FileInfo] = []
-            group_selected: List[int] = []
+            split_files: List[FileInfo] = []
+            split_selected: List[int] = []
             for sec_idx, (start, end) in enumerate(sections):
                 pages = [
                     p for p in range(start, end + 1)
@@ -758,29 +719,25 @@ class SplitPdfDialog(ctk.CTkToplevel):
                     safe_name += ".pdf"
                 output_path = os.path.join(output_dir, safe_name)
                 extract_pages(self._pdf_path, pages, output_path)
-                group_files.append(FileInfo(
+                split_files.append(FileInfo(
                     original_path=output_path,
                     display_name=os.path.basename(output_path),
                 ))
-                if sec_idx < len(self._active_instruments):
-                    group_selected.append(sec_idx)
-            if not group_files:
+                if sec_idx < len(self._project.instruments):
+                    split_selected.append(sec_idx)
+            if not split_files:
                 messagebox.showinfo(t("dialog.info"), t("dialog.info.no_files"))
                 return
-            source_name = os.path.splitext(os.path.basename(self._pdf_path))[0]
-            new_group = Group(
-                name=source_name,
-                files=group_files,
-                selected_instruments=group_selected,
-            )
             if self._on_split_complete:
                 self._on_split_complete(
-                    new_group,
-                    self._active_instruments or None,
+                    split_files,
+                    split_selected,
+                    self._source_group,
+                    self._pdf_path,
                 )
             messagebox.showinfo(
                 t("dialog.complete"),
-                t("split.done", count=len(group_files)),
+                t("split.done", count=len(split_files)),
             )
             self.destroy()
         except Exception as e:

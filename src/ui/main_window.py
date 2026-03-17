@@ -687,34 +687,28 @@ class MainWindow(ctk.CTkFrame):
             on_split_complete=self._on_split_complete,
         )
 
-    def _on_split_complete(self, group, instruments=None):
-        """分割完成回呼，合併樂器表並建立群組"""
-        merged = None
-        if instruments:
-            merged = list(self.project.instruments)
-            for inst in instruments:
-                if inst not in merged:
-                    merged.append(inst)
-            remapped = []
-            for old_idx in group.selected_instruments:
-                if old_idx < len(instruments):
-                    name = instruments[old_idx]
-                    try:
-                        remapped.append(merged.index(name))
-                    except ValueError:
-                        pass
-            group.selected_instruments = remapped
-            self.project.instruments = merged
-        self.project.groups.append(group)
+    def _on_split_complete(self, files, selected, source_group, source_path):
+        """分割完成回呼，將檔案放回來源群組或建立新群組"""
+        from core.models import Group
+        if source_group:
+            source_group.files = [
+                f for f in source_group.files
+                if f.original_path != source_path
+            ]
+            source_group.files.extend(files)
+            source_group.selected_instruments = selected
+        else:
+            source_name = os.path.splitext(os.path.basename(source_path))[0]
+            new_group = Group(
+                name=source_name,
+                files=files,
+                selected_instruments=selected,
+            )
+            self.project.groups.append(new_group)
         self._mark_modified()
-        if merged:
-            saved_cb = self._instrument_editor._on_changed
-            self._instrument_editor._on_changed = None
-            self._instrument_editor.set_instruments(merged)
-            self._instrument_editor._on_changed = saved_cb
         if self._group_panel:
             self._group_panel.reload_all()
-        self._set_status(t("split.files_added", count=len(group.files)))
+        self._set_status(t("split.files_added", count=len(files)))
 
     def _open_rotate_pdf(self):
         from ui.rotate_dialog import RotatePdfDialog
