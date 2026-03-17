@@ -357,40 +357,41 @@ class SplitPdfDialog(ctk.CTkToplevel):
         top_bar = ctk.CTkFrame(preview, fg_color="transparent")
         top_bar.pack(fill="x", padx=8, pady=(4, 0))
         self._preview_page_label = ctk.CTkLabel(
-            top_bar, text="",
-            font=ctk.CTkFont(size=13),
+            top_bar, text="", font=ctk.CTkFont(size=13),
         )
         self._preview_page_label.pack(expand=True)
-        # 中間：譜面（不被任何元件遮擋）
-        self._preview_scroll = ctk.CTkScrollableFrame(preview)
-        self._preview_scroll.pack(fill="both", expand=True, padx=4, pady=2)
-        self._preview_img_label = ctk.CTkLabel(self._preview_scroll, text="")
-        self._preview_img_label.pack(padx=4, pady=4)
-        # 浮動翻頁箭頭（CTkLabel，真正透明無殘影）
-        # 預設只有淡色箭頭貼齊邊緣；接近時浮現半透明背景
-        nav_font = ctk.CTkFont(size=36)
-        dim_text = ("gray75", "gray35")
+        # 中間：左箭頭欄 | 譜面 | 右箭頭欄
+        middle = ctk.CTkFrame(preview, fg_color="transparent")
+        middle.pack(fill="both", expand=True, pady=2)
+        nav_font = ctk.CTkFont(size=28)
+        dim_text = ("gray72", "gray38")
+        self._left_col = ctk.CTkFrame(middle, width=36, fg_color="transparent")
+        self._left_col.pack(side="left", fill="y")
+        self._left_col.pack_propagate(False)
         self._prev_nav = ctk.CTkLabel(
-            preview, text="\u276E", width=48, height=120,
-            fg_color="transparent", corner_radius=12,
+            self._left_col, text="\u276E",
             text_color=dim_text, font=nav_font, cursor="hand2",
         )
-        self._prev_nav.place(x=0, rely=0.5, anchor="w")
+        self._prev_nav.pack(expand=True)
         self._prev_nav.bind("<Button-1>", lambda e: self._preview_prev())
+        self._right_col = ctk.CTkFrame(middle, width=36, fg_color="transparent")
+        self._right_col.pack(side="right", fill="y")
+        self._right_col.pack_propagate(False)
         self._next_nav = ctk.CTkLabel(
-            preview, text="\u276F", width=48, height=120,
-            fg_color="transparent", corner_radius=12,
+            self._right_col, text="\u276F",
             text_color=dim_text, font=nav_font, cursor="hand2",
         )
-        self._next_nav.place(relx=1.0, rely=0.5, anchor="e")
+        self._next_nav.pack(expand=True)
         self._next_nav.bind("<Button-1>", lambda e: self._preview_next())
-        self._prev_nav.lift()
-        self._next_nav.lift()
+        self._preview_scroll = ctk.CTkScrollableFrame(middle)
+        self._preview_scroll.pack(side="left", fill="both", expand=True)
+        self._preview_img_label = ctk.CTkLabel(self._preview_scroll, text="")
+        self._preview_img_label.pack(padx=2, pady=2)
         self._prev_visible = False
         self._next_visible = False
-        # 底部列：分割點 + 刪除（統一高度）
+        # 底部列：分割點 + 刪除（統一高度，與閱讀區留間距）
         bottom_bar = ctk.CTkFrame(preview, fg_color="transparent")
-        bottom_bar.pack(fill="x", padx=12, pady=(0, 8))
+        bottom_bar.pack(fill="x", padx=12, pady=(6, 12))
         self._split_toggle_btn = ctk.CTkButton(
             bottom_bar, text="", height=32,
             corner_radius=16,
@@ -406,10 +407,8 @@ class SplitPdfDialog(ctk.CTkToplevel):
             command=self._preview_toggle_delete,
         )
         self._delete_toggle_btn.pack(side="left")
-        # 算繪（視窗大小足以完整顯示 A4）
-        screen_h = preview.winfo_screenheight()
-        win_h = min(int(screen_h * 0.88), 1000)
-        preview.geometry(f"700x{win_h}")
+        # 初始大小（算繪後依內容調整）
+        preview.geometry("700x880")
         self._render_preview_page(page_idx)
         self._poll_nav_proximity()
         # 鍵盤
@@ -439,14 +438,14 @@ class SplitPdfDialog(ctk.CTkToplevel):
         self._preview_page_label.configure(
             text=f"{page_idx + 1} / {self._page_count}",
         )
-        if page_idx > 0:
-            self._prev_nav.place(x=10, rely=0.5, anchor="w")
-        else:
-            self._prev_nav.place_forget()
-        if page_idx < self._page_count - 1:
-            self._next_nav.place(relx=1.0, x=-10, rely=0.5, anchor="e")
-        else:
-            self._next_nav.place_forget()
+        self._prev_nav.configure(
+            text_color=("gray72", "gray38") if page_idx > 0 else ("gray88", "gray20"),
+            cursor="hand2" if page_idx > 0 else "arrow",
+        )
+        self._next_nav.configure(
+            text_color=("gray72", "gray38") if page_idx < self._page_count - 1 else ("gray88", "gray20"),
+            cursor="hand2" if page_idx < self._page_count - 1 else "arrow",
+        )
         self._update_preview_split_indicator()
         self._update_preview_delete_indicator()
 
@@ -498,29 +497,25 @@ class SplitPdfDialog(ctk.CTkToplevel):
         return 0
 
     def _poll_nav_proximity(self):
-        """定期檢查滑鼠位置，接近邊緣時浮現翻頁箭頭背景"""
+        """定期檢查滑鼠位置，接近邊緣時高亮翻頁欄"""
         if not self._preview_win or not self._preview_win.winfo_exists():
             return
         try:
             mx = self._preview_win.winfo_pointerx() - self._preview_win.winfo_rootx()
             w = self._preview_win.winfo_width()
-            dim_text = ("gray75", "gray35")
-            bright_text = ("gray10", "gray98")
-            bg_on = ("gray88", "gray28")
-            near_left = 0 <= mx < w * 0.15
+            dim = ("gray72", "gray38")
+            bright = ("gray10", "gray98")
+            bg_on = ("gray80", "gray30")
+            near_left = 0 <= mx < w * 0.12
             if near_left != self._prev_visible:
                 self._prev_visible = near_left
-                self._prev_nav.configure(
-                    fg_color=bg_on if near_left else "transparent",
-                    text_color=bright_text if near_left else dim_text,
-                )
-            near_right = mx > w * 0.85
+                self._left_col.configure(fg_color=bg_on if near_left else "transparent")
+                self._prev_nav.configure(text_color=bright if near_left else dim)
+            near_right = mx > w * 0.88
             if near_right != self._next_visible:
                 self._next_visible = near_right
-                self._next_nav.configure(
-                    fg_color=bg_on if near_right else "transparent",
-                    text_color=bright_text if near_right else dim_text,
-                )
+                self._right_col.configure(fg_color=bg_on if near_right else "transparent")
+                self._next_nav.configure(text_color=bright if near_right else dim)
         except Exception:
             pass
         self._preview_win.after(150, self._poll_nav_proximity)
