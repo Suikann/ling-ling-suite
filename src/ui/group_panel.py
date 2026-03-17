@@ -204,21 +204,25 @@ class UngroupedTabContent(ctk.CTkFrame):
             ).pack(expand=True, pady=40)
             return
         for i, file_info in enumerate(self.project.ungrouped_files):
-            row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-            row.pack(fill="x", pady=1)
-            var = ctk.BooleanVar(value=False)
-            self._check_vars.append(var)
-            ctk.CTkCheckBox(
-                row, text="", variable=var, width=24,
-            ).pack(side="left", padx=(4, 2))
-            ctk.CTkLabel(row, text=file_info.display_name, anchor="w").pack(
-                side="left", fill="x", expand=True, padx=2,
-            )
-            ctk.CTkButton(
-                row, text="\u00D7", width=28, height=28,
-                fg_color="#c0392b", hover_color="#e74c3c",
-                command=lambda idx=i: self._remove_file(idx),
-            ).pack(side="right", padx=2)
+            self._create_ungrouped_row(i, file_info)
+
+    def _create_ungrouped_row(self, index: int, file_info: FileInfo):
+        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        row._idx = index
+        row.pack(fill="x", pady=1)
+        var = ctk.BooleanVar(value=False)
+        self._check_vars.append(var)
+        ctk.CTkCheckBox(
+            row, text="", variable=var, width=24,
+        ).pack(side="left", padx=(4, 2))
+        ctk.CTkLabel(row, text=file_info.display_name, anchor="w").pack(
+            side="left", fill="x", expand=True, padx=2,
+        )
+        ctk.CTkButton(
+            row, text="\u00D7", width=28, height=28,
+            fg_color="#c0392b", hover_color="#e74c3c",
+            command=lambda r=row: self._remove_file(r._idx),
+        ).pack(side="right", padx=2)
 
     def _toggle_select_all(self):
         val = self._select_all_var.get()
@@ -281,7 +285,16 @@ class UngroupedTabContent(ctk.CTkFrame):
     def _remove_file(self, index: int):
         if 0 <= index < len(self.project.ungrouped_files):
             self.project.ungrouped_files.pop(index)
-            self._refresh_list()
+            if index < len(self._check_vars):
+                self._check_vars.pop(index)
+            rows = self._scroll.winfo_children()
+            if index < len(rows):
+                rows[index].destroy()
+            if not self.project.ungrouped_files:
+                self._refresh_list()
+            else:
+                for i, row in enumerate(self._scroll.winfo_children()):
+                    row._idx = i
             self.main_window._mark_modified()
 
     def refresh(self):
@@ -459,40 +472,49 @@ class GroupTabContent(ctk.CTkFrame):
         instruments = self.project.instruments
         selected = self._group.selected_instruments
         for i, file_info in enumerate(self._group.files):
-            row = ctk.CTkFrame(self._file_scroll, fg_color="transparent")
-            row.pack(fill="x", pady=1)
-            if i < len(selected) and selected[i] < len(instruments):
-                inst_text = instruments[selected[i]]
-                ctk.CTkLabel(
-                    row, text=inst_text, width=100, anchor="w",
-                    font=ctk.CTkFont(size=11), text_color=("gray40", "gray60"),
-                ).pack(side="left", padx=(4, 2))
-            ctk.CTkLabel(row, text=file_info.display_name, anchor="w").pack(
-                side="left", fill="x", expand=True, padx=2,
-            )
-            btn_frame = ctk.CTkFrame(row, fg_color="transparent")
-            btn_frame.pack(side="right")
-            ctk.CTkButton(
-                btn_frame, text="\u25B2", width=28, height=28,
-                command=lambda idx=i: self._move_file_up(idx),
-            ).pack(side="left", padx=1)
-            ctk.CTkButton(
-                btn_frame, text="\u25BC", width=28, height=28,
-                command=lambda idx=i: self._move_file_down(idx),
-            ).pack(side="left", padx=1)
-            ctk.CTkButton(
-                btn_frame, text="\u2190", width=28, height=28,
-                fg_color=("gray75", "gray35"),
-                hover_color=("gray65", "gray45"),
-                command=lambda idx=i: self._remove_file(idx),
-            ).pack(side="left", padx=1)
+            self._create_file_row(i, file_info, instruments, selected)
+
+    def _create_file_row(self, index, file_info, instruments, selected):
+        row = ctk.CTkFrame(self._file_scroll, fg_color="transparent")
+        row._idx = index
+        row.pack(fill="x", pady=1)
+        if index < len(selected) and selected[index] < len(instruments):
+            inst_text = instruments[selected[index]]
+            ctk.CTkLabel(
+                row, text=inst_text, width=100, anchor="w",
+                font=ctk.CTkFont(size=11), text_color=("gray40", "gray60"),
+            ).pack(side="left", padx=(4, 2))
+        file_label = ctk.CTkLabel(row, text=file_info.display_name, anchor="w")
+        file_label.pack(side="left", fill="x", expand=True, padx=2)
+        row._file_label = file_label
+        btn_frame = ctk.CTkFrame(row, fg_color="transparent")
+        btn_frame.pack(side="right")
+        ctk.CTkButton(
+            btn_frame, text="\u2191", width=28, height=28,
+            command=lambda r=row: self._move_file_up(r._idx),
+        ).pack(side="left", padx=1)
+        ctk.CTkButton(
+            btn_frame, text="\u2193", width=28, height=28,
+            command=lambda r=row: self._move_file_down(r._idx),
+        ).pack(side="left", padx=1)
+        ctk.CTkButton(
+            btn_frame, text="\u2190", width=28, height=28,
+            fg_color=("gray75", "gray35"),
+            hover_color=("gray65", "gray45"),
+            command=lambda r=row: self._remove_file(r._idx),
+        ).pack(side="left", padx=1)
 
     def _move_file_up(self, index: int):
         if index <= 0:
             return
         files = self._group.files
         files[index], files[index - 1] = files[index - 1], files[index]
-        self._refresh_file_list()
+        rows = self._file_scroll.winfo_children()
+        if index < len(rows) and index - 1 < len(rows):
+            a, b = rows[index]._file_label, rows[index - 1]._file_label
+            ta, tb = a.cget("text"), b.cget("text")
+            a.configure(text=tb)
+            b.configure(text=ta)
         self.main_window._mark_modified()
 
     def _move_file_down(self, index: int):
@@ -500,14 +522,26 @@ class GroupTabContent(ctk.CTkFrame):
         if index >= len(files) - 1:
             return
         files[index], files[index + 1] = files[index + 1], files[index]
-        self._refresh_file_list()
+        rows = self._file_scroll.winfo_children()
+        if index < len(rows) and index + 1 < len(rows):
+            a, b = rows[index]._file_label, rows[index + 1]._file_label
+            ta, tb = a.cget("text"), b.cget("text")
+            a.configure(text=tb)
+            b.configure(text=ta)
         self.main_window._mark_modified()
 
     def _remove_file(self, index: int):
         if 0 <= index < len(self._group.files):
             removed = self._group.files.pop(index)
             self.project.ungrouped_files.append(removed)
-            self._refresh_file_list()
+            rows = self._file_scroll.winfo_children()
+            if index < len(rows):
+                rows[index].destroy()
+            if not self._group.files:
+                self._refresh_file_list()
+            else:
+                for i, row in enumerate(self._file_scroll.winfo_children()):
+                    row._idx = i
             self._check_mismatch()
             self.main_window._mark_modified()
             group_panel = self.main_window._group_panel
