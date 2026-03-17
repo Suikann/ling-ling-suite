@@ -27,6 +27,7 @@ class Group:
     piece_name: str = ""
     movement_number: str = ""
     movement_name: str = ""
+    score_file: Optional["FileInfo"] = None
     use_small_template: bool = False
     small_template: str = ""
 

@@ -82,6 +82,11 @@ class ProjectService:
                 {"original_path": f.original_path, "display_name": f.display_name}
                 for f in group.files
             ],
+            "score_file": (
+                {"original_path": group.score_file.original_path,
+                 "display_name": group.score_file.display_name}
+                if group.score_file else None
+            ),
             "selected_instruments": group.selected_instruments,
             "piece_name": group.piece_name,
             "movement_number": group.movement_number,
@@ -99,9 +104,18 @@ class ProjectService:
         Returns:
             Group 物件
         """
+        score_data = data.get("score_file")
+        score_file = (
+            FileInfo(
+                original_path=score_data["original_path"],
+                display_name=score_data["display_name"],
+            )
+            if score_data else None
+        )
         group = Group(
             id=data.get("id", ""),
             name=data.get("name", ""),
+            score_file=score_file,
             selected_instruments=data.get("selected_instruments", []),
             piece_name=data.get("piece_name", ""),
             movement_number=data.get("movement_number", ""),

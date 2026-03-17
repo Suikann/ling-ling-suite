@@ -381,6 +381,27 @@ class GroupTabContent(ctk.CTkFrame):
         self._mismatch_label.pack(padx=4, pady=2)
         right_col = ctk.CTkFrame(middle)
         right_col.pack(side="left", fill="both", expand=True, padx=(4, 0))
+        score_frame = ctk.CTkFrame(right_col, fg_color="transparent")
+        score_frame.pack(fill="x", padx=4, pady=(4, 2))
+        ctk.CTkLabel(
+            score_frame, text=t("group.score_file"),
+            font=ctk.CTkFont(weight="bold"),
+        ).pack(side="left")
+        self._score_label = ctk.CTkLabel(
+            score_frame, text=t("group.score_file.none"),
+            text_color="gray", anchor="w",
+        )
+        self._score_label.pack(side="left", fill="x", expand=True, padx=4)
+        ctk.CTkButton(
+            score_frame, text=t("group.score_file.clear"), width=50, height=24,
+            fg_color=("gray75", "gray35"), hover_color=("gray65", "gray45"),
+            command=self._clear_score_file,
+        ).pack(side="right", padx=1)
+        ctk.CTkButton(
+            score_frame, text=t("group.score_file.set"), width=80, height=24,
+            command=self._set_score_file,
+        ).pack(side="right", padx=1)
+        self._update_score_display()
         ctk.CTkLabel(right_col, text=t("group.file_list"), font=ctk.CTkFont(weight="bold")).pack(pady=(4, 2))
         self._file_scroll = ctk.CTkScrollableFrame(right_col)
         self._file_scroll.pack(fill="both", expand=True, padx=4, pady=4)
@@ -409,6 +430,54 @@ class GroupTabContent(ctk.CTkFrame):
         self._refresh_instruments()
         self._refresh_file_list()
         self._auto_detect_if_empty()
+
+    def _update_score_display(self):
+        """更新總譜顯示"""
+        if self._group.score_file:
+            self._score_label.configure(
+                text=self._group.score_file.display_name,
+                text_color=("black", "white"),
+            )
+        else:
+            self._score_label.configure(
+                text=t("group.score_file.none"),
+                text_color="gray",
+            )
+
+    def _set_score_file(self):
+        """從檔案清單中指定一個檔案為總譜"""
+        if not self._group.files:
+            return
+        import tkinter as tk
+        menu = tk.Menu(self, tearoff=0)
+        for i, f in enumerate(self._group.files):
+            menu.add_command(
+                label=f.display_name,
+                command=lambda idx=i: self._do_set_score(idx),
+            )
+        btn = self._score_label
+        menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
+
+    def _do_set_score(self, file_index: int):
+        """將指定檔案設為總譜"""
+        if self._group.score_file:
+            self._group.files.append(self._group.score_file)
+        if 0 <= file_index < len(self._group.files):
+            self._group.score_file = self._group.files.pop(file_index)
+        self._update_score_display()
+        self._refresh_file_list()
+        self._check_mismatch()
+        self.main_window._mark_modified()
+
+    def _clear_score_file(self):
+        """清除總譜指定，將檔案放回清單"""
+        if self._group.score_file:
+            self._group.files.insert(0, self._group.score_file)
+            self._group.score_file = None
+            self._update_score_display()
+            self._refresh_file_list()
+            self._check_mismatch()
+            self.main_window._mark_modified()
 
     def _auto_detect_if_empty(self):
         """曲名欄位為空時自動偵測一次"""

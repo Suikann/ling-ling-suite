@@ -31,13 +31,37 @@ class RenameService:
         """
         plan = []
         for group in project.groups:
-            if not group.files or not group.selected_instruments:
-                continue
             template = (
                 group.small_template
                 if group.use_small_template and group.small_template
                 else project.master_template
             )
+            if group.score_file:
+                score_vars = {
+                    "序號": "00", "Number": "00",
+                    "樂器": t("group.score_label"),
+                    "Instrument": "Full Score",
+                    "曲名": group.piece_name,
+                    "PieceName": group.piece_name,
+                    "樂章編號": group.movement_number,
+                    "MovementNum": group.movement_number,
+                    "樂章名稱": group.movement_name,
+                    "MovementName": group.movement_name,
+                }
+                score_name = substitute_template(template, score_vars)
+                base_dir = (
+                    project.output_directory
+                    if project.output_directory
+                    else os.path.dirname(group.score_file.original_path)
+                )
+                target_dir = base_dir
+                plan.append(RenameEntry(
+                    original_path=group.score_file.original_path,
+                    new_path=os.path.join(target_dir, score_name),
+                    group_id=group.id,
+                ))
+            if not group.files or not group.selected_instruments:
+                continue
             for i, file_info in enumerate(group.files):
                 if i >= len(group.selected_instruments):
                     break
