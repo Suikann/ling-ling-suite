@@ -577,7 +577,6 @@ class GroupTabContent(ctk.CTkFrame):
                 text=t("group.select_all_instruments"),
                 variable=self._select_all_inst_var,
                 command=self._toggle_select_all_instruments,
-                font=ctk.CTkFont(size=11),
             ).pack(anchor="w", padx=4, pady=(1, 4))
             for i, name in enumerate(instruments):
                 var = ctk.BooleanVar(value=(i in self._group.selected_instruments))
