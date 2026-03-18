@@ -9,11 +9,24 @@ import os
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QProxyStyle, QStyleFactory
 from PySide6.QtCore import Qt
 from core.locale import t, set_locale
 from core.models import Project
 from services.preferences_service import PreferencesService
+
+
+class _AppStyle(QProxyStyle):
+    """子選單不與父選單重疊"""
+
+    def __init__(self):
+        super().__init__(QStyleFactory.create("Fusion"))
+
+    def pixelMetric(self, metric, option=None, widget=None):
+        from PySide6.QtWidgets import QStyle
+        if metric == QStyle.PM_SubMenuOverlap:
+            return -6
+        return super().pixelMetric(metric, option, widget)
 
 
 def main():
@@ -22,7 +35,7 @@ def main():
     language = prefs.get("language") or "zh_TW"
     set_locale(language)
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
+    app.setStyle(_AppStyle())
     _apply_dark_theme(app)
     from ui.main_window import MainWindow
     window = MainWindow(prefs)
