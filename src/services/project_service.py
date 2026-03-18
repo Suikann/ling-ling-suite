@@ -25,6 +25,8 @@ class ProjectService:
             "master_template": project.master_template,
             "use_subfolders": project.use_subfolders,
             "subfolder_template": project.subfolder_template,
+            "use_parts_subfolder": project.use_parts_subfolder,
+            "parts_subfolder_name": project.parts_subfolder_name,
             "output_directory": project.output_directory,
             "ungrouped_files": [
                 {"original_path": f.original_path, "display_name": f.display_name}
@@ -51,6 +53,8 @@ class ProjectService:
             master_template=data.get("master_template", ""),
             use_subfolders=data.get("use_subfolders", False),
             subfolder_template=data.get("subfolder_template", ""),
+            use_parts_subfolder=data.get("use_parts_subfolder", False),
+            parts_subfolder_name=data.get("parts_subfolder_name", "Parts"),
             output_directory=data.get("output_directory", ""),
         )
         project.ungrouped_files = [

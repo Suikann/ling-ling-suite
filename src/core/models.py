@@ -71,4 +71,6 @@ class Project:
     ungrouped_files: List[FileInfo] = field(default_factory=list)
     use_subfolders: bool = False
     subfolder_template: str = DEFAULT_SUBFOLDER_TEMPLATE
+    use_parts_subfolder: bool = False
+    parts_subfolder_name: str = "Parts"
     output_directory: str = ""

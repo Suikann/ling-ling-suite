@@ -64,6 +64,16 @@ class PreviewDialog(QDialog):
         self._subfolder_entry.editingFinished.connect(self._on_settings_changed)
         subfolder_row.addWidget(self._subfolder_entry, stretch=1)
         layout.addLayout(subfolder_row)
+        parts_row = QHBoxLayout()
+        self._parts_cb = QCheckBox(t("panel.parts_subfolder"))
+        self._parts_cb.setChecked(self._project.use_parts_subfolder)
+        self._parts_cb.toggled.connect(self._on_settings_changed)
+        parts_row.addWidget(self._parts_cb)
+        parts_row.addWidget(QLabel(t("panel.parts_subfolder_name")))
+        self._parts_entry = QLineEdit(self._project.parts_subfolder_name)
+        self._parts_entry.editingFinished.connect(self._on_settings_changed)
+        parts_row.addWidget(self._parts_entry, stretch=1)
+        layout.addLayout(parts_row)
         self._warn_label = QLabel("")
         self._warn_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
         self._warn_label.setVisible(False)
@@ -106,6 +116,8 @@ class PreviewDialog(QDialog):
     def _on_settings_changed(self):
         self._project.use_subfolders = self._subfolder_cb.isChecked()
         self._project.subfolder_template = self._subfolder_entry.text()
+        self._project.use_parts_subfolder = self._parts_cb.isChecked()
+        self._project.parts_subfolder_name = self._parts_entry.text()
         self._refresh_plan()
 
     def _refresh_plan(self):

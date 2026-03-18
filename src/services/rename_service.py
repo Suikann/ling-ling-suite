@@ -98,6 +98,10 @@ class RenameService:
                     target_dir = os.path.join(base_dir, subfolder_name)
                 else:
                     target_dir = base_dir
+                if project.use_parts_subfolder and project.parts_subfolder_name:
+                    target_dir = os.path.join(
+                        target_dir, _sanitize_name(project.parts_subfolder_name),
+                    )
                 new_path = os.path.join(target_dir, new_name)
                 plan.append(RenameEntry(
                     original_path=file_info.original_path,
