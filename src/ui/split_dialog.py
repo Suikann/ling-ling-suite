@@ -356,11 +356,8 @@ class SplitPdfDialog(QDialog):
         used = set()
         if not self._project:
             return used
-        instruments = self._project.instruments
         for group in self._project.groups:
-            for idx in group.selected_instruments:
-                if idx < len(instruments):
-                    used.add(instruments[idx])
+            used.update(group.instruments)
         return used
 
     def _next_unused(self, used, start_after=-1):

@@ -221,6 +221,7 @@ class MainWindow(QMainWindow):
         widget = self._tab_widget.currentWidget()
         if widget and hasattr(widget, '_group'):
             widget._group.instruments = instruments
+            widget._group.selected_instruments = list(range(len(instruments)))
             if hasattr(widget, 'on_instruments_changed'):
                 widget.on_instruments_changed(instruments)
 

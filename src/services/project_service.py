@@ -67,6 +67,14 @@ class ProjectService:
         for group in project.groups:
             if not group.instruments and project.instruments:
                 group.instruments = list(project.instruments)
+            if group.instruments and group.selected_instruments:
+                if group.selected_instruments != list(range(len(group.instruments))):
+                    group.instruments = [
+                        group.instruments[i]
+                        for i in group.selected_instruments
+                        if i < len(group.instruments)
+                    ]
+            group.selected_instruments = list(range(len(group.instruments)))
         return project
 
     def _serialize_group(self, group: Group) -> dict:

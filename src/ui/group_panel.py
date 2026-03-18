@@ -2,15 +2,14 @@
 """
 群組管理面板（PySide6）
 
-提供群組標籤管理、樂器勾選與檔案清單。
+提供群組標籤管理與檔案清單。
 """
 import os
 from typing import List, TYPE_CHECKING
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QCheckBox, QListWidget, QListWidgetItem,
-    QScrollArea, QFrame, QMessageBox, QMenu, QFileDialog,
-    QAbstractItemView,
+    QMessageBox, QMenu, QFileDialog, QAbstractItemView,
 )
 from ui.widgets import DragListWidget
 from PySide6.QtCore import Qt
@@ -150,30 +149,6 @@ class GroupTab(QWidget):
         self._movement_name_entry = QLineEdit(self._group.movement_name)
         vars_row.addWidget(self._movement_name_entry)
         layout.addLayout(vars_row)
-        middle = QHBoxLayout()
-        left_widget = QWidget()
-        left_widget.setFixedWidth(210)
-        left_col = QVBoxLayout(left_widget)
-        left_col.setContentsMargins(0, 0, 0, 0)
-        left_col.addWidget(QLabel(t("group.instrument_check")))
-        self._select_all_cb = QCheckBox(t("group.select_all_instruments"))
-        self._select_all_cb.toggled.connect(self._toggle_select_all)
-        self._select_all_cb.setContentsMargins(4, 0, 0, 0)
-        left_col.addWidget(self._select_all_cb)
-        self._inst_scroll = QScrollArea()
-        self._inst_scroll.setWidgetResizable(True)
-        self._inst_container = QWidget()
-        self._inst_layout = QVBoxLayout(self._inst_container)
-        self._inst_layout.setContentsMargins(4, 4, 4, 4)
-        self._inst_layout.setSpacing(2)
-        self._inst_scroll.setWidget(self._inst_container)
-        left_col.addWidget(self._inst_scroll)
-        self._mismatch_label = QLabel("")
-        self._mismatch_label.setWordWrap(True)
-        self._mismatch_label.setStyleSheet("color: #e74c3c; font-size: 12px;")
-        left_col.addWidget(self._mismatch_label)
-        middle.addWidget(left_widget)
-        right_col = QVBoxLayout()
         score_row = QHBoxLayout()
         score_row.addWidget(QLabel(t("group.score_file")))
         self._score_label = QLabel(t("group.score_file.none"))
@@ -185,7 +160,7 @@ class GroupTab(QWidget):
         clear_score_btn = QPushButton(t("group.score_file.clear"))
         clear_score_btn.clicked.connect(self._clear_score_file)
         score_row.addWidget(clear_score_btn)
-        right_col.addLayout(score_row)
+        layout.addLayout(score_row)
         score_label_row = QHBoxLayout()
         score_label_row.addWidget(QLabel(t("group.score_file.label")))
         self._score_label_entry = QLineEdit(
@@ -194,11 +169,15 @@ class GroupTab(QWidget):
         self._score_label_entry.setFixedWidth(120)
         score_label_row.addWidget(self._score_label_entry)
         score_label_row.addStretch()
-        right_col.addLayout(score_label_row)
-        right_col.addWidget(QLabel(t("group.file_list")))
+        layout.addLayout(score_label_row)
+        self._mismatch_label = QLabel("")
+        self._mismatch_label.setWordWrap(True)
+        self._mismatch_label.setStyleSheet("font-size: 12px;")
+        layout.addWidget(self._mismatch_label)
+        layout.addWidget(QLabel(t("group.file_list")))
         self._file_list = DragListWidget()
         self._file_list.model().rowsMoved.connect(self._on_files_reordered)
-        right_col.addWidget(self._file_list)
+        layout.addWidget(self._file_list, stretch=1)
         file_btn_row = QHBoxLayout()
         add_btn = QPushButton(t("group.add_files"))
         add_btn.clicked.connect(self._add_files)
@@ -211,9 +190,7 @@ class GroupTab(QWidget):
         delete_btn.clicked.connect(self._delete_selected_files)
         file_btn_row.addWidget(delete_btn)
         file_btn_row.addStretch()
-        right_col.addLayout(file_btn_row)
-        middle.addLayout(right_col, stretch=1)
-        layout.addLayout(middle, stretch=1)
+        layout.addLayout(file_btn_row)
         bottom_row = QHBoxLayout()
         self._small_template_cb = QCheckBox(t("group.use_small_template"))
         self._small_template_cb.setChecked(self._group.use_small_template)
@@ -223,53 +200,12 @@ class GroupTab(QWidget):
         self._small_template_cb.toggled.connect(self._small_template_entry.setEnabled)
         bottom_row.addWidget(self._small_template_entry, stretch=1)
         layout.addLayout(bottom_row)
-        self._refresh_instruments()
         self._refresh_file_list()
         self._update_score_display()
-
-    def _refresh_instruments(self):
-        while self._inst_layout.count():
-            item = self._inst_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self._inst_vars: List[QCheckBox] = []
-        instruments = self._group.instruments
-        if not instruments:
-            self._inst_layout.addWidget(QLabel(t("group.no_instruments")))
-            return
-        for i, name in enumerate(instruments):
-            cb = QCheckBox(name)
-            cb.setChecked(i in self._group.selected_instruments)
-            cb.toggled.connect(self._on_instrument_check_changed)
-            self._inst_layout.addWidget(cb)
-            self._inst_vars.append(cb)
-        self._inst_layout.addStretch()
-        all_checked = len(self._group.selected_instruments) == len(instruments) and len(instruments) > 0
-        self._select_all_cb.blockSignals(True)
-        self._select_all_cb.setChecked(all_checked)
-        self._select_all_cb.blockSignals(False)
         self._check_mismatch()
-
-    def _toggle_select_all(self, checked):
-        for cb in self._inst_vars:
-            cb.blockSignals(True)
-            cb.setChecked(checked)
-            cb.blockSignals(False)
-        self._on_instrument_check_changed()
-
-    def _on_instrument_check_changed(self):
-        self._group.selected_instruments = [
-            i for i, cb in enumerate(self._inst_vars) if cb.isChecked()
-        ]
-        all_checked = len(self._group.selected_instruments) == len(self._inst_vars) and len(self._inst_vars) > 0
-        self._select_all_cb.blockSignals(True)
-        self._select_all_cb.setChecked(all_checked)
-        self._select_all_cb.blockSignals(False)
-        self._check_mismatch()
-        self.main_window._mark_modified()
 
     def _check_mismatch(self):
-        n_inst = len(self._group.selected_instruments)
+        n_inst = len(self._group.instruments)
         n_files = len(self._group.files)
         if n_files == 0 and n_inst == 0:
             self._mismatch_label.setText("")
@@ -277,19 +213,18 @@ class GroupTab(QWidget):
             self._mismatch_label.setText(
                 t("group.mismatch", n_inst=n_inst, n_files=n_files),
             )
-            self._mismatch_label.setStyleSheet("color: #e74c3c;")
+            self._mismatch_label.setStyleSheet("color: #e74c3c; font-size: 12px;")
         else:
             self._mismatch_label.setText(t("group.match", count=n_inst))
-            self._mismatch_label.setStyleSheet("color: #2ecc71;")
+            self._mismatch_label.setStyleSheet("color: #2ecc71; font-size: 12px;")
 
     def _refresh_file_list(self):
         self._file_list.clear()
         instruments = self._group.instruments
-        selected = self._group.selected_instruments
         for i, f in enumerate(self._group.files):
             inst = ""
-            if i < len(selected) and selected[i] < len(instruments):
-                inst = f"{instruments[selected[i]]}  |  "
+            if i < len(instruments):
+                inst = f"{instruments[i]}  |  "
             self._file_list.addItem(f"{inst}{f.display_name}")
 
     def _on_files_reordered(self):
@@ -442,15 +377,14 @@ class GroupTab(QWidget):
         self.main_window._rebuild_tabs()
 
     def on_instruments_changed(self, instruments):
+        """左側樂器表變更時同步至群組"""
         self._group.instruments = list(instruments)
-        valid = set(range(len(instruments)))
-        self._group.selected_instruments = [
-            i for i in self._group.selected_instruments if i in valid
-        ]
-        self._refresh_instruments()
+        self._group.selected_instruments = list(range(len(instruments)))
         self._refresh_file_list()
+        self._check_mismatch()
 
     def sync_to_group(self):
+        """將 UI 狀態寫回群組模型"""
         self._group.name = self._name_entry.text().strip()
         self._group.piece_name = self._piece_name_entry.text().strip()
         self._group.movement_number = self._movement_num_entry.text().strip()
@@ -458,7 +392,5 @@ class GroupTab(QWidget):
         self._group.use_small_template = self._small_template_cb.isChecked()
         if self._group.use_small_template:
             self._group.small_template = self._small_template_entry.text()
-        self._group.selected_instruments = [
-            i for i, cb in enumerate(self._inst_vars) if cb.isChecked()
-        ]
+        self._group.selected_instruments = list(range(len(self._group.instruments)))
         self._group.score_label = self._score_label_entry.text().strip()

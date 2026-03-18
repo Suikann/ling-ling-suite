@@ -71,10 +71,10 @@ class RenameService:
                     new_path=os.path.join(target_dir, score_name),
                     group_id=group.id,
                 ))
-            if not group.files or not group.selected_instruments:
+            if not group.files or not group.instruments:
                 continue
             for i, file_info in enumerate(group.files):
-                if i >= len(group.selected_instruments):
+                if i >= len(group.instruments):
                     break
                 variables = build_variables_for_file(
                     i, group, project.instruments or None,

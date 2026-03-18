@@ -123,7 +123,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "group.add_files": "+ 加入檔案",
         "group.use_small_template": "使用自訂格式",
         "group.no_instruments": "請先在左側新增樂器",
-        "group.mismatch": "勾選 {n_inst} 個樂器 / {n_files} 個檔案（不匹配）",
+        "group.mismatch": "{n_inst} 個樂器 / {n_files} 個檔案（不匹配）",
         "group.match": "{count} 個樂器 = {count} 個檔案",
         "group.loading": "群組面板（載入中...）",
         "group.move_to_group": "移至群組...",

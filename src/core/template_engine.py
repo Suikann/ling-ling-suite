@@ -43,24 +43,21 @@ def build_variables_for_file(
         變數名稱到值的對應字典（包含中英文鍵名）
     """
     group_instruments = getattr(group, "instruments", []) or []
-    selected = group.selected_instruments
-    if group_instruments and selected:
-        total = len(selected)
+    if group_instruments:
+        total = len(group_instruments)
         pad_width = len(str(total)) if total > 0 else 1
-        inst_idx = selected[file_index] if file_index < len(selected) else 0
-        sequence_number = str(inst_idx + 1).zfill(pad_width)
+        sequence_number = str(file_index + 1).zfill(pad_width)
         instrument_name = (
-            group_instruments[inst_idx]
-            if inst_idx < len(group_instruments)
+            group_instruments[file_index]
+            if file_index < len(group_instruments)
             else ""
         )
-    elif instruments and selected:
-        total = len(selected)
+    elif instruments:
+        total = len(instruments)
         pad_width = len(str(total)) if total > 0 else 1
-        inst_idx = selected[file_index] if file_index < len(selected) else 0
-        sequence_number = str(inst_idx + 1).zfill(pad_width)
+        sequence_number = str(file_index + 1).zfill(pad_width)
         instrument_name = (
-            instruments[inst_idx] if inst_idx < len(instruments) else ""
+            instruments[file_index] if file_index < len(instruments) else ""
         )
     else:
         pad_width = len(str(len(group.files))) if group.files else 1
