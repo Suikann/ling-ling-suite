@@ -25,6 +25,7 @@ class InstrumentListEditor(QWidget):
     def __init__(self, project: Optional["Project"] = None, parent=None):
         super().__init__(parent)
         self._project = project
+        self._group = None
         self._build_ui()
 
     def _build_ui(self):
@@ -102,13 +103,10 @@ class InstrumentListEditor(QWidget):
         self._notify()
 
     def _auto_extract(self):
-        if not self._project:
+        if not self._group:
             QMessageBox.information(self, t("dialog.info"), t("instrument.auto_extract.empty"))
             return
-        all_filenames = []
-        for group in self._project.groups:
-            all_filenames.extend([f.display_name for f in group.files])
-        all_filenames.extend([f.display_name for f in self._project.ungrouped_files])
+        all_filenames = [f.display_name for f in self._group.files]
         if not all_filenames:
             QMessageBox.information(self, t("dialog.info"), t("instrument.auto_extract.empty"))
             return

@@ -210,6 +210,7 @@ class MainWindow(QMainWindow):
 
     def _sync_instrument_editor_to_group(self, group):
         if group:
+            self._instrument_editor._group = group
             self._instrument_editor.instruments_changed.disconnect(self._on_instruments_changed)
             self._instrument_editor.set_instruments(group.instruments)
             self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
