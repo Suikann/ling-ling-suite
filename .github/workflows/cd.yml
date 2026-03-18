@@ -30,13 +30,14 @@ jobs:
           python -m pytest tests/ -v --tb=short
 
       - name: Build portable EXE
-        run: |
-          pyinstaller --noconfirm --onedir --windowed ^
-            --name "LingLingSuite" ^
-            --add-data "src/assets;assets" ^
-            --hidden-import PySide6.QtSvg ^
-            --icon NONE ^
-            src/main.py
+        shell: cmd
+        run: >
+          pyinstaller --noconfirm --onedir --windowed
+          --name "LingLingSuite"
+          --add-data "src\assets;assets"
+          --hidden-import PySide6.QtSvg
+          --icon NONE
+          src\main.py
 
       - name: Create ZIP archive
         run: |
