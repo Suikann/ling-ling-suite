@@ -21,11 +21,11 @@ SECTION_COLORS = [
 
 _NAV_STYLE = (
     "QPushButton { font-size: 22px; font-weight: bold; border-radius: 24px; "
-    "background: rgba(58, 50, 44, 25); color: rgba(222, 216, 208, 35); "
+    "background: rgba(46, 48, 64, 25); color: rgba(216, 218, 232, 35); "
     "border: none; }"
-    "QPushButton:hover { background: rgba(58, 50, 44, 210); "
-    "color: #ded8d0; border: 1px solid #4e4438; }"
-    "QPushButton:pressed { background: rgba(52, 44, 38, 230); color: #ded8d0; }"
+    "QPushButton:hover { background: rgba(46, 48, 64, 210); "
+    "color: #d8dae8; border: 1px solid #42445c; }"
+    "QPushButton:pressed { background: rgba(40, 42, 56, 230); color: #d8dae8; }"
     "QPushButton:disabled { background: transparent; color: transparent; }"
 )
 
@@ -180,7 +180,7 @@ class PagePreviewDialog(QDialog):
             f"QPushButton {{ border-radius: 18px; font-weight: bold; color: white; "
             f"padding: 0 20px; background: {color}; border: none; }}"
             f"QPushButton:hover {{ opacity: 0.85; }}"
-            f"QPushButton:disabled {{ background: #3a322c; color: #6e6458; }}"
+            f"QPushButton:disabled {{ background: #2e3040; color: #6e7288; }}"
         )
 
     def _update_delete_btn(self):
@@ -195,7 +195,7 @@ class PagePreviewDialog(QDialog):
             self._delete_btn.setText(t("split.delete_page"))
             self._delete_btn.setStyleSheet(
                 "QPushButton { border-radius: 18px; padding: 0 20px; "
-                "background: #8b2020; color: #eed8d0; border: none; }"
+                "background: #8b2020; color: #f0d8d8; border: none; }"
                 "QPushButton:hover { background: #a02828; }"
             )
 

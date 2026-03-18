@@ -94,7 +94,7 @@ class SplitPdfDialog(QDialog):
         hint.setStyleSheet("color: gray; font-size: 11px;")
         rl.addWidget(hint)
         clear_btn = QPushButton(t("split.clear_splits"))
-        clear_btn.setStyleSheet("border: 1px solid #5e5246; color: #b0a898; background: #342c26;")
+        clear_btn.setStyleSheet("border: 1px solid #5a5d72; color: #a0a4b8; background: #282a38;")
         clear_btn.clicked.connect(self._clear_all_splits)
         rl.addWidget(clear_btn)
         self._assign_scroll = QScrollArea()

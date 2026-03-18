@@ -65,7 +65,7 @@ class InstrumentListEditor(QWidget):
         del_btn.clicked.connect(self._auto_extract)
         btn_row.addWidget(del_btn)
         remove_btn = QPushButton(t("instrument.remove"))
-        remove_btn.setStyleSheet("background: #6b3020; color: #eed8d0;")
+        remove_btn.setStyleSheet("background: #6b2030; color: #f0d8d8;")
         remove_btn.clicked.connect(self._remove_selected)
         btn_row.addWidget(remove_btn)
         layout.addLayout(btn_row)
