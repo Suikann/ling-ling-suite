@@ -70,6 +70,9 @@ class RotatePdfDialog(QDialog):
         self._file_combo.setMinimumWidth(300)
         self._file_combo.currentIndexChanged.connect(self._on_file_selected)
         top.addWidget(self._file_combo, stretch=1)
+        self._page_info = QLabel("")
+        self._page_info.setVisible(False)
+        top.addWidget(self._page_info)
         layout.addLayout(top)
         splitter = QSplitter(Qt.Horizontal)
         layout.addWidget(splitter, stretch=1)
@@ -214,9 +217,8 @@ class RotatePdfDialog(QDialog):
             from services.pdf_service import get_page_count
             self._pdf_path = path
             self._page_count = get_page_count(path)
-            self.setWindowTitle(
-                f"{t('rotate.title')} - {t('split.page_count', count=self._page_count)}"
-            )
+            self._page_info.setText(t("split.page_count", count=self._page_count))
+            self._page_info.setVisible(True)
             self._exec_btn.setEnabled(False)
             self._clear_thumb_area()
             loading = QLabel(t("rotate.loading", count=self._page_count))
