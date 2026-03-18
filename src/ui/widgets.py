@@ -17,7 +17,7 @@ class DragListWidget(QListWidget):
         self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.setSpacing(1)
         self.setUniformItemSizes(True)
-        self._drop_color = QColor("#c89530")
+        self._drop_color = QColor("#7c6ddf")
 
     def paintEvent(self, event):
         super().paintEvent(event)
