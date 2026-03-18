@@ -52,9 +52,11 @@ class MainWindow(QMainWindow):
         file_menu = mb.addMenu(t("menu.file"))
         self._add_action(file_menu, t("menu.file.new"), self._new_project, "Ctrl+N")
         self._add_action(file_menu, t("menu.file.open"), self._open_project, "Ctrl+O")
-        self._recent_menu = file_menu.addMenu(t("menu.file.recent"))
-        self._refresh_recent_menu()
         file_menu.addSeparator()
+        self._recent_separator = file_menu.addSeparator()
+        self._recent_actions = []
+        self._file_menu = file_menu
+        self._refresh_recent_menu()
         self._add_action(file_menu, t("menu.file.save"), self._save_project, "Ctrl+S")
         self._add_action(file_menu, t("menu.file.save_as"), self._save_project_as)
         edit_menu = mb.addMenu(t("menu.edit"))
@@ -564,6 +566,18 @@ class MainWindow(QMainWindow):
         set_locale(lang_code)
         self._preferences.set("language", lang_code)
         self._preferences.save()
+        from core.template_engine import convert_template_language
+        self.project.master_template = convert_template_language(
+            self.project.master_template, lang_code,
+        )
+        self.project.subfolder_template = convert_template_language(
+            self.project.subfolder_template, lang_code,
+        )
+        for group in self.project.groups:
+            if group.small_template:
+                group.small_template = convert_template_language(
+                    group.small_template, lang_code,
+                )
         self.menuBar().clear()
         self._create_menu()
         self._create_ui()
@@ -674,17 +688,23 @@ class MainWindow(QMainWindow):
         return True
 
     def _refresh_recent_menu(self):
-        self._recent_menu.clear()
+        for action in self._recent_actions:
+            self._file_menu.removeAction(action)
+        self._recent_actions = []
         recent = self._preferences.get("recent_projects") or []
         if not recent:
-            action = self._recent_menu.addAction(t("menu.file.recent.empty"))
-            action.setEnabled(False)
+            self._recent_separator.setVisible(False)
             return
+        self._recent_separator.setVisible(True)
+        insert_before = self._recent_separator
         for path in recent:
-            action = self._recent_menu.addAction(os.path.basename(path))
+            action = QAction(os.path.basename(path), self)
+            action.setToolTip(path)
             action.triggered.connect(
                 lambda checked=False, p=path: self._open_recent(p),
             )
+            self._file_menu.insertAction(insert_before, action)
+            self._recent_actions.append(action)
 
     def _open_recent(self, path: str):
         if not os.path.isfile(path):
