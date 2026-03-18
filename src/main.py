@@ -25,7 +25,7 @@ class _AppStyle(QProxyStyle):
     def pixelMetric(self, metric, option=None, widget=None):
         from PySide6.QtWidgets import QStyle
         if metric == QStyle.PM_SubMenuOverlap:
-            return -6
+            return 6
         return super().pixelMetric(metric, option, widget)
 
 
