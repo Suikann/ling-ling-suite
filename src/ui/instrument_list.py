@@ -60,7 +60,8 @@ class InstrumentListEditor(QWidget):
         remove_btn.setStyleSheet("background: #6b3020; color: #eed8d0;")
         remove_btn.clicked.connect(self._remove_selected)
         btn_row.addWidget(remove_btn)
-        self._list.setSelectionMode(self._list.SingleSelection)
+        from PySide6.QtWidgets import QAbstractItemView
+        self._list.setSelectionMode(QAbstractItemView.SingleSelection)
         layout.addLayout(btn_row)
 
     def _build_preset_options(self) -> List[str]:
