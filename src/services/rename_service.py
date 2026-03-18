@@ -65,13 +65,7 @@ class RenameService:
                     if project.output_directory
                     else os.path.dirname(group.score_file.original_path)
                 )
-                if project.use_subfolders and project.subfolder_template:
-                    subfolder_name = _sanitize_name(substitute_template(
-                        project.subfolder_template, score_vars,
-                    ))
-                    target_dir = os.path.join(base_dir, subfolder_name)
-                else:
-                    target_dir = base_dir
+                target_dir = base_dir
                 plan.append(RenameEntry(
                     original_path=group.score_file.original_path,
                     new_path=os.path.join(target_dir, score_name),
