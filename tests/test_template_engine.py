@@ -76,17 +76,17 @@ class TestBuildVariablesForFile(unittest.TestCase):
         result = build_variables_for_file(11, group, instruments)
         self.assertEqual(result["序號"], "12")
 
-    def test_selected_instruments_subset(self):
+    def test_group_instruments_direct(self):
         group = Group(
-            selected_instruments=[1, 3],
+            instruments=["Oboe", "Bassoon"],
+            selected_instruments=[0, 1],
             piece_name="Test",
         )
-        instruments = ["Flute", "Oboe", "Clarinet", "Bassoon"]
-        result = build_variables_for_file(0, group, instruments)
-        self.assertEqual(result["序號"], "2")
+        result = build_variables_for_file(0, group)
+        self.assertEqual(result["序號"], "1")
         self.assertEqual(result["樂器"], "Oboe")
-        result = build_variables_for_file(1, group, instruments)
-        self.assertEqual(result["序號"], "4")
+        result = build_variables_for_file(1, group)
+        self.assertEqual(result["序號"], "2")
         self.assertEqual(result["樂器"], "Bassoon")
 
 

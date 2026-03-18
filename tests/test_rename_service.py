@@ -36,13 +36,13 @@ class TestRenameService(unittest.TestCase):
         p1 = self._create_file("raw_fl.pdf")
         p2 = self._create_file("raw_ob.pdf")
         project = Project(
-            instruments=["Flute", "Oboe"],
             master_template="{序號}. {樂器} - {曲名}.pdf",
             groups=[Group(
                 files=[
                     FileInfo(p1, "raw_fl.pdf"),
                     FileInfo(p2, "raw_ob.pdf"),
                 ],
+                instruments=["Flute", "Oboe"],
                 selected_instruments=[0, 1],
                 piece_name="Sym5",
             )],
@@ -55,12 +55,12 @@ class TestRenameService(unittest.TestCase):
     def test_generate_plan_with_subfolders(self):
         p1 = self._create_file("fl.pdf")
         project = Project(
-            instruments=["Flute"],
             master_template="{序號}. {樂器}.pdf",
             use_subfolders=True,
             subfolder_template="{曲名}",
             groups=[Group(
                 files=[FileInfo(p1, "fl.pdf")],
+                instruments=["Flute"],
                 selected_instruments=[0],
                 piece_name="Test",
             )],
@@ -127,8 +127,7 @@ class TestRenameService(unittest.TestCase):
 
     def test_generate_plan_skips_empty_group(self):
         project = Project(
-            instruments=["Flute"],
-            groups=[Group(files=[], selected_instruments=[])],
+            groups=[Group(files=[], instruments=[])],
         )
         plan = self.rename_service.generate_rename_plan(project)
         self.assertEqual(len(plan), 0)
@@ -136,10 +135,10 @@ class TestRenameService(unittest.TestCase):
     def test_generate_plan_with_small_template(self):
         p1 = self._create_file("fl.pdf")
         project = Project(
-            instruments=["Flute"],
             master_template="{序號}. {樂器}.pdf",
             groups=[Group(
                 files=[FileInfo(p1, "fl.pdf")],
+                instruments=["Flute"],
                 selected_instruments=[0],
                 piece_name="Test",
                 use_small_template=True,
@@ -148,6 +147,24 @@ class TestRenameService(unittest.TestCase):
         )
         plan = self.rename_service.generate_rename_plan(project)
         self.assertEqual(os.path.basename(plan[0].new_path), "Flute - Test.pdf")
+
+    def test_generate_plan_with_score_file(self):
+        p_score = self._create_file("score.pdf")
+        p1 = self._create_file("fl.pdf")
+        project = Project(
+            master_template="{序號}-{樂器}.pdf",
+            groups=[Group(
+                files=[FileInfo(p1, "fl.pdf")],
+                instruments=["Flute"],
+                selected_instruments=[0],
+                score_file=FileInfo(p_score, "score.pdf"),
+                score_label="Full Score",
+            )],
+        )
+        plan = self.rename_service.generate_rename_plan(project)
+        self.assertEqual(len(plan), 2)
+        self.assertIn("00-Full Score.pdf", os.path.basename(plan[0].new_path))
+        self.assertIn("1-Flute.pdf", os.path.basename(plan[1].new_path))
 
 
 if __name__ == '__main__':
