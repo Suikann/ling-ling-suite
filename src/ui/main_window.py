@@ -560,13 +560,15 @@ class MainWindow(QMainWindow):
     def _set_language(self, lang_code: str):
         if lang_code == get_locale():
             return
+        self._sync_project_from_ui()
         set_locale(lang_code)
         self._preferences.set("language", lang_code)
         self._preferences.save()
-        QMessageBox.information(
-            self, t("dialog.info"),
-            "Language changed. Please restart the application.",
-        )
+        self.menuBar().clear()
+        self._create_menu()
+        self._create_ui()
+        self._sync_ui_from_project()
+        self._update_title()
 
     # --- 輔助 ---
 
