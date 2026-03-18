@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 from ui.widgets import DragListWidget
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from core.locale import t
 from core.models import Group, Project, FileInfo
 from core.template_engine import detect_piece_name
@@ -177,6 +178,7 @@ class GroupTab(QWidget):
         layout.addWidget(QLabel(t("group.file_list")))
         self._file_list = DragListWidget()
         self._file_list.model().rowsMoved.connect(self._on_files_reordered)
+        QShortcut(QKeySequence("Delete"), self._file_list, self._delete_selected_files)
         layout.addWidget(self._file_list, stretch=1)
         file_btn_row = QHBoxLayout()
         add_btn = QPushButton(t("group.add_files"))
