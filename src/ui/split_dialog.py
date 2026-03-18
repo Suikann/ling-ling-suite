@@ -84,7 +84,7 @@ class SplitPdfDialog(QDialog):
         self._thumb_scroll.setWidget(self._thumb_container)
         splitter.addWidget(self._thumb_scroll)
         right = QWidget()
-        right.setFixedWidth(280)
+        right.setFixedWidth(300)
         rl = QVBoxLayout(right)
         rl.setContentsMargins(4, 4, 0, 4)
         rl.setSpacing(4)
@@ -94,7 +94,7 @@ class SplitPdfDialog(QDialog):
         hint.setStyleSheet("color: gray; font-size: 11px;")
         rl.addWidget(hint)
         clear_btn = QPushButton(t("split.clear_splits"))
-        clear_btn.setStyleSheet("border: 1px solid #4a4a4a; color: #888;")
+        clear_btn.setStyleSheet("border: 1px solid #5e5246; color: #b0a898; background: #342c26;")
         clear_btn.clicked.connect(self._clear_all_splits)
         rl.addWidget(clear_btn)
         self._assign_scroll = QScrollArea()
@@ -106,7 +106,10 @@ class SplitPdfDialog(QDialog):
         self._assign_layout.addStretch()
         self._assign_scroll.setWidget(self._assign_container)
         rl.addWidget(self._assign_scroll, stretch=1)
-        outdir_row = QHBoxLayout()
+        outdir_widget = QWidget()
+        outdir_widget.setMinimumHeight(38)
+        outdir_row = QHBoxLayout(outdir_widget)
+        outdir_row.setContentsMargins(0, 2, 0, 2)
         outdir_row.addWidget(QLabel(t("split.output_dir")))
         self._dir_label = QLabel(t("split.same_as_source"))
         self._dir_label.setStyleSheet("color: gray; font-size: 11px;")
@@ -116,7 +119,7 @@ class SplitPdfDialog(QDialog):
         browse_btn.setStyleSheet("padding: 0; min-height: 0; border-radius: 6px;")
         browse_btn.clicked.connect(self._browse_dir)
         outdir_row.addWidget(browse_btn)
-        rl.addLayout(outdir_row)
+        rl.addWidget(outdir_widget)
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 1)
         btn_row = QHBoxLayout()
@@ -386,10 +389,13 @@ class SplitPdfDialog(QDialog):
         last_idx = -1
         for sec_idx, (start, end) in enumerate(sections):
             color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
+            _h = 28
             row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(3)
             dot = QLabel("\u25CF")
             dot.setStyleSheet(f"color: {color}; font-size: 14px; border: none;")
-            dot.setFixedSize(18, 24)
+            dot.setFixedSize(18, _h)
             dot.setAlignment(Qt.AlignCenter)
             row.addWidget(dot)
             if sec_idx in old_names:
@@ -409,19 +415,19 @@ class SplitPdfDialog(QDialog):
             )
             if instruments:
                 prev_btn = QPushButton("\u25C0")
-                prev_btn.setFixedSize(28, 28)
+                prev_btn.setFixedSize(_h, _h)
                 prev_btn.setStyleSheet(_arrow_style)
                 prev_btn.clicked.connect(
                     lambda checked=False, s=sec_idx: self._cycle_instrument(s, -1),
                 )
                 row.addWidget(prev_btn)
             entry = QLineEdit(name)
-            entry.setFixedHeight(28)
+            entry.setFixedHeight(_h)
             row.addWidget(entry, stretch=1)
             self._section_name_entries[sec_idx] = entry
             if instruments:
                 next_btn = QPushButton("\u25B6")
-                next_btn.setFixedSize(28, 28)
+                next_btn.setFixedSize(_h, _h)
                 next_btn.setStyleSheet(_arrow_style)
                 next_btn.clicked.connect(
                     lambda checked=False, s=sec_idx: self._cycle_instrument(s, 1),
@@ -432,6 +438,8 @@ class SplitPdfDialog(QDialog):
             pg = f"p.{start+1}" if start == end else f"p.{start+1}-{end+1}"
             cnt = f"({actual}/{total})" if actual < total else f"({total})"
             info = QLabel(f"{pg} {cnt}")
+            info.setFixedHeight(_h)
+            info.setFixedWidth(80)
             info.setStyleSheet("color: gray; font-size: 12px;")
             row.addWidget(info)
             wrapper = QWidget()

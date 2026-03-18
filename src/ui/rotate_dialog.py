@@ -87,7 +87,7 @@ class RotatePdfDialog(QDialog):
         self._thumb_scroll.setWidget(self._thumb_container)
         splitter.addWidget(self._thumb_scroll)
         right = QWidget()
-        right.setFixedWidth(280)
+        right.setFixedWidth(300)
         rl = QVBoxLayout(right)
         rl.setContentsMargins(4, 4, 0, 4)
         rl.setSpacing(4)
@@ -97,7 +97,7 @@ class RotatePdfDialog(QDialog):
         hint.setStyleSheet("color: gray; font-size: 11px;")
         rl.addWidget(hint)
         clear_btn = QPushButton(t("rotate.clear_segments"))
-        clear_btn.setStyleSheet("border: 1px solid #4a4a4a; color: #888;")
+        clear_btn.setStyleSheet("border: 1px solid #5e5246; color: #b0a898; background: #342c26;")
         clear_btn.clicked.connect(self._clear_all_segments)
         rl.addWidget(clear_btn)
         self._assign_scroll = QScrollArea()
@@ -112,7 +112,10 @@ class RotatePdfDialog(QDialog):
         self._overwrite_cb = QCheckBox(t("rotate.overwrite"))
         self._overwrite_cb.setChecked(True)
         rl.addWidget(self._overwrite_cb)
-        outdir_row = QHBoxLayout()
+        outdir_widget = QWidget()
+        outdir_widget.setMinimumHeight(38)
+        outdir_row = QHBoxLayout(outdir_widget)
+        outdir_row.setContentsMargins(0, 2, 0, 2)
         outdir_row.addWidget(QLabel(t("rotate.save_as") + ":"))
         self._dir_label = QLabel(t("split.same_as_source"))
         self._dir_label.setStyleSheet("color: gray; font-size: 11px;")
@@ -122,7 +125,7 @@ class RotatePdfDialog(QDialog):
         dir_btn.setStyleSheet("padding: 0; min-height: 0; border-radius: 6px;")
         dir_btn.clicked.connect(self._browse_dir)
         outdir_row.addWidget(dir_btn)
-        rl.addLayout(outdir_row)
+        rl.addWidget(outdir_widget)
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 1)
         btn_row = QHBoxLayout()
@@ -386,10 +389,13 @@ class RotatePdfDialog(QDialog):
             color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
             angle = old_angles.get(sec_idx, 90)
             self._section_angles[sec_idx] = angle
+            _h = 28
             row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(3)
             dot = QLabel("\u25CF")
             dot.setStyleSheet(f"color: {color}; font-size: 14px; border: none;")
-            dot.setFixedSize(18, 24)
+            dot.setFixedSize(18, _h)
             dot.setAlignment(Qt.AlignCenter)
             row.addWidget(dot)
             combo = QComboBox()
@@ -401,13 +407,16 @@ class RotatePdfDialog(QDialog):
             combo.currentIndexChanged.connect(
                 lambda idx, s=sec_idx: self._on_angle_changed(s, ROTATION_ANGLES[idx]),
             )
-            combo.setFixedWidth(75)
+            combo.setFixedWidth(80)
+            combo.setFixedHeight(_h)
             row.addWidget(combo)
             self._section_combos[sec_idx] = combo
             total = end - start + 1
             pg = f"p.{start+1}" if start == end else f"p.{start+1}-{end+1}"
             info = QLabel(f"{pg} ({total})")
-            info.setStyleSheet("color: gray; font-size: 11px;")
+            info.setFixedHeight(_h)
+            info.setFixedWidth(80)
+            info.setStyleSheet("color: gray; font-size: 12px;")
             row.addWidget(info)
             row.addStretch()
             wrapper = QWidget()
