@@ -29,7 +29,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "menu.file.recent.empty": "（無）",
         # 選單 - 編輯
         "menu.edit": "編輯",
-        "menu.edit.undo": "復原上次操作",
+        "menu.edit.undo": "復原",
+        "menu.edit.redo": "重做",
         # 選單 - 匯入
         "menu.import": "匯入",
         "menu.import.files": "匯入檔案...",
@@ -60,6 +61,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "dialog.info": "提示",
         "dialog.info.no_files": "沒有需要重新命名的檔案。",
         "dialog.info.no_undo": "沒有可復原的操作。",
+        "dialog.info.no_redo": "沒有可重做的操作。",
+        "dialog.confirm_redo": "確認重做",
+        "dialog.confirm_redo.message": "是否重做上次復原的操作？\n{description}",
         "dialog.confirm_undo": "確認復原",
         "dialog.confirm_undo.message": "是否復原上次操作？\n{description}",
         "dialog.complete": "完成",
@@ -144,6 +148,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "instrument.load_preset": "載入編制表",
         "instrument.auto_extract": "從檔名擷取",
         "instrument.remove": "移除選取",
+        "instrument.remove_context": "移除選取樂器",
         "instrument.auto_extract.empty": "目前沒有已匯入的檔案可供擷取。",
         "split.browse": "瀏覽...",
         "instrument.auto_extract.confirm": "偵測到以下樂器，是否取代目前的樂器表？\n\n{instruments}",
@@ -167,6 +172,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "preview.execute_with_suffix": "繼續（自動加後綴）",
         # 重新命名服務
         "rename.undo_description": "重新命名 {count} 個檔案",
+        "undo.split_description": "PDF 分割：建立 {count} 個檔案",
+        "undo.rotate_description": "PDF 旋轉",
+        "status.redone": "已重做上次操作",
         # PDF 分割
         "split.title": "PDF 分割",
         "split.select_file": "選擇要分割的檔案：",
@@ -242,7 +250,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "menu.file.recent.empty": "(None)",
         # 選單 - 編輯
         "menu.edit": "Edit",
-        "menu.edit.undo": "Undo Last Operation",
+        "menu.edit.undo": "Undo",
+        "menu.edit.redo": "Redo",
         # 選單 - 匯入
         "menu.import": "Import",
         "menu.import.files": "Import Files...",
@@ -273,6 +282,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "dialog.info": "Info",
         "dialog.info.no_files": "No files to rename.",
         "dialog.info.no_undo": "No operations to undo.",
+        "dialog.info.no_redo": "No operations to redo.",
+        "dialog.confirm_redo": "Confirm Redo",
+        "dialog.confirm_redo.message": "Redo last undone operation?\n{description}",
         "dialog.confirm_undo": "Confirm Undo",
         "dialog.confirm_undo.message": "Undo last operation?\n{description}",
         "dialog.complete": "Done",
@@ -357,6 +369,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "instrument.load_preset": "Load Preset",
         "instrument.auto_extract": "Extract from Files",
         "instrument.remove": "Remove",
+        "instrument.remove_context": "Remove Selected Instruments",
         "instrument.auto_extract.empty": "No imported files to extract from.",
         "split.browse": "Browse...",
         "instrument.auto_extract.confirm": "Detected the following instruments. Replace current list?\n\n{instruments}",
@@ -380,6 +393,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "preview.execute_with_suffix": "Continue (auto suffix)",
         # 重新命名服務
         "rename.undo_description": "Renamed {count} file(s)",
+        "undo.split_description": "PDF Split: created {count} file(s)",
+        "undo.rotate_description": "PDF Rotation",
+        "status.redone": "Redone last operation",
         # PDF 分割
         "split.title": "PDF Split",
         "split.select_file": "Select file to split:",

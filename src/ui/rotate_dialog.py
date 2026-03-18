@@ -35,12 +35,13 @@ class _ThumbnailSignals(QObject):
 class RotatePdfDialog(QDialog):
     """PDF 旋轉對話框"""
 
-    def __init__(self, project=None, initial_group=None, parent=None):
+    def __init__(self, project=None, on_rotate_complete=None, initial_group=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(t("rotate.title"))
         self.resize(1100, 720)
         self.setMinimumSize(900, 520)
         self._project = project
+        self._on_rotate_complete = on_rotate_complete
         self._filter_group = initial_group
         self._pdf_path: Optional[str] = None
         self._page_count = 0
@@ -441,8 +442,17 @@ class RotatePdfDialog(QDialog):
             if not output_path:
                 return
         try:
+            backup_path = ""
+            if self._overwrite_cb.isChecked():
+                from services.undo_service import UndoService
+                backup_path = UndoService.create_backup(self._pdf_path)
             from services.pdf_service import rotate_pdf_sections
             rotate_pdf_sections(self._pdf_path, rotation_ops, output_path)
+            if self._on_rotate_complete:
+                if self._overwrite_cb.isChecked():
+                    self._on_rotate_complete(backup_path, self._pdf_path)
+                else:
+                    self._on_rotate_complete("", output_path)
             QMessageBox.information(self, t("dialog.complete"), t("rotate.done"))
             self.accept()
         except Exception as e:

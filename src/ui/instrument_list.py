@@ -43,7 +43,7 @@ class InstrumentListEditor(QWidget):
         self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
         layout.addWidget(self._preset_combo)
         self._list = DragListWidget()
-        self._list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._list.model().rowsMoved.connect(self._on_rows_moved)
         from PySide6.QtCore import Qt as _Qt
         self._list.setContextMenuPolicy(_Qt.CustomContextMenu)
@@ -112,7 +112,7 @@ class InstrumentListEditor(QWidget):
         if not item:
             return
         menu = QMenu(self)
-        remove_action = menu.addAction(t("instrument.remove"))
+        remove_action = menu.addAction(t("instrument.remove_context"))
         action = menu.exec(self._list.mapToGlobal(pos))
         if action == remove_action:
             self._list.takeItem(self._list.row(item))

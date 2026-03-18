@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu, t("menu.file.save_as"), self._save_project_as)
         edit_menu = mb.addMenu(t("menu.edit"))
         self._add_action(edit_menu, t("menu.edit.undo"), self._undo_last, "Ctrl+Z")
+        self._add_action(edit_menu, t("menu.edit.redo"), self._redo_last, "Ctrl+Y")
         import_menu = mb.addMenu(t("menu.import"))
         self._add_action(import_menu, t("menu.import.files"), self._import_files)
         self._add_action(import_menu, t("menu.import.folder"), self._import_folder)
@@ -428,6 +429,23 @@ class MainWindow(QMainWindow):
                 f.original_path = new_path
                 f.display_name = os.path.basename(new_path)
 
+    def _save_operation_undo(self, op_type, description, **kwargs):
+        """儲存操作的復原紀錄"""
+        if not self._undo_service:
+            from services.undo_service import UndoService
+            self._undo_service = UndoService(self.file_service)
+        from datetime import datetime
+        from core.models import UndoRecord
+        record = UndoRecord(
+            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+            description=description,
+            operation_type=op_type,
+            created_files=kwargs.get("created_files", []),
+            backup_path=kwargs.get("backup_path", ""),
+            original_path=kwargs.get("original_path", ""),
+        )
+        self._undo_service.save_undo_record(record)
+
     def _undo_last(self):
         if not self._undo_service:
             from services.undo_service import UndoService
@@ -447,6 +465,29 @@ class MainWindow(QMainWindow):
             self._set_status(t("status.undone"))
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.undo_failed", error=e))
+
+    def _redo_last(self):
+        if not self._undo_service:
+            from services.undo_service import UndoService
+            self._undo_service = UndoService(self.file_service)
+        record = self._undo_service.get_latest_redo_record()
+        if not record:
+            QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_redo"))
+            return
+        if record.operation_type != "rename":
+            QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_redo"))
+            return
+        result = QMessageBox.question(
+            self, t("dialog.confirm_redo"),
+            t("dialog.confirm_redo.message", description=record.description),
+        )
+        if result != QMessageBox.Yes:
+            return
+        try:
+            self._undo_service.execute_redo(record)
+            self._set_status(t("status.redone"))
+        except Exception as e:
+            QMessageBox.critical(self, t("dialog.error"), str(e))
 
     def _open_split_pdf(self):
         from ui.split_dialog import SplitPdfDialog
@@ -475,6 +516,10 @@ class MainWindow(QMainWindow):
                 instruments=instruments, selected_instruments=selected,
             )
             self.project.groups.append(new_group)
+        self._save_operation_undo(
+            "split", t("undo.split_description", count=len(files)),
+            created_files=[f.original_path for f in files],
+        )
         self._mark_modified()
         self._rebuild_tabs()
         self._set_status(t("split.files_added", count=len(files)))
@@ -485,8 +530,16 @@ class MainWindow(QMainWindow):
         widget = self._tab_widget.currentWidget()
         if widget and hasattr(widget, '_group'):
             current_group = widget._group
-        dialog = RotatePdfDialog(self.project, current_group, self)
+        dialog = RotatePdfDialog(
+            self.project, self._on_rotate_complete, current_group, self,
+        )
         dialog.exec()
+
+    def _on_rotate_complete(self, backup_path, original_path):
+        self._save_operation_undo(
+            "rotate", t("undo.rotate_description"),
+            backup_path=backup_path, original_path=original_path,
+        )
 
     def _set_language(self, lang_code: str):
         if lang_code == get_locale():

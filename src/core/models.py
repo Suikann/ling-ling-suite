@@ -46,8 +46,12 @@ class UndoRecord:
     """復原紀錄"""
     timestamp: str = ""
     description: str = ""
+    operation_type: str = "rename"
     mappings: List[UndoMapping] = field(default_factory=list)
     created_directories: List[str] = field(default_factory=list)
+    created_files: List[str] = field(default_factory=list)
+    backup_path: str = ""
+    original_path: str = ""
 
 
 @dataclass

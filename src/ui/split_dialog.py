@@ -106,14 +106,6 @@ class SplitPdfDialog(QDialog):
         self._assign_layout.addStretch()
         self._assign_scroll.setWidget(self._assign_container)
         rl.addWidget(self._assign_scroll, stretch=1)
-        subfolder_row = QHBoxLayout()
-        self._subfolder_cb = QCheckBox(t("split.use_subfolder"))
-        self._subfolder_cb.setChecked(True)
-        subfolder_row.addWidget(self._subfolder_cb)
-        self._subfolder_entry = QLineEdit(t("split.subfolder_default"))
-        self._subfolder_entry.setFixedWidth(80)
-        subfolder_row.addWidget(self._subfolder_entry)
-        rl.addLayout(subfolder_row)
         outdir_row = QHBoxLayout()
         outdir_row.addWidget(QLabel(t("split.output_dir")))
         self._dir_label = QLabel(t("split.same_as_source"))
@@ -484,12 +476,7 @@ class SplitPdfDialog(QDialog):
     def _execute_split(self):
         if not self._pdf_path:
             return
-        base_dir = self._output_dir or os.path.dirname(self._pdf_path)
-        if self._subfolder_cb.isChecked():
-            sub = self._subfolder_entry.text().strip() or t("split.subfolder_default")
-            output_dir = os.path.join(base_dir, sub)
-        else:
-            output_dir = base_dir
+        output_dir = self._output_dir or os.path.dirname(self._pdf_path)
         sections = self._get_sections()
         try:
             from services.pdf_service import extract_pages
