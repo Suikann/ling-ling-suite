@@ -8,9 +8,11 @@ from typing import List, Optional, TYPE_CHECKING
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidgetItem,
     QLineEdit, QPushButton, QComboBox, QLabel, QMessageBox,
+    QAbstractItemView, QMenu,
 )
 from ui.widgets import DragListWidget
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from core.locale import t
 
 if TYPE_CHECKING:
@@ -41,8 +43,13 @@ class InstrumentListEditor(QWidget):
         self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
         layout.addWidget(self._preset_combo)
         self._list = DragListWidget()
+        self._list.setSelectionMode(QAbstractItemView.SingleSelection)
         self._list.model().rowsMoved.connect(self._on_rows_moved)
+        from PySide6.QtCore import Qt as _Qt
+        self._list.setContextMenuPolicy(_Qt.CustomContextMenu)
+        self._list.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self._list)
+        QShortcut(QKeySequence("Delete"), self._list, self._remove_selected)
         input_row = QHBoxLayout()
         self._entry = QLineEdit()
         self._entry.setPlaceholderText(t("instrument.placeholder"))
@@ -61,8 +68,6 @@ class InstrumentListEditor(QWidget):
         remove_btn.setStyleSheet("background: #6b3020; color: #eed8d0;")
         remove_btn.clicked.connect(self._remove_selected)
         btn_row.addWidget(remove_btn)
-        from PySide6.QtWidgets import QAbstractItemView
-        self._list.setSelectionMode(QAbstractItemView.SingleSelection)
         layout.addLayout(btn_row)
 
     def _build_preset_options(self) -> List[str]:
@@ -95,9 +100,23 @@ class InstrumentListEditor(QWidget):
         self._notify()
 
     def _remove_selected(self):
-        for item in self._list.selectedItems():
+        items = self._list.selectedItems()
+        if not items:
+            return
+        for item in items:
             self._list.takeItem(self._list.row(item))
         self._notify()
+
+    def _show_context_menu(self, pos):
+        item = self._list.itemAt(pos)
+        if not item:
+            return
+        menu = QMenu(self)
+        remove_action = menu.addAction(t("instrument.remove"))
+        action = menu.exec(self._list.mapToGlobal(pos))
+        if action == remove_action:
+            self._list.takeItem(self._list.row(item))
+            self._notify()
 
     def _on_rows_moved(self):
         self._notify()

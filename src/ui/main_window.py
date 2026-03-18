@@ -96,10 +96,10 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._instrument_editor)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(6, 0, 0, 0)
         right_layout.setSpacing(4)
         btn_bar = QHBoxLayout()
-        btn_bar.setContentsMargins(6, 0, 0, 0)
+        btn_bar.setContentsMargins(0, 0, 0, 0)
         add_group_btn = QPushButton(t("group.add"))
         add_group_btn.clicked.connect(self._add_group)
         btn_bar.addWidget(add_group_btn)
@@ -372,6 +372,20 @@ class MainWindow(QMainWindow):
         if not plan:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
             return
+        missing = [e for e in plan if not os.path.isfile(e.original_path)]
+        if missing:
+            names = [os.path.basename(e.original_path) for e in missing[:10]]
+            detail = "\n".join(names)
+            if len(missing) > 10:
+                detail += f"\n{t('dialog.missing_files.more', count=len(missing))}"
+            result = QMessageBox.warning(
+                self, t("dialog.missing_files"),
+                f"{t('dialog.missing_files.header', count=len(missing))}\n\n{detail}",
+                QMessageBox.Ok,
+            )
+            plan = [e for e in plan if os.path.isfile(e.original_path)]
+            if not plan:
+                return
         conflicts = self._rename_service.detect_conflicts(plan)
         from ui.preview_dialog import PreviewDialog
         dialog = PreviewDialog(plan, conflicts, self._execute_rename, self)
