@@ -120,7 +120,8 @@ class SplitPdfDialog(QDialog):
         self._dir_label.setStyleSheet("color: gray; font-size: 11px;")
         outdir_row.addWidget(self._dir_label, stretch=1)
         browse_btn = QPushButton("...")
-        browse_btn.setFixedWidth(32)
+        browse_btn.setFixedSize(32, 28)
+        browse_btn.setStyleSheet("padding: 0; min-height: 0;")
         browse_btn.clicked.connect(self._browse_dir)
         outdir_row.addWidget(browse_btn)
         rl.addLayout(outdir_row)
@@ -389,7 +390,8 @@ class SplitPdfDialog(QDialog):
             row = QHBoxLayout()
             dot = QLabel("\u25CF")
             dot.setStyleSheet(f"color: {color}; font-size: 14px; border: none;")
-            dot.setFixedWidth(18)
+            dot.setFixedSize(18, 24)
+            dot.setAlignment(Qt.AlignCenter)
             row.addWidget(dot)
             if sec_idx in old_names:
                 name = old_names[sec_idx]
@@ -402,9 +404,14 @@ class SplitPdfDialog(QDialog):
                 last_idx = instruments.index(name)
             except (ValueError, AttributeError):
                 pass
+            _arrow_style = (
+                "QPushButton { padding: 0; min-height: 0; font-size: 13px; "
+                "border-radius: 12px; }"
+            )
             if instruments:
                 prev_btn = QPushButton("\u25C0")
-                prev_btn.setFixedSize(22, 22)
+                prev_btn.setFixedSize(24, 24)
+                prev_btn.setStyleSheet(_arrow_style)
                 prev_btn.clicked.connect(
                     lambda checked=False, s=sec_idx: self._cycle_instrument(s, -1),
                 )
@@ -415,7 +422,8 @@ class SplitPdfDialog(QDialog):
             self._section_name_entries[sec_idx] = entry
             if instruments:
                 next_btn = QPushButton("\u25B6")
-                next_btn.setFixedSize(22, 22)
+                next_btn.setFixedSize(24, 24)
+                next_btn.setStyleSheet(_arrow_style)
                 next_btn.clicked.connect(
                     lambda checked=False, s=sec_idx: self._cycle_instrument(s, 1),
                 )

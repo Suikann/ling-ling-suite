@@ -19,6 +19,40 @@ SECTION_COLORS = [
     "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
 ]
 
+_NAV_STYLE = (
+    "QPushButton { font-size: 22px; font-weight: bold; border-radius: 24px; "
+    "background: rgba(58, 50, 44, 25); color: rgba(222, 216, 208, 35); "
+    "border: none; }"
+    "QPushButton:hover { background: rgba(58, 50, 44, 210); "
+    "color: #ded8d0; border: 1px solid #4e4438; }"
+    "QPushButton:pressed { background: rgba(52, 44, 38, 230); color: #ded8d0; }"
+    "QPushButton:disabled { background: transparent; color: transparent; }"
+)
+
+
+class _PageArea(QWidget):
+    """頁面顯示區域，翻頁按鈕覆蓋於譜面上方"""
+
+    def __init__(self, scroll, prev_btn, next_btn, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(scroll)
+        self._scroll = scroll
+        self._prev = prev_btn
+        self._next = next_btn
+        prev_btn.setParent(self)
+        next_btn.setParent(self)
+        prev_btn.raise_()
+        next_btn.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        h = self.height()
+        y = h // 2 - self._prev.height() // 2
+        self._prev.move(8, y)
+        self._next.move(self.width() - self._next.width() - 8, y)
+
 
 class PagePreviewDialog(QDialog):
     """頁面放大預覽
@@ -45,7 +79,7 @@ class PagePreviewDialog(QDialog):
         win_h = min(int(screen_h * 0.84), 950)
         chrome = 90
         self._render_w = min(600, int((win_h - chrome) / 1.414))
-        self.resize(self._render_w + 130, win_h)
+        self.resize(self._render_w + 80, win_h)
         self._build_ui()
         self._render_page()
         QShortcut(QKeySequence(Qt.Key_Left), self, self._prev)
@@ -60,46 +94,41 @@ class PagePreviewDialog(QDialog):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
         top = QHBoxLayout()
+        self._section_dot = QLabel("\u25CF")
+        self._section_dot.setFixedWidth(20)
+        self._section_dot.setAlignment(Qt.AlignCenter)
+        top.addWidget(self._section_dot)
         self._page_label = QLabel()
         self._page_label.setAlignment(Qt.AlignCenter)
         top.addWidget(self._page_label)
         layout.addLayout(top)
-        mid = QHBoxLayout()
-        nav_style = (
-            "QPushButton { font-size: 20px; font-weight: bold; border-radius: 22px; "
-            "background: #3a322c; color: #ded8d0; border: 1px solid #4e4438; }"
-            "QPushButton:hover { background: #463c34; border-color: #c89530; }"
-            "QPushButton:pressed { background: #342c26; }"
-            "QPushButton:disabled { color: #6e6458; background: #2c2622; border-color: #3e3630; }"
-        )
-        self._prev_btn = QPushButton("\u25C0")
-        self._prev_btn.setFixedSize(44, 44)
-        self._prev_btn.setStyleSheet(nav_style)
-        self._prev_btn.clicked.connect(self._prev)
-        mid.addWidget(self._prev_btn, alignment=Qt.AlignVCenter)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; }")
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self._img_label = QLabel()
         self._img_label.setAlignment(Qt.AlignCenter)
         scroll.setWidget(self._img_label)
-        mid.addWidget(scroll, stretch=1)
+        self._prev_btn = QPushButton("\u25C0")
+        self._prev_btn.setFixedSize(48, 48)
+        self._prev_btn.setStyleSheet(_NAV_STYLE)
+        self._prev_btn.setCursor(Qt.PointingHandCursor)
+        self._prev_btn.clicked.connect(self._prev)
         self._next_btn = QPushButton("\u25B6")
-        self._next_btn.setFixedSize(44, 44)
-        self._next_btn.setStyleSheet(nav_style)
+        self._next_btn.setFixedSize(48, 48)
+        self._next_btn.setStyleSheet(_NAV_STYLE)
+        self._next_btn.setCursor(Qt.PointingHandCursor)
         self._next_btn.clicked.connect(self._next)
-        mid.addWidget(self._next_btn, alignment=Qt.AlignVCenter)
-        mid_widget = QWidget()
-        mid_widget.setLayout(mid)
-        layout.addWidget(mid_widget, stretch=1)
+        page_area = _PageArea(scroll, self._prev_btn, self._next_btn)
+        layout.addWidget(page_area, stretch=1)
         bottom = QHBoxLayout()
+        bottom.setSpacing(8)
         self._split_btn = QPushButton()
-        self._split_btn.setFixedHeight(32)
+        self._split_btn.setFixedHeight(36)
         self._split_btn.clicked.connect(self._toggle_split)
         bottom.addWidget(self._split_btn)
         if self._mode == "split":
             self._delete_btn = QPushButton()
-            self._delete_btn.setFixedHeight(32)
+            self._delete_btn.setFixedHeight(36)
             self._delete_btn.clicked.connect(self._toggle_delete)
             bottom.addWidget(self._delete_btn)
         else:
@@ -117,7 +146,12 @@ class PagePreviewDialog(QDialog):
         except Exception:
             pass
         self.setWindowTitle(t("split.page_label", num=self._page_idx + 1))
-        self._page_label.setText(f"{self._page_idx + 1} / {self._page_count}")
+        sec_idx = self._get_section_for_page(self._page_idx)
+        color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
+        self._section_dot.setStyleSheet(f"color: {color}; font-size: 16px;")
+        self._page_label.setText(
+            f"{self._page_idx + 1} / {self._page_count}"
+        )
         self._prev_btn.setEnabled(self._page_idx > 0)
         self._next_btn.setEnabled(self._page_idx < self._page_count - 1)
         self._update_split_btn()
@@ -141,8 +175,8 @@ class PagePreviewDialog(QDialog):
             self._split_btn.setText(t(mark_key))
             self._split_btn.setEnabled(True)
         self._split_btn.setStyleSheet(
-            f"QPushButton {{ border-radius: 16px; font-weight: bold; color: white; "
-            f"padding: 0 16px; background: {color}; border: none; }}"
+            f"QPushButton {{ border-radius: 18px; font-weight: bold; color: white; "
+            f"padding: 0 20px; background: {color}; border: none; }}"
             f"QPushButton:hover {{ opacity: 0.85; }}"
             f"QPushButton:disabled {{ background: #3a322c; color: #6e6458; }}"
         )
@@ -151,14 +185,14 @@ class PagePreviewDialog(QDialog):
         if self._page_idx in self._deleted_pages:
             self._delete_btn.setText(t("split.restore_page"))
             self._delete_btn.setStyleSheet(
-                "QPushButton { border-radius: 16px; padding: 0 16px; "
+                "QPushButton { border-radius: 18px; padding: 0 20px; "
                 "background: #2563EB; color: white; border: none; }"
                 "QPushButton:hover { background: #3B82F6; }"
             )
         else:
             self._delete_btn.setText(t("split.delete_page"))
             self._delete_btn.setStyleSheet(
-                "QPushButton { border-radius: 16px; padding: 0 16px; "
+                "QPushButton { border-radius: 18px; padding: 0 20px; "
                 "background: #8b2020; color: #eed8d0; border: none; }"
                 "QPushButton:hover { background: #a02828; }"
             )
@@ -186,7 +220,7 @@ class PagePreviewDialog(QDialog):
             self._split_starts.discard(self._page_idx)
         else:
             self._split_starts.add(self._page_idx)
-        self._update_split_btn()
+        self._render_page()
 
     def _toggle_delete(self):
         if not self._delete_btn:
