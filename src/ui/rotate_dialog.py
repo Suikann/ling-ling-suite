@@ -312,7 +312,9 @@ class RotatePdfDialog(QDialog):
         img_label.setPixmap(self._pixmaps[page_idx])
         img_label.setAlignment(Qt.AlignCenter)
         img_label.setCursor(Qt.PointingHandCursor)
+        img_label.setToolTip(t("rotate.click_hint").split("\n")[0])
         img_label.mousePressEvent = lambda e, idx=page_idx: self._on_thumb_click(e, idx)
+        img_label.mouseDoubleClickEvent = lambda e, idx=page_idx: self._open_preview(idx)
         fl.addWidget(img_label)
         info_text = str(page_idx + 1)
         if angle != 0:
@@ -359,7 +361,12 @@ class RotatePdfDialog(QDialog):
             self._segment_starts, set(),
             self._get_sections, self, mode="rotate",
         )
+        dialog.split_changed.connect(self._on_preview_changed)
         dialog.exec()
+        self._render_grid()
+        self._update_assignments()
+
+    def _on_preview_changed(self):
         self._render_grid()
         self._update_assignments()
 

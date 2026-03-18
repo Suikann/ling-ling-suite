@@ -13,13 +13,14 @@ class FileService:
     """檔案系統操作服務"""
 
     def rename_file(self, old_path: str, new_path: str) -> None:
-        """重新命名檔案
+        """重新命名檔案並更新修改日期
 
         Args:
             old_path: 原始檔案路徑
             new_path: 新檔案路徑
         """
         os.rename(old_path, new_path)
+        os.utime(new_path)
 
     def create_directory(self, path: str) -> None:
         """建立目錄（含父目錄）

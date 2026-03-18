@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(1, 1)
         self._build_bottom_panel(main_layout)
+        self._action_spacer.setFixedWidth(self._clear_btn.sizeHint().width())
         self._rebuild_tabs()
 
     def _build_bottom_panel(self, parent_layout):
@@ -146,17 +147,19 @@ class MainWindow(QMainWindow):
         browse_btn = QPushButton(t("split.browse"))
         browse_btn.clicked.connect(self._browse_output_dir)
         outdir_row.addWidget(browse_btn)
-        clear_btn = QPushButton(t("group.score_file.clear"))
-        clear_btn.clicked.connect(self._clear_output_dir)
-        outdir_row.addWidget(clear_btn)
+        self._clear_btn = QPushButton(t("group.score_file.clear"))
+        self._clear_btn.clicked.connect(self._clear_output_dir)
+        outdir_row.addWidget(self._clear_btn)
         bl.addLayout(outdir_row)
         action_row = QHBoxLayout()
         self._status_label = QLabel(t("status.ready"))
         action_row.addWidget(self._status_label, stretch=1)
         preview_btn = QPushButton(t("panel.preview_rename"))
-        preview_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 6px 16px;")
+        preview_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 8px 24px;")
         preview_btn.clicked.connect(self._preview_and_rename)
         action_row.addWidget(preview_btn)
+        self._action_spacer = QWidget()
+        action_row.addWidget(self._action_spacer)
         bl.addLayout(action_row)
         parent_layout.addWidget(bottom)
 
@@ -373,6 +376,14 @@ class MainWindow(QMainWindow):
         if not plan:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
             return
+        if len(self.project.groups) > 1:
+            selected_ids = self._select_groups_for_rename()
+            if selected_ids is None:
+                return
+            plan = [e for e in plan if e.group_id in selected_ids]
+            if not plan:
+                QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
+                return
         missing = [e for e in plan if not os.path.isfile(e.original_path)]
         if missing:
             names = [os.path.basename(e.original_path) for e in missing[:10]]
@@ -553,6 +564,43 @@ class MainWindow(QMainWindow):
         )
 
     # --- 輔助 ---
+
+    def _select_groups_for_rename(self):
+        """顯示群組選擇對話框，回傳選取的群組 ID 集合，取消時回傳 None"""
+        from PySide6.QtWidgets import QDialog, QCheckBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle(t("panel.select_groups"))
+        dlg.resize(320, 200)
+        lay = QVBoxLayout(dlg)
+        select_all = QCheckBox(t("panel.select_groups.all"))
+        select_all.setChecked(True)
+        lay.addWidget(select_all)
+        cbs = []
+        for g in self.project.groups:
+            cb = QCheckBox(g.name or g.id[:8])
+            cb.setChecked(True)
+            cb.setProperty("gid", g.id)
+            lay.addWidget(cb)
+            cbs.append(cb)
+        def toggle_all(checked):
+            for c in cbs:
+                c.blockSignals(True)
+                c.setChecked(checked)
+                c.blockSignals(False)
+        select_all.toggled.connect(toggle_all)
+        lay.addStretch()
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        ok_btn = QPushButton(t("preview.execute"))
+        ok_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(ok_btn)
+        cancel_btn = QPushButton(t("preview.cancel"))
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(cancel_btn)
+        lay.addLayout(btn_row)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return {cb.property("gid") for cb in cbs if cb.isChecked()}
 
     def _show_variable_menu(self):
         menu = QMenu(self)

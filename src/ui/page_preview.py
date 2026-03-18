@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QWidget,
 )
 from PySide6.QtGui import QPixmap, QImage, QKeySequence, QShortcut
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from core.locale import t
 
 SECTION_COLORS = [
@@ -60,6 +60,8 @@ class PagePreviewDialog(QDialog):
     Args:
         mode: "split"（預設）或 "rotate"
     """
+
+    split_changed = Signal()
 
     def __init__(
         self, pdf_path: str, page_idx: int, page_count: int,
@@ -221,6 +223,7 @@ class PagePreviewDialog(QDialog):
         else:
             self._split_starts.add(self._page_idx)
         self._render_page()
+        self.split_changed.emit()
 
     def _toggle_delete(self):
         if not self._delete_btn:

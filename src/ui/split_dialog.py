@@ -298,7 +298,9 @@ class SplitPdfDialog(QDialog):
         img_label.setPixmap(self._pixmaps[page_idx])
         img_label.setAlignment(Qt.AlignCenter)
         img_label.setCursor(Qt.PointingHandCursor)
+        img_label.setToolTip(t("split.thumb_tooltip"))
         img_label.mousePressEvent = lambda e, idx=page_idx: self._on_thumb_click(e, idx)
+        img_label.mouseDoubleClickEvent = lambda e, idx=page_idx: self._open_preview(idx)
         fl.addWidget(img_label)
         num_text = f"{page_idx+1} X" if is_deleted else str(page_idx + 1)
         num = QLabel(num_text)
@@ -343,7 +345,12 @@ class SplitPdfDialog(QDialog):
             self._split_starts, self._deleted_pages,
             self._get_sections, self,
         )
+        dialog.split_changed.connect(self._on_preview_changed)
         dialog.exec()
+        self._render_grid()
+        self._update_assignments()
+
+    def _on_preview_changed(self):
         self._render_grid()
         self._update_assignments()
 
@@ -397,24 +404,24 @@ class SplitPdfDialog(QDialog):
             except (ValueError, AttributeError):
                 pass
             _arrow_style = (
-                "QPushButton { padding: 0; min-height: 0; font-size: 13px; "
-                "border-radius: 12px; }"
+                "QPushButton { padding: 0; min-height: 0; font-size: 14px; "
+                "border-radius: 14px; }"
             )
             if instruments:
                 prev_btn = QPushButton("\u25C0")
-                prev_btn.setFixedSize(24, 24)
+                prev_btn.setFixedSize(28, 28)
                 prev_btn.setStyleSheet(_arrow_style)
                 prev_btn.clicked.connect(
                     lambda checked=False, s=sec_idx: self._cycle_instrument(s, -1),
                 )
                 row.addWidget(prev_btn)
             entry = QLineEdit(name)
-            entry.setFixedHeight(24)
+            entry.setFixedHeight(28)
             row.addWidget(entry, stretch=1)
             self._section_name_entries[sec_idx] = entry
             if instruments:
                 next_btn = QPushButton("\u25B6")
-                next_btn.setFixedSize(24, 24)
+                next_btn.setFixedSize(28, 28)
                 next_btn.setStyleSheet(_arrow_style)
                 next_btn.clicked.connect(
                     lambda checked=False, s=sec_idx: self._cycle_instrument(s, 1),
@@ -425,7 +432,7 @@ class SplitPdfDialog(QDialog):
             pg = f"p.{start+1}" if start == end else f"p.{start+1}-{end+1}"
             cnt = f"({actual}/{total})" if actual < total else f"({total})"
             info = QLabel(f"{pg} {cnt}")
-            info.setStyleSheet("color: gray; font-size: 11px;")
+            info.setStyleSheet("color: gray; font-size: 12px;")
             row.addWidget(info)
             wrapper = QWidget()
             wrapper.setLayout(row)
