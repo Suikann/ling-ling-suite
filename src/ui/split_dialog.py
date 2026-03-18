@@ -179,6 +179,10 @@ class SplitPdfDialog(QDialog):
                 if f.original_path.lower().endswith(".pdf"):
                     files.append((f.display_name, f.original_path, None))
         else:
+            if self._filter_group.score_file:
+                sf = self._filter_group.score_file
+                if sf.original_path.lower().endswith(".pdf"):
+                    files.append((sf.display_name, sf.original_path, self._filter_group))
             for f in self._filter_group.files:
                 if f.original_path.lower().endswith(".pdf"):
                     files.append((f.display_name, f.original_path, self._filter_group))

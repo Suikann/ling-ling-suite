@@ -2,9 +2,10 @@
 """
 頁面預覽對話框（PySide6）
 
-提供 PDF 單頁放大預覽、翻頁、分割點切換與刪除頁面功能。
+提供 PDF 單頁放大預覽、翻頁、分割點/段落邊界切換與刪除頁面功能。
+支援分割模式（split）與旋轉模式（rotate）。
 """
-from typing import Set, Callable, List, Tuple
+from typing import Set, Callable
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QWidget,
@@ -20,12 +21,16 @@ SECTION_COLORS = [
 
 
 class PagePreviewDialog(QDialog):
-    """頁面放大預覽"""
+    """頁面放大預覽
+
+    Args:
+        mode: "split"（預設）或 "rotate"
+    """
 
     def __init__(
         self, pdf_path: str, page_idx: int, page_count: int,
         split_starts: Set[int], deleted_pages: Set[int],
-        get_sections: Callable, parent=None,
+        get_sections: Callable, parent=None, *, mode: str = "split",
     ):
         super().__init__(parent)
         self._pdf_path = pdf_path
@@ -34,6 +39,7 @@ class PagePreviewDialog(QDialog):
         self._split_starts = split_starts
         self._deleted_pages = deleted_pages
         self._get_sections = get_sections
+        self._mode = mode
         self.setWindowTitle(t("split.page_label", num=page_idx + 1))
         screen_h = self.screen().availableGeometry().height()
         win_h = min(int(screen_h * 0.84), 950)
@@ -45,7 +51,8 @@ class PagePreviewDialog(QDialog):
         QShortcut(QKeySequence(Qt.Key_Left), self, self._prev)
         QShortcut(QKeySequence(Qt.Key_Right), self, self._next)
         QShortcut(QKeySequence(Qt.Key_Space), self, self._toggle_split)
-        QShortcut(QKeySequence(Qt.Key_Delete), self, self._toggle_delete)
+        if mode == "split":
+            QShortcut(QKeySequence(Qt.Key_Delete), self, self._toggle_delete)
         QShortcut(QKeySequence(Qt.Key_Escape), self, self.close)
 
     def _build_ui(self):
@@ -90,10 +97,13 @@ class PagePreviewDialog(QDialog):
         self._split_btn.setFixedHeight(32)
         self._split_btn.clicked.connect(self._toggle_split)
         bottom.addWidget(self._split_btn)
-        self._delete_btn = QPushButton()
-        self._delete_btn.setFixedHeight(32)
-        self._delete_btn.clicked.connect(self._toggle_delete)
-        bottom.addWidget(self._delete_btn)
+        if self._mode == "split":
+            self._delete_btn = QPushButton()
+            self._delete_btn.setFixedHeight(32)
+            self._delete_btn.clicked.connect(self._toggle_delete)
+            bottom.addWidget(self._delete_btn)
+        else:
+            self._delete_btn = None
         bottom.addStretch()
         layout.addLayout(bottom)
 
@@ -111,20 +121,24 @@ class PagePreviewDialog(QDialog):
         self._prev_btn.setEnabled(self._page_idx > 0)
         self._next_btn.setEnabled(self._page_idx < self._page_count - 1)
         self._update_split_btn()
-        self._update_delete_btn()
+        if self._delete_btn:
+            self._update_delete_btn()
 
     def _update_split_btn(self):
         idx = self._page_idx
         sec_idx = self._get_section_for_page(idx)
         color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
+        is_rotate = self._mode == "rotate"
+        mark_key = "rotate.mark_segment" if is_rotate else "split.mark_split"
+        remove_key = "rotate.remove_segment" if is_rotate else "split.remove_split"
         if idx == 0:
-            self._split_btn.setText(t("split.mark_split"))
+            self._split_btn.setText(t(mark_key))
             self._split_btn.setEnabled(False)
         elif idx in self._split_starts:
-            self._split_btn.setText(t("split.remove_split"))
+            self._split_btn.setText(t(remove_key))
             self._split_btn.setEnabled(True)
         else:
-            self._split_btn.setText(t("split.mark_split"))
+            self._split_btn.setText(t(mark_key))
             self._split_btn.setEnabled(True)
         self._split_btn.setStyleSheet(
             f"QPushButton {{ border-radius: 16px; font-weight: bold; color: white; "
@@ -175,6 +189,8 @@ class PagePreviewDialog(QDialog):
         self._update_split_btn()
 
     def _toggle_delete(self):
+        if not self._delete_btn:
+            return
         if self._page_idx in self._deleted_pages:
             self._deleted_pages.discard(self._page_idx)
         else:

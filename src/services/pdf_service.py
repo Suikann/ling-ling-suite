@@ -196,6 +196,39 @@ def render_single_page(pdf_path: str, page_index: int, max_width: int = 600):
     return img
 
 
+def rotate_pdf_sections(
+    pdf_path: str,
+    sections: List[Tuple[int, int, int]],
+    output_path: str,
+) -> str:
+    """依區段旋轉 PDF 頁面
+
+    Args:
+        pdf_path: 來源 PDF 檔案路徑
+        sections: 區段清單，每項為 (起始頁0based, 結束頁0based, 角度)
+        output_path: 輸出檔案路徑
+
+    Returns:
+        輸出檔案路徑
+    """
+    reader = PdfReader(pdf_path)
+    writer = PdfWriter()
+    page_angles = {}
+    for start, end, angle in sections:
+        if angle == 0:
+            continue
+        for p in range(start, end + 1):
+            page_angles[p] = angle
+    for i, page in enumerate(reader.pages):
+        if i in page_angles:
+            page.rotate(page_angles[i])
+        writer.add_page(page)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "wb") as f:
+        writer.write(f)
+    return output_path
+
+
 def rotate_pdf(
     pdf_path: str,
     angle: int,
