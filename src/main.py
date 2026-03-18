@@ -86,7 +86,7 @@ QMenu::item { padding: 6px 28px; border-radius: 3px; }
 QMenu::item:selected { background: #4338CA; color: #eef2ff; }
 QMenu::separator { height: 1px; background: #363848; margin: 4px 8px; }
 QTabWidget::pane {
-    border: 1px solid #363848; border-top: none;
+    border: 1px solid #363848;
     background: #1e2029; padding: 2px;
 }
 QTabBar::tab {
