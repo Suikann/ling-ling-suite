@@ -132,39 +132,11 @@ class MainWindow(QMainWindow):
         vars_btn.clicked.connect(self._show_variable_menu)
         template_row.addWidget(vars_btn)
         bl.addLayout(template_row)
-        subfolder_row = QHBoxLayout()
-        self._subfolder_check = QCheckBox(t("panel.subfolder"))
-        self._subfolder_check.setChecked(self.project.use_subfolders)
-        subfolder_row.addWidget(self._subfolder_check)
-        subfolder_row.addWidget(QLabel(t("panel.subfolder_template")))
-        self._subfolder_entry = QLineEdit(self.project.subfolder_template)
-        subfolder_row.addWidget(self._subfolder_entry, stretch=1)
-        bl.addLayout(subfolder_row)
-        _btn_area_w = 200
-        outdir_row = QHBoxLayout()
-        outdir_row.addWidget(QLabel(t("panel.output_dir")))
-        self._output_dir_label = QLabel(t("panel.output_dir_hint"))
-        self._output_dir_label.setStyleSheet("color: gray;")
-        outdir_row.addWidget(self._output_dir_label, stretch=1)
-        btn_pair = QWidget()
-        btn_pair.setFixedWidth(_btn_area_w)
-        bp_lay = QHBoxLayout(btn_pair)
-        bp_lay.setContentsMargins(0, 0, 0, 0)
-        bp_lay.setSpacing(4)
-        browse_btn = QPushButton(t("split.browse"))
-        browse_btn.clicked.connect(self._browse_output_dir)
-        bp_lay.addWidget(browse_btn, stretch=1)
-        clear_btn = QPushButton(t("group.score_file.clear"))
-        clear_btn.clicked.connect(self._clear_output_dir)
-        bp_lay.addWidget(clear_btn, stretch=1)
-        outdir_row.addWidget(btn_pair)
-        bl.addLayout(outdir_row)
         action_row = QHBoxLayout()
         self._status_label = QLabel(t("status.ready"))
         action_row.addWidget(self._status_label, stretch=1)
         preview_btn = QPushButton(t("panel.preview_rename"))
-        preview_btn.setFixedWidth(_btn_area_w)
-        preview_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 8px 0;")
+        preview_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 8px 24px;")
         preview_btn.clicked.connect(self._preview_and_rename)
         action_row.addWidget(preview_btn)
         bl.addLayout(action_row)
@@ -345,14 +317,6 @@ class MainWindow(QMainWindow):
     def _sync_ui_from_project(self):
         self._instrument_editor._project = self.project
         self._master_template_entry.setText(self.project.master_template)
-        self._subfolder_check.setChecked(self.project.use_subfolders)
-        self._subfolder_entry.setText(self.project.subfolder_template)
-        if self.project.output_directory:
-            self._output_dir_label.setText(self.project.output_directory)
-            self._output_dir_label.setStyleSheet("")
-        else:
-            self._output_dir_label.setText(t("panel.output_dir_hint"))
-            self._output_dir_label.setStyleSheet("color: gray;")
         self._rebuild_tabs()
         if self.project.groups:
             self._tab_widget.setCurrentIndex(1)
@@ -362,8 +326,6 @@ class MainWindow(QMainWindow):
 
     def _sync_project_from_ui(self):
         self.project.master_template = self._master_template_entry.text()
-        self.project.use_subfolders = self._subfolder_check.isChecked()
-        self.project.subfolder_template = self._subfolder_entry.text()
         for i in range(self._tab_widget.count()):
             widget = self._tab_widget.widget(i)
             if hasattr(widget, 'sync_to_group'):
@@ -379,35 +341,16 @@ class MainWindow(QMainWindow):
         if not self._rename_service:
             from services.rename_service import RenameService
             self._rename_service = RenameService(self.file_service)
-        plan = self._rename_service.generate_rename_plan(self.project)
-        if not plan:
-            QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
-            return
+        selected_ids = None
         if len(self.project.groups) > 1:
             selected_ids = self._select_groups_for_rename()
             if selected_ids is None:
                 return
-            plan = [e for e in plan if e.group_id in selected_ids]
-            if not plan:
-                QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
-                return
-        missing = [e for e in plan if not os.path.isfile(e.original_path)]
-        if missing:
-            names = [os.path.basename(e.original_path) for e in missing[:10]]
-            detail = "\n".join(names)
-            if len(missing) > 10:
-                detail += f"\n{t('dialog.missing_files.more', count=len(missing))}"
-            result = QMessageBox.warning(
-                self, t("dialog.missing_files"),
-                f"{t('dialog.missing_files.header', count=len(missing))}\n\n{detail}",
-                QMessageBox.Ok,
-            )
-            plan = [e for e in plan if os.path.isfile(e.original_path)]
-            if not plan:
-                return
-        conflicts = self._rename_service.detect_conflicts(plan)
         from ui.preview_dialog import PreviewDialog
-        dialog = PreviewDialog(plan, conflicts, self._execute_rename, self)
+        dialog = PreviewDialog(
+            self.project, self._rename_service,
+            self._execute_rename, selected_ids, self,
+        )
         dialog.exec()
 
     def _execute_rename(self, plan):
@@ -641,20 +584,6 @@ class MainWindow(QMainWindow):
 
     def _insert_variable(self, var_name: str):
         self._master_template_entry.insert(f"{{{var_name}}}")
-
-    def _browse_output_dir(self):
-        folder = QFileDialog.getExistingDirectory(self, t("panel.output_dir"))
-        if folder:
-            self.project.output_directory = folder
-            self._output_dir_label.setText(folder)
-            self._output_dir_label.setStyleSheet("")
-            self._mark_modified()
-
-    def _clear_output_dir(self):
-        self.project.output_directory = ""
-        self._output_dir_label.setText(t("panel.output_dir_hint"))
-        self._output_dir_label.setStyleSheet("color: gray;")
-        self._mark_modified()
 
     def _mark_modified(self):
         if not self._modified:

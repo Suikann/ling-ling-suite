@@ -103,7 +103,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # 底部面板
         "panel.master_template": "命名格式：",
         "panel.insert_variable": "插入變數",
-        "panel.subfolder": "依群組建立分譜資料夾",
+        "panel.subfolder": "將各群組分別放入子資料夾",
         "panel.subfolder_template": "  資料夾模板：",
         "panel.output_dir": "輸出至：",
         "panel.output_dir_hint": "（檔案原始位置）",
