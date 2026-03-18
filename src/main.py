@@ -64,7 +64,7 @@ QMenuBar {
 }
 QMenuBar::item { padding: 5px 10px; }
 QMenuBar::item:selected { background: #3e3630; border-radius: 4px; }
-QMenu { background: #2c2622; border: 1px solid #3e3630; padding: 4px; }
+QMenu { background: #2c2622; border: 1px solid #3e3630; padding: 4px; font-size: 13px; }
 QMenu::item { padding: 6px 28px; border-radius: 3px; }
 QMenu::item:selected { background: #8b6914; color: #fff8ee; }
 QMenu::separator { height: 1px; background: #3e3630; margin: 4px 8px; }
