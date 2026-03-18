@@ -69,18 +69,19 @@ QMenu::item { padding: 6px 28px; border-radius: 3px; }
 QMenu::item:selected { background: #8b6914; color: #fff8ee; }
 QMenu::separator { height: 1px; background: #3e3630; margin: 4px 8px; }
 QTabWidget::pane {
-    border: 1px solid #3e3630; border-radius: 6px;
+    border: 1px solid #3e3630; border-top: none;
     background: #28211d; padding: 2px;
 }
 QTabBar::tab {
     padding: 7px 20px; margin-right: 2px; font-size: 14px;
     background: #2c2622; border: 1px solid #3e3630;
-    border-bottom: none; border-radius: 6px 6px 0 0;
+    border-bottom: 1px solid #3e3630;
+    border-radius: 6px 6px 0 0;
     color: #b0a898;
 }
 QTabBar::tab:selected {
-    background: #38302a; border-bottom: 2px solid #c89530;
-    color: #e8ddd0;
+    background: #28211d; border-bottom: 1px solid #28211d;
+    border-top: 2px solid #c89530; color: #e8ddd0;
 }
 QTabBar::tab:hover:!selected { background: #342c26; }
 QPushButton {

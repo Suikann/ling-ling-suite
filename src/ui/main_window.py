@@ -115,7 +115,6 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(1, 1)
         self._build_bottom_panel(main_layout)
-        self._action_spacer.setFixedWidth(self._clear_btn.sizeHint().width())
         self._rebuild_tabs()
 
     def _build_bottom_panel(self, parent_layout):
@@ -158,8 +157,6 @@ class MainWindow(QMainWindow):
         preview_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 8px 24px;")
         preview_btn.clicked.connect(self._preview_and_rename)
         action_row.addWidget(preview_btn)
-        self._action_spacer = QWidget()
-        action_row.addWidget(self._action_spacer)
         bl.addLayout(action_row)
         parent_layout.addWidget(bottom)
 
