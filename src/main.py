@@ -100,12 +100,13 @@ QLineEdit:focus, QComboBox:focus { border-color: #c89530; }
 QComboBox::drop-down {
     border: none; width: 28px; background: transparent;
 }
+QComboBox { combobox-popup: 0; }
 QComboBox QAbstractItemView {
     background: #2c2622; border: 1px solid #4e4438;
     selection-background-color: #8b6914;
     padding: 4px; color: #ded8d0;
 }
-QComboBox QAbstractItemView::item { padding: 4px 8px; }
+QComboBox QAbstractItemView::item { padding: 6px 10px; }
 QListWidget {
     border: 1px solid #3e3630; border-radius: 5px;
     background: #28211d; outline: none;
