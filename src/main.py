@@ -52,7 +52,11 @@ def _apply_dark_theme(app: QApplication):
     palette.setColor(QPalette.Disabled, QPalette.Text, QColor(110, 114, 130))
     palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(110, 114, 130))
     app.setPalette(palette)
-    app.setStyleSheet(_QSS)
+    check_svg = os.path.join(os.path.dirname(__file__), "assets", "check.svg").replace("\\", "/")
+    qss = _QSS + (
+        f'\nQCheckBox::indicator:checked {{ image: url("{check_svg}"); }}'
+    )
+    app.setStyleSheet(qss)
 
 
 _QSS = """

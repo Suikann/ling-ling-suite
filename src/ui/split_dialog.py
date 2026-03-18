@@ -391,8 +391,9 @@ class SplitPdfDialog(QDialog):
             color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
             _h = 28
             row = QHBoxLayout()
-            row.setContentsMargins(0, 0, 0, 0)
+            row.setContentsMargins(0, 2, 0, 2)
             row.setSpacing(3)
+            row.setAlignment(Qt.AlignVCenter)
             dot = QLabel("\u25CF")
             dot.setStyleSheet(f"color: {color}; font-size: 14px; border: none;")
             dot.setFixedSize(18, _h)

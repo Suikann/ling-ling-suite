@@ -238,6 +238,7 @@ class GroupTab(QWidget):
                     break
         if len(new_order) == len(self._group.files):
             self._group.files = new_order
+            self._refresh_file_list()
             self.main_window._mark_modified()
 
     def _add_files(self):

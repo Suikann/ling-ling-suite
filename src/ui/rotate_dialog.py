@@ -70,9 +70,6 @@ class RotatePdfDialog(QDialog):
         self._file_combo.setMinimumWidth(300)
         self._file_combo.currentIndexChanged.connect(self._on_file_selected)
         top.addWidget(self._file_combo, stretch=1)
-        browse_btn = QPushButton(t("rotate.browse"))
-        browse_btn.clicked.connect(self._browse_file)
-        top.addWidget(browse_btn)
         self._page_info = QLabel("")
         top.addWidget(self._page_info)
         layout.addLayout(top)
@@ -391,8 +388,9 @@ class RotatePdfDialog(QDialog):
             self._section_angles[sec_idx] = angle
             _h = 28
             row = QHBoxLayout()
-            row.setContentsMargins(0, 0, 0, 0)
+            row.setContentsMargins(0, 2, 0, 2)
             row.setSpacing(3)
+            row.setAlignment(Qt.AlignVCenter)
             dot = QLabel("\u25CF")
             dot.setStyleSheet(f"color: {color}; font-size: 14px; border: none;")
             dot.setFixedSize(18, _h)
