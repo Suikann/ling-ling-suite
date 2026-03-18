@@ -52,11 +52,11 @@ class MainWindow(QMainWindow):
         file_menu = mb.addMenu(t("menu.file"))
         self._add_action(file_menu, t("menu.file.new"), self._new_project, "Ctrl+N")
         self._add_action(file_menu, t("menu.file.open"), self._open_project, "Ctrl+O")
-        file_menu.addSeparator()
-        self._recent_separator = file_menu.addSeparator()
-        self._recent_actions = []
-        self._file_menu = file_menu
+        self._recent_menu = file_menu.addMenu(t("menu.file.recent"))
+        self._recent_menu.setMinimumWidth(250)
+        self._recent_menu.setToolTipsVisible(True)
         self._refresh_recent_menu()
+        file_menu.addSeparator()
         self._add_action(file_menu, t("menu.file.save"), self._save_project, "Ctrl+S")
         self._add_action(file_menu, t("menu.file.save_as"), self._save_project_as)
         edit_menu = mb.addMenu(t("menu.edit"))
@@ -677,34 +677,34 @@ class MainWindow(QMainWindow):
         self._status_label.setText(text)
 
     def _confirm_discard(self) -> bool:
-        result = QMessageBox.question(
-            self, t("dialog.unsaved"), t("dialog.unsaved.message"),
-            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-        )
-        if result == QMessageBox.Cancel:
+        msg = QMessageBox(self)
+        msg.setWindowTitle(t("dialog.unsaved"))
+        msg.setText(t("dialog.unsaved.message"))
+        msg.setIcon(QMessageBox.Question)
+        save_btn = msg.addButton(t("dialog.save_btn"), QMessageBox.AcceptRole)
+        msg.addButton(t("dialog.discard_btn"), QMessageBox.DestructiveRole)
+        cancel_btn = msg.addButton(t("dialog.cancel_btn"), QMessageBox.RejectRole)
+        msg.setDefaultButton(save_btn)
+        msg.exec()
+        if msg.clickedButton() == cancel_btn:
             return False
-        if result == QMessageBox.Yes:
+        if msg.clickedButton() == save_btn:
             self._save_project()
         return True
 
     def _refresh_recent_menu(self):
-        for action in self._recent_actions:
-            self._file_menu.removeAction(action)
-        self._recent_actions = []
+        self._recent_menu.clear()
         recent = self._preferences.get("recent_projects") or []
         if not recent:
-            self._recent_separator.setVisible(False)
+            action = self._recent_menu.addAction(t("menu.file.recent.empty"))
+            action.setEnabled(False)
             return
-        self._recent_separator.setVisible(True)
-        insert_before = self._recent_separator
         for path in recent:
-            action = QAction(os.path.basename(path), self)
+            action = self._recent_menu.addAction(os.path.basename(path))
             action.setToolTip(path)
             action.triggered.connect(
                 lambda checked=False, p=path: self._open_recent(p),
             )
-            self._file_menu.insertAction(insert_before, action)
-            self._recent_actions.append(action)
 
     def _open_recent(self, path: str):
         if not os.path.isfile(path):
@@ -721,13 +721,18 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self._modified:
-            result = QMessageBox.question(
-                self, t("dialog.close"), t("dialog.close.message"),
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            )
-            if result == QMessageBox.Cancel:
+            msg = QMessageBox(self)
+            msg.setWindowTitle(t("dialog.close"))
+            msg.setText(t("dialog.close.message"))
+            msg.setIcon(QMessageBox.Question)
+            save_btn = msg.addButton(t("dialog.save_btn"), QMessageBox.AcceptRole)
+            msg.addButton(t("dialog.discard_btn"), QMessageBox.DestructiveRole)
+            cancel_btn = msg.addButton(t("dialog.cancel_btn"), QMessageBox.RejectRole)
+            msg.setDefaultButton(save_btn)
+            msg.exec()
+            if msg.clickedButton() == cancel_btn:
                 event.ignore()
                 return
-            if result == QMessageBox.Yes:
+            if msg.clickedButton() == save_btn:
                 self._save_project()
         event.accept()
