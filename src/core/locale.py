@@ -143,7 +143,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "instrument.add": "新增",
         "instrument.load_preset": "載入編制表",
         "instrument.auto_extract": "從檔名擷取",
+        "instrument.remove": "移除選取",
         "instrument.auto_extract.empty": "目前沒有已匯入的檔案可供擷取。",
+        "split.browse": "瀏覽...",
         "instrument.auto_extract.confirm": "偵測到以下樂器，是否取代目前的樂器表？\n\n{instruments}",
         "instrument.auto_extract.title": "從檔名擷取樂器",
         # 連結樂章
@@ -347,7 +349,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "instrument.add": "Add",
         "instrument.load_preset": "Load Preset",
         "instrument.auto_extract": "Extract from Files",
+        "instrument.remove": "Remove",
         "instrument.auto_extract.empty": "No imported files to extract from.",
+        "split.browse": "Browse...",
         "instrument.auto_extract.confirm": "Detected the following instruments. Replace current list?\n\n{instruments}",
         "instrument.auto_extract.title": "Extract Instruments from Filenames",
         # 連結樂章

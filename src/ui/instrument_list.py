@@ -56,10 +56,11 @@ class InstrumentListEditor(QWidget):
         del_btn = QPushButton(t("instrument.auto_extract"))
         del_btn.clicked.connect(self._auto_extract)
         btn_row.addWidget(del_btn)
-        remove_btn = QPushButton(t("group.delete"))
+        remove_btn = QPushButton(t("instrument.remove"))
         remove_btn.setStyleSheet("background: #6b3020; color: #eed8d0;")
         remove_btn.clicked.connect(self._remove_selected)
         btn_row.addWidget(remove_btn)
+        self._list.setSelectionMode(self._list.SingleSelection)
         layout.addLayout(btn_row)
 
     def _build_preset_options(self) -> List[str]:

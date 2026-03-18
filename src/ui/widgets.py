@@ -14,6 +14,7 @@ class DragListWidget(QListWidget):
         super().__init__(parent)
         self.setDragDropMode(QAbstractItemView.InternalMove)
         self.setDefaultDropAction(Qt.MoveAction)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.setSpacing(1)
         self.setUniformItemSizes(True)
         self._drop_color = QColor("#c89530")
@@ -46,3 +47,8 @@ class DragListWidget(QListWidget):
         painter.drawEllipse(4, y - 4, 8, 8)
         painter.drawEllipse(w - 12, y - 4, 8, 8)
         painter.end()
+
+    def wheelEvent(self, event):
+        super().wheelEvent(event)
+        if self.state() == QAbstractItemView.DraggingState:
+            self.viewport().update()

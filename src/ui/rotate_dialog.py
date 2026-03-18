@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 PDF 旋轉對話框（PySide6）
+
+提供從專案檔案或磁碟選擇 PDF，執行頁面旋轉。
 """
 import os
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QRadioButton, QCheckBox, QButtonGroup,
-    QFileDialog, QMessageBox,
+    QComboBox, QFileDialog, QMessageBox,
 )
 from core.locale import t
 
@@ -14,21 +16,30 @@ from core.locale import t
 class RotatePdfDialog(QDialog):
     """PDF 旋轉對話框"""
 
-    def __init__(self, parent=None):
+    def __init__(self, project=None, initial_group=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(t("rotate.title"))
-        self.resize(520, 400)
+        self.resize(560, 420)
+        self._project = project
+        self._filter_group = initial_group
         self._pdf_path = None
         self._page_count = 0
         self._build_ui()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
         file_row = QHBoxLayout()
-        file_row.addWidget(QLabel(t("rotate.select_file")))
-        self._file_label = QLabel(t("rotate.no_file"))
-        self._file_label.setStyleSheet("color: gray;")
-        file_row.addWidget(self._file_label, stretch=1)
+        self._group_filter = QComboBox()
+        self._group_filter.setFixedWidth(160)
+        self._build_group_filter()
+        self._group_filter.currentIndexChanged.connect(self._on_group_filter_changed)
+        file_row.addWidget(self._group_filter)
+        self._file_combo = QComboBox()
+        self._file_combo.setMinimumWidth(200)
+        self._file_combo.currentIndexChanged.connect(self._on_file_selected)
+        file_row.addWidget(self._file_combo, stretch=1)
         browse_btn = QPushButton(t("rotate.browse"))
         browse_btn.clicked.connect(self._browse_file)
         file_row.addWidget(browse_btn)
@@ -77,6 +88,58 @@ class RotatePdfDialog(QDialog):
         self._exec_btn.clicked.connect(self._execute)
         btn_row.addWidget(self._exec_btn)
         layout.addLayout(btn_row)
+        self._refresh_file_combo()
+
+    # --- 群組篩選與檔案選擇 ---
+
+    def _build_group_filter(self):
+        self._group_filter.blockSignals(True)
+        self._group_filter.clear()
+        self._group_filter.addItem(t("group.ungrouped"), None)
+        sel_idx = 0
+        if self._project:
+            for i, g in enumerate(self._project.groups):
+                self._group_filter.addItem(g.name or g.id[:8], g)
+                if g is self._filter_group:
+                    sel_idx = i + 1
+        self._group_filter.setCurrentIndex(sel_idx)
+        self._group_filter.blockSignals(False)
+
+    def _on_group_filter_changed(self, index):
+        self._filter_group = self._group_filter.currentData()
+        self._refresh_file_combo()
+
+    def _refresh_file_combo(self):
+        self._file_combo.blockSignals(True)
+        self._file_combo.clear()
+        files = self._collect_files()
+        if files:
+            self._file_combo.addItem(t("split.no_file"), None)
+            for label, path, group in files:
+                self._file_combo.addItem(label, (path, group))
+        else:
+            self._file_combo.addItem(t("split.no_project_files"), None)
+        self._file_combo.blockSignals(False)
+
+    def _collect_files(self):
+        files = []
+        if not self._project:
+            return files
+        if self._filter_group is None:
+            for f in self._project.ungrouped_files:
+                if f.original_path.lower().endswith(".pdf"):
+                    files.append((f.display_name, f.original_path, None))
+        else:
+            for f in self._filter_group.files:
+                if f.original_path.lower().endswith(".pdf"):
+                    files.append((f.display_name, f.original_path, self._filter_group))
+        return files
+
+    def _on_file_selected(self, index):
+        data = self._file_combo.currentData()
+        if data:
+            path, group = data
+            self._load_file_info(path)
 
     def _browse_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -85,9 +148,17 @@ class RotatePdfDialog(QDialog):
         )
         if not path:
             return
+        self._file_combo.blockSignals(True)
+        self._file_combo.addItem(os.path.basename(path), (path, None))
+        self._file_combo.setCurrentIndex(self._file_combo.count() - 1)
+        self._file_combo.blockSignals(False)
+        self._load_file_info(path)
+
+    def _load_file_info(self, path):
+        if not os.path.isfile(path):
+            QMessageBox.critical(self, t("dialog.error"), f"File not found:\n{path}")
+            return
         self._pdf_path = path
-        self._file_label.setText(os.path.basename(path))
-        self._file_label.setStyleSheet("")
         try:
             from services.pdf_service import get_page_count
             self._page_count = get_page_count(path)
@@ -95,6 +166,8 @@ class RotatePdfDialog(QDialog):
             self._exec_btn.setEnabled(True)
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
+
+    # --- 執行旋轉 ---
 
     def _execute(self):
         if not self._pdf_path:

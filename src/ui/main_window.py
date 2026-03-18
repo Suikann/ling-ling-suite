@@ -109,6 +109,7 @@ class MainWindow(QMainWindow):
         btn_bar.addStretch()
         right_layout.addLayout(btn_bar)
         self._tab_widget = QTabWidget()
+        self._tab_widget.currentChanged.connect(self._on_tab_changed)
         right_layout.addWidget(self._tab_widget)
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(1, 1)
@@ -167,7 +168,6 @@ class MainWindow(QMainWindow):
         )
         for group in self.project.groups:
             self._add_group_tab(group)
-        self._tab_widget.currentChanged.connect(self._on_tab_changed)
 
     def _create_ungrouped_tab(self):
         from ui.group_panel import UngroupedTab
@@ -331,11 +331,6 @@ class MainWindow(QMainWindow):
 
     def _sync_ui_from_project(self):
         self._instrument_editor._project = self.project
-        widget = self._tab_widget.currentWidget()
-        if widget and hasattr(widget, '_group'):
-            self._instrument_editor.set_instruments(widget._group.instruments)
-        else:
-            self._instrument_editor.set_instruments([])
         self._master_template_entry.setText(self.project.master_template)
         self._subfolder_check.setChecked(self.project.use_subfolders)
         self._subfolder_entry.setText(self.project.subfolder_template)
@@ -346,6 +341,10 @@ class MainWindow(QMainWindow):
             self._output_dir_label.setText(t("panel.output_dir_hint"))
             self._output_dir_label.setStyleSheet("color: gray;")
         self._rebuild_tabs()
+        if self.project.groups:
+            self._tab_widget.setCurrentIndex(1)
+        else:
+            self._instrument_editor.set_instruments([])
         self._update_title()
 
     def _sync_project_from_ui(self):
@@ -383,6 +382,9 @@ class MainWindow(QMainWindow):
                 from services.undo_service import UndoService
                 self._undo_service = UndoService(self.file_service)
             self._undo_service.save_undo_record(record)
+            self._update_project_paths(record.mappings)
+            self._mark_modified()
+            self._rebuild_tabs()
             self._set_status(t("status.renamed", count=len(record.mappings)))
             QMessageBox.information(
                 self, t("dialog.complete"),
@@ -390,6 +392,25 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
+
+    def _update_project_paths(self, mappings):
+        """根據重新命名結果更新專案內的檔案路徑"""
+        path_map = {m.original: m.renamed for m in mappings}
+        for group in self.project.groups:
+            if group.score_file and group.score_file.original_path in path_map:
+                new_path = path_map[group.score_file.original_path]
+                group.score_file.original_path = new_path
+                group.score_file.display_name = os.path.basename(new_path)
+            for f in group.files:
+                if f.original_path in path_map:
+                    new_path = path_map[f.original_path]
+                    f.original_path = new_path
+                    f.display_name = os.path.basename(new_path)
+        for f in self.project.ungrouped_files:
+            if f.original_path in path_map:
+                new_path = path_map[f.original_path]
+                f.original_path = new_path
+                f.display_name = os.path.basename(new_path)
 
     def _undo_last(self):
         if not self._undo_service:
@@ -444,7 +465,11 @@ class MainWindow(QMainWindow):
 
     def _open_rotate_pdf(self):
         from ui.rotate_dialog import RotatePdfDialog
-        dialog = RotatePdfDialog(self)
+        current_group = None
+        widget = self._tab_widget.currentWidget()
+        if widget and hasattr(widget, '_group'):
+            current_group = widget._group
+        dialog = RotatePdfDialog(self.project, current_group, self)
         dialog.exec()
 
     def _set_language(self, lang_code: str):

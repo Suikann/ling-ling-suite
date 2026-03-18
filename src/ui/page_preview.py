@@ -7,7 +7,7 @@
 from typing import Set, Callable, List, Tuple
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea,
+    QScrollArea, QWidget,
 )
 from PySide6.QtGui import QPixmap, QImage, QKeySequence, QShortcut
 from PySide6.QtCore import Qt
@@ -58,11 +58,18 @@ class PagePreviewDialog(QDialog):
         top.addWidget(self._page_label)
         layout.addLayout(top)
         mid = QHBoxLayout()
-        self._prev_btn = QPushButton("\u276E")
-        self._prev_btn.setFixedSize(36, 52)
-        self._prev_btn.setStyleSheet("font-size: 18px; border-radius: 8px;")
+        nav_style = (
+            "QPushButton { font-size: 20px; font-weight: bold; border-radius: 22px; "
+            "background: #3a322c; color: #ded8d0; border: 1px solid #4e4438; }"
+            "QPushButton:hover { background: #463c34; border-color: #c89530; }"
+            "QPushButton:pressed { background: #342c26; }"
+            "QPushButton:disabled { color: #6e6458; background: #2c2622; border-color: #3e3630; }"
+        )
+        self._prev_btn = QPushButton("\u25C0")
+        self._prev_btn.setFixedSize(44, 44)
+        self._prev_btn.setStyleSheet(nav_style)
         self._prev_btn.clicked.connect(self._prev)
-        mid.addWidget(self._prev_btn)
+        mid.addWidget(self._prev_btn, alignment=Qt.AlignVCenter)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { border: none; }")
@@ -70,21 +77,21 @@ class PagePreviewDialog(QDialog):
         self._img_label.setAlignment(Qt.AlignCenter)
         scroll.setWidget(self._img_label)
         mid.addWidget(scroll, stretch=1)
-        self._next_btn = QPushButton("\u276F")
-        self._next_btn.setFixedSize(36, 52)
-        self._next_btn.setStyleSheet("font-size: 18px; border-radius: 8px;")
+        self._next_btn = QPushButton("\u25B6")
+        self._next_btn.setFixedSize(44, 44)
+        self._next_btn.setStyleSheet(nav_style)
         self._next_btn.clicked.connect(self._next)
-        mid.addWidget(self._next_btn)
-        layout.addWidget(QWidget_from_layout(mid), stretch=1)
+        mid.addWidget(self._next_btn, alignment=Qt.AlignVCenter)
+        mid_widget = QWidget()
+        mid_widget.setLayout(mid)
+        layout.addWidget(mid_widget, stretch=1)
         bottom = QHBoxLayout()
         self._split_btn = QPushButton()
         self._split_btn.setFixedHeight(32)
-        self._split_btn.setStyleSheet("border-radius: 16px; font-weight: bold; color: white; padding: 0 16px;")
         self._split_btn.clicked.connect(self._toggle_split)
         bottom.addWidget(self._split_btn)
         self._delete_btn = QPushButton()
         self._delete_btn.setFixedHeight(32)
-        self._delete_btn.setStyleSheet("border-radius: 16px; padding: 0 16px;")
         self._delete_btn.clicked.connect(self._toggle_delete)
         bottom.addWidget(self._delete_btn)
         bottom.addStretch()
@@ -120,20 +127,26 @@ class PagePreviewDialog(QDialog):
             self._split_btn.setText(t("split.mark_split"))
             self._split_btn.setEnabled(True)
         self._split_btn.setStyleSheet(
-            f"border-radius: 16px; font-weight: bold; color: white; "
-            f"padding: 0 16px; background: {color};",
+            f"QPushButton {{ border-radius: 16px; font-weight: bold; color: white; "
+            f"padding: 0 16px; background: {color}; border: none; }}"
+            f"QPushButton:hover {{ opacity: 0.85; }}"
+            f"QPushButton:disabled {{ background: #3a322c; color: #6e6458; }}"
         )
 
     def _update_delete_btn(self):
         if self._page_idx in self._deleted_pages:
             self._delete_btn.setText(t("split.restore_page"))
             self._delete_btn.setStyleSheet(
-                "border-radius: 16px; padding: 0 16px; background: #2563EB; color: white;",
+                "QPushButton { border-radius: 16px; padding: 0 16px; "
+                "background: #2563EB; color: white; border: none; }"
+                "QPushButton:hover { background: #3B82F6; }"
             )
         else:
             self._delete_btn.setText(t("split.delete_page"))
             self._delete_btn.setStyleSheet(
-                "border-radius: 16px; padding: 0 16px; background: #DC2626; color: white;",
+                "QPushButton { border-radius: 16px; padding: 0 16px; "
+                "background: #8b2020; color: #eed8d0; border: none; }"
+                "QPushButton:hover { background: #a02828; }"
             )
 
     def _get_section_for_page(self, page_idx):
@@ -167,15 +180,3 @@ class PagePreviewDialog(QDialog):
         else:
             self._deleted_pages.add(self._page_idx)
         self._update_delete_btn()
-
-
-class QWidget_from_layout(QLabel):
-    """Helper to wrap a layout in a widget."""
-    def __init__(self, layout, parent=None):
-        super().__init__(parent)
-        from PySide6.QtWidgets import QWidget
-        w = QWidget()
-        w.setLayout(layout)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(w)
