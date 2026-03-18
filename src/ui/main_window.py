@@ -551,7 +551,13 @@ class MainWindow(QMainWindow):
                 c.blockSignals(True)
                 c.setChecked(checked)
                 c.blockSignals(False)
+        def update_select_all():
+            select_all.blockSignals(True)
+            select_all.setChecked(all(c.isChecked() for c in cbs))
+            select_all.blockSignals(False)
         select_all.toggled.connect(toggle_all)
+        for cb in cbs:
+            cb.toggled.connect(update_select_all)
         lay.addStretch()
         btn_row = QHBoxLayout()
         btn_row.addStretch()
