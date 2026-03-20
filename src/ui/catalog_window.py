@@ -245,22 +245,6 @@ class CatalogWindow(QMainWindow):
         title = QLabel(folder_name)
         title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 4px;")
         self._detail_layout.addWidget(title)
-        pdfs = []
-        if self._drive:
-            try:
-                pdfs = self._drive.list_pdfs_in_folder(folder_id)
-                if pdfs:
-                    files_group = QGroupBox(
-                        t("catalog.drive.files_in_folder", count=len(pdfs)),
-                    )
-                    files_layout = QVBoxLayout(files_group)
-                    file_list = QListWidget()
-                    for pdf in pdfs:
-                        file_list.addItem(pdf["name"])
-                    files_layout.addWidget(file_list)
-                    self._detail_layout.addWidget(files_group)
-            except Exception:
-                pass
         btn_row = QHBoxLayout()
         tag_btn = QPushButton(t("catalog.drive.tag_as_piece"))
         tag_btn.clicked.connect(
@@ -274,7 +258,26 @@ class CatalogWindow(QMainWindow):
         btn_row.addWidget(collect_btn)
         btn_row.addStretch()
         self._detail_layout.addLayout(btn_row)
-        self._detail_layout.addStretch()
+        if self._drive:
+            try:
+                pdfs = self._drive.list_pdfs_in_folder(folder_id)
+                if pdfs:
+                    files_label = QLabel(
+                        t("catalog.drive.files_in_folder", count=len(pdfs)),
+                    )
+                    files_label.setStyleSheet("font-weight: bold; padding: 4px 0;")
+                    self._detail_layout.addWidget(files_label)
+                    file_list = QListWidget()
+                    for pdf in pdfs:
+                        file_list.addItem(pdf["name"])
+                    self._detail_layout.addWidget(file_list, stretch=1)
+                else:
+                    empty = QLabel(t("catalog.tree.no_items"))
+                    empty.setStyleSheet("color: gray; padding: 8px;")
+                    self._detail_layout.addWidget(empty)
+                    self._detail_layout.addStretch()
+            except Exception:
+                self._detail_layout.addStretch()
 
     def _show_file_detail(self, file_id: str, file_name: str):
         """顯示檔案資訊"""
