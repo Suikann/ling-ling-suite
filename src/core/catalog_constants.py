@@ -52,8 +52,9 @@ SHEET_HEADERS = {
     ],
     SHEET_PIECES: [
         "id", "composer_id", "title", "title_short", "opus",
-        "catalog_number", "genre", "duration_minutes",
-        "difficulty_level", "notes", "active_edition_id",
+        "catalog_number", "genre", "instrumentation",
+        "duration_minutes", "difficulty_level", "notes",
+        "active_edition_id",
     ],
     SHEET_EDITIONS: [
         "id", "piece_id", "publisher", "edition_label",

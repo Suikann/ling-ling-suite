@@ -29,6 +29,7 @@ class Piece:
     opus: str = ""
     catalog_number: str = ""
     genre: str = ""
+    instrumentation: str = ""
     duration_minutes: str = ""
     difficulty_level: str = ""
     notes: str = ""

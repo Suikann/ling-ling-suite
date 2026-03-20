@@ -59,9 +59,6 @@ class CatalogWindow(QMainWindow):
         self._toolbar = QToolBar()
         self._toolbar.setMovable(False)
         self.addToolBar(self._toolbar)
-        add_composer_btn = QPushButton(t("catalog.toolbar.add_composer"))
-        add_composer_btn.clicked.connect(self._add_composer)
-        self._toolbar.addWidget(add_composer_btn)
         add_piece_btn = QPushButton(t("catalog.toolbar.add_piece"))
         add_piece_btn.clicked.connect(self._add_piece)
         self._toolbar.addWidget(add_piece_btn)
@@ -75,6 +72,17 @@ class CatalogWindow(QMainWindow):
         self._search_entry.setFixedWidth(200)
         self._search_entry.textChanged.connect(self._on_search)
         self._toolbar.addWidget(self._search_entry)
+        self._toolbar.addSeparator()
+        self._toolbar.addWidget(QLabel(f" {t('catalog.groupby')} "))
+        self._groupby_combo = QComboBox()
+        self._groupby_combo.addItem(t("catalog.groupby.composer"), "composer")
+        self._groupby_combo.addItem(t("catalog.groupby.genre"), "genre")
+        self._groupby_combo.addItem(t("catalog.groupby.instrumentation"), "instrumentation")
+        self._groupby_combo.addItem(t("catalog.groupby.title"), "title")
+        self._groupby_combo.currentIndexChanged.connect(
+            lambda: self._rebuild_tree(self._search_entry.text()),
+        )
+        self._toolbar.addWidget(self._groupby_combo)
         central = QWidget()
         self.setCentralWidget(central)
         layout = QHBoxLayout(central)
@@ -133,42 +141,94 @@ class CatalogWindow(QMainWindow):
             self._status_bar.showMessage(t("catalog.error", error=str(e)))
 
     def _rebuild_tree(self, filter_text: str = ""):
-        """重建樹狀結構"""
+        """依選定的分類方式重建樹狀結構"""
         self._tree.clear()
-        composer_map: Dict[str, QTreeWidgetItem] = {}
-        q = filter_text.lower()
-        for composer in self._composers:
-            node = QTreeWidgetItem([composer.name_short or composer.name])
-            node.setData(0, Qt.UserRole, ("composer", composer.id))
-            composer_map[composer.id] = node
-        uncategorized = QTreeWidgetItem([t("catalog.tree.no_composer")])
-        uncategorized.setData(0, Qt.UserRole, ("none", ""))
-        has_uncategorized = False
+        q = filter_text.lower() if filter_text else ""
+        groupby = self._groupby_combo.currentData() or "composer"
+        composer_map = {c.id: c for c in self._composers}
+        filtered = []
         for piece in self._pieces:
             display = piece.title_short or piece.title
-            if piece.opus:
-                display += f" ({piece.opus})"
-            if q and q not in display.lower() and q not in piece.genre.lower():
+            if q and not self._piece_matches_search(piece, composer_map, q):
                 continue
-            piece_node = QTreeWidgetItem([display])
-            piece_node.setData(0, Qt.UserRole, ("piece", piece.id))
-            parent = composer_map.get(piece.composer_id)
-            if parent:
-                parent.addChild(piece_node)
-            else:
-                uncategorized.addChild(piece_node)
-                has_uncategorized = True
-        for node in composer_map.values():
-            if node.childCount() > 0 or not q:
-                self._tree.addTopLevelItem(node)
-                node.setExpanded(True)
-        if has_uncategorized:
-            self._tree.addTopLevelItem(uncategorized)
-            uncategorized.setExpanded(True)
+            filtered.append(piece)
+        if groupby == "title":
+            self._build_flat_tree(sorted(filtered, key=lambda p: p.title))
+        elif groupby == "composer":
+            self._build_grouped_tree(
+                filtered, composer_map,
+                key_fn=lambda p: p.composer_id,
+                label_fn=lambda kid: (
+                    (composer_map[kid].name_short or composer_map[kid].name)
+                    if kid in composer_map else t("catalog.tree.no_composer")
+                ),
+            )
+        elif groupby == "genre":
+            self._build_grouped_tree(
+                filtered, composer_map,
+                key_fn=lambda p: p.genre or t("catalog.tree.no_composer"),
+                label_fn=lambda g: g,
+            )
+        elif groupby == "instrumentation":
+            self._build_grouped_tree(
+                filtered, composer_map,
+                key_fn=lambda p: p.instrumentation or t("catalog.tree.no_composer"),
+                label_fn=lambda g: g,
+            )
         if self._tree.topLevelItemCount() == 0:
             empty = QTreeWidgetItem([t("catalog.tree.no_items")])
             empty.setFlags(Qt.NoItemFlags)
             self._tree.addTopLevelItem(empty)
+
+    def _piece_matches_search(
+        self, piece: Piece, composer_map: Dict, q: str,
+    ) -> bool:
+        """判斷曲目是否符合搜尋條件"""
+        if q in piece.title.lower():
+            return True
+        if q in (piece.title_short or "").lower():
+            return True
+        if q in piece.genre.lower():
+            return True
+        if q in piece.opus.lower():
+            return True
+        if q in piece.instrumentation.lower():
+            return True
+        composer = composer_map.get(piece.composer_id)
+        if composer and (q in composer.name.lower() or q in (composer.name_short or "").lower()):
+            return True
+        return False
+
+    def _build_flat_tree(self, pieces: List[Piece]):
+        """建立扁平（無分組）的樹狀結構"""
+        for piece in pieces:
+            display = piece.title_short or piece.title
+            if piece.opus:
+                display += f" ({piece.opus})"
+            node = QTreeWidgetItem([display])
+            node.setData(0, Qt.UserRole, ("piece", piece.id))
+            self._tree.addTopLevelItem(node)
+
+    def _build_grouped_tree(self, pieces, composer_map, key_fn, label_fn):
+        """建立分組的樹狀結構"""
+        groups: Dict[str, List[Piece]] = {}
+        for piece in pieces:
+            key = key_fn(piece)
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(piece)
+        for key in sorted(groups.keys()):
+            group_node = QTreeWidgetItem([label_fn(key)])
+            group_node.setData(0, Qt.UserRole, ("group", key))
+            for piece in groups[key]:
+                display = piece.title_short or piece.title
+                if piece.opus:
+                    display += f" ({piece.opus})"
+                piece_node = QTreeWidgetItem([display])
+                piece_node.setData(0, Qt.UserRole, ("piece", piece.id))
+                group_node.addChild(piece_node)
+            self._tree.addTopLevelItem(group_node)
+            group_node.setExpanded(True)
 
     def _on_search(self, text: str):
         """搜尋篩選"""
@@ -182,9 +242,7 @@ class CatalogWindow(QMainWindow):
         if not data:
             return
         node_type, node_id = data
-        if node_type == "composer":
-            self._show_composer_detail(node_id)
-        elif node_type == "piece":
+        if node_type == "piece":
             self._show_piece_detail(node_id)
 
     # --- 清除並重建右側面板 ---
@@ -196,123 +254,23 @@ class CatalogWindow(QMainWindow):
             if child.widget():
                 child.widget().deleteLater()
 
-    # --- 作曲家 ---
-
-    def _add_composer(self):
-        """新增作曲家"""
-        if not self._sheets:
-            return
-        name, ok = QInputDialog.getText(
-            self, t("catalog.toolbar.add_composer"),
-            t("catalog.composer.name"),
-        )
-        if not ok or not name.strip():
-            return
-        try:
-            self._sheets.create_composer(Composer(name=name.strip()))
-            self._refresh_all()
-        except Exception as e:
-            QMessageBox.critical(self, t("catalog.error", error=""), str(e))
-
-    def _show_composer_detail(self, composer_id: str):
-        """顯示作曲家詳細資訊"""
-        if not self._sheets:
-            return
-        composer = self._sheets.get_composer(composer_id)
-        if not composer:
-            return
-        self._clear_detail()
-        group = QGroupBox(t("catalog.composer.title"))
-        form = QFormLayout(group)
-        name_edit = QLineEdit(composer.name)
-        form.addRow(t("catalog.composer.name"), name_edit)
-        short_edit = QLineEdit(composer.name_short)
-        form.addRow(t("catalog.composer.name_short"), short_edit)
-        nat_edit = QLineEdit(composer.nationality)
-        form.addRow(t("catalog.composer.nationality"), nat_edit)
-        era_edit = QLineEdit(composer.era)
-        form.addRow(t("catalog.composer.era"), era_edit)
-        notes_edit = QTextEdit(composer.notes)
-        notes_edit.setMaximumHeight(80)
-        form.addRow(t("catalog.composer.notes"), notes_edit)
-        self._detail_layout.addWidget(group)
-        btn_row = QHBoxLayout()
-        save_btn = QPushButton(t("catalog.save"))
-        save_btn.clicked.connect(lambda: self._save_composer(
-            composer, name_edit, short_edit, nat_edit, era_edit, notes_edit,
-        ))
-        btn_row.addWidget(save_btn)
-        del_btn = QPushButton(t("catalog.composer.delete"))
-        del_btn.setStyleSheet("background-color: #c0392b; color: white;")
-        del_btn.clicked.connect(lambda: self._delete_composer(composer))
-        btn_row.addWidget(del_btn)
-        btn_row.addStretch()
-        self._detail_layout.addLayout(btn_row)
-        pieces = [p for p in self._pieces if p.composer_id == composer_id]
-        if pieces:
-            pieces_group = QGroupBox(
-                f"{t('catalog.piece.title')} ({len(pieces)})",
-            )
-            pieces_layout = QVBoxLayout(pieces_group)
-            for p in pieces:
-                label = p.title
-                if p.opus:
-                    label += f" ({p.opus})"
-                if p.genre:
-                    label += f" [{p.genre}]"
-                pieces_layout.addWidget(QLabel(label))
-            self._detail_layout.addWidget(pieces_group)
-        self._detail_layout.addStretch()
-
-    def _save_composer(self, original, name_w, short_w, nat_w, era_w, notes_w):
-        """儲存作曲家變更"""
-        updated = replace(
-            original,
-            name=name_w.text().strip(),
-            name_short=short_w.text().strip(),
-            nationality=nat_w.text().strip(),
-            era=era_w.text().strip(),
-            notes=notes_w.toPlainText().strip(),
-        )
-        try:
-            self._sheets.update_composer(updated)
-            self._refresh_all()
-        except Exception as e:
-            QMessageBox.critical(self, t("catalog.error", error=""), str(e))
-
-    def _delete_composer(self, composer: Composer):
-        """刪除作曲家"""
-        pieces = [p for p in self._pieces if p.composer_id == composer.id]
-        if pieces:
-            QMessageBox.warning(
-                self, t("catalog.composer.delete"),
-                t("catalog.composer.has_pieces", count=len(pieces)),
-            )
-            return
-        result = QMessageBox.question(
-            self, t("catalog.composer.delete"),
-            t("catalog.composer.confirm_delete", name=composer.name),
-        )
-        if result != QMessageBox.Yes:
-            return
-        try:
-            self._sheets.delete_composer(composer.id)
-            self._refresh_all()
-            self._clear_detail()
-        except Exception as e:
-            QMessageBox.critical(self, t("catalog.error", error=""), str(e))
-
     # --- 曲目 ---
 
     def _add_piece(self):
-        """新增曲目"""
+        """新增曲目（作曲家不存在時自動建立）"""
         if not self._sheets:
             return
         dialog = _NewPieceDialog(self._composers, self)
         if dialog.exec() != QDialog.Accepted:
             return
         try:
-            piece_id = self._sheets.create_piece(dialog.piece)
+            composer_id = dialog.composer_id
+            if not composer_id and dialog.composer_name:
+                composer_id = self._sheets.create_composer(
+                    Composer(name=dialog.composer_name),
+                )
+            piece = replace(dialog.piece, composer_id=composer_id)
+            piece_id = self._sheets.create_piece(piece)
             self._refresh_all()
             self._show_piece_detail(piece_id)
         except Exception as e:
@@ -373,6 +331,8 @@ class CatalogWindow(QMainWindow):
         form.addRow(t("catalog.piece.catalog_number"), self._piece_catalog_edit)
         self._piece_genre_edit = QLineEdit(piece.genre)
         form.addRow(t("catalog.piece.genre"), self._piece_genre_edit)
+        self._piece_instrumentation_edit = QLineEdit(piece.instrumentation)
+        form.addRow(t("catalog.piece.instrumentation"), self._piece_instrumentation_edit)
         self._piece_duration_edit = QLineEdit(piece.duration_minutes)
         self._piece_duration_edit.setFixedWidth(80)
         form.addRow(t("catalog.piece.duration"), self._piece_duration_edit)
@@ -406,6 +366,7 @@ class CatalogWindow(QMainWindow):
             opus=self._piece_opus_edit.text().strip(),
             catalog_number=self._piece_catalog_edit.text().strip(),
             genre=self._piece_genre_edit.text().strip(),
+            instrumentation=self._piece_instrumentation_edit.text().strip(),
             duration_minutes=self._piece_duration_edit.text().strip(),
             difficulty_level=self._piece_difficulty_edit.text().strip(),
             notes=self._piece_notes_edit.toPlainText().strip(),
@@ -950,17 +911,23 @@ class _NewPieceDialog(QDialog):
         self.setWindowTitle(t("catalog.toolbar.add_piece"))
         self.setMinimumWidth(400)
         self.piece = Piece()
+        self.composer_id = ""
+        self.composer_name = ""
+        self._composers = composers
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self._title_edit = QLineEdit()
         form.addRow(t("catalog.piece.name"), self._title_edit)
-        self._composer_combo = QComboBox()
-        self._composer_combo.addItem("", "")
+        self._composer_edit = QComboBox()
+        self._composer_edit.setEditable(True)
+        self._composer_edit.addItem("")
         for c in composers:
-            self._composer_combo.addItem(c.name_short or c.name, c.id)
-        form.addRow(t("catalog.piece.composer"), self._composer_combo)
+            self._composer_edit.addItem(c.name_short or c.name, c.id)
+        form.addRow(t("catalog.piece.composer"), self._composer_edit)
         self._genre_edit = QLineEdit()
         form.addRow(t("catalog.piece.genre"), self._genre_edit)
+        self._instrumentation_edit = QLineEdit()
+        form.addRow(t("catalog.piece.instrumentation"), self._instrumentation_edit)
         self._opus_edit = QLineEdit()
         form.addRow(t("catalog.piece.opus"), self._opus_edit)
         layout.addLayout(form)
@@ -975,10 +942,19 @@ class _NewPieceDialog(QDialog):
         title = self._title_edit.text().strip()
         if not title:
             return
+        composer_text = self._composer_edit.currentText().strip()
+        self.composer_id = self._composer_edit.currentData() or ""
+        if not self.composer_id and composer_text:
+            for c in self._composers:
+                if (c.name_short or c.name) == composer_text or c.name == composer_text:
+                    self.composer_id = c.id
+                    break
+            if not self.composer_id:
+                self.composer_name = composer_text
         self.piece = Piece(
             title=title,
-            composer_id=self._composer_combo.currentData() or "",
             genre=self._genre_edit.text().strip(),
+            instrumentation=self._instrumentation_edit.text().strip(),
             opus=self._opus_edit.text().strip(),
         )
         self.accept()
