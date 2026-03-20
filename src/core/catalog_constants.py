@@ -80,4 +80,4 @@ GOOGLE_SCOPES = [
 ]
 
 TOKEN_FILE = "google_token.json"
-CLIENT_SECRETS_FILE = "client_secrets.json"
+CLIENT_SECRETS_FILE = "client_secret.json"
