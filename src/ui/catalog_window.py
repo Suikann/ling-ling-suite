@@ -110,6 +110,10 @@ class CatalogWindow(QMainWindow):
         self._toolbar = QToolBar()
         self._toolbar.setMovable(False)
         self.addToolBar(self._toolbar)
+        new_folder_btn = QPushButton(t("catalog.toolbar.new_folder"))
+        new_folder_btn.clicked.connect(self._create_subfolder)
+        self._toolbar.addWidget(new_folder_btn)
+        self._toolbar.addSeparator()
         refresh_btn = QPushButton(t("catalog.toolbar.refresh"))
         refresh_btn.clicked.connect(self._refresh_all)
         self._toolbar.addWidget(refresh_btn)
@@ -291,6 +295,32 @@ class CatalogWindow(QMainWindow):
             if child.widget():
                 child.widget().deleteLater()
 
+    def _create_subfolder(self):
+        """在目前選取的資料夾中建立子資料夾"""
+        if not self._drive:
+            return
+        current = self._tree.currentItem()
+        parent_id = self._prefs.get("catalog_root_folder_id") or ""
+        if current:
+            data = current.data(0, Qt.UserRole)
+            if data and data[0] == "folder":
+                parent_id = data[1]
+        if not parent_id:
+            return
+        name, ok = QInputDialog.getText(
+            self, t("catalog.toolbar.new_folder"),
+            t("catalog.toolbar.new_folder_name"),
+        )
+        if not ok or not name.strip():
+            return
+        try:
+            self._drive.create_folder(name.strip(), parent_id)
+            self._refresh_all()
+        except Exception as e:
+            QMessageBox.critical(
+                self, t("catalog.error", error=""), str(e),
+            )
+
     # --- 資料夾詳細 ---
 
     def _show_folder_detail(self, folder_id: str, folder_name: str):
@@ -303,19 +333,31 @@ class CatalogWindow(QMainWindow):
         title = QLabel(folder_name)
         title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 4px;")
         self._detail_layout.addWidget(title)
-        btn_row = QHBoxLayout()
+        actions_group = QGroupBox(t("catalog.drive.actions"))
+        actions_layout = QVBoxLayout(actions_group)
+        tag_row = QHBoxLayout()
         tag_btn = QPushButton(t("catalog.drive.tag_as_piece"))
         tag_btn.clicked.connect(
             lambda: self._tag_folder_as_piece(folder_id, folder_name),
         )
-        btn_row.addWidget(tag_btn)
+        tag_row.addWidget(tag_btn)
+        tag_desc = QLabel(t("catalog.drive.tag_desc"))
+        tag_desc.setStyleSheet("color: gray; font-size: 12px;")
+        tag_desc.setWordWrap(True)
+        tag_row.addWidget(tag_desc, stretch=1)
+        actions_layout.addLayout(tag_row)
+        collect_row = QHBoxLayout()
         collect_btn = QPushButton(t("catalog.drive.collect_files"))
         collect_btn.clicked.connect(
             lambda: self._collect_files_to_folder(folder_id, folder_name),
         )
-        btn_row.addWidget(collect_btn)
-        btn_row.addStretch()
-        self._detail_layout.addLayout(btn_row)
+        collect_row.addWidget(collect_btn)
+        collect_desc = QLabel(t("catalog.drive.collect_desc"))
+        collect_desc.setStyleSheet("color: gray; font-size: 12px;")
+        collect_desc.setWordWrap(True)
+        collect_row.addWidget(collect_desc, stretch=1)
+        actions_layout.addLayout(collect_row)
+        self._detail_layout.addWidget(actions_group)
         if self._drive:
             try:
                 pdfs = self._drive.list_pdfs_in_folder(folder_id)
@@ -330,7 +372,7 @@ class CatalogWindow(QMainWindow):
                         file_list.addItem(pdf["name"])
                     self._detail_layout.addWidget(file_list, stretch=1)
                 else:
-                    empty = QLabel(t("catalog.tree.no_items"))
+                    empty = QLabel(t("catalog.drive.folder_empty"))
                     empty.setStyleSheet("color: gray; padding: 8px;")
                     self._detail_layout.addWidget(empty)
                     self._detail_layout.addStretch()
