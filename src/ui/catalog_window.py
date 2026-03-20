@@ -2,7 +2,7 @@
 """
 譜庫瀏覽器視窗
 
-提供譜庫的樹狀瀏覽、搜尋、曲目編輯與分譜狀態管理。
+以 Drive 資料夾內容為主體，使用者可為資料夾加上元資料（曲目資訊、演出紀錄等）。
 """
 from dataclasses import replace
 from typing import Dict, List, Optional
@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QLabel, QLineEdit, QPushButton,
     QToolBar, QStatusBar, QMessageBox, QComboBox, QFormLayout,
     QGroupBox, QTabWidget, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTextEdit, QDialog, QDialogButtonBox,
-    QAbstractItemView, QInputDialog,
+    QTextEdit, QDialog, QDialogButtonBox, QInputDialog,
+    QListWidget, QListWidgetItem,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QBrush
@@ -34,9 +34,15 @@ _STATUS_COLORS = {
     PartStatus.UNKNOWN.value: QColor("#95a5a6"),
 }
 
+_FOLDER_ICON = "\U0001f4c1 "
+_PDF_ICON = "\U0001f4c4 "
+
 
 class CatalogWindow(QMainWindow):
     """譜庫管理主視窗"""
+
+    _FOLDER_MIME = "application/vnd.google-apps.folder"
+    _PDF_MIME = "application/pdf"
 
     def __init__(
         self, auth_service: GoogleAuthService,
@@ -47,9 +53,10 @@ class CatalogWindow(QMainWindow):
         self._prefs = preferences
         self._sheets: Optional[SheetsService] = None
         self._drive: Optional[DriveService] = None
-        self._composers: List[Composer] = []
         self._pieces: List[Piece] = []
+        self._piece_by_folder: Dict[str, Piece] = {}
         self._current_detail: Optional[PieceDetail] = None
+        self._composers: List[Composer] = []
         self.setWindowTitle(t("catalog.title"))
         self.resize(1200, 750)
         self._build_ui()
@@ -59,10 +66,6 @@ class CatalogWindow(QMainWindow):
         self._toolbar = QToolBar()
         self._toolbar.setMovable(False)
         self.addToolBar(self._toolbar)
-        add_piece_btn = QPushButton(t("catalog.toolbar.add_piece"))
-        add_piece_btn.clicked.connect(self._add_piece)
-        self._toolbar.addWidget(add_piece_btn)
-        self._toolbar.addSeparator()
         refresh_btn = QPushButton(t("catalog.toolbar.refresh"))
         refresh_btn.clicked.connect(self._refresh_all)
         self._toolbar.addWidget(refresh_btn)
@@ -72,17 +75,6 @@ class CatalogWindow(QMainWindow):
         self._search_entry.setFixedWidth(200)
         self._search_entry.textChanged.connect(self._on_search)
         self._toolbar.addWidget(self._search_entry)
-        self._toolbar.addSeparator()
-        self._toolbar.addWidget(QLabel(f" {t('catalog.groupby')} "))
-        self._groupby_combo = QComboBox()
-        self._groupby_combo.addItem(t("catalog.groupby.composer"), "composer")
-        self._groupby_combo.addItem(t("catalog.groupby.genre"), "genre")
-        self._groupby_combo.addItem(t("catalog.groupby.instrumentation"), "instrumentation")
-        self._groupby_combo.addItem(t("catalog.groupby.title"), "title")
-        self._groupby_combo.currentIndexChanged.connect(
-            lambda: self._rebuild_tree(self._search_entry.text()),
-        )
-        self._toolbar.addWidget(self._groupby_combo)
         central = QWidget()
         self.setCentralWidget(central)
         layout = QHBoxLayout(central)
@@ -91,12 +83,13 @@ class CatalogWindow(QMainWindow):
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
         self._tree.setMinimumWidth(280)
+        self._tree.itemExpanded.connect(self._on_expand)
         self._tree.currentItemChanged.connect(self._on_tree_select)
         splitter.addWidget(self._tree)
         self._detail_area = QWidget()
         self._detail_layout = QVBoxLayout(self._detail_area)
         self._detail_layout.setContentsMargins(4, 4, 4, 4)
-        self._detail_placeholder = QLabel(t("catalog.tree.no_items"))
+        self._detail_placeholder = QLabel(t("catalog.drive.select_hint"))
         self._detail_placeholder.setAlignment(Qt.AlignCenter)
         self._detail_placeholder.setStyleSheet("color: gray; font-size: 14px;")
         self._detail_layout.addWidget(self._detail_placeholder)
@@ -125,13 +118,27 @@ class CatalogWindow(QMainWindow):
             self._status_bar.showMessage(t("catalog.error", error=str(e)))
 
     def _refresh_all(self):
-        """重新載入所有資料"""
-        if not self._sheets:
+        """重新載入 Drive 資料夾與元資料"""
+        if not self._drive or not self._sheets:
+            return
+        root_id = self._prefs.get("catalog_root_folder_id") or ""
+        if not root_id:
+            self._status_bar.showMessage(t("catalog.no_connection"))
             return
         try:
-            self._composers = self._sheets.list_composers()
             self._pieces = self._sheets.list_pieces()
-            self._rebuild_tree()
+            self._composers = self._sheets.list_composers()
+            self._piece_by_folder = {
+                p.active_edition_id: p for p in self._pieces
+                if p.active_edition_id
+            }
+            for p in self._pieces:
+                editions = self._sheets.list_editions(p.id)
+                for e in editions:
+                    if e.drive_folder_id:
+                        self._piece_by_folder[e.drive_folder_id] = p
+            self._tree.clear()
+            self._load_drive_children(None, root_id)
             self._status_bar.showMessage(
                 t("catalog.status.stats",
                   composers=len(self._composers),
@@ -140,112 +147,84 @@ class CatalogWindow(QMainWindow):
         except Exception as e:
             self._status_bar.showMessage(t("catalog.error", error=str(e)))
 
-    def _rebuild_tree(self, filter_text: str = ""):
-        """依選定的分類方式重建樹狀結構"""
-        self._tree.clear()
-        q = filter_text.lower() if filter_text else ""
-        groupby = self._groupby_combo.currentData() or "composer"
-        composer_map = {c.id: c for c in self._composers}
-        filtered = []
-        for piece in self._pieces:
-            display = piece.title_short or piece.title
-            if q and not self._piece_matches_search(piece, composer_map, q):
-                continue
-            filtered.append(piece)
-        if groupby == "title":
-            self._build_flat_tree(sorted(filtered, key=lambda p: p.title))
-        elif groupby == "composer":
-            self._build_grouped_tree(
-                filtered, composer_map,
-                key_fn=lambda p: p.composer_id,
-                label_fn=lambda kid: (
-                    (composer_map[kid].name_short or composer_map[kid].name)
-                    if kid in composer_map else t("catalog.tree.no_composer")
-                ),
-            )
-        elif groupby == "genre":
-            self._build_grouped_tree(
-                filtered, composer_map,
-                key_fn=lambda p: p.genre or t("catalog.tree.no_composer"),
-                label_fn=lambda g: g,
-            )
-        elif groupby == "instrumentation":
-            self._build_grouped_tree(
-                filtered, composer_map,
-                key_fn=lambda p: p.instrumentation or t("catalog.tree.no_composer"),
-                label_fn=lambda g: g,
-            )
-        if self._tree.topLevelItemCount() == 0:
-            empty = QTreeWidgetItem([t("catalog.tree.no_items")])
-            empty.setFlags(Qt.NoItemFlags)
-            self._tree.addTopLevelItem(empty)
+    # --- Drive 樹狀結構 ---
 
-    def _piece_matches_search(
-        self, piece: Piece, composer_map: Dict, q: str,
-    ) -> bool:
-        """判斷曲目是否符合搜尋條件"""
-        if q in piece.title.lower():
-            return True
-        if q in (piece.title_short or "").lower():
-            return True
-        if q in piece.genre.lower():
-            return True
-        if q in piece.opus.lower():
-            return True
-        if q in piece.instrumentation.lower():
-            return True
-        composer = composer_map.get(piece.composer_id)
-        if composer and (q in composer.name.lower() or q in (composer.name_short or "").lower()):
-            return True
-        return False
+    def _load_drive_children(self, parent_node, folder_id: str):
+        """載入 Drive 資料夾的子項目"""
+        if not self._drive:
+            return
+        try:
+            folders = self._drive.list_subfolders(folder_id)
+            pdfs = self._drive.list_pdfs_in_folder(folder_id)
+        except Exception:
+            return
+        for folder in folders:
+            has_meta = folder["id"] in self._piece_by_folder
+            label = folder["name"]
+            if has_meta:
+                label += "  *"
+            node = QTreeWidgetItem([label])
+            node.setData(0, Qt.UserRole, ("folder", folder["id"], folder["name"]))
+            node.setData(0, Qt.UserRole + 1, False)
+            placeholder = QTreeWidgetItem([t("catalog.loading")])
+            node.addChild(placeholder)
+            if parent_node is None:
+                self._tree.addTopLevelItem(node)
+            else:
+                parent_node.addChild(node)
+        for pdf in pdfs:
+            node = QTreeWidgetItem([pdf["name"]])
+            node.setData(0, Qt.UserRole, ("file", pdf["id"], pdf["name"]))
+            if parent_node is None:
+                self._tree.addTopLevelItem(node)
+            else:
+                parent_node.addChild(node)
 
-    def _build_flat_tree(self, pieces: List[Piece]):
-        """建立扁平（無分組）的樹狀結構"""
-        for piece in pieces:
-            display = piece.title_short or piece.title
-            if piece.opus:
-                display += f" ({piece.opus})"
-            node = QTreeWidgetItem([display])
-            node.setData(0, Qt.UserRole, ("piece", piece.id))
-            self._tree.addTopLevelItem(node)
-
-    def _build_grouped_tree(self, pieces, composer_map, key_fn, label_fn):
-        """建立分組的樹狀結構"""
-        groups: Dict[str, List[Piece]] = {}
-        for piece in pieces:
-            key = key_fn(piece)
-            if key not in groups:
-                groups[key] = []
-            groups[key].append(piece)
-        for key in sorted(groups.keys()):
-            group_node = QTreeWidgetItem([label_fn(key)])
-            group_node.setData(0, Qt.UserRole, ("group", key))
-            for piece in groups[key]:
-                display = piece.title_short or piece.title
-                if piece.opus:
-                    display += f" ({piece.opus})"
-                piece_node = QTreeWidgetItem([display])
-                piece_node.setData(0, Qt.UserRole, ("piece", piece.id))
-                group_node.addChild(piece_node)
-            self._tree.addTopLevelItem(group_node)
-            group_node.setExpanded(True)
+    def _on_expand(self, item):
+        """展開資料夾時載入子項目"""
+        already_loaded = item.data(0, Qt.UserRole + 1)
+        if already_loaded:
+            return
+        item.setData(0, Qt.UserRole + 1, True)
+        item.takeChildren()
+        data = item.data(0, Qt.UserRole)
+        if data and data[0] == "folder":
+            self._load_drive_children(item, data[1])
 
     def _on_search(self, text: str):
-        """搜尋篩選"""
-        self._rebuild_tree(text)
+        """搜尋時篩選樹狀結構"""
+        q = text.lower()
+        for i in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(i)
+            self._filter_tree_item(item, q)
+
+    def _filter_tree_item(self, item, q: str) -> bool:
+        """遞迴篩選樹狀結構項目"""
+        data = item.data(0, Qt.UserRole)
+        name = data[2].lower() if data else ""
+        match = not q or q in name
+        child_match = False
+        for i in range(item.childCount()):
+            if self._filter_tree_item(item.child(i), q):
+                child_match = True
+        visible = match or child_match
+        item.setHidden(not visible)
+        return visible
 
     def _on_tree_select(self, current: QTreeWidgetItem, previous):
-        """樹狀結構選取變更"""
+        """選取項目時更新右側面板"""
         if not current:
             return
         data = current.data(0, Qt.UserRole)
         if not data:
             return
-        node_type, node_id = data
-        if node_type == "piece":
-            self._show_piece_detail(node_id)
+        item_type, item_id, item_name = data
+        if item_type == "folder":
+            self._show_folder_detail(item_id, item_name)
+        elif item_type == "file":
+            self._show_file_detail(item_id, item_name)
 
-    # --- 清除並重建右側面板 ---
+    # --- 清除右側面板 ---
 
     def _clear_detail(self):
         """清除右側面板內容"""
@@ -254,27 +233,75 @@ class CatalogWindow(QMainWindow):
             if child.widget():
                 child.widget().deleteLater()
 
-    # --- 曲目 ---
+    # --- 資料夾詳細 ---
 
-    def _add_piece(self):
-        """新增曲目（作曲家不存在時自動建立）"""
+    def _show_folder_detail(self, folder_id: str, folder_name: str):
+        """顯示資料夾內容與元資料"""
+        self._clear_detail()
+        piece = self._piece_by_folder.get(folder_id)
+        if piece:
+            self._show_piece_detail(piece.id)
+            return
+        title = QLabel(folder_name)
+        title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 4px;")
+        self._detail_layout.addWidget(title)
+        if self._drive:
+            try:
+                pdfs = self._drive.list_pdfs_in_folder(folder_id)
+                if pdfs:
+                    files_group = QGroupBox(
+                        t("catalog.drive.files_in_folder", count=len(pdfs)),
+                    )
+                    files_layout = QVBoxLayout(files_group)
+                    file_list = QListWidget()
+                    for pdf in pdfs:
+                        file_list.addItem(pdf["name"])
+                    files_layout.addWidget(file_list)
+                    self._detail_layout.addWidget(files_group)
+            except Exception:
+                pass
+        tag_btn = QPushButton(t("catalog.drive.tag_as_piece"))
+        tag_btn.clicked.connect(
+            lambda: self._tag_folder_as_piece(folder_id, folder_name),
+        )
+        self._detail_layout.addWidget(tag_btn)
+        self._detail_layout.addStretch()
+
+    def _show_file_detail(self, file_id: str, file_name: str):
+        """顯示檔案資訊"""
+        self._clear_detail()
+        title = QLabel(file_name)
+        title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 4px;")
+        self._detail_layout.addWidget(title)
+        info = QLabel(f"Drive ID: {file_id}")
+        info.setStyleSheet("color: gray;")
+        info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._detail_layout.addWidget(info)
+        self._detail_layout.addStretch()
+
+    def _tag_folder_as_piece(self, folder_id: str, folder_name: str):
+        """將資料夾標記為一首曲目"""
         if not self._sheets:
             return
-        dialog = _NewPieceDialog(self._composers, self)
-        if dialog.exec() != QDialog.Accepted:
-            return
         try:
-            composer_id = dialog.composer_id
-            if not composer_id and dialog.composer_name:
-                composer_id = self._sheets.create_composer(
-                    Composer(name=dialog.composer_name),
+            edition_id = self._sheets.create_edition(
+                Edition(piece_id="", publisher="", drive_folder_id=folder_id),
+            )
+            piece_id = self._sheets.create_piece(Piece(
+                title=folder_name,
+                active_edition_id=edition_id,
+            ))
+            edition = self._sheets.get_edition(edition_id)
+            if edition:
+                self._sheets.update_edition(
+                    replace(edition, piece_id=piece_id),
                 )
-            piece = replace(dialog.piece, composer_id=composer_id)
-            piece_id = self._sheets.create_piece(piece)
             self._refresh_all()
             self._show_piece_detail(piece_id)
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
+
+    # --- 曲目詳細（含元資料頁籤） ---
 
     def _show_piece_detail(self, piece_id: str):
         """顯示曲目完整資訊"""
@@ -290,18 +317,20 @@ class CatalogWindow(QMainWindow):
             self._build_piece_info_tab(detail), t("catalog.piece.title"),
         )
         tabs.addTab(
-            self._build_editions_tab(detail), t("catalog.edition.title"),
-        )
-        tabs.addTab(
-            self._build_movements_tab(detail), t("catalog.movement.title"),
-        )
-        tabs.addTab(
             self._build_parts_tab(detail), t("catalog.part.title"),
         )
         tabs.addTab(
             self._build_performances_tab(detail), t("catalog.performance.title"),
         )
+        tabs.addTab(
+            self._build_movements_tab(detail), t("catalog.movement.title"),
+        )
+        tabs.addTab(
+            self._build_editions_tab(detail), t("catalog.edition.title"),
+        )
         self._detail_layout.addWidget(tabs)
+
+    # --- 曲目資訊頁籤 ---
 
     def _build_piece_info_tab(self, detail: PieceDetail) -> QWidget:
         """建立曲目資訊頁籤"""
@@ -314,16 +343,15 @@ class CatalogWindow(QMainWindow):
         self._piece_short_edit = QLineEdit(piece.title_short)
         form.addRow(t("catalog.piece.name_short"), self._piece_short_edit)
         self._piece_composer_combo = QComboBox()
+        self._piece_composer_combo.setEditable(True)
+        self._piece_composer_combo.addItem("")
         for c in self._composers:
-            self._piece_composer_combo.addItem(
-                c.name_short or c.name, c.id,
-            )
+            self._piece_composer_combo.addItem(c.name_short or c.name, c.id)
         idx = next(
-            (i for i, c in enumerate(self._composers)
-             if c.id == piece.composer_id), -1,
+            (i + 1 for i, c in enumerate(self._composers)
+             if c.id == piece.composer_id), 0,
         )
-        if idx >= 0:
-            self._piece_composer_combo.setCurrentIndex(idx)
+        self._piece_composer_combo.setCurrentIndex(idx)
         form.addRow(t("catalog.piece.composer"), self._piece_composer_combo)
         self._piece_opus_edit = QLineEdit(piece.opus)
         form.addRow(t("catalog.piece.opus"), self._piece_opus_edit)
@@ -356,8 +384,18 @@ class CatalogWindow(QMainWindow):
         return widget
 
     def _save_piece(self, detail: PieceDetail):
-        """儲存曲目變更"""
+        """儲存曲目變更（作曲家不存在時自動建立）"""
+        composer_text = self._piece_composer_combo.currentText().strip()
         composer_id = self._piece_composer_combo.currentData() or ""
+        if not composer_id and composer_text:
+            for c in self._composers:
+                if (c.name_short or c.name) == composer_text or c.name == composer_text:
+                    composer_id = c.id
+                    break
+            if not composer_id:
+                composer_id = self._sheets.create_composer(
+                    Composer(name=composer_text),
+                )
         updated = replace(
             detail.piece,
             title=self._piece_title_edit.text().strip(),
@@ -374,12 +412,11 @@ class CatalogWindow(QMainWindow):
         try:
             self._sheets.update_piece(updated)
             self._refresh_all()
-            self._show_piece_detail(updated.id)
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
 
     def _delete_piece(self, piece: Piece):
-        """刪除曲目及所有關聯資料"""
+        """刪除曲目的元資料（不刪除 Drive 上的檔案）"""
         result = QMessageBox.question(
             self, t("catalog.piece.delete"),
             t("catalog.piece.confirm_delete", name=piece.title),
@@ -417,7 +454,7 @@ class CatalogWindow(QMainWindow):
         for edition in detail.editions:
             is_active = edition.id == detail.piece.active_edition_id
             group = QGroupBox(
-                f"{edition.publisher}"
+                f"{edition.publisher or t('catalog.edition.title')}"
                 f"{' ' + t('catalog.edition.active') if is_active else ''}",
             )
             form = QFormLayout(group)
@@ -430,32 +467,26 @@ class CatalogWindow(QMainWindow):
             year_edit = QLineEdit(edition.year)
             year_edit.setFixedWidth(80)
             form.addRow(t("catalog.edition.year"), year_edit)
-            folder_edit = QLineEdit(edition.drive_folder_id)
-            form.addRow(t("catalog.edition.drive_folder"), folder_edit)
+            folder_label = QLabel(edition.drive_folder_id or "")
+            folder_label.setStyleSheet("color: gray;")
+            form.addRow(t("catalog.edition.drive_folder"), folder_label)
             notes_edit = QLineEdit(edition.notes)
             form.addRow(t("catalog.edition.notes"), notes_edit)
             ed_btn_row = QHBoxLayout()
             save_btn = QPushButton(t("catalog.save"))
             save_btn.clicked.connect(
                 lambda checked=False, e=edition, pw=pub_edit, lw=label_edit,
-                cw=cat_edit, yw=year_edit, fw=folder_edit, nw=notes_edit:
-                self._save_edition(e, pw, lw, cw, yw, fw, nw),
+                cw=cat_edit, yw=year_edit, nw=notes_edit:
+                self._save_edition(e, pw, lw, cw, yw, nw),
             )
             ed_btn_row.addWidget(save_btn)
-            if not is_active:
+            if not is_active and len(detail.editions) > 1:
                 active_btn = QPushButton(t("catalog.edition.set_active"))
                 active_btn.clicked.connect(
                     lambda checked=False, eid=edition.id:
                     self._set_active_edition(detail.piece, eid),
                 )
                 ed_btn_row.addWidget(active_btn)
-            del_btn = QPushButton(t("catalog.edition.delete"))
-            del_btn.setStyleSheet("background-color: #c0392b; color: white;")
-            del_btn.clicked.connect(
-                lambda checked=False, eid=edition.id:
-                self._delete_edition(eid, detail.piece.id),
-            )
-            ed_btn_row.addWidget(del_btn)
             ed_btn_row.addStretch()
             form.addRow("", ed_btn_row)
             layout.addWidget(group)
@@ -477,7 +508,7 @@ class CatalogWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
 
-    def _save_edition(self, original, pub_w, label_w, cat_w, year_w, folder_w, notes_w):
+    def _save_edition(self, original, pub_w, label_w, cat_w, year_w, notes_w):
         """儲存版本變更"""
         updated = replace(
             original,
@@ -485,7 +516,6 @@ class CatalogWindow(QMainWindow):
             edition_label=label_w.text().strip(),
             catalog_number=cat_w.text().strip(),
             year=year_w.text().strip(),
-            drive_folder_id=folder_w.text().strip(),
             notes=notes_w.text().strip(),
         )
         try:
@@ -501,23 +531,6 @@ class CatalogWindow(QMainWindow):
             self._sheets.update_piece(updated)
             self._refresh_all()
             self._show_piece_detail(piece.id)
-        except Exception as e:
-            QMessageBox.critical(self, t("catalog.error", error=""), str(e))
-
-    def _delete_edition(self, edition_id: str, piece_id: str):
-        """刪除版本"""
-        result = QMessageBox.question(
-            self, t("catalog.edition.delete"),
-            t("catalog.edition.confirm_delete"),
-        )
-        if result != QMessageBox.Yes:
-            return
-        try:
-            parts = self._sheets.list_parts(edition_id=edition_id)
-            for part in parts:
-                self._sheets.delete_part(part.id)
-            self._sheets.delete_edition(edition_id)
-            self._show_piece_detail(piece_id)
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
 
@@ -622,16 +635,27 @@ class CatalogWindow(QMainWindow):
             return widget
         edition_combo = QComboBox()
         for edition in detail.editions:
-            label = edition.publisher
+            label = edition.publisher or t("catalog.edition.title")
             if edition.id == detail.piece.active_edition_id:
                 label += f" {t('catalog.edition.active')}"
             edition_combo.addItem(label, edition.id)
         layout.addWidget(edition_combo)
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton(t("catalog.part.add_instruments"))
+        scan_btn = QPushButton(t("catalog.part.scan_folder"))
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(scan_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
         parts_container = QWidget()
         parts_layout = QVBoxLayout(parts_container)
         layout.addWidget(parts_container)
 
-        def rebuild_parts_grid(edition_id: str):
+        def get_current_edition_id():
+            return edition_combo.currentData() or ""
+
+        def rebuild_parts_grid():
+            edition_id = get_current_edition_id()
             while parts_layout.count():
                 child = parts_layout.takeAt(0)
                 if child.widget():
@@ -643,23 +667,7 @@ class CatalogWindow(QMainWindow):
                 return
             instruments = sorted(set(p.instrument_name for p in parts))
             if not instruments:
-                btn_row = QHBoxLayout()
-                add_btn = QPushButton(t("catalog.part.add_instruments"))
-                add_btn.clicked.connect(
-                    lambda: self._add_parts_from_instruments(
-                        edition_id, detail.piece.id, movements,
-                    ),
-                )
-                btn_row.addWidget(add_btn)
-                scan_btn = QPushButton(t("catalog.part.scan_folder"))
-                scan_btn.clicked.connect(
-                    lambda: self._scan_parts_from_drive(
-                        edition_id, detail.piece.id, movements,
-                    ),
-                )
-                btn_row.addWidget(scan_btn)
-                btn_row.addStretch()
-                parts_layout.addLayout(btn_row)
+                parts_layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
                 return
             table = QTableWidget()
             table.setRowCount(len(instruments))
@@ -681,7 +689,9 @@ class CatalogWindow(QMainWindow):
                     status_label = t(f"catalog.part.status.{status}")
                     item = QTableWidgetItem(status_label)
                     item.setTextAlignment(Qt.AlignCenter)
-                    color = _STATUS_COLORS.get(status, _STATUS_COLORS[PartStatus.UNKNOWN.value])
+                    color = _STATUS_COLORS.get(
+                        status, _STATUS_COLORS[PartStatus.UNKNOWN.value],
+                    )
                     item.setBackground(QBrush(color))
                     item.setForeground(QBrush(QColor("white")))
                     item.setData(Qt.UserRole, (part, inst, mov.id, edition_id))
@@ -695,11 +705,18 @@ class CatalogWindow(QMainWindow):
             table.horizontalHeader().setStretchLastSection(True)
             parts_layout.addWidget(table)
 
-        edition_combo.currentIndexChanged.connect(
-            lambda idx: rebuild_parts_grid(edition_combo.itemData(idx) or ""),
+        add_btn.clicked.connect(
+            lambda: self._add_parts_from_instruments(
+                get_current_edition_id(), detail, rebuild_parts_grid,
+            ),
         )
-        if detail.editions:
-            rebuild_parts_grid(detail.editions[0].id)
+        scan_btn.clicked.connect(
+            lambda: self._scan_parts_from_drive(
+                get_current_edition_id(), detail, rebuild_parts_grid,
+            ),
+        )
+        edition_combo.currentIndexChanged.connect(lambda: rebuild_parts_grid())
+        rebuild_parts_grid()
         return widget
 
     def _toggle_part_status(self, table, row, col, piece_id):
@@ -722,8 +739,7 @@ class CatalogWindow(QMainWindow):
         new_status = cycle[(idx + 1) % len(cycle)]
         try:
             if part and part.id:
-                updated = replace(part, status=new_status)
-                self._sheets.update_part(updated)
+                self._sheets.update_part(replace(part, status=new_status))
             else:
                 self._sheets.create_part(Part(
                     edition_id=edition_id,
@@ -736,16 +752,19 @@ class CatalogWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
 
-    def _add_parts_from_instruments(self, edition_id, piece_id, movements):
-        """從主視窗的樂器表新增分譜記錄"""
+    def _add_parts_from_instruments(self, edition_id, detail, refresh_fn):
+        """手動輸入樂器名稱以新增分譜"""
         text, ok = QInputDialog.getMultiLineText(
             self, t("catalog.part.add_instruments"),
-            t("catalog.part.instrument"),
-            "",
+            t("catalog.part.instrument"), "",
         )
         if not ok or not text.strip():
             return
-        instruments = [line.strip() for line in text.strip().split("\n") if line.strip()]
+        instruments = [l.strip() for l in text.strip().split("\n") if l.strip()]
+        movements = detail.movements
+        if not movements:
+            movements = [Movement(id="1", piece_id=detail.piece.id,
+                                  movement_number="1", sort_order="1")]
         try:
             for mov in movements:
                 for i, inst in enumerate(instruments):
@@ -756,40 +775,42 @@ class CatalogWindow(QMainWindow):
                         sort_order=str(i),
                         status=PartStatus.UNKNOWN.value,
                     ))
-            self._show_piece_detail(piece_id)
+            self._show_piece_detail(detail.piece.id)
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
 
-    def _scan_parts_from_drive(self, edition_id, piece_id, movements):
-        """從 Drive 資料夾掃描 PDF 檔案並建立分譜記錄"""
+    def _scan_parts_from_drive(self, edition_id, detail, refresh_fn):
+        """從 Drive 資料夾掃描 PDF 建立分譜"""
         if not self._drive:
             return
         edition = self._sheets.get_edition(edition_id)
         if not edition or not edition.drive_folder_id:
-            QMessageBox.information(
-                self, t("catalog.part.scan_folder"),
-                t("catalog.edition.drive_folder"),
-            )
             return
         try:
             pdfs = self._drive.list_pdfs_in_folder(edition.drive_folder_id)
             if not pdfs:
                 return
-            first_movement = movements[0] if movements else None
-            if not first_movement:
-                return
+            movements = detail.movements
+            if not movements:
+                mov_id = self._sheets.create_movement(Movement(
+                    piece_id=detail.piece.id,
+                    movement_number="1", sort_order="1",
+                ))
+                movements = [Movement(id=mov_id, piece_id=detail.piece.id,
+                                      movement_number="1", sort_order="1")]
+            first_mov = movements[0]
             for i, pdf in enumerate(pdfs):
                 name = pdf["name"].replace(".pdf", "").replace(".PDF", "")
                 self._sheets.create_part(Part(
                     edition_id=edition_id,
-                    movement_id=first_movement.id,
+                    movement_id=first_mov.id,
                     instrument_name=name,
                     sort_order=str(i),
                     status=PartStatus.AVAILABLE.value,
                     drive_file_id=pdf["id"],
                     file_name=pdf["name"],
                 ))
-            self._show_piece_detail(piece_id)
+            self._show_piece_detail(detail.piece.id)
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
 
@@ -837,7 +858,8 @@ class CatalogWindow(QMainWindow):
                 status_combo.addItem(
                     t(f"catalog.performance.status.{s}"), s,
                 )
-            idx = status_options.index(perf.status) if perf.status in status_options else 0
+            idx = (status_options.index(perf.status)
+                   if perf.status in status_options else 0)
             status_combo.setCurrentIndex(idx)
             table.setCellWidget(row, 4, status_combo)
             table.setItem(row, 5, QTableWidgetItem(perf.program_order))
@@ -901,60 +923,3 @@ class CatalogWindow(QMainWindow):
             self._show_piece_detail(piece_id)
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
-
-
-class _NewPieceDialog(QDialog):
-    """新增曲目對話框"""
-
-    def __init__(self, composers: List[Composer], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(t("catalog.toolbar.add_piece"))
-        self.setMinimumWidth(400)
-        self.piece = Piece()
-        self.composer_id = ""
-        self.composer_name = ""
-        self._composers = composers
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        self._title_edit = QLineEdit()
-        form.addRow(t("catalog.piece.name"), self._title_edit)
-        self._composer_edit = QComboBox()
-        self._composer_edit.setEditable(True)
-        self._composer_edit.addItem("")
-        for c in composers:
-            self._composer_edit.addItem(c.name_short or c.name, c.id)
-        form.addRow(t("catalog.piece.composer"), self._composer_edit)
-        self._genre_edit = QLineEdit()
-        form.addRow(t("catalog.piece.genre"), self._genre_edit)
-        self._instrumentation_edit = QLineEdit()
-        form.addRow(t("catalog.piece.instrumentation"), self._instrumentation_edit)
-        self._opus_edit = QLineEdit()
-        form.addRow(t("catalog.piece.opus"), self._opus_edit)
-        layout.addLayout(form)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
-        )
-        buttons.accepted.connect(self._on_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _on_accept(self):
-        title = self._title_edit.text().strip()
-        if not title:
-            return
-        composer_text = self._composer_edit.currentText().strip()
-        self.composer_id = self._composer_edit.currentData() or ""
-        if not self.composer_id and composer_text:
-            for c in self._composers:
-                if (c.name_short or c.name) == composer_text or c.name == composer_text:
-                    self.composer_id = c.id
-                    break
-            if not self.composer_id:
-                self.composer_name = composer_text
-        self.piece = Piece(
-            title=title,
-            genre=self._genre_edit.text().strip(),
-            instrumentation=self._instrumentation_edit.text().strip(),
-            opus=self._opus_edit.text().strip(),
-        )
-        self.accept()

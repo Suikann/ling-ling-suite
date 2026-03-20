@@ -282,6 +282,10 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.status.stats": "作曲家：{composers} 位 / 曲目：{pieces} 首",
         "catalog.tree.no_items": "（譜庫為空）",
         "catalog.tree.no_composer": "（未分類）",
+        "catalog.drive.select_hint": "從左側選擇資料夾或檔案",
+        "catalog.drive.files_in_folder": "資料夾內的檔案（{count} 個）",
+        "catalog.drive.tag_as_piece": "將此資料夾標記為曲目",
+        "catalog.drive.no_parts_yet": "尚未登錄分譜，請按「從樂器表新增」或「從 Drive 資料夾掃描」。",
         # 譜庫 - 作曲家
         "catalog.composer.title": "作曲家資訊",
         "catalog.composer.name": "全名：",
@@ -634,6 +638,10 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.status.stats": "Composers: {composers} / Pieces: {pieces}",
         "catalog.tree.no_items": "(Catalog is empty)",
         "catalog.tree.no_composer": "(Uncategorized)",
+        "catalog.drive.select_hint": "Select a folder or file from the left panel",
+        "catalog.drive.files_in_folder": "Files in folder ({count})",
+        "catalog.drive.tag_as_piece": "Tag this folder as a piece",
+        "catalog.drive.no_parts_yet": "No parts registered yet. Use \"Add from Instrument List\" or \"Scan from Drive Folder\".",
         # Catalog - Composer
         "catalog.composer.title": "Composer Info",
         "catalog.composer.name": "Full Name:",
