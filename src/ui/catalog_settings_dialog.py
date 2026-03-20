@@ -182,7 +182,7 @@ class CatalogSettingsDialog(QDialog):
             )
 
     def _browse_folder(self):
-        """瀏覽 Google Drive 選取資料夾"""
+        """以階層式樹狀結構瀏覽 Drive 資料夾"""
         creds = self._auth.get_credentials()
         if not creds:
             QMessageBox.warning(
@@ -192,22 +192,7 @@ class CatalogSettingsDialog(QDialog):
         try:
             from googleapiclient.discovery import build
             service = build("drive", "v3", credentials=creds)
-            results = service.files().list(
-                q="mimeType='application/vnd.google-apps.folder' and trashed=false",
-                fields="files(id, name)",
-                orderBy="name",
-                pageSize=200,
-            ).execute()
-            files = results.get("files", [])
-            if not files:
-                QMessageBox.information(
-                    self, t("catalog.settings.title"),
-                    t("catalog.settings.no_folders"),
-                )
-                return
-            dialog = _DrivePickerDialog(
-                files, t("catalog.settings.pick_folder"), self,
-            )
+            dialog = _DriveFolderBrowser(service, self)
             if dialog.exec() == QDialog.Accepted and dialog.selected_id:
                 self._root_folder_entry.setText(dialog.selected_id)
         except Exception as e:
@@ -217,17 +202,28 @@ class CatalogSettingsDialog(QDialog):
             )
 
     def _create_spreadsheet(self):
-        """建立新的譜庫試算表"""
+        """建立新的譜庫試算表（放入譜庫根資料夾）"""
         creds = self._auth.get_credentials()
         if not creds:
             QMessageBox.warning(
                 self, t("catalog.settings.title"), t("catalog.no_connection"),
             )
             return
+        root_folder_id = _extract_folder_id(
+            self._root_folder_entry.text(),
+        )
         try:
             from services.sheets_service import SheetsService
             service = SheetsService(creds)
             spreadsheet_id = service.create_catalog_spreadsheet()
+            if root_folder_id:
+                from googleapiclient.discovery import build
+                drive = build("drive", "v3", credentials=creds)
+                drive.files().update(
+                    fileId=spreadsheet_id,
+                    addParents=root_folder_id,
+                    removeParents="root",
+                ).execute()
             self._spreadsheet_entry.setText(spreadsheet_id)
             QMessageBox.information(
                 self, t("catalog.settings.title"),
@@ -301,6 +297,106 @@ class _DrivePickerDialog(QDialog):
         """雙擊選取"""
         self.selected_id = item.data(0, Qt.UserRole) or ""
         if self.selected_id:
+            self.accept()
+
+    def _on_accept(self):
+        """確認選取"""
+        current = self._tree.currentItem()
+        if current:
+            self.selected_id = current.data(0, Qt.UserRole) or ""
+        self.accept()
+
+
+class _DriveFolderBrowser(QDialog):
+    """階層式 Google Drive 資料夾瀏覽器"""
+
+    _FOLDER_MIME = "application/vnd.google-apps.folder"
+
+    def __init__(self, drive_service, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(t("catalog.settings.pick_folder"))
+        self.setMinimumSize(500, 450)
+        self.selected_id = ""
+        self._drive = drive_service
+        layout = QVBoxLayout(self)
+        self._path_label = QLabel("My Drive")
+        self._path_label.setStyleSheet("font-weight: bold; padding: 4px;")
+        layout.addWidget(self._path_label)
+        self._tree = QTreeWidget()
+        self._tree.setHeaderHidden(True)
+        self._tree.itemExpanded.connect(self._on_expand)
+        self._tree.itemDoubleClicked.connect(self._on_double_click)
+        self._tree.currentItemChanged.connect(self._on_select)
+        layout.addWidget(self._tree)
+        self._selected_label = QLabel("")
+        self._selected_label.setStyleSheet("color: #7c6ddf; padding: 4px;")
+        layout.addWidget(self._selected_label)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._load_children(None, "root")
+
+    def _list_subfolders(self, parent_id: str):
+        """列出指定資料夾的子資料夾"""
+        query = (
+            f"'{parent_id}' in parents"
+            f" and mimeType='{self._FOLDER_MIME}'"
+            " and trashed=false"
+        )
+        results = self._drive.files().list(
+            q=query,
+            fields="files(id, name)",
+            orderBy="name",
+            pageSize=200,
+        ).execute()
+        return results.get("files", [])
+
+    def _load_children(self, parent_node, folder_id: str):
+        """載入子資料夾並加入樹狀結構"""
+        try:
+            folders = self._list_subfolders(folder_id)
+        except Exception:
+            return
+        for folder in folders:
+            node = QTreeWidgetItem([folder["name"]])
+            node.setData(0, Qt.UserRole, folder["id"])
+            node.setData(0, Qt.UserRole + 1, False)
+            placeholder = QTreeWidgetItem([t("catalog.loading")])
+            node.addChild(placeholder)
+            if parent_node is None:
+                self._tree.addTopLevelItem(node)
+            else:
+                parent_node.addChild(node)
+
+    def _on_expand(self, item):
+        """展開資料夾時載入子資料夾"""
+        already_loaded = item.data(0, Qt.UserRole + 1)
+        if already_loaded:
+            return
+        item.setData(0, Qt.UserRole + 1, True)
+        item.takeChildren()
+        folder_id = item.data(0, Qt.UserRole) or ""
+        if folder_id:
+            self._load_children(item, folder_id)
+        if item.childCount() == 0:
+            empty = QTreeWidgetItem([t("catalog.settings.no_folders")])
+            empty.setFlags(Qt.NoItemFlags)
+            item.addChild(empty)
+
+    def _on_select(self, current, previous):
+        """選取變更時更新顯示"""
+        if current and current.data(0, Qt.UserRole):
+            name = current.text(0)
+            self._selected_label.setText(name)
+
+    def _on_double_click(self, item, column):
+        """雙擊選取資料夾"""
+        folder_id = item.data(0, Qt.UserRole) or ""
+        if folder_id:
+            self.selected_id = folder_id
             self.accept()
 
     def _on_accept(self):
