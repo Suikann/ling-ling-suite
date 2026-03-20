@@ -22,6 +22,8 @@ _DEFAULTS: Dict[str, Any] = {
     "language": "zh_TW",
     "appearance_mode": "Dark",
     "recent_projects": [],
+    "catalog_spreadsheet_id": "",
+    "catalog_root_folder_id": "",
 }
 
 MAX_RECENT = 8
