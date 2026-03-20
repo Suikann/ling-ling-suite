@@ -14,8 +14,8 @@ from PySide6.QtWidgets import (
     QTextEdit, QDialog, QDialogButtonBox, QInputDialog,
     QListWidget, QListWidgetItem,
 )
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QBrush
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject
+from PySide6.QtGui import QColor, QBrush, QCursor
 from core.locale import t
 from core.catalog_constants import PartStatus, PerformanceStatus
 from core.catalog_models import (
@@ -36,6 +36,23 @@ _STATUS_COLORS = {
 
 _FOLDER_ICON = "\U0001f4c1 "
 _PDF_ICON = "\U0001f4c4 "
+
+
+class _Worker(QThread):
+    """在背景執行緒執行工作並回傳結果"""
+    finished = Signal(object)
+    error = Signal(str)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+
+    def run(self):
+        try:
+            result = self._fn()
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class CatalogWindow(QMainWindow):
@@ -59,8 +76,35 @@ class CatalogWindow(QMainWindow):
         self._composers: List[Composer] = []
         self.setWindowTitle(t("catalog.title"))
         self.resize(1200, 750)
+        self._workers = []
         self._build_ui()
         QTimer.singleShot(100, self._init_services)
+
+    def _run_async(self, fn, on_done, on_error=None):
+        """在背景執行緒執行 fn，完成後在主執行緒呼叫 on_done"""
+        self.setCursor(QCursor(Qt.WaitCursor))
+        self._status_bar.showMessage(t("catalog.loading"))
+        worker = _Worker(fn, self)
+        worker.finished.connect(lambda result: self._on_worker_done(worker, on_done, result))
+        worker.error.connect(lambda msg: self._on_worker_error(worker, on_error, msg))
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_worker_done(self, worker, callback, result):
+        """背景工作完成"""
+        self.unsetCursor()
+        self._status_bar.clearMessage()
+        self._workers = [w for w in self._workers if w is not worker]
+        callback(result)
+
+    def _on_worker_error(self, worker, callback, msg):
+        """背景工作失敗"""
+        self.unsetCursor()
+        self._workers = [w for w in self._workers if w is not worker]
+        if callback:
+            callback(msg)
+        else:
+            self._status_bar.showMessage(t("catalog.error", error=msg))
 
     def _build_ui(self):
         self._toolbar = QToolBar()
@@ -125,39 +169,41 @@ class CatalogWindow(QMainWindow):
         if not root_id:
             self._status_bar.showMessage(t("catalog.no_connection"))
             return
-        try:
-            self._pieces = self._sheets.list_pieces()
-            self._composers = self._sheets.list_composers()
-            self._piece_by_folder = {
-                p.active_edition_id: p for p in self._pieces
-                if p.active_edition_id
-            }
-            for p in self._pieces:
+
+        def load():
+            pieces = self._sheets.list_pieces()
+            composers = self._sheets.list_composers()
+            folder_map = {}
+            for p in pieces:
+                if p.active_edition_id:
+                    folder_map[p.active_edition_id] = p
                 editions = self._sheets.list_editions(p.id)
                 for e in editions:
                     if e.drive_folder_id:
-                        self._piece_by_folder[e.drive_folder_id] = p
+                        folder_map[e.drive_folder_id] = p
+            folders = self._drive.list_subfolders(root_id)
+            pdfs = self._drive.list_pdfs_in_folder(root_id)
+            return pieces, composers, folder_map, folders, pdfs
+
+        def on_done(result):
+            pieces, composers, folder_map, folders, pdfs = result
+            self._pieces = pieces
+            self._composers = composers
+            self._piece_by_folder = folder_map
             self._tree.clear()
-            self._load_drive_children(None, root_id)
+            self._populate_tree(None, folders, pdfs)
             self._status_bar.showMessage(
                 t("catalog.status.stats",
                   composers=len(self._composers),
                   pieces=len(self._pieces)),
             )
-        except Exception as e:
-            self._status_bar.showMessage(t("catalog.error", error=str(e)))
+
+        self._run_async(load, on_done)
 
     # --- Drive 樹狀結構 ---
 
-    def _load_drive_children(self, parent_node, folder_id: str):
-        """載入 Drive 資料夾的子項目"""
-        if not self._drive:
-            return
-        try:
-            folders = self._drive.list_subfolders(folder_id)
-            pdfs = self._drive.list_pdfs_in_folder(folder_id)
-        except Exception:
-            return
+    def _populate_tree(self, parent_node, folders, pdfs):
+        """將資料夾與 PDF 清單填入樹狀結構（在主執行緒呼叫）"""
         for folder in folders:
             has_meta = folder["id"] in self._piece_by_folder
             label = folder["name"]
@@ -181,15 +227,27 @@ class CatalogWindow(QMainWindow):
                 parent_node.addChild(node)
 
     def _on_expand(self, item):
-        """展開資料夾時載入子項目"""
+        """展開資料夾時在背景載入子項目"""
         already_loaded = item.data(0, Qt.UserRole + 1)
         if already_loaded:
             return
         item.setData(0, Qt.UserRole + 1, True)
-        item.takeChildren()
         data = item.data(0, Qt.UserRole)
-        if data and data[0] == "folder":
-            self._load_drive_children(item, data[1])
+        if not data or data[0] != "folder" or not self._drive:
+            return
+        folder_id = data[1]
+
+        def load():
+            folders = self._drive.list_subfolders(folder_id)
+            pdfs = self._drive.list_pdfs_in_folder(folder_id)
+            return folders, pdfs
+
+        def on_done(result):
+            item.takeChildren()
+            folders, pdfs = result
+            self._populate_tree(item, folders, pdfs)
+
+        self._run_async(load, on_done)
 
     def _on_search(self, text: str):
         """搜尋時篩選樹狀結構"""
@@ -663,192 +721,81 @@ class CatalogWindow(QMainWindow):
     # --- 分譜狀態頁籤 ---
 
     def _build_parts_tab(self, detail: PieceDetail) -> QWidget:
-        """建立分譜狀態矩陣頁籤"""
+        """建立分譜狀態頁籤：直接列出 Drive 資料夾內的檔案與狀態"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         if not detail.editions:
             layout.addWidget(QLabel(t("catalog.tree.no_items")))
             return widget
-        edition_combo = QComboBox()
-        for edition in detail.editions:
-            label = edition.publisher or t("catalog.edition.title")
-            if edition.id == detail.piece.active_edition_id:
-                label += f" {t('catalog.edition.active')}"
-            edition_combo.addItem(label, edition.id)
-        layout.addWidget(edition_combo)
-        btn_row = QHBoxLayout()
-        add_btn = QPushButton(t("catalog.part.add_instruments"))
-        scan_btn = QPushButton(t("catalog.part.scan_folder"))
-        btn_row.addWidget(add_btn)
-        btn_row.addWidget(scan_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-        parts_container = QWidget()
-        parts_layout = QVBoxLayout(parts_container)
-        layout.addWidget(parts_container)
-
-        def get_current_edition_id():
-            return edition_combo.currentData() or ""
-
-        def rebuild_parts_grid():
-            edition_id = get_current_edition_id()
-            while parts_layout.count():
-                child = parts_layout.takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
-            parts = [p for p in detail.parts if p.edition_id == edition_id]
-            movements = sorted(detail.movements, key=lambda m: m.sort_order)
-            if not movements:
-                parts_layout.addWidget(QLabel(t("catalog.tree.no_items")))
-                return
-            instruments = sorted(set(p.instrument_name for p in parts))
-            if not instruments:
-                parts_layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
-                return
-            table = QTableWidget()
-            table.setRowCount(len(instruments))
-            table.setColumnCount(len(movements))
-            headers = [
-                f"{m.movement_number}. {m.name}" if m.name
-                else m.movement_number
-                for m in movements
-            ]
-            table.setHorizontalHeaderLabels(headers)
-            table.setVerticalHeaderLabels(instruments)
-            part_map = {}
-            for p in parts:
-                part_map[(p.instrument_name, p.movement_id)] = p
-            for row, inst in enumerate(instruments):
-                for col, mov in enumerate(movements):
-                    part = part_map.get((inst, mov.id))
-                    status = part.status if part else PartStatus.UNKNOWN.value
-                    status_label = t(f"catalog.part.status.{status}")
-                    item = QTableWidgetItem(status_label)
-                    item.setTextAlignment(Qt.AlignCenter)
-                    color = _STATUS_COLORS.get(
-                        status, _STATUS_COLORS[PartStatus.UNKNOWN.value],
-                    )
-                    item.setBackground(QBrush(color))
-                    item.setForeground(QBrush(QColor("white")))
-                    item.setData(Qt.UserRole, (part, inst, mov.id, edition_id))
-                    table.setItem(row, col, item)
-            table.cellDoubleClicked.connect(
-                lambda r, c, tbl=table: self._toggle_part_status(
-                    tbl, r, c, detail.piece.id,
-                ),
+        active_edition = None
+        for e in detail.editions:
+            if e.id == detail.piece.active_edition_id:
+                active_edition = e
+                break
+        if not active_edition:
+            active_edition = detail.editions[0]
+        if not active_edition.drive_folder_id or not self._drive:
+            layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
+            return widget
+        try:
+            pdfs = self._drive.list_pdfs_in_folder(active_edition.drive_folder_id)
+        except Exception:
+            pdfs = []
+        if not pdfs:
+            layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
+            return widget
+        part_map = {p.drive_file_id: p for p in detail.parts if p.drive_file_id}
+        name_map = {p.file_name: p for p in detail.parts if p.file_name}
+        table = QTableWidget()
+        table.setRowCount(len(pdfs))
+        table.setColumnCount(2)
+        table.setHorizontalHeaderLabels([
+            t("catalog.part.file"), t("catalog.part.status"),
+        ])
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setColumnWidth(0, 350)
+        status_options = [s.value for s in PartStatus]
+        for row, pdf in enumerate(pdfs):
+            name_item = QTableWidgetItem(pdf["name"])
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row, 0, name_item)
+            existing = part_map.get(pdf["id"]) or name_map.get(pdf["name"])
+            current_status = existing.status if existing else PartStatus.UNKNOWN.value
+            combo = QComboBox()
+            for s in status_options:
+                combo.addItem(t(f"catalog.part.status.{s}"), s)
+            idx = status_options.index(current_status) if current_status in status_options else 3
+            combo.setCurrentIndex(idx)
+            color = _STATUS_COLORS.get(current_status, _STATUS_COLORS[PartStatus.UNKNOWN.value])
+            combo.setStyleSheet(f"background-color: {color.name()};")
+            combo.currentIndexChanged.connect(
+                lambda index, r=row, c=combo, pdf_info=pdf, ed=active_edition, det=detail, ex=existing:
+                self._on_part_status_changed(c, pdf_info, ed, det, ex),
             )
-            table.resizeColumnsToContents()
-            table.horizontalHeader().setStretchLastSection(True)
-            parts_layout.addWidget(table)
-
-        add_btn.clicked.connect(
-            lambda: self._add_parts_from_instruments(
-                get_current_edition_id(), detail, rebuild_parts_grid,
-            ),
-        )
-        scan_btn.clicked.connect(
-            lambda: self._scan_parts_from_drive(
-                get_current_edition_id(), detail, rebuild_parts_grid,
-            ),
-        )
-        edition_combo.currentIndexChanged.connect(lambda: rebuild_parts_grid())
-        rebuild_parts_grid()
+            table.setCellWidget(row, 1, combo)
+        layout.addWidget(table, stretch=1)
         return widget
 
-    def _toggle_part_status(self, table, row, col, piece_id):
-        """雙擊切換分譜狀態"""
-        item = table.item(row, col)
-        if not item:
-            return
-        data = item.data(Qt.UserRole)
-        if not data:
-            return
-        part, inst, movement_id, edition_id = data
-        cycle = [
-            PartStatus.AVAILABLE.value,
-            PartStatus.MISSING.value,
-            PartStatus.DAMAGED.value,
-            PartStatus.UNKNOWN.value,
-        ]
-        current = part.status if part else PartStatus.UNKNOWN.value
-        idx = cycle.index(current) if current in cycle else 0
-        new_status = cycle[(idx + 1) % len(cycle)]
+    def _on_part_status_changed(self, combo, pdf_info, edition, detail, existing):
+        """分譜狀態下拉選單變更"""
+        new_status = combo.currentData()
+        color = _STATUS_COLORS.get(new_status, _STATUS_COLORS[PartStatus.UNKNOWN.value])
+        combo.setStyleSheet(f"background-color: {color.name()};")
         try:
-            if part and part.id:
-                self._sheets.update_part(replace(part, status=new_status))
+            if existing and existing.id:
+                self._sheets.update_part(replace(existing, status=new_status))
             else:
                 self._sheets.create_part(Part(
-                    edition_id=edition_id,
-                    movement_id=movement_id,
-                    instrument_name=inst,
-                    sort_order=str(row),
+                    edition_id=edition.id,
+                    movement_id="",
+                    instrument_name=pdf_info["name"].replace(".pdf", "").replace(".PDF", ""),
+                    sort_order="0",
                     status=new_status,
+                    drive_file_id=pdf_info["id"],
+                    file_name=pdf_info["name"],
                 ))
-            self._show_piece_detail(piece_id)
         except Exception as e:
-            QMessageBox.critical(self, t("catalog.error", error=""), str(e))
-
-    def _add_parts_from_instruments(self, edition_id, detail, refresh_fn):
-        """手動輸入樂器名稱以新增分譜"""
-        text, ok = QInputDialog.getMultiLineText(
-            self, t("catalog.part.add_instruments"),
-            t("catalog.part.instrument"), "",
-        )
-        if not ok or not text.strip():
-            return
-        instruments = [l.strip() for l in text.strip().split("\n") if l.strip()]
-        movements = detail.movements
-        if not movements:
-            movements = [Movement(id="1", piece_id=detail.piece.id,
-                                  movement_number="1", sort_order="1")]
-        try:
-            for mov in movements:
-                for i, inst in enumerate(instruments):
-                    self._sheets.create_part(Part(
-                        edition_id=edition_id,
-                        movement_id=mov.id,
-                        instrument_name=inst,
-                        sort_order=str(i),
-                        status=PartStatus.UNKNOWN.value,
-                    ))
-            self._show_piece_detail(detail.piece.id)
-        except Exception as e:
-            QMessageBox.critical(self, t("catalog.error", error=""), str(e))
-
-    def _scan_parts_from_drive(self, edition_id, detail, refresh_fn):
-        """從 Drive 資料夾掃描 PDF 建立分譜"""
-        if not self._drive:
-            return
-        edition = self._sheets.get_edition(edition_id)
-        if not edition or not edition.drive_folder_id:
-            return
-        try:
-            pdfs = self._drive.list_pdfs_in_folder(edition.drive_folder_id)
-            if not pdfs:
-                return
-            movements = detail.movements
-            if not movements:
-                mov_id = self._sheets.create_movement(Movement(
-                    piece_id=detail.piece.id,
-                    movement_number="1", sort_order="1",
-                ))
-                movements = [Movement(id=mov_id, piece_id=detail.piece.id,
-                                      movement_number="1", sort_order="1")]
-            first_mov = movements[0]
-            for i, pdf in enumerate(pdfs):
-                name = pdf["name"].replace(".pdf", "").replace(".PDF", "")
-                self._sheets.create_part(Part(
-                    edition_id=edition_id,
-                    movement_id=first_mov.id,
-                    instrument_name=name,
-                    sort_order=str(i),
-                    status=PartStatus.AVAILABLE.value,
-                    drive_file_id=pdf["id"],
-                    file_name=pdf["name"],
-                ))
-            self._show_piece_detail(detail.piece.id)
-        except Exception as e:
-            QMessageBox.critical(self, t("catalog.error", error=""), str(e))
+            self._status_bar.showMessage(t("catalog.error", error=str(e)))
 
     # --- 演出紀錄頁籤 ---
 
