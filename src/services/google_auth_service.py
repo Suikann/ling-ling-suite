@@ -24,10 +24,15 @@ from core.constants import APPDATA_DIR
 
 
 def _get_app_dir() -> str:
-    """取得應用程式目錄（支援 PyInstaller 打包環境）"""
+    """取得應用程式根目錄（支援 PyInstaller 打包環境）
+
+    開發環境：回傳 src/ 的上層（專案根目錄）
+    打包環境：回傳 exe 所在目錄
+    """
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.dirname(src_dir)
 
 
 class GoogleAuthService:
