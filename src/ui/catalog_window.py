@@ -245,6 +245,7 @@ class CatalogWindow(QMainWindow):
         title = QLabel(folder_name)
         title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 4px;")
         self._detail_layout.addWidget(title)
+        pdfs = []
         if self._drive:
             try:
                 pdfs = self._drive.list_pdfs_in_folder(folder_id)
@@ -260,11 +261,19 @@ class CatalogWindow(QMainWindow):
                     self._detail_layout.addWidget(files_group)
             except Exception:
                 pass
+        btn_row = QHBoxLayout()
         tag_btn = QPushButton(t("catalog.drive.tag_as_piece"))
         tag_btn.clicked.connect(
             lambda: self._tag_folder_as_piece(folder_id, folder_name),
         )
-        self._detail_layout.addWidget(tag_btn)
+        btn_row.addWidget(tag_btn)
+        collect_btn = QPushButton(t("catalog.drive.collect_files"))
+        collect_btn.clicked.connect(
+            lambda: self._collect_files_to_folder(folder_id, folder_name),
+        )
+        btn_row.addWidget(collect_btn)
+        btn_row.addStretch()
+        self._detail_layout.addLayout(btn_row)
         self._detail_layout.addStretch()
 
     def _show_file_detail(self, file_id: str, file_name: str):
@@ -300,6 +309,30 @@ class CatalogWindow(QMainWindow):
             self._show_piece_detail(piece_id)
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
+
+    def _collect_files_to_folder(self, target_folder_id: str, folder_name: str):
+        """從 Drive 其他位置收集檔案到此資料夾"""
+        if not self._drive:
+            return
+        root_id = self._prefs.get("catalog_root_folder_id") or ""
+        if not root_id:
+            return
+        dialog = _DriveFilePicker(self._drive, root_id, self)
+        if dialog.exec() != QDialog.Accepted or not dialog.selected_files:
+            return
+        moved = 0
+        errors = []
+        for file_info in dialog.selected_files:
+            ok = self._drive.move_file(file_info["id"], target_folder_id)
+            if ok:
+                moved += 1
+            else:
+                errors.append(file_info["name"])
+        msg = t("catalog.drive.collect_result", moved=moved, total=len(dialog.selected_files))
+        if errors:
+            msg += "\n" + t("catalog.drive.collect_errors", files=", ".join(errors))
+        QMessageBox.information(self, t("catalog.drive.collect_files"), msg)
+        self._show_folder_detail(target_folder_id, folder_name)
 
     # --- 曲目詳細（含元資料頁籤） ---
 
@@ -923,3 +956,98 @@ class CatalogWindow(QMainWindow):
             self._show_piece_detail(piece_id)
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
+
+
+class _DriveFilePicker(QDialog):
+    """從 Drive 資料夾中勾選多個檔案的對話框"""
+
+    def __init__(self, drive_service: DriveService, root_folder_id: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(t("catalog.drive.collect_files"))
+        self.setMinimumSize(550, 500)
+        self.selected_files = []
+        self._drive = drive_service
+        self._root_id = root_folder_id
+        layout = QVBoxLayout(self)
+        hint = QLabel(t("catalog.drive.collect_hint"))
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self._tree = QTreeWidget()
+        self._tree.setHeaderHidden(True)
+        self._tree.itemExpanded.connect(self._on_expand)
+        layout.addWidget(self._tree)
+        self._selected_label = QLabel(
+            t("catalog.drive.collect_selected", count=0),
+        )
+        layout.addWidget(self._selected_label)
+        self._tree.itemChanged.connect(self._update_count)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._load_children(None, self._root_id)
+
+    def _load_children(self, parent_node, folder_id: str):
+        """載入資料夾內容（資料夾 + PDF）"""
+        try:
+            folders = self._drive.list_subfolders(folder_id)
+            pdfs = self._drive.list_pdfs_in_folder(folder_id)
+        except Exception:
+            return
+        for folder in folders:
+            node = QTreeWidgetItem([folder["name"]])
+            node.setData(0, Qt.UserRole, ("folder", folder["id"], folder["name"]))
+            node.setData(0, Qt.UserRole + 1, False)
+            placeholder = QTreeWidgetItem([t("catalog.loading")])
+            node.addChild(placeholder)
+            if parent_node is None:
+                self._tree.addTopLevelItem(node)
+            else:
+                parent_node.addChild(node)
+        for pdf in pdfs:
+            node = QTreeWidgetItem([pdf["name"]])
+            node.setData(0, Qt.UserRole, ("file", pdf["id"], pdf["name"]))
+            node.setCheckState(0, Qt.Unchecked)
+            if parent_node is None:
+                self._tree.addTopLevelItem(node)
+            else:
+                parent_node.addChild(node)
+
+    def _on_expand(self, item):
+        """展開資料夾時載入"""
+        already_loaded = item.data(0, Qt.UserRole + 1)
+        if already_loaded:
+            return
+        item.setData(0, Qt.UserRole + 1, True)
+        item.takeChildren()
+        data = item.data(0, Qt.UserRole)
+        if data and data[0] == "folder":
+            self._load_children(item, data[1])
+
+    def _update_count(self):
+        """更新已勾選數量顯示"""
+        count = len(self._collect_checked())
+        self._selected_label.setText(
+            t("catalog.drive.collect_selected", count=count),
+        )
+
+    def _collect_checked(self, parent=None) -> list:
+        """遞迴收集所有勾選的檔案"""
+        results = []
+        if parent is None:
+            for i in range(self._tree.topLevelItemCount()):
+                results.extend(self._collect_checked(self._tree.topLevelItem(i)))
+        else:
+            data = parent.data(0, Qt.UserRole)
+            if data and data[0] == "file" and parent.checkState(0) == Qt.Checked:
+                results.append({"id": data[1], "name": data[2]})
+            for i in range(parent.childCount()):
+                results.extend(self._collect_checked(parent.child(i)))
+        return results
+
+    def _on_accept(self):
+        """確認選取"""
+        self.selected_files = self._collect_checked()
+        self.accept()

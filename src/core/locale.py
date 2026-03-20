@@ -286,6 +286,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.drive.files_in_folder": "資料夾內的檔案（{count} 個）",
         "catalog.drive.tag_as_piece": "將此資料夾標記為曲目",
         "catalog.drive.no_parts_yet": "尚未登錄分譜，請按「從樂器表新增」或「從 Drive 資料夾掃描」。",
+        "catalog.drive.collect_files": "收集檔案到此資料夾",
+        "catalog.drive.collect_hint": "勾選要移動到目標資料夾的檔案，展開資料夾以查看內容。",
+        "catalog.drive.collect_selected": "已選取 {count} 個檔案",
+        "catalog.drive.collect_result": "已移動 {moved}/{total} 個檔案。",
+        "catalog.drive.collect_errors": "以下檔案移動失敗：{files}",
         # 譜庫 - 作曲家
         "catalog.composer.title": "作曲家資訊",
         "catalog.composer.name": "全名：",
@@ -642,6 +647,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.drive.files_in_folder": "Files in folder ({count})",
         "catalog.drive.tag_as_piece": "Tag this folder as a piece",
         "catalog.drive.no_parts_yet": "No parts registered yet. Use \"Add from Instrument List\" or \"Scan from Drive Folder\".",
+        "catalog.drive.collect_files": "Collect Files to This Folder",
+        "catalog.drive.collect_hint": "Check the files to move into the target folder. Expand folders to see their contents.",
+        "catalog.drive.collect_selected": "{count} file(s) selected",
+        "catalog.drive.collect_result": "Moved {moved}/{total} file(s).",
+        "catalog.drive.collect_errors": "Failed to move: {files}",
         # Catalog - Composer
         "catalog.composer.title": "Composer Info",
         "catalog.composer.name": "Full Name:",
