@@ -951,7 +951,7 @@ class CatalogWindow(QMainWindow):
 
 
 class _DriveFilePicker(QDialog):
-    """從 Drive 資料夾中勾選多個檔案的對話框"""
+    """從 Drive 中勾選資料夾或檔案的對話框"""
 
     def __init__(self, drive_service: DriveService, root_folder_id: str, parent=None):
         super().__init__(parent)
@@ -982,7 +982,7 @@ class _DriveFilePicker(QDialog):
         self._load_children(None, self._root_id)
 
     def _load_children(self, parent_node, folder_id: str):
-        """載入資料夾內容（資料夾 + PDF）"""
+        """載入資料夾內容（資料夾與 PDF 皆可勾選）"""
         try:
             folders = self._drive.list_subfolders(folder_id)
             pdfs = self._drive.list_pdfs_in_folder(folder_id)
@@ -992,6 +992,7 @@ class _DriveFilePicker(QDialog):
             node = QTreeWidgetItem([folder["name"]])
             node.setData(0, Qt.UserRole, ("folder", folder["id"], folder["name"]))
             node.setData(0, Qt.UserRole + 1, False)
+            node.setCheckState(0, Qt.Unchecked)
             placeholder = QTreeWidgetItem([t("catalog.loading")])
             node.addChild(placeholder)
             if parent_node is None:
@@ -1026,15 +1027,18 @@ class _DriveFilePicker(QDialog):
         )
 
     def _collect_checked(self, parent=None) -> list:
-        """遞迴收集所有勾選的檔案"""
+        """遞迴收集所有勾選的資料夾與檔案（勾選資料夾時不重複收集其子項）"""
         results = []
         if parent is None:
             for i in range(self._tree.topLevelItemCount()):
                 results.extend(self._collect_checked(self._tree.topLevelItem(i)))
         else:
             data = parent.data(0, Qt.UserRole)
-            if data and data[0] == "file" and parent.checkState(0) == Qt.Checked:
-                results.append({"id": data[1], "name": data[2]})
+            if data and parent.checkState(0) == Qt.Checked:
+                results.append({
+                    "id": data[1], "name": data[2], "type": data[0],
+                })
+                return results
             for i in range(parent.childCount()):
                 results.extend(self._collect_checked(parent.child(i)))
         return results
