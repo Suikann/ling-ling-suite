@@ -28,6 +28,8 @@ class Group:
     piece_name: str = ""
     movement_number: str = ""
     movement_name: str = ""
+    composer: str = ""
+    genre: str = ""
     score_file: Optional["FileInfo"] = None
     score_label: str = ""
     use_small_template: bool = False

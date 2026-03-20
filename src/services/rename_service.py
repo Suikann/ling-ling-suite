@@ -58,6 +58,10 @@ class RenameService:
                     "MovementNum": group.movement_number,
                     "樂章名稱": group.movement_name,
                     "MovementName": group.movement_name,
+                    "作曲家": group.composer,
+                    "Composer": group.composer,
+                    "曲種": group.genre,
+                    "Genre": group.genre,
                 }
                 score_name = _sanitize_name(substitute_template(template, score_vars))
                 base_dir = (

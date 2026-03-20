@@ -108,6 +108,8 @@ class ProjectService:
             "piece_name": group.piece_name,
             "movement_number": group.movement_number,
             "movement_name": group.movement_name,
+            "composer": group.composer,
+            "genre": group.genre,
             "use_small_template": group.use_small_template,
             "small_template": group.small_template,
         }
@@ -139,6 +141,8 @@ class ProjectService:
             piece_name=data.get("piece_name", ""),
             movement_number=data.get("movement_number", ""),
             movement_name=data.get("movement_name", ""),
+            composer=data.get("composer", ""),
+            genre=data.get("genre", ""),
             use_small_template=data.get("use_small_template", False),
             small_template=data.get("small_template", ""),
         )

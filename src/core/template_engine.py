@@ -69,6 +69,8 @@ def build_variables_for_file(
         "曲名": group.piece_name,
         "樂章編號": group.movement_number,
         "樂章名稱": group.movement_name,
+        "作曲家": group.composer,
+        "曲種": group.genre,
     }
     en_mapping = {tv.name: tv.name_en for tv in TEMPLATE_VARIABLES}
     for zh_name, val in list(values.items()):

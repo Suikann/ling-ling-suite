@@ -37,6 +37,8 @@ TEMPLATE_VARIABLES: List[TemplateVariable] = [
     TemplateVariable("曲名", "PieceName", "群組層級", "從檔名共同部分自動偵測，使用者可覆寫"),
     TemplateVariable("樂章編號", "MovementNum", "群組層級", "使用者輸入"),
     TemplateVariable("樂章名稱", "MovementName", "群組層級", "使用者輸入"),
+    TemplateVariable("作曲家", "Composer", "群組層級", "使用者輸入"),
+    TemplateVariable("曲種", "Genre", "群組層級", "使用者輸入，例如交響曲、協奏曲"),
 ]
 
 VARIABLE_NAMES: List[str] = [v.name for v in TEMPLATE_VARIABLES]
