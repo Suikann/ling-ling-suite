@@ -540,18 +540,22 @@ class MainWindow(QMainWindow):
         return self._auth_service
 
     def _open_catalog(self):
-        """開啟譜庫瀏覽器"""
-        from ui.catalog_window import CatalogWindow
+        """開啟譜庫瀏覽器，尚未設定時先引導設定"""
         auth = self._get_auth_service()
+        spreadsheet_id = self._preferences.get("catalog_spreadsheet_id")
+        if not auth.is_authenticated or not spreadsheet_id:
+            if not self._open_catalog_settings():
+                return
+        from ui.catalog_window import CatalogWindow
         self._catalog_window = CatalogWindow(auth, self._preferences)
         self._catalog_window.show()
 
-    def _open_catalog_settings(self):
-        """開啟譜庫設定"""
+    def _open_catalog_settings(self) -> bool:
+        """開啟譜庫設定，回傳是否設定完成"""
         from ui.catalog_settings_dialog import CatalogSettingsDialog
         auth = self._get_auth_service()
         dialog = CatalogSettingsDialog(auth, self._preferences, self)
-        dialog.exec()
+        return dialog.exec() == CatalogSettingsDialog.Accepted
 
     # --- 輔助 ---
 
