@@ -37,7 +37,7 @@ PERFORMANCE_STATUS_LABELS = {
     PerformanceStatus.CANCELLED: ("已取消", "Cancelled"),
 }
 
-CATALOG_SPREADSHEET_NAME = "泠靈譜庫目錄"
+DEFAULT_CATALOG_NAME = "譜庫目錄"
 
 SHEET_COMPOSERS = "作曲家"
 SHEET_PIECES = "曲目"

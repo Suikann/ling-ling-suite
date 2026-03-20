@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from core.locale import t
-from core.catalog_constants import CATALOG_SPREADSHEET_NAME
 from services.google_auth_service import GoogleAuthService
 from services.preferences_service import PreferencesService
 
@@ -146,7 +145,7 @@ class CatalogSettingsDialog(QDialog):
             )
 
     def _check_catalog_in_folder(self):
-        """在選定的資料夾中尋找現有的譜庫目錄試算表"""
+        """在選定的資料夾中尋找試算表，找到則讓使用者選，沒有則提議建立"""
         creds = self._auth.get_credentials()
         if not creds:
             return
@@ -163,25 +162,15 @@ class CatalogSettingsDialog(QDialog):
                     " and trashed=false"
                 ),
                 fields="files(id, name)",
+                orderBy="name",
                 pageSize=50,
             ).execute()
-            files = results.get("files", [])
-            catalog = None
-            for f in files:
-                if f["name"] == CATALOG_SPREADSHEET_NAME:
-                    catalog = f
-                    break
-            if catalog:
-                self._prefs.set("catalog_spreadsheet_id", catalog["id"])
-                self._folder_status.setText(
-                    t("catalog.settings.catalog_found", name=catalog["name"]),
-                )
-                self._folder_status.setStyleSheet("color: #2ecc71;")
+            sheets = results.get("files", [])
+            if len(sheets) == 1:
+                self._use_catalog(sheets[0])
+            elif len(sheets) > 1:
+                self._pick_catalog(sheets)
             else:
-                self._folder_status.setText(
-                    t("catalog.settings.catalog_not_found"),
-                )
-                self._folder_status.setStyleSheet("color: #f39c12;")
                 self._offer_create_catalog(folder_id)
         except Exception as e:
             self._folder_status.setText(
@@ -189,13 +178,43 @@ class CatalogSettingsDialog(QDialog):
             )
             self._folder_status.setStyleSheet("color: #e74c3c;")
 
-    def _offer_create_catalog(self, folder_id: str):
-        """詢問是否在此資料夾建立譜庫目錄"""
-        result = QMessageBox.question(
-            self, t("catalog.settings.title"),
-            t("catalog.settings.create_confirm"),
+    def _use_catalog(self, sheet_file: dict):
+        """使用找到的試算表作為譜庫目錄"""
+        self._prefs.set("catalog_spreadsheet_id", sheet_file["id"])
+        self._folder_status.setText(
+            t("catalog.settings.catalog_found", name=sheet_file["name"]),
         )
-        if result != QMessageBox.Yes:
+        self._folder_status.setStyleSheet("color: #2ecc71;")
+
+    def _pick_catalog(self, sheets: list):
+        """資料夾內有多個試算表時，讓使用者選擇"""
+        from PySide6.QtWidgets import QInputDialog
+        names = [s["name"] for s in sheets]
+        chosen, ok = QInputDialog.getItem(
+            self, t("catalog.settings.title"),
+            t("catalog.settings.pick_catalog"),
+            names, 0, False,
+        )
+        if not ok:
+            return
+        for s in sheets:
+            if s["name"] == chosen:
+                self._use_catalog(s)
+                return
+
+    def _offer_create_catalog(self, folder_id: str):
+        """資料夾內沒有試算表時，讓使用者命名並建立"""
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(
+            self, t("catalog.settings.title"),
+            t("catalog.settings.create_prompt"),
+            text=t("catalog.settings.default_catalog_name"),
+        )
+        if not ok or not name.strip():
+            self._folder_status.setText(
+                t("catalog.settings.catalog_not_found"),
+            )
+            self._folder_status.setStyleSheet("color: #f39c12;")
             return
         creds = self._auth.get_credentials()
         if not creds:
@@ -204,7 +223,7 @@ class CatalogSettingsDialog(QDialog):
             from services.sheets_service import SheetsService
             from googleapiclient.discovery import build
             service = SheetsService(creds)
-            spreadsheet_id = service.create_catalog_spreadsheet()
+            spreadsheet_id = service.create_catalog_spreadsheet(name.strip())
             drive = build("drive", "v3", credentials=creds)
             drive.files().update(
                 fileId=spreadsheet_id,

@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Type, TypeVar
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from core.catalog_constants import (
-    CATALOG_SPREADSHEET_NAME, SHEET_HEADERS,
+    DEFAULT_CATALOG_NAME, SHEET_HEADERS,
     SHEET_COMPOSERS, SHEET_PIECES, SHEET_EDITIONS,
     SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES,
 )
@@ -83,17 +83,20 @@ class SheetsService:
     def spreadsheet_id(self, value: str):
         self._spreadsheet_id = value
 
-    def create_catalog_spreadsheet(self) -> str:
+    def create_catalog_spreadsheet(self, name: str = "") -> str:
         """建立新的譜庫試算表，包含所有工作表與標題列
+
+        Args:
+            name: 試算表名稱，未提供時使用預設名稱
 
         Returns:
             新建試算表的 ID
         """
         sheet_props = [
-            {"properties": {"title": name}} for name in SHEET_HEADERS
+            {"properties": {"title": s}} for s in SHEET_HEADERS
         ]
         body = {
-            "properties": {"title": CATALOG_SPREADSHEET_NAME},
+            "properties": {"title": name or DEFAULT_CATALOG_NAME},
             "sheets": sheet_props,
         }
         result = self._sheets.create(body=body).execute()
