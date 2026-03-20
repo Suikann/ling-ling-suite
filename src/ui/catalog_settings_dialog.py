@@ -2,8 +2,7 @@
 """
 譜庫設定對話框
 
-提供譜庫試算表 ID 與根目錄設定。
-認證使用 Service Account，無需使用者操作。
+提供 Google 帳號登入與譜庫試算表設定。
 """
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -30,20 +29,17 @@ class CatalogSettingsDialog(QDialog):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        status_group = QGroupBox(t("catalog.auth.title"))
-        status_layout = QVBoxLayout(status_group)
-        if self._auth.has_key_file:
-            status_label = QLabel(t("catalog.auth.connected"))
-            status_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
-        else:
-            status_label = QLabel(
-                t("catalog.auth.credentials_missing",
-                  path=self._auth.key_file_path),
-            )
-            status_label.setStyleSheet("color: #e74c3c;")
-            status_label.setWordWrap(True)
-        status_layout.addWidget(status_label)
-        layout.addWidget(status_group)
+        auth_group = QGroupBox(t("catalog.auth.title"))
+        auth_layout = QVBoxLayout(auth_group)
+        status_row = QHBoxLayout()
+        self._auth_status = QLabel()
+        status_row.addWidget(self._auth_status)
+        status_row.addStretch()
+        self._login_btn = QPushButton()
+        self._login_btn.clicked.connect(self._toggle_auth)
+        status_row.addWidget(self._login_btn)
+        auth_layout.addLayout(status_row)
+        layout.addWidget(auth_group)
         sheet_group = QGroupBox(t("catalog.settings.title"))
         sheet_layout = QFormLayout(sheet_group)
         self._spreadsheet_entry = QLineEdit(
@@ -71,15 +67,49 @@ class CatalogSettingsDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
+        self._update_auth_display()
+
+    def _update_auth_display(self):
+        """更新認證狀態顯示"""
+        if self._auth.is_authenticated:
+            self._auth_status.setText(t("catalog.auth.connected"))
+            self._auth_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
+            self._login_btn.setText(t("catalog.auth.disconnect"))
+        else:
+            self._auth_status.setText(t("catalog.auth.not_connected"))
+            self._auth_status.setStyleSheet("color: #e74c3c;")
+            self._login_btn.setText(t("catalog.auth.connect"))
+
+    def _toggle_auth(self):
+        """登入或登出"""
+        if self._auth.is_authenticated:
+            self._auth.logout()
+            self._update_auth_display()
+            return
+        try:
+            self._auth.authenticate()
+            self._update_auth_display()
+            QMessageBox.information(
+                self, t("catalog.auth.title"), t("catalog.auth.success"),
+            )
+        except FileNotFoundError:
+            QMessageBox.warning(
+                self, t("catalog.auth.title"),
+                t("catalog.auth.credentials_missing",
+                  path=self._auth.client_secrets_path),
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, t("catalog.auth.title"),
+                t("catalog.auth.failed", error=str(e)),
+            )
 
     def _create_spreadsheet(self):
         """建立新的譜庫試算表"""
         creds = self._auth.get_credentials()
         if not creds:
             QMessageBox.warning(
-                self, t("catalog.settings.title"),
-                t("catalog.auth.credentials_missing",
-                  path=self._auth.key_file_path),
+                self, t("catalog.settings.title"), t("catalog.no_connection"),
             )
             return
         try:

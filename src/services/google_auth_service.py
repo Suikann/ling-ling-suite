@@ -2,19 +2,25 @@
 """
 Google API 認證服務
 
-使用 Service Account 金鑰檔進行認證，免去使用者登入流程。
-金鑰檔隨程式打包發佈，使用者無需任何認證操作。
+使用 OAuth2 桌面應用程式流程進行認證。
+用戶端憑證（client_secrets.json）隨程式打包，
+使用者首次啟動時透過瀏覽器登入 Google 帳號授權，
+權杖快取於本地，後續啟動自動登入。
 
 使用範例：
     from services.google_auth_service import GoogleAuthService
     auth = GoogleAuthService()
-    creds = auth.get_credentials()
+    creds = auth.get_credentials()  # 已登入時直接取得
+    creds = auth.authenticate()     # 首次登入
 """
 import os
 import sys
 from typing import Optional
-from google.oauth2.service_account import Credentials
-from core.catalog_constants import GOOGLE_SCOPES, SERVICE_ACCOUNT_FILE
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from core.catalog_constants import GOOGLE_SCOPES, TOKEN_FILE, CLIENT_SECRETS_FILE
+from core.constants import APPDATA_DIR
 
 
 def _get_app_dir() -> str:
@@ -25,46 +31,95 @@ def _get_app_dir() -> str:
 
 
 class GoogleAuthService:
-    """Google Service Account 認證管理"""
+    """Google OAuth2 認證管理"""
 
-    def __init__(self, key_path: str = ""):
-        self._key_path = key_path or os.path.join(
-            _get_app_dir(), SERVICE_ACCOUNT_FILE,
+    def __init__(self):
+        self._client_secrets_path = os.path.join(
+            _get_app_dir(), CLIENT_SECRETS_FILE,
         )
+        self._token_path = os.path.join(APPDATA_DIR, TOKEN_FILE)
         self._credentials: Optional[Credentials] = None
 
     @property
     def is_authenticated(self) -> bool:
         """是否已通過認證"""
-        return self._credentials is not None and self._credentials.valid
+        creds = self.get_credentials()
+        return creds is not None
 
     @property
-    def has_key_file(self) -> bool:
-        """是否有 Service Account 金鑰檔"""
-        return os.path.isfile(self._key_path)
+    def has_client_secrets(self) -> bool:
+        """是否有 OAuth 用戶端憑證檔"""
+        return os.path.isfile(self._client_secrets_path)
 
     @property
-    def key_file_path(self) -> str:
-        """金鑰檔路徑"""
-        return self._key_path
+    def client_secrets_path(self) -> str:
+        """用戶端憑證檔路徑"""
+        return self._client_secrets_path
 
     def get_credentials(self) -> Optional[Credentials]:
-        """取得有效的認證憑據
+        """取得有效的認證憑據（不觸發登入流程）
 
-        從 Service Account 金鑰檔載入，過期時自動重新整理。
+        從快取載入權杖，過期時自動重新整理。
 
         Returns:
-            Google 認證憑據，金鑰檔不存在時回傳 None
+            Google 認證憑據，尚未登入時回傳 None
         """
         if self._credentials and self._credentials.valid:
             return self._credentials
-        if not self.has_key_file:
+        self._credentials = self._load_token()
+        if not self._credentials:
+            return None
+        if self._credentials.expired and self._credentials.refresh_token:
+            try:
+                self._credentials.refresh(Request())
+                self._save_token(self._credentials)
+            except Exception:
+                self._credentials = None
+                return None
+        if self._credentials and self._credentials.valid:
+            return self._credentials
+        return None
+
+    def authenticate(self) -> Credentials:
+        """執行 OAuth2 登入流程
+
+        開啟瀏覽器讓使用者登入 Google 帳號並授權。
+        授權後權杖自動儲存於本地，後續啟動免再登入。
+
+        Returns:
+            Google 認證憑據
+
+        Raises:
+            FileNotFoundError: 找不到用戶端憑證檔
+        """
+        if not self.has_client_secrets:
+            raise FileNotFoundError(self._client_secrets_path)
+        flow = InstalledAppFlow.from_client_secrets_file(
+            self._client_secrets_path, GOOGLE_SCOPES,
+        )
+        self._credentials = flow.run_local_server(port=0)
+        self._save_token(self._credentials)
+        return self._credentials
+
+    def logout(self):
+        """登出並清除本地權杖"""
+        self._credentials = None
+        if os.path.isfile(self._token_path):
+            os.remove(self._token_path)
+
+    def _load_token(self) -> Optional[Credentials]:
+        """從本地快取載入權杖"""
+        if not os.path.isfile(self._token_path):
             return None
         try:
-            self._credentials = Credentials.from_service_account_file(
-                self._key_path, scopes=GOOGLE_SCOPES,
+            return Credentials.from_authorized_user_file(
+                self._token_path, GOOGLE_SCOPES,
             )
-            return self._credentials
         except Exception:
-            self._credentials = None
             return None
+
+    def _save_token(self, credentials: Credentials):
+        """將權杖儲存至本地"""
+        os.makedirs(os.path.dirname(self._token_path), exist_ok=True)
+        with open(self._token_path, "w", encoding="utf-8") as f:
+            f.write(credentials.to_json())

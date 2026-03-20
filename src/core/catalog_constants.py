@@ -79,4 +79,5 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-SERVICE_ACCOUNT_FILE = "service_account.json"
+TOKEN_FILE = "google_token.json"
+CLIENT_SECRETS_FILE = "client_secrets.json"
