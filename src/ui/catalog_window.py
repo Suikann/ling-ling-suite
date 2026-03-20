@@ -763,7 +763,12 @@ class CatalogWindow(QMainWindow):
     # --- 分譜狀態頁籤 ---
 
     def _build_parts_tab(self, detail: PieceDetail) -> QWidget:
-        """建立分譜狀態頁籤：直接列出 Drive 資料夾內的檔案與狀態"""
+        """建立分譜狀態頁籤
+
+        自動偵測資料夾結構：
+        - 有子資料夾 → 每個子資料夾視為一個樂章，分段顯示
+        - 無子資料夾 → 直接列出 PDF 檔案
+        """
         widget = QWidget()
         layout = QVBoxLayout(widget)
         if not detail.editions:
@@ -780,14 +785,61 @@ class CatalogWindow(QMainWindow):
             layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
             return widget
         try:
-            pdfs = self._drive.list_pdfs_in_folder(active_edition.drive_folder_id)
+            subfolders = self._drive.list_subfolders(active_edition.drive_folder_id)
+            root_pdfs = self._drive.list_pdfs_in_folder(active_edition.drive_folder_id)
         except Exception:
-            pdfs = []
-        if not pdfs:
-            layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
-            return widget
+            subfolders = []
+            root_pdfs = []
         part_map = {p.drive_file_id: p for p in detail.parts if p.drive_file_id}
         name_map = {p.file_name: p for p in detail.parts if p.file_name}
+        if subfolders:
+            scroll_content = QWidget()
+            scroll_layout = QVBoxLayout(scroll_content)
+            scroll_layout.setContentsMargins(0, 0, 0, 0)
+            for sf in subfolders:
+                try:
+                    sf_pdfs = self._drive.list_pdfs_in_folder(sf["id"])
+                except Exception:
+                    sf_pdfs = []
+                group = QGroupBox(f"{sf['name']}  ({len(sf_pdfs)} {t('catalog.part.file')})")
+                group_layout = QVBoxLayout(group)
+                if sf_pdfs:
+                    table = self._build_file_status_table(
+                        sf_pdfs, part_map, name_map, active_edition, detail,
+                    )
+                    group_layout.addWidget(table)
+                else:
+                    empty = QLabel(t("catalog.drive.folder_empty"))
+                    empty.setStyleSheet("color: gray;")
+                    group_layout.addWidget(empty)
+                scroll_layout.addWidget(group)
+            if root_pdfs:
+                root_group = QGroupBox(
+                    t("catalog.drive.root_files", count=len(root_pdfs)),
+                )
+                root_layout = QVBoxLayout(root_group)
+                table = self._build_file_status_table(
+                    root_pdfs, part_map, name_map, active_edition, detail,
+                )
+                root_layout.addWidget(table)
+                scroll_layout.addWidget(root_group)
+            scroll_layout.addStretch()
+            from PySide6.QtWidgets import QScrollArea
+            scroll = QScrollArea()
+            scroll.setWidget(scroll_content)
+            scroll.setWidgetResizable(True)
+            layout.addWidget(scroll, stretch=1)
+        elif root_pdfs:
+            table = self._build_file_status_table(
+                root_pdfs, part_map, name_map, active_edition, detail,
+            )
+            layout.addWidget(table, stretch=1)
+        else:
+            layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
+        return widget
+
+    def _build_file_status_table(self, pdfs, part_map, name_map, edition, detail):
+        """建立檔案狀態表格"""
         table = QTableWidget()
         table.setRowCount(len(pdfs))
         table.setColumnCount(2)
@@ -808,15 +860,17 @@ class CatalogWindow(QMainWindow):
                 combo.addItem(t(f"catalog.part.status.{s}"), s)
             idx = status_options.index(current_status) if current_status in status_options else 3
             combo.setCurrentIndex(idx)
-            color = _STATUS_COLORS.get(current_status, _STATUS_COLORS[PartStatus.UNKNOWN.value])
+            color = _STATUS_COLORS.get(
+                current_status, _STATUS_COLORS[PartStatus.UNKNOWN.value],
+            )
             combo.setStyleSheet(f"background-color: {color.name()};")
             combo.currentIndexChanged.connect(
-                lambda index, r=row, c=combo, pdf_info=pdf, ed=active_edition, det=detail, ex=existing:
+                lambda index, c=combo, pdf_info=pdf, ed=edition, det=detail, ex=existing:
                 self._on_part_status_changed(c, pdf_info, ed, det, ex),
             )
             table.setCellWidget(row, 1, combo)
-        layout.addWidget(table, stretch=1)
-        return widget
+        table.setMaximumHeight(min(len(pdfs) * 35 + 30, 300))
+        return table
 
     def _on_part_status_changed(self, combo, pdf_info, edition, detail, existing):
         """分譜狀態下拉選單變更"""
