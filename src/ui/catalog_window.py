@@ -784,6 +784,11 @@ class CatalogWindow(QMainWindow):
         if not active_edition.drive_folder_id or not self._drive:
             layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
             return widget
+        rename_btn = QPushButton(t("catalog.drive.apply_template"))
+        rename_btn.clicked.connect(
+            lambda: self._open_drive_rename(active_edition, detail),
+        )
+        layout.addWidget(rename_btn)
         try:
             subfolders = self._drive.list_subfolders(active_edition.drive_folder_id)
             root_pdfs = self._drive.list_pdfs_in_folder(active_edition.drive_folder_id)
@@ -871,6 +876,27 @@ class CatalogWindow(QMainWindow):
             table.setCellWidget(row, 1, combo)
         table.setMaximumHeight(min(len(pdfs) * 35 + 30, 300))
         return table
+
+    def _open_drive_rename(self, edition, detail):
+        """開啟 Drive 重新命名對話框"""
+        if not self._drive or not edition.drive_folder_id:
+            return
+        try:
+            from services.drive_rename_service import build_groups_from_drive
+            composer = None
+            if detail.composer:
+                composer = detail.composer
+            elif detail.piece.composer_id:
+                composer = self._sheets.get_composer(detail.piece.composer_id)
+            groups = build_groups_from_drive(
+                self._drive, edition.drive_folder_id, detail, composer,
+            )
+            from ui.drive_rename_dialog import DriveRenameDialog
+            dialog = DriveRenameDialog(self._drive, groups, self)
+            if dialog.exec() == DriveRenameDialog.Accepted:
+                self._show_piece_detail(detail.piece.id)
+        except Exception as e:
+            QMessageBox.critical(self, t("catalog.error", error=""), str(e))
 
     def _on_part_status_changed(self, combo, pdf_info, edition, detail, existing):
         """分譜狀態下拉選單變更"""

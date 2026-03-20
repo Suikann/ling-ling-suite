@@ -65,6 +65,16 @@ class RenameEntry:
 
 
 @dataclass
+class DriveRenameEntry:
+    """Drive 重新命名計畫項目"""
+    file_id: str = ""
+    original_name: str = ""
+    new_name: str = ""
+    folder_id: str = ""
+    group_name: str = ""
+
+
+@dataclass
 class Project:
     """專案資料"""
     instruments: List[str] = field(default_factory=list)
