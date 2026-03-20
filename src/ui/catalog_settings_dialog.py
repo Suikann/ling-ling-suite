@@ -82,10 +82,13 @@ class CatalogSettingsDialog(QDialog):
 
     def _toggle_auth(self):
         """登入或登出"""
-        if self._auth.is_authenticated:
-            self._auth.logout()
-            self._update_auth_display()
-            return
+        try:
+            if self._auth.is_authenticated:
+                self._auth.logout()
+                self._update_auth_display()
+                return
+        except Exception:
+            pass
         try:
             self._auth.authenticate()
             self._update_auth_display()
@@ -99,6 +102,7 @@ class CatalogSettingsDialog(QDialog):
                   path=self._auth.client_secrets_path),
             )
         except Exception as e:
+            self._update_auth_display()
             QMessageBox.critical(
                 self, t("catalog.auth.title"),
                 t("catalog.auth.failed", error=str(e)),

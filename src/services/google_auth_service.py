@@ -48,8 +48,11 @@ class GoogleAuthService:
     @property
     def is_authenticated(self) -> bool:
         """是否已通過認證"""
-        creds = self.get_credentials()
-        return creds is not None
+        try:
+            creds = self.get_credentials()
+            return creds is not None
+        except Exception:
+            return False
 
     @property
     def has_client_secrets(self) -> bool:
@@ -102,7 +105,13 @@ class GoogleAuthService:
         flow = InstalledAppFlow.from_client_secrets_file(
             self._client_secrets_path, GOOGLE_SCOPES,
         )
-        self._credentials = flow.run_local_server(port=0)
+        try:
+            self._credentials = flow.run_local_server(port=0)
+        except Exception as e:
+            self._credentials = None
+            raise RuntimeError(f"OAuth 登入流程失敗：{e}") from e
+        if not self._credentials:
+            raise RuntimeError("使用者取消了登入")
         self._save_token(self._credentials)
         return self._credentials
 
