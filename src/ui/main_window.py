@@ -65,6 +65,9 @@ class MainWindow(QMainWindow):
         import_menu = mb.addMenu(t("menu.import"))
         self._add_action(import_menu, t("menu.import.files"), self._import_files)
         self._add_action(import_menu, t("menu.import.folder"), self._import_folder)
+        catalog_menu = mb.addMenu(t("menu.catalog"))
+        self._add_action(catalog_menu, t("menu.catalog.open"), self._open_catalog)
+        self._add_action(catalog_menu, t("menu.catalog.settings"), self._open_catalog_settings)
         tools_menu = mb.addMenu(t("menu.tools"))
         self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf)
         tools_menu.addSeparator()
@@ -526,6 +529,35 @@ class MainWindow(QMainWindow):
         self._create_ui()
         self._sync_ui_from_project()
         self._update_title()
+
+    # --- 譜庫 ---
+
+    def _get_auth_service(self):
+        """取得或建立 Google 認證服務"""
+        if not hasattr(self, "_auth_service"):
+            from services.google_auth_service import GoogleAuthService
+            self._auth_service = GoogleAuthService()
+        return self._auth_service
+
+    def _open_catalog(self):
+        """開啟譜庫瀏覽器"""
+        from ui.catalog_window import CatalogWindow
+        auth = self._get_auth_service()
+        if not auth.get_credentials():
+            spreadsheet_id = self._preferences.get("catalog_spreadsheet_id")
+            if not spreadsheet_id:
+                self._open_catalog_settings()
+                if not auth.get_credentials():
+                    return
+        self._catalog_window = CatalogWindow(auth, self._preferences)
+        self._catalog_window.show()
+
+    def _open_catalog_settings(self):
+        """開啟譜庫設定"""
+        from ui.catalog_settings_dialog import CatalogSettingsDialog
+        auth = self._get_auth_service()
+        dialog = CatalogSettingsDialog(auth, self._preferences, self)
+        dialog.exec()
 
     # --- 輔助 ---
 
