@@ -543,12 +543,6 @@ class MainWindow(QMainWindow):
         """開啟譜庫瀏覽器"""
         from ui.catalog_window import CatalogWindow
         auth = self._get_auth_service()
-        if not auth.get_credentials():
-            spreadsheet_id = self._preferences.get("catalog_spreadsheet_id")
-            if not spreadsheet_id:
-                self._open_catalog_settings()
-                if not auth.get_credentials():
-                    return
         self._catalog_window = CatalogWindow(auth, self._preferences)
         self._catalog_window.show()
 

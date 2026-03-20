@@ -251,13 +251,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "menu.catalog.settings": "譜庫設定...",
         # 譜庫 - 認證
         "catalog.auth.title": "Google 帳號連結",
-        "catalog.auth.not_connected": "尚未連結 Google 帳號",
-        "catalog.auth.connect": "連結 Google 帳號",
-        "catalog.auth.disconnect": "取消連結",
-        "catalog.auth.connected": "已連結",
-        "catalog.auth.credentials_missing": "找不到 OAuth 憑證檔案。請先將憑證檔放入：{path}",
-        "catalog.auth.success": "Google 帳號連結成功",
-        "catalog.auth.failed": "Google 帳號連結失敗：{error}",
+        "catalog.auth.connected": "Service Account 金鑰已就緒",
+        "catalog.auth.credentials_missing": "找不到 Service Account 金鑰檔。請將金鑰檔放入：{path}",
         # 譜庫 - 設定
         "catalog.settings.title": "譜庫設定",
         "catalog.settings.spreadsheet_id": "試算表 ID：",
@@ -351,7 +346,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.cancel": "取消",
         "catalog.error": "發生錯誤：{error}",
         "catalog.loading": "載入中...",
-        "catalog.no_connection": "尚未連結 Google 帳號，請先至「譜庫 > 譜庫設定」連結帳號。",
+        "catalog.no_connection": "找不到 Service Account 金鑰或尚未設定試算表 ID，請至「譜庫 > 譜庫設定」完成設定。",
     },
     "en": {
         # 應用程式
@@ -589,13 +584,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "menu.catalog.settings": "Catalog Settings...",
         # Catalog - Auth
         "catalog.auth.title": "Google Account",
-        "catalog.auth.not_connected": "Google account not connected",
-        "catalog.auth.connect": "Connect Google Account",
-        "catalog.auth.disconnect": "Disconnect",
-        "catalog.auth.connected": "Connected",
-        "catalog.auth.credentials_missing": "OAuth credentials file not found. Please place it at: {path}",
-        "catalog.auth.success": "Google account connected successfully",
-        "catalog.auth.failed": "Google account connection failed: {error}",
+        "catalog.auth.connected": "Service Account key is ready",
+        "catalog.auth.credentials_missing": "Service Account key file not found. Please place it at: {path}",
         # Catalog - Settings
         "catalog.settings.title": "Catalog Settings",
         "catalog.settings.spreadsheet_id": "Spreadsheet ID:",
@@ -689,7 +679,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.cancel": "Cancel",
         "catalog.error": "Error: {error}",
         "catalog.loading": "Loading...",
-        "catalog.no_connection": "Google account not connected. Go to Catalog > Catalog Settings to connect.",
+        "catalog.no_connection": "Service Account key not found or spreadsheet ID not set. Go to Catalog > Catalog Settings.",
     },
 }
 
