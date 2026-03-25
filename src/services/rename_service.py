@@ -102,7 +102,18 @@ class RenameService:
                     target_dir = os.path.join(base_dir, subfolder_name)
                 else:
                     target_dir = base_dir
-                if project.use_parts_subfolder and project.parts_subfolder_name:
+                if project.parts_output_mode == "parts" and project.parts_subfolder_name:
+                    target_dir = os.path.join(
+                        target_dir, _sanitize_name(project.parts_subfolder_name),
+                    )
+                elif project.parts_output_mode == "section":
+                    instrument = group.instruments[i] if i < len(group.instruments) else ""
+                    section = project.instrument_sections.get(instrument)
+                    if not section:
+                        from core.constants import detect_instrument_section
+                        section = detect_instrument_section(instrument)
+                    target_dir = os.path.join(target_dir, _sanitize_name(section))
+                elif project.use_parts_subfolder and project.parts_subfolder_name:
                     target_dir = os.path.join(
                         target_dir, _sanitize_name(project.parts_subfolder_name),
                     )

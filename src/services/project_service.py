@@ -27,7 +27,10 @@ class ProjectService:
             "subfolder_template": project.subfolder_template,
             "use_parts_subfolder": project.use_parts_subfolder,
             "parts_subfolder_name": project.parts_subfolder_name,
+            "parts_output_mode": project.parts_output_mode,
             "output_directory": project.output_directory,
+            "instrument_headcounts": project.instrument_headcounts,
+            "instrument_sections": project.instrument_sections,
             "ungrouped_files": [
                 {"original_path": f.original_path, "display_name": f.display_name}
                 for f in project.ungrouped_files
@@ -55,7 +58,10 @@ class ProjectService:
             subfolder_template=data.get("subfolder_template", ""),
             use_parts_subfolder=data.get("use_parts_subfolder", False),
             parts_subfolder_name=data.get("parts_subfolder_name", "Parts"),
+            parts_output_mode=data.get("parts_output_mode", "root"),
             output_directory=data.get("output_directory", ""),
+            instrument_headcounts=data.get("instrument_headcounts", {}),
+            instrument_sections=data.get("instrument_sections", {}),
         )
         project.ungrouped_files = [
             FileInfo(
@@ -68,6 +74,8 @@ class ProjectService:
             self._deserialize_group(g)
             for g in data.get("groups", [])
         ]
+        if "parts_output_mode" not in data and project.use_parts_subfolder:
+            project.parts_output_mode = "parts"
         for group in project.groups:
             if not group.instruments and project.instruments:
                 group.instruments = list(project.instruments)

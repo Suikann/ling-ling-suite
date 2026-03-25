@@ -9,7 +9,7 @@ from typing import Callable, Optional, Set
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QCheckBox, QLineEdit, QScrollArea, QWidget, QFileDialog,
-    QMessageBox,
+    QMessageBox, QRadioButton, QButtonGroup,
 )
 from core.locale import t
 from core.models import Project
@@ -65,14 +65,29 @@ class PreviewDialog(QDialog):
         subfolder_row.addWidget(self._subfolder_entry, stretch=1)
         layout.addLayout(subfolder_row)
         parts_row = QHBoxLayout()
-        self._parts_cb = QCheckBox(t("panel.parts_subfolder"))
-        self._parts_cb.setChecked(self._project.use_parts_subfolder)
-        self._parts_cb.toggled.connect(self._on_settings_changed)
-        parts_row.addWidget(self._parts_cb)
-        parts_row.addWidget(QLabel(t("panel.parts_subfolder_name")))
+        parts_row.addWidget(QLabel(t("panel.parts_output_mode")))
+        self._parts_group = QButtonGroup(self)
+        self._radio_root = QRadioButton(t("panel.parts_mode_root"))
+        self._radio_parts = QRadioButton(t("panel.parts_mode_parts"))
+        self._radio_section = QRadioButton(t("panel.parts_mode_section"))
+        self._parts_group.addButton(self._radio_root, 0)
+        self._parts_group.addButton(self._radio_parts, 1)
+        self._parts_group.addButton(self._radio_section, 2)
+        mode = self._project.parts_output_mode
+        if mode == "parts":
+            self._radio_parts.setChecked(True)
+        elif mode == "section":
+            self._radio_section.setChecked(True)
+        else:
+            self._radio_root.setChecked(True)
+        self._parts_group.buttonClicked.connect(self._on_settings_changed)
+        parts_row.addWidget(self._radio_root)
+        parts_row.addWidget(self._radio_parts)
+        parts_row.addWidget(self._radio_section)
         self._parts_entry = QLineEdit(self._project.parts_subfolder_name)
+        self._parts_entry.setFixedWidth(120)
         self._parts_entry.editingFinished.connect(self._on_settings_changed)
-        parts_row.addWidget(self._parts_entry, stretch=1)
+        parts_row.addWidget(self._parts_entry)
         layout.addLayout(parts_row)
         self._warn_label = QLabel("")
         self._warn_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
@@ -113,10 +128,19 @@ class PreviewDialog(QDialog):
         self._output_label.setStyleSheet("color: gray;")
         self._refresh_plan()
 
-    def _on_settings_changed(self):
+    def _on_settings_changed(self, *_args):
         self._project.use_subfolders = self._subfolder_cb.isChecked()
         self._project.subfolder_template = self._subfolder_entry.text()
-        self._project.use_parts_subfolder = self._parts_cb.isChecked()
+        checked_id = self._parts_group.checkedId()
+        if checked_id == 1:
+            self._project.parts_output_mode = "parts"
+            self._project.use_parts_subfolder = True
+        elif checked_id == 2:
+            self._project.parts_output_mode = "section"
+            self._project.use_parts_subfolder = False
+        else:
+            self._project.parts_output_mode = "root"
+            self._project.use_parts_subfolder = False
         self._project.parts_subfolder_name = self._parts_entry.text()
         self._refresh_plan()
 

@@ -6,7 +6,7 @@
 """
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 from core.constants import DEFAULT_MASTER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE
 
 
@@ -85,4 +85,7 @@ class Project:
     subfolder_template: str = DEFAULT_SUBFOLDER_TEMPLATE
     use_parts_subfolder: bool = False
     parts_subfolder_name: str = "Parts"
+    parts_output_mode: str = "root"
     output_directory: str = ""
+    instrument_headcounts: Dict[str, int] = field(default_factory=dict)
+    instrument_sections: Dict[str, str] = field(default_factory=dict)

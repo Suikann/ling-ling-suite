@@ -48,6 +48,7 @@ class UngroupedTab(QWidget):
         layout.addLayout(action_row)
         self._list = QListWidget()
         self._list.setSelectionMode(QAbstractItemView.MultiSelection)
+        QShortcut(QKeySequence("Ctrl+A"), self._list, self._select_all_items)
         layout.addWidget(self._list)
         self._refresh()
 
@@ -61,6 +62,10 @@ class UngroupedTab(QWidget):
             return
         for f in self.project.ungrouped_files:
             self._list.addItem(f.display_name)
+
+    def _select_all_items(self):
+        self._list.selectAll()
+        self._select_all.setChecked(True)
 
     def _toggle_select_all(self, checked):
         for i in range(self._list.count()):
@@ -186,8 +191,10 @@ class GroupTab(QWidget):
         layout.addWidget(self._mismatch_label)
         layout.addWidget(QLabel(t("group.file_list")))
         self._file_list = DragListWidget()
+        self._file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._file_list.model().rowsMoved.connect(self._on_files_reordered)
         QShortcut(QKeySequence("Delete"), self._file_list, self._delete_selected_files)
+        QShortcut(QKeySequence("Ctrl+A"), self._file_list, self._file_list.selectAll)
         layout.addWidget(self._file_list, stretch=1)
         file_btn_row = QHBoxLayout()
         add_btn = QPushButton(t("group.add_files"))

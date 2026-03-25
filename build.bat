@@ -14,6 +14,8 @@ pyinstaller --noconfirm --onedir --windowed ^
     --name "LingLingSuite" ^
     --add-data "src\assets;assets" ^
     --hidden-import PySide6.QtSvg ^
+    --hidden-import PIL ^
+    --hidden-import PIL.Image ^
     --icon NONE ^
     src\main.py
 

@@ -6,7 +6,7 @@
 """
 import os
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 
 APP_NAME = "LingLingSuite"
 APP_DISPLAY_NAME = "泠靈小工具"
@@ -146,3 +146,55 @@ INSTRUMENT_PRESETS: List[InstrumentPreset] = [
         ),
     ),
 ]
+
+SECTION_KEYWORDS: List[Tuple[str, str, List[str]]] = [
+    ("吹管", "Winds", [
+        "笛", "曲笛", "梆笛", "新笛", "簫", "笙", "嗩吶", "管子",
+    ]),
+    ("彈撥", "Plucked Strings", [
+        "琵琶", "阮", "柳琴", "揚琴", "箏", "三弦",
+    ]),
+    ("木管", "Woodwinds", [
+        "flute", "piccolo", "oboe", "english horn", "cor anglais",
+        "clarinet", "bassoon", "contrabassoon", "saxophone", "sax",
+    ]),
+    ("銅管", "Brass", [
+        "horn", "trumpet", "cornet", "trombone", "tuba", "euphonium",
+    ]),
+    ("打擊", "Percussion", [
+        "timpani", "percussion", "xylophone", "marimba", "vibraphone",
+        "glockenspiel", "drum", "打擊", "鼓", "鑼", "鈸",
+    ]),
+    ("鍵盤", "Keyboard", [
+        "piano", "keyboard", "organ", "celesta", "harpsichord", "harp",
+    ]),
+    ("弦樂", "Strings", [
+        "violin", "viola", "violoncello", "cello", "contrabass",
+        "double bass", "string bass", "胡", "高胡", "二胡", "中胡",
+        "大提琴", "低音提琴",
+    ]),
+]
+
+SECTION_NAMES_EN = {
+    section_zh: section_en
+    for section_zh, section_en, _ in SECTION_KEYWORDS
+}
+
+DEFAULT_HEADCOUNT = 1
+
+
+def detect_instrument_section(instrument_name: str) -> str:
+    """根據樂器名稱自動偵測所屬聲部組
+
+    Args:
+        instrument_name: 樂器名稱
+
+    Returns:
+        聲部組名稱（中文），偵測不到時回傳「其他」
+    """
+    name_lower = instrument_name.lower()
+    for section_zh, _section_en, keywords in SECTION_KEYWORDS:
+        for kw in keywords:
+            if kw.lower() in name_lower:
+                return section_zh
+    return "其他"
