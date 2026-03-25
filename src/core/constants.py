@@ -10,7 +10,7 @@ from typing import List
 
 APP_NAME = "LingLingSuite"
 APP_DISPLAY_NAME = "泠靈小工具"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.0-beta"
 APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), APP_NAME)
 UNDO_DIR = os.path.join(APPDATA_DIR, "undo")
 REDO_DIR = os.path.join(APPDATA_DIR, "redo")
