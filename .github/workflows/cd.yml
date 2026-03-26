@@ -33,8 +33,11 @@ jobs:
           python -m pytest tests/ -v --tb=short
 
       - name: Write Google client secret
+        if: env.GOOGLE_CLIENT_SECRET != ''
         run: echo '${{ secrets.GOOGLE_CLIENT_SECRET }}' > src\client_secret.json
         shell: bash
+        env:
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
 
       - name: Build portable EXE
         shell: cmd
@@ -42,7 +45,7 @@ jobs:
           pyinstaller --noconfirm --onedir --windowed
           --name "LingLingSuite"
           --add-data "src\assets;assets"
-          --add-data "src\client_secret.json;."
+          ${{ secrets.GOOGLE_CLIENT_SECRET && '--add-data "src\client_secret.json;."' || '' }}
           --hidden-import PySide6.QtSvg
           --hidden-import PIL
           --hidden-import PIL.Image
