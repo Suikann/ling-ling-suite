@@ -125,6 +125,74 @@ class TestRenameService(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(sub_dir, "new.pdf")))
         self.assertIn(sub_dir, record.created_directories)
 
+    def test_detect_duplicate_sources(self):
+        plan = [
+            RenameEntry("shared.pdf", os.path.join(self.temp_dir, "A.pdf")),
+            RenameEntry("shared.pdf", os.path.join(self.temp_dir, "B.pdf")),
+            RenameEntry("other.pdf", os.path.join(self.temp_dir, "C.pdf")),
+        ]
+        duplicates = self.rename_service.detect_duplicate_sources(plan)
+        self.assertEqual(len(duplicates), 1)
+        self.assertEqual(len(next(iter(duplicates.values()))), 2)
+
+    def test_execute_rename_rejects_duplicate_sources(self):
+        p1 = self._create_file("shared.pdf")
+        plan = [
+            RenameEntry(p1, os.path.join(self.temp_dir, "A.pdf")),
+            RenameEntry(p1, os.path.join(self.temp_dir, "B.pdf")),
+        ]
+        with self.assertRaises(FileExistsError):
+            self.rename_service.execute_rename(plan, Project())
+        self.assertTrue(os.path.isfile(p1))
+        self.assertFalse(os.path.isfile(os.path.join(self.temp_dir, "A.pdf")))
+
+    def test_execute_rename_rejects_missing_source(self):
+        plan = [
+            RenameEntry(os.path.join(self.temp_dir, "ghost.pdf"), os.path.join(self.temp_dir, "A.pdf")),
+        ]
+        with self.assertRaises(FileNotFoundError):
+            self.rename_service.execute_rename(plan, Project())
+
+    def test_execute_rename_rejects_occupied_target(self):
+        p1 = self._create_file("old.pdf")
+        occupied = self._create_file("taken.pdf")
+        plan = [RenameEntry(p1, occupied)]
+        with self.assertRaises(FileExistsError):
+            self.rename_service.execute_rename(plan, Project())
+        self.assertTrue(os.path.isfile(p1))
+        with open(occupied) as f:
+            self.assertEqual(f.read(), "dummy")
+
+    def test_execute_rename_allows_noop_entry(self):
+        p1 = self._create_file("same.pdf")
+        record = self.rename_service.execute_rename([RenameEntry(p1, p1)], Project())
+        self.assertEqual(len(record.mappings), 1)
+        self.assertTrue(os.path.isfile(p1))
+
+    def test_execute_rename_rolls_back_on_failure(self):
+        p1 = self._create_file("old1.pdf")
+        p2 = self._create_file("old2.pdf")
+        sub_dir = os.path.join(self.temp_dir, "NewDir")
+        plan = [
+            RenameEntry(p1, os.path.join(sub_dir, "new1.pdf")),
+            RenameEntry(p2, os.path.join(sub_dir, "new2.pdf")),
+        ]
+        original_rename = self.file_service.rename_file
+        calls = []
+
+        def failing_rename(old_path, new_path):
+            calls.append(old_path)
+            if len(calls) == 2:
+                raise OSError("simulated failure")
+            original_rename(old_path, new_path)
+
+        self.file_service.rename_file = failing_rename
+        with self.assertRaises(OSError):
+            self.rename_service.execute_rename(plan, Project())
+        self.assertTrue(os.path.isfile(p1))
+        self.assertTrue(os.path.isfile(p2))
+        self.assertFalse(os.path.exists(sub_dir))
+
     def test_generate_plan_skips_empty_group(self):
         project = Project(
             groups=[Group(files=[], instruments=[])],

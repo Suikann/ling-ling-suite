@@ -492,35 +492,62 @@ class SplitPdfDialog(QDialog):
             self._dir_label.setText(folder)
             self._dir_label.setStyleSheet("font-size: 11px;")
 
+    def _build_split_plan(self, output_dir: str) -> List[Tuple[List[int], str, str]]:
+        """依目前的分割點與名稱欄位建立分割計畫
+
+        Args:
+            output_dir: 輸出資料夾
+
+        Returns:
+            (頁面索引清單, 顯示名稱, 輸出路徑) 的清單，已略過無頁面的區段
+        """
+        plan = []
+        for sec_idx, (start, end) in enumerate(self._get_sections()):
+            pages = [p for p in range(start, end + 1) if p not in self._deleted_pages]
+            if not pages:
+                continue
+            entry = self._section_name_entries.get(sec_idx)
+            name = entry.text().strip() if entry else f"Part {sec_idx + 1}"
+            safe = self._sanitize(name)
+            if not safe.lower().endswith(".pdf"):
+                safe += ".pdf"
+            plan.append((pages, name, os.path.join(output_dir, safe)))
+        return plan
+
+    def _confirm_overwrite(self, existing: List[str]) -> bool:
+        """輸出位置已有同名檔案時，詢問使用者是否覆蓋"""
+        reply = QMessageBox.question(
+            self, t("dialog.warning"),
+            t("split.overwrite_confirm",
+              count=len(existing),
+              files="\n".join(os.path.basename(p) for p in existing)),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
+
     def _execute_split(self):
         if not self._pdf_path:
             return
         output_dir = self._output_dir or os.path.dirname(self._pdf_path)
-        sections = self._get_sections()
+        plan = self._build_split_plan(output_dir)
+        if not plan:
+            QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
+            return
+        existing = [out_path for _, _, out_path in plan if os.path.isfile(out_path)]
+        if existing and not self._confirm_overwrite(existing):
+            return
         try:
             from services.pdf_service import extract_pages
             os.makedirs(output_dir, exist_ok=True)
             split_files = []
             split_instruments = []
-            for sec_idx, (start, end) in enumerate(sections):
-                pages = [p for p in range(start, end + 1) if p not in self._deleted_pages]
-                if not pages:
-                    continue
-                entry = self._section_name_entries.get(sec_idx)
-                name = entry.text().strip() if entry else f"Part {sec_idx + 1}"
-                safe = self._sanitize(name)
-                if not safe.lower().endswith(".pdf"):
-                    safe += ".pdf"
-                out_path = os.path.join(output_dir, safe)
+            for pages, name, out_path in plan:
                 extract_pages(self._pdf_path, pages, out_path)
                 split_files.append(FileInfo(
                     original_path=out_path,
                     display_name=os.path.basename(out_path),
                 ))
                 split_instruments.append(name)
-            if not split_files:
-                QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
-                return
             if self._on_split_complete:
                 self._on_split_complete(
                     split_files, split_instruments,

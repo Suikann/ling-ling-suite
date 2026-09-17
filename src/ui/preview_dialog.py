@@ -32,6 +32,7 @@ class PreviewDialog(QDialog):
         self._selected_ids = selected_group_ids
         self._plan = []
         self._conflicts = {}
+        self._duplicate_sources = {}
         self._build_ui()
         self._refresh_plan()
 
@@ -152,6 +153,7 @@ class PreviewDialog(QDialog):
         if missing:
             self._plan = [e for e in self._plan if os.path.isfile(e.original_path)]
         self._conflicts = self._rename_service.detect_conflicts(self._plan)
+        self._duplicate_sources = self._rename_service.detect_duplicate_sources(self._plan)
         self._render_list()
 
     def _render_list(self):
@@ -163,9 +165,16 @@ class PreviewDialog(QDialog):
             self._count_label.setText(t("dialog.info.no_files"))
             self._exec_btn.setEnabled(False)
             return
-        self._exec_btn.setEnabled(True)
+        self._exec_btn.setEnabled(not self._duplicate_sources)
         conflict_keys = {k.lower() for k in self._conflicts}
-        if self._conflicts:
+        duplicate_keys = set(self._duplicate_sources)
+        if self._duplicate_sources:
+            self._warn_label.setText(
+                t("preview.duplicate_source_warning", count=len(self._duplicate_sources)),
+            )
+            self._warn_label.setVisible(True)
+            self._exec_btn.setText(t("preview.execute"))
+        elif self._conflicts:
             self._warn_label.setText(
                 t("preview.conflict_warning", count=len(self._conflicts)),
             )
@@ -178,7 +187,8 @@ class PreviewDialog(QDialog):
         for entry in self._plan:
             row = QLabel(f"{entry.original_path}\n  \u2192 {entry.new_path}")
             row.setWordWrap(True)
-            if entry.new_path.lower() in conflict_keys:
+            if (entry.new_path.lower() in conflict_keys
+                    or os.path.normcase(entry.original_path) in duplicate_keys):
                 row.setStyleSheet("color: #e74c3c;")
             self._scroll_layout.addWidget(row)
         self._scroll_layout.addStretch()
