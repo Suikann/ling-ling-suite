@@ -109,8 +109,8 @@ class WorkspaceService:
         for path in self.list_outputs(folder):
             self.file_service.delete_file(path)
 
-    def remove_folder_if_empty(self, folder: str) -> None:
-        """子資料夾內已無輸出檔時，連同 meta.json 一併移除"""
+    def remove_folder(self, folder: str) -> None:
+        """移除只剩 meta.json 的空子資料夾；仍有輸出檔時不動"""
         if not os.path.isdir(folder) or self.list_outputs(folder):
             return
         meta_path = os.path.join(folder, WORKSPACE_META_FILE)
@@ -118,16 +118,26 @@ class WorkspaceService:
             os.remove(meta_path)
         self.file_service.remove_empty_directory(folder)
 
-    def remove_empty_folders_for(self, moved_paths: Iterable[str]) -> None:
-        """重新命名後，清除已搬空的工作區子資料夾
+    def purge_empty_folders(self, in_use: Optional[Set[str]] = None) -> int:
+        """移除所有已搬空（只剩 meta.json）且未被使用的子資料夾
+
+        搬空是暫態：復原重新命名會把分譜搬回來，需要 meta.json 才能辨識來源，
+        所以搬空當下不刪，留到掃描時再一併清除。
 
         Args:
-            moved_paths: 已被搬走的原始路徑
+            in_use: 目前專案引用的子資料夾（正規化路徑），這些不移除
+
+        Returns:
+            移除的資料夾數
         """
-        folders = {self.folder_of(p) for p in moved_paths}
-        for folder in folders:
-            if folder:
-                self.remove_folder_if_empty(folder)
+        in_use = in_use or set()
+        count = 0
+        for folder in self._list_folders():
+            if _normalize(folder) in in_use or self.list_outputs(folder):
+                continue
+            self.remove_folder(folder)
+            count += 1
+        return count
 
     # --- meta.json ---
 
@@ -180,6 +190,7 @@ class WorkspaceService:
         """
         scan = WorkspaceScan()
         in_use = self._referenced_folders(current_project) if current_project else set()
+        self.purge_empty_folders(in_use)
         owned: Dict[str, str] = {}
         unreadable: Set[str] = set()
         for path in recent_projects:

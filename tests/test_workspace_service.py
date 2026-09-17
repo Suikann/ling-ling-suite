@@ -116,14 +116,40 @@ class TestWorkspaceService(unittest.TestCase):
         self.assertEqual(self.service.list_outputs(folder), [])
         self.assertIsNotNone(self.service.read_meta(folder))
 
-    def test_remove_folder_if_empty(self):
+    def test_remove_folder_keeps_folder_with_outputs(self):
+        folder = self.service.prepare_folder(self.source)
+        self._create_file("高笙.pdf", folder)
+        self.service.remove_folder(folder)
+        self.assertTrue(os.path.isdir(folder))
+
+    def test_emptied_folder_keeps_meta_until_purge(self):
         folder = self.service.prepare_folder(self.source)
         part = self._create_file("高笙.pdf", folder)
-        self.service.remove_folder_if_empty(folder)
-        self.assertTrue(os.path.isdir(folder))
         os.remove(part)
-        self.service.remove_empty_folders_for([part])
+        # 搬空後 meta 仍在，復原時能辨識來源
+        self.assertIsNotNone(self.service.read_meta(folder))
+        removed = self.service.purge_empty_folders()
+        self.assertEqual(removed, 1)
         self.assertFalse(os.path.exists(folder))
+
+    def test_purge_skips_in_use_and_non_empty(self):
+        f_in_use = self.service.prepare_folder(self._create_file("a.pdf"))
+        f_full = self.service.prepare_folder(self._create_file("b.pdf"))
+        self._create_file("x.pdf", f_full)
+        f_empty = self.service.prepare_folder(self._create_file("c.pdf"))
+        removed = self.service.purge_empty_folders({os.path.normcase(os.path.abspath(f_in_use))})
+        self.assertEqual(removed, 1)
+        self.assertTrue(os.path.isdir(f_in_use))
+        self.assertTrue(os.path.isdir(f_full))
+        self.assertFalse(os.path.exists(f_empty))
+
+    def test_scan_purges_empty_folders_first(self):
+        f_empty = self.service.prepare_folder(self._create_file("a.pdf"))
+        f_full = self.service.prepare_folder(self._create_file("b.pdf"))
+        self._create_file("x.pdf", f_full)
+        scan = self.service.scan(None, [], ProjectService().load_project)
+        self.assertEqual([e.folder for e in scan.entries], [f_full])
+        self.assertFalse(os.path.exists(f_empty))
 
     def test_update_project_path(self):
         folder = self.service.prepare_folder(self.source)

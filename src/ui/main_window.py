@@ -380,7 +380,6 @@ class MainWindow(QMainWindow):
                 from services.undo_service import UndoService
                 self._undo_service = UndoService(self.file_service)
             self._undo_service.save_undo_record(record)
-            self.workspace_service.remove_empty_folders_for(m.original for m in record.mappings)
             self._update_project_paths(record.mappings)
             self._mark_modified()
             self._rebuild_tabs()
