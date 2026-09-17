@@ -101,13 +101,7 @@ class ProjectService:
         Returns:
             找不到的檔案路徑清單（依群組順序）
         """
-        missing = []
-        for group in project.groups:
-            paths = [f.original_path for f in group.files]
-            if group.score_file:
-                paths.append(group.score_file.original_path)
-            missing.extend(p for p in paths if p and not os.path.isfile(p))
-        return missing
+        return [p for p in project.all_file_paths() if not os.path.isfile(p)]
 
     def _serialize_group(self, group: Group) -> dict:
         """序列化單一群組

@@ -15,22 +15,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from core.constants import WorkspaceStatus
 from core.locale import t
-from core.models import WorkspaceEntry
-from services.workspace_service import WorkspaceScan, WorkspaceService
+from core.models import WorkspaceEntry, WorkspaceScan
+from services.workspace_service import WorkspaceService
 
-_STATUS_KEYS = {
-    WorkspaceStatus.IN_USE.value: "workspace.status.in_use",
-    WorkspaceStatus.OWNED_BY_OTHER.value: "workspace.status.owned_by_other",
-    WorkspaceStatus.OWNER_UNREADABLE.value: "workspace.status.owner_unreadable",
-    WorkspaceStatus.ORPHAN.value: "workspace.status.orphan",
-    WorkspaceStatus.UNKNOWN_SOURCE.value: "workspace.status.unknown_source",
-}
 _STATUS_COLORS = {
-    WorkspaceStatus.IN_USE.value: "#7fb37f",
-    WorkspaceStatus.OWNED_BY_OTHER.value: "#e0b060",
-    WorkspaceStatus.OWNER_UNREADABLE.value: "#e0b060",
-    WorkspaceStatus.ORPHAN.value: "#c0c4d4",
-    WorkspaceStatus.UNKNOWN_SOURCE.value: "#c0c4d4",
+    WorkspaceStatus.IN_USE: "#7fb37f",
+    WorkspaceStatus.OWNED_BY_OTHER: "#e0b060",
+    WorkspaceStatus.OWNER_UNREADABLE: "#e0b060",
+    WorkspaceStatus.ORPHAN: "#c0c4d4",
+    WorkspaceStatus.UNKNOWN_SOURCE: "#c0c4d4",
 }
 
 
@@ -118,10 +111,9 @@ class WorkspaceCleanupDialog(QDialog):
             source_item = QTableWidgetItem(entry.source_name or os.path.basename(entry.folder))
             source_item.setToolTip(entry.source_path or entry.folder)
             source_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            checkable = entry.status != WorkspaceStatus.IN_USE.value
-            if not checkable:
+            if entry.status == WorkspaceStatus.IN_USE:
                 source_item.setFlags(Qt.ItemIsUserCheckable)
-            default_checked = entry.status == WorkspaceStatus.ORPHAN.value
+            default_checked = entry.status == WorkspaceStatus.ORPHAN
             source_item.setCheckState(Qt.Checked if default_checked else Qt.Unchecked)
             self._table.setItem(row, 0, source_item)
             self._table.setItem(row, 1, self._readonly_item(str(entry.file_count)))
@@ -143,9 +135,8 @@ class WorkspaceCleanupDialog(QDialog):
 
     @staticmethod
     def _status_text(entry: WorkspaceEntry) -> str:
-        key = _STATUS_KEYS.get(entry.status, "workspace.status.unknown_source")
         project = os.path.basename(entry.project_path) if entry.project_path else ""
-        return t(key, project=project)
+        return t(f"workspace.status.{entry.status.value}", project=project)
 
     def _checked_entries(self) -> List[WorkspaceEntry]:
         checked = []

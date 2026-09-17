@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from core.models import FileInfo, Group, Project, RenameEntry
 from services.file_service import FileService
-from services.rename_service import RenameService
+from services.rename_service import RenameRollbackError, RenameService
 
 
 class TestRenameService(unittest.TestCase):
@@ -162,6 +162,45 @@ class TestRenameService(unittest.TestCase):
         self.assertTrue(os.path.isfile(p1))
         with open(occupied) as f:
             self.assertEqual(f.read(), "dummy")
+
+    def test_execute_rename_rejects_duplicate_targets(self):
+        p1 = self._create_file("a.pdf")
+        p2 = self._create_file("b.pdf")
+        target = os.path.join(self.temp_dir, "Same.pdf")
+        with self.assertRaises(FileExistsError):
+            self.rename_service.execute_rename([RenameEntry(p1, target), RenameEntry(p2, target)], Project())
+        self.assertTrue(os.path.isfile(p1))
+        self.assertTrue(os.path.isfile(p2))
+
+    def test_find_missing_sources(self):
+        p1 = self._create_file("a.pdf")
+        ghost = os.path.join(self.temp_dir, "ghost.pdf")
+        plan = [RenameEntry(p1, os.path.join(self.temp_dir, "A.pdf")), RenameEntry(ghost, os.path.join(self.temp_dir, "G.pdf"))]
+        self.assertEqual(self.rename_service.find_missing_sources(plan), [ghost])
+
+    def test_rollback_failure_reports_residual(self):
+        p1 = self._create_file("old1.pdf")
+        p2 = self._create_file("old2.pdf")
+        p3 = self._create_file("old3.pdf")
+        new1 = os.path.join(self.temp_dir, "new1.pdf")
+        new2 = os.path.join(self.temp_dir, "new2.pdf")
+        plan = [RenameEntry(p1, new1), RenameEntry(p2, new2), RenameEntry(p3, os.path.join(self.temp_dir, "new3.pdf"))]
+        original_rename = self.file_service.rename_file
+
+        def flaky_rename(old_path, new_path):
+            # 第三筆搬移失敗觸發回滾；回滾時第一筆搬不回去
+            if old_path == p3 or new_path == p1:
+                raise OSError("simulated")
+            original_rename(old_path, new_path)
+
+        self.file_service.rename_file = flaky_rename
+        with self.assertRaises(RenameRollbackError) as ctx:
+            self.rename_service.execute_rename(plan, Project())
+        self.assertEqual([m.renamed for m in ctx.exception.residual], [new1])
+        self.assertTrue(os.path.isfile(new1))
+        self.assertTrue(os.path.isfile(p2))
+        self.assertTrue(os.path.isfile(p3))
+        self.assertIn("new1.pdf", str(ctx.exception))
 
     def test_execute_rename_allows_noop_entry(self):
         p1 = self._create_file("same.pdf")

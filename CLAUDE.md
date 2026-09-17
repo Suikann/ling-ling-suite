@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 遵循 SOLID 原則（SRP、OCP、LSP、ISP、DIP）
 - 遵循 DRY 原則：避免重複邏輯，將共用邏輯抽取為可重用的函數或模組
 - Use LF line endings
-- No consecutive blank lines
+- 函式與方法內不留連續空行；頂層定義之間依 PEP 8 留兩行
 
 ### Docstring 格式規範
 
@@ -232,7 +232,7 @@ src/
     rename_service.py            - 批次重新命名邏輯編排
     pdf_service.py               - PDF 分割、旋轉、縮圖產生
     project_service.py           - 專案檔儲存/載入
-    undo_service.py              - 復原/重做操作管理
+    undo_service.py              - 復原／重做操作管理
     preferences_service.py       - 使用者偏好（語言、外觀）持久化
     workspace_service.py         - 工作區（分割輸出的暫存地）管理：子資料夾、meta.json、掃描、清理
     google_auth_service.py       - Google API OAuth 認證
@@ -348,8 +348,8 @@ services/ 層
 - 使用者可選擇取消修改，或繼續執行（自動加後綴區分）
 - 若同一來源檔案被多個群組引用，標記警告並停用執行（無法自動修正，需使用者調整群組）
 
-執行階段（`RenameService.execute_rename`）先驗證來源存在、來源未重複、目標未被佔用，任一不符即整批取消；
-執行中途失敗則將已搬移的檔案回滾至原位，確保不會留下半完成狀態。
+執行階段（`RenameService.execute_rename`）先驗證來源存在、來源未重複、新檔名未重複、目標未被佔用，任一不符即整批取消；
+執行中途失敗則將已搬移的檔案回滾至原位；回滾也失敗的檔案以 `RenameRollbackError` 回報，UI 為其寫入復原紀錄並更新專案路徑，不留下無紀錄的半完成狀態。
 
 PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後先清空該來源上次的輸出。
 指定資料夾模式下才做同名檔案覆蓋確認。
@@ -362,8 +362,11 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 
 - 每個來源合併譜對應一個子資料夾，名稱為來源絕對路徑 SHA-1 的前 8 碼；資料夾內 `meta.json` 記錄 `source_path`、`source_name`、`project_path`、`created_at`
 - 專案存檔時更新引用到的子資料夾的 `meta.project_path`
-- 搬空的子資料夾保留 `meta.json`（復原重新命名時分譜會搬回來，需要它辨識來源）；「清理工作區」掃描時才移除未被目前專案引用的空資料夾
-- 「工具 → 清理工作區」列出各子資料夾的引用狀態（使用中／屬於其他專案／屬於無法讀取的專案／未被引用／來源不明），只有「未被引用」預設勾選，刪除走資源回收桶
+- 搬空的子資料夾保留 `meta.json`（復原重新命名時分譜會搬回來，需要它辨識來源）；「清理工作區」掃描時才移除既未被目前專案、也未被任何已知專案引用的空資料夾（`meta.json` 是程式自產的中繼資料，直接刪除不走資源回收桶）
+- 「工具 → 開啟工作區資料夾」以系統檔案總管開啟 `WORKSPACE_DIR`
+- 「工具 → 清理工作區」列出各子資料夾的引用狀態（使用中／屬於其他專案／屬於無法讀取的專案／未被引用／來源不明），只有「未被引用」預設勾選，刪除走資源回收桶。「已知專案」= 最近專案清單 + 各 `meta.project_path` 指向的專案檔；開啟對話框時會順手把最近清單中已不存在的專案檔移除
+- 引用關係涵蓋群組內分譜、總譜與未分組檔案（`Project.all_file_paths()`）
+- 分割輸出路徑等於來源合併譜時拒絕執行（`pdf_service.extract_pages` 與分割對話框各擋一層）；重新分割同一來源時，所有指向舊輸出的群組／未分組項目一併移除
 - `rename_file` 跨磁碟時複製到 `.part` 再就位，失敗不留半成品
 
 ---

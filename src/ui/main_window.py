@@ -19,9 +19,10 @@ from core.constants import (
     TEMPLATE_VARIABLES,
 )
 from core.locale import t, get_locale, set_locale
-from core.models import Project, Group, FileInfo
+from core.models import Project, Group, FileInfo, UndoMapping, UndoRecord
 from services.file_service import FileService
 from services.import_service import ImportService
+from services.rename_service import RenameRollbackError
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from ui.instrument_list import InstrumentListEditor
@@ -388,8 +389,38 @@ class MainWindow(QMainWindow):
                 self, t("dialog.complete"),
                 t("dialog.complete.renamed", count=len(record.mappings)),
             )
+        except RenameRollbackError as e:
+            self._save_residual_rename(e)
+            QMessageBox.critical(self, t("dialog.error"), str(e))
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
+
+    def _save_residual_rename(self, error: RenameRollbackError):
+        """回滾失敗時，為仍留在新位置的檔案寫入復原紀錄並更新專案路徑"""
+        if not self._undo_service:
+            from services.undo_service import UndoService
+            self._undo_service = UndoService(self.file_service)
+        from datetime import datetime
+        record = UndoRecord(
+            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+            description=t("rename.undo_description", count=len(error.residual)),
+            mappings=list(error.residual),
+        )
+        self._undo_service.save_undo_record(record)
+        self._update_project_paths(error.residual)
+        self._mark_modified()
+        self._rebuild_tabs()
+
+    def _remove_file_references(self, paths):
+        """從所有群組與未分組清單移除指向指定路徑的檔案項目（重新分割取代舊輸出時使用）"""
+        removed = set(paths)
+        for group in self.project.groups:
+            group.files = [f for f in group.files if f.original_path not in removed]
+            if group.score_file and group.score_file.original_path in removed:
+                group.score_file = None
+        self.project.ungrouped_files = [
+            f for f in self.project.ungrouped_files if f.original_path not in removed
+        ]
 
     def _update_project_paths(self, mappings):
         """根據重新命名結果更新專案內的檔案路徑"""
@@ -416,7 +447,6 @@ class MainWindow(QMainWindow):
             from services.undo_service import UndoService
             self._undo_service = UndoService(self.file_service)
         from datetime import datetime
-        from core.models import UndoRecord
         record = UndoRecord(
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
             description=description,
@@ -444,6 +474,12 @@ class MainWindow(QMainWindow):
             return
         try:
             self._undo_service.execute_undo(record)
+            if record.operation_type == "rename":
+                self._update_project_paths(
+                    [UndoMapping(original=m.renamed, renamed=m.original) for m in record.mappings],
+                )
+                self._mark_modified()
+                self._rebuild_tabs()
             self._set_status(t("status.undone"))
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.undo_failed", error=e))
@@ -467,6 +503,9 @@ class MainWindow(QMainWindow):
             return
         try:
             self._undo_service.execute_redo(record)
+            self._update_project_paths(record.mappings)
+            self._mark_modified()
+            self._rebuild_tabs()
             self._set_status(t("status.redone"))
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
@@ -490,7 +529,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
         folder = self.workspace_service.workspace_dir
-        if not os.path.isdir(folder):
+        if not self.file_service.directory_exists(folder):
             QMessageBox.information(self, t("dialog.info"), t("workspace.open_failed"))
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
@@ -514,8 +553,10 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _on_split_complete(self, files, instruments, source_group, source_path,
-                           created_directories=None):
+                           created_directories=None, replaced_paths=None):
         selected = list(range(len(files)))
+        if replaced_paths:
+            self._remove_file_references(replaced_paths)
         if source_group:
             source_group.files = [
                 f for f in source_group.files if f.original_path != source_path

@@ -155,9 +155,10 @@ class PreviewDialog(QDialog):
         self._plan = self._rename_service.generate_rename_plan(self._project)
         if self._selected_ids is not None:
             self._plan = [e for e in self._plan if e.group_id in self._selected_ids]
-        self._missing = [e.original_path for e in self._plan if not os.path.isfile(e.original_path)]
+        self._missing = self._rename_service.find_missing_sources(self._plan)
         if self._missing:
-            self._plan = [e for e in self._plan if os.path.isfile(e.original_path)]
+            missing = set(self._missing)
+            self._plan = [e for e in self._plan if e.original_path not in missing]
         self._conflicts = self._rename_service.detect_conflicts(self._plan)
         self._duplicate_sources = self._rename_service.detect_duplicate_sources(self._plan)
         self._render_list()

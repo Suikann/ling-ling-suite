@@ -16,6 +16,7 @@ from PySide6.QtGui import QPixmap, QImage, QColor
 from PySide6.QtCore import Qt, Signal, QObject
 from core.locale import t
 from core.models import FileInfo
+from services.workspace_service import WorkspaceService
 
 SECTION_COLORS = [
     "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
@@ -35,9 +36,20 @@ class SplitPdfDialog(QDialog):
     """PDF 分割對話框"""
 
     def __init__(self, project, on_split_complete=None, initial_group=None, parent=None,
-                 workspace_service=None, project_path=""):
+                 workspace_service: WorkspaceService = None, project_path: str = ""):
+        """建立分割對話框
+
+        Args:
+            project: 目前專案
+            on_split_complete: 分割完成回呼
+            initial_group: 開啟時預選的群組
+            parent: 父視窗
+            workspace_service: 工作區服務，分割輸出的預設落點
+            project_path: 目前專案檔路徑，尚未存檔時為空字串，寫入工作區 meta
+        """
         super().__init__(parent)
         self._workspace = workspace_service
+        self._files = workspace_service.file_service
         self._project_path = project_path or ""
         self.setWindowTitle(t("split.title"))
         self.resize(1100, 720)
@@ -117,9 +129,7 @@ class SplitPdfDialog(QDialog):
         outdir_row.addWidget(QLabel(t("split.output_dir")))
         self._radio_workspace = QRadioButton(t("split.output_workspace"))
         self._radio_custom = QRadioButton(t("split.output_custom"))
-        self._radio_workspace.setChecked(self._workspace is not None)
-        self._radio_custom.setChecked(self._workspace is None)
-        self._radio_workspace.setEnabled(self._workspace is not None)
+        self._radio_workspace.setChecked(True)
         self._radio_workspace.toggled.connect(self._on_output_mode_changed)
         outdir_row.addWidget(self._radio_workspace)
         outdir_row.addWidget(self._radio_custom)
@@ -509,7 +519,7 @@ class SplitPdfDialog(QDialog):
         self._refresh_dir_label()
 
     def _use_workspace(self) -> bool:
-        return self._workspace is not None and self._radio_workspace.isChecked()
+        return self._radio_workspace.isChecked()
 
     def _effective_output_dir(self) -> str:
         """實際輸出資料夾：工作區內來源對應的子資料夾，或使用者指定／來源所在資料夾"""
@@ -539,7 +549,7 @@ class SplitPdfDialog(QDialog):
             output_dir: 輸出資料夾
 
         Returns:
-            (頁面索引清單, 顯示名稱, 輸出路徑) 的清單，已略過無頁面的區段
+            （頁面索引清單、顯示名稱、輸出路徑）的清單，已略過無頁面的區段
         """
         plan = []
         for sec_idx, (start, end) in enumerate(self._get_sections()):
@@ -573,22 +583,28 @@ class SplitPdfDialog(QDialog):
         if not plan:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
             return
+        source_key = os.path.normcase(os.path.abspath(self._pdf_path))
+        for _, name, out_path in plan:
+            if os.path.normcase(os.path.abspath(out_path)) == source_key:
+                QMessageBox.critical(self, t("dialog.error"), t("split.error.overwrite_source", name=name))
+                return
+        replaced = []
         if self._use_workspace():
-            previous = self._workspace.list_outputs(output_dir)
-            if previous and not self._confirm_resplit(len(previous)):
+            replaced = self._workspace.list_outputs(output_dir)
+            if replaced and not self._confirm_resplit(len(replaced)):
                 return
         else:
-            existing = [out_path for _, _, out_path in plan if os.path.isfile(out_path)]
+            existing = [out_path for _, _, out_path in plan if self._files.file_exists(out_path)]
             if existing and not self._confirm_overwrite(existing):
                 return
         try:
             from services.pdf_service import extract_pages
-            created_dirs = [] if os.path.isdir(output_dir) else [output_dir]
+            created_dirs = [] if self._files.directory_exists(output_dir) else [output_dir]
             if self._use_workspace():
                 self._workspace.clear_outputs(output_dir)
                 self._workspace.prepare_folder(self._pdf_path, self._project_path)
             else:
-                os.makedirs(output_dir, exist_ok=True)
+                self._files.create_directory(output_dir)
             split_files = []
             split_instruments = []
             for pages, name, out_path in plan:
@@ -601,7 +617,7 @@ class SplitPdfDialog(QDialog):
             if self._on_split_complete:
                 self._on_split_complete(
                     split_files, split_instruments,
-                    self._source_group, self._pdf_path, created_dirs,
+                    self._source_group, self._pdf_path, created_dirs, replaced,
                 )
             QMessageBox.information(
                 self, t("dialog.complete"),

@@ -81,6 +81,25 @@ class TestProjectService(unittest.TestCase):
         self.assertEqual(len(loaded.groups), 0)
         self.assertEqual(len(loaded.ungrouped_files), 0)
 
+    def test_find_missing_files_covers_groups_score_and_ungrouped(self):
+        existing = os.path.join(self.temp_dir, "ok.pdf")
+        with open(existing, "w") as f:
+            f.write("x")
+        gone_part = os.path.join(self.temp_dir, "gone_part.pdf")
+        gone_score = os.path.join(self.temp_dir, "gone_score.pdf")
+        gone_ungrouped = os.path.join(self.temp_dir, "gone_ungrouped.pdf")
+        project = Project()
+        project.groups.append(Group(
+            name="g",
+            files=[FileInfo(existing, "ok.pdf"), FileInfo(gone_part, "gone_part.pdf")],
+            score_file=FileInfo(gone_score, "gone_score.pdf"),
+        ))
+        project.ungrouped_files = [FileInfo(gone_ungrouped, "gone_ungrouped.pdf")]
+        self.assertEqual(
+            ProjectService.find_missing_files(project),
+            [gone_part, gone_score, gone_ungrouped],
+        )
+
     def test_unicode_content(self):
         project = Project(instruments=["長笛", "雙簧管"])
         project.groups = [

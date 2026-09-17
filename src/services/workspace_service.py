@@ -14,22 +14,13 @@ import hashlib
 import json
 import os
 import time
-from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Set
 
 from core.constants import (
     WORKSPACE_DIR, WORKSPACE_FOLDER_HASH_LENGTH, WORKSPACE_META_FILE, WorkspaceStatus,
 )
-from core.models import Project, WorkspaceEntry
+from core.models import Project, WorkspaceEntry, WorkspaceScan
 from services.file_service import FileService
-
-
-@dataclass
-class WorkspaceScan:
-    """清理前的掃描結果"""
-    entries: List[WorkspaceEntry] = field(default_factory=list)
-    missing_projects: List[str] = field(default_factory=list)
-    unreadable_projects: List[str] = field(default_factory=list)
 
 
 def _normalize(path: str) -> str:
@@ -152,6 +143,7 @@ class WorkspaceService:
             return None
 
     def _write_meta(self, folder: str, meta: Dict) -> None:
+        """寫入子資料夾的 meta.json"""
         meta_path = os.path.join(folder, WORKSPACE_META_FILE)
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -190,10 +182,9 @@ class WorkspaceService:
         """
         scan = WorkspaceScan()
         in_use = self._referenced_folders(current_project) if current_project else set()
-        self.purge_empty_folders(in_use)
         owned: Dict[str, str] = {}
         unreadable: Set[str] = set()
-        for path in recent_projects:
+        for path in self._candidate_projects(recent_projects):
             if not os.path.isfile(path):
                 scan.missing_projects.append(path)
                 continue
@@ -205,6 +196,7 @@ class WorkspaceService:
                 continue
             for folder in self._referenced_folders(project):
                 owned.setdefault(folder, path)
+        self.purge_empty_folders(in_use | set(owned))
         for folder in self._list_folders():
             key = _normalize(folder)
             meta = self.read_meta(folder)
@@ -220,6 +212,7 @@ class WorkspaceService:
             else:
                 status = WorkspaceStatus.ORPHAN
             scan.entries.append(self._build_entry(folder, meta, status, owned.get(key, "")))
+        scan.missing_projects = [p for p in scan.missing_projects if p in recent_projects]
         scan.entries.sort(key=lambda e: e.modified_at, reverse=True)
         return scan
 
@@ -242,26 +235,45 @@ class WorkspaceService:
     # --- 內部 ---
 
     def _list_folders(self) -> List[str]:
+        """列出工作區內所有子資料夾；工作區尚未建立時回傳空清單"""
         if not os.path.isdir(self.workspace_dir):
             return []
         return self.file_service.list_subdirectories(self.workspace_dir)
 
+    def _candidate_projects(self, recent_projects: List[str]) -> List[str]:
+        """需要載入以判定引用關係的專案檔：最近清單，加上各子資料夾 meta 指向的專案"""
+        seen: Set[str] = set()
+        candidates: List[str] = []
+        owners = [(self.read_meta(f) or {}).get("project_path") or "" for f in self._list_folders()]
+        for path in list(recent_projects) + owners:
+            if path and _normalize(path) not in seen:
+                seen.add(_normalize(path))
+                candidates.append(path)
+        return candidates
+
     def _referenced_folders(self, project: Project) -> Set[str]:
         """專案引用到的工作區子資料夾（正規化後的路徑集合）"""
         folders: Set[str] = set()
-        for group in project.groups:
-            paths = [f.original_path for f in group.files]
-            if group.score_file:
-                paths.append(group.score_file.original_path)
-            for path in paths:
-                folder = self.folder_of(path)
-                if folder:
-                    folders.add(_normalize(folder))
+        for path in project.all_file_paths():
+            folder = self.folder_of(path)
+            if folder:
+                folders.add(_normalize(folder))
         return folders
 
     def _build_entry(
         self, folder: str, meta: Optional[Dict], status: WorkspaceStatus, owner: str,
     ) -> WorkspaceEntry:
+        """組出子資料夾的摘要
+
+        Args:
+            folder: 子資料夾路徑
+            meta: 已讀取的 meta.json 內容，可為 None
+            status: 判定後的引用狀態
+            owner: 引用此資料夾的專案檔路徑，無則為空字串
+
+        Returns:
+            供清理對話框顯示的摘要
+        """
         outputs = self.list_outputs(folder)
         total = sum(os.path.getsize(p) for p in outputs)
         modified = max((os.path.getmtime(p) for p in outputs), default=os.path.getmtime(folder))
@@ -274,5 +286,5 @@ class WorkspaceService:
             file_count=len(outputs),
             total_bytes=total,
             modified_at=modified,
-            status=status.value,
+            status=status,
         )

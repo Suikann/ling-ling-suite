@@ -47,11 +47,12 @@ class TestWorkspaceService(unittest.TestCase):
             f.write(content)
         return path
 
-    def _project_with(self, *paths):
+    def _project_with(self, *paths, ungrouped=()):
         project = Project()
         project.groups.append(Group(
             name="g", files=[FileInfo(p, os.path.basename(p)) for p in paths],
         ))
+        project.ungrouped_files = [FileInfo(p, os.path.basename(p)) for p in ungrouped]
         return project
 
     def _save_project(self, project, name):
@@ -199,6 +200,32 @@ class TestWorkspaceService(unittest.TestCase):
         self.assertEqual(scan.unreadable_projects, [broken_path])
         owned_entry = next(e for e in scan.entries if e.folder == f_owned)
         self.assertEqual(owned_entry.project_path, other_path)
+
+    def test_scan_treats_ungrouped_files_as_in_use(self):
+        folder = self.service.prepare_folder(self.source)
+        part = self._create_file("高笙.pdf", folder)
+        current = self._project_with(ungrouped=[part])
+        scan = self.service.scan(current, [], ProjectService().load_project)
+        self.assertEqual(scan.entries[0].status, WorkspaceStatus.IN_USE)
+
+    def test_scan_loads_owner_from_meta_even_if_not_recent(self):
+        folder = self.service.prepare_folder(self.source)
+        part = self._create_file("高笙.pdf", folder)
+        owner_path = self._save_project(self._project_with(part), "old.llproj")
+        self.service.update_project_path(self._project_with(part), owner_path)
+        scan = self.service.scan(None, [], ProjectService().load_project)
+        self.assertEqual(scan.entries[0].status, WorkspaceStatus.OWNED_BY_OTHER)
+        self.assertEqual(scan.entries[0].project_path, owner_path)
+        self.assertEqual(scan.missing_projects, [])
+
+    def test_scan_keeps_emptied_folder_owned_by_other_project(self):
+        folder = self.service.prepare_folder(self.source)
+        part = self._create_file("高笙.pdf", folder)
+        owner_path = self._save_project(self._project_with(part), "other.llproj")
+        os.remove(part)
+        self.service.scan(None, [owner_path], ProjectService().load_project)
+        self.assertTrue(os.path.isdir(folder))
+        self.assertIsNotNone(self.service.read_meta(folder))
 
     def test_scan_entry_summary(self):
         folder = self.service.prepare_folder(self.source)

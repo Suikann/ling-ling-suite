@@ -52,6 +52,10 @@ class FileService:
         """
         os.makedirs(path, exist_ok=True)
 
+    def directory_exists(self, path: str) -> bool:
+        """檢查目錄是否存在"""
+        return os.path.isdir(path)
+
     def file_exists(self, path: str) -> bool:
         """檢查檔案是否存在
 
@@ -110,20 +114,15 @@ class FileService:
         return dirs
 
     def delete_file(self, path: str) -> None:
-        """將檔案移至資源回收桶
-
-        Args:
-            path: 檔案路徑
-        """
-        from send2trash import send2trash
-        send2trash(path)
+        """將檔案移至資源回收桶"""
+        self._move_to_trash(path)
 
     def delete_directory(self, path: str) -> None:
-        """將整個目錄移至資源回收桶
+        """將整個目錄移至資源回收桶"""
+        self._move_to_trash(path)
 
-        Args:
-            path: 目錄路徑
-        """
+    @staticmethod
+    def _move_to_trash(path: str) -> None:
         from send2trash import send2trash
         send2trash(path)
 
