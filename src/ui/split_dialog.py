@@ -115,6 +115,10 @@ class SplitPdfDialog(QDialog):
         self._dir_label = QLabel(t("split.same_as_source"))
         self._dir_label.setStyleSheet("color: gray; font-size: 11px;")
         outdir_row.addWidget(self._dir_label, stretch=1)
+        self._subfolder_cb = QCheckBox(t("split.use_subfolder"))
+        self._subfolder_cb.setChecked(True)
+        self._subfolder_cb.toggled.connect(self._refresh_dir_label)
+        outdir_row.addWidget(self._subfolder_cb)
         browse_btn = QPushButton("...")
         browse_btn.setFixedSize(32, 32)
         browse_btn.setStyleSheet("padding: 0; min-height: 0; border-radius: 6px;")
@@ -201,6 +205,7 @@ class SplitPdfDialog(QDialog):
         try:
             from services.pdf_service import get_page_count
             self._pdf_path = path
+            self._refresh_dir_label()
             self._page_count = get_page_count(path)
             self._page_info.setText(t("split.page_count", count=self._page_count))
             self._page_info.setVisible(True)
@@ -489,8 +494,24 @@ class SplitPdfDialog(QDialog):
         folder = QFileDialog.getExistingDirectory(self, t("split.output_dir"))
         if folder:
             self._output_dir = folder
-            self._dir_label.setText(folder)
+            self._refresh_dir_label()
+
+    def _effective_output_dir(self) -> str:
+        """實際輸出資料夾：使用者指定或來源所在資料夾，勾選時再加上以來源檔名命名的子資料夾"""
+        base = self._output_dir or os.path.dirname(self._pdf_path)
+        if self._subfolder_cb.isChecked():
+            return os.path.join(base, os.path.splitext(os.path.basename(self._pdf_path))[0])
+        return base
+
+    def _refresh_dir_label(self):
+        if not self._pdf_path:
+            return
+        if self._output_dir or self._subfolder_cb.isChecked():
+            self._dir_label.setText(self._effective_output_dir())
             self._dir_label.setStyleSheet("font-size: 11px;")
+        else:
+            self._dir_label.setText(t("split.same_as_source"))
+            self._dir_label.setStyleSheet("color: gray; font-size: 11px;")
 
     def _build_split_plan(self, output_dir: str) -> List[Tuple[List[int], str, str]]:
         """依目前的分割點與名稱欄位建立分割計畫
@@ -528,7 +549,7 @@ class SplitPdfDialog(QDialog):
     def _execute_split(self):
         if not self._pdf_path:
             return
-        output_dir = self._output_dir or os.path.dirname(self._pdf_path)
+        output_dir = self._effective_output_dir()
         plan = self._build_split_plan(output_dir)
         if not plan:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
@@ -538,6 +559,7 @@ class SplitPdfDialog(QDialog):
             return
         try:
             from services.pdf_service import extract_pages
+            created_dirs = [] if os.path.isdir(output_dir) else [output_dir]
             os.makedirs(output_dir, exist_ok=True)
             split_files = []
             split_instruments = []
@@ -551,7 +573,7 @@ class SplitPdfDialog(QDialog):
             if self._on_split_complete:
                 self._on_split_complete(
                     split_files, split_instruments,
-                    self._source_group, self._pdf_path,
+                    self._source_group, self._pdf_path, created_dirs,
                 )
             QMessageBox.information(
                 self, t("dialog.complete"),

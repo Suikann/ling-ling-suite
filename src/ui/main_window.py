@@ -405,6 +405,7 @@ class MainWindow(QMainWindow):
             description=description,
             operation_type=op_type,
             created_files=kwargs.get("created_files", []),
+            created_directories=kwargs.get("created_directories", []),
             backup_path=kwargs.get("backup_path", ""),
             original_path=kwargs.get("original_path", ""),
         )
@@ -464,7 +465,8 @@ class MainWindow(QMainWindow):
         )
         dialog.exec()
 
-    def _on_split_complete(self, files, instruments, source_group, source_path):
+    def _on_split_complete(self, files, instruments, source_group, source_path,
+                           created_directories=None):
         selected = list(range(len(files)))
         if source_group:
             source_group.files = [
@@ -483,6 +485,7 @@ class MainWindow(QMainWindow):
         self._save_operation_undo(
             "split", t("undo.split_description", count=len(files)),
             created_files=[f.original_path for f in files],
+            created_directories=created_directories or [],
         )
         self._mark_modified()
         self._rebuild_tabs()
