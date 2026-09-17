@@ -4,6 +4,7 @@
 
 提供檔案系統操作：列出、重新命名、建立目錄等。
 """
+import errno
 import os
 import shutil
 from typing import List
@@ -13,14 +14,35 @@ class FileService:
     """檔案系統操作服務"""
 
     def rename_file(self, old_path: str, new_path: str) -> None:
-        """重新命名檔案並更新修改日期
+        """重新命名（搬移）檔案並更新修改日期
+
+        同一磁碟內直接 rename；跨磁碟時先複製到 `<new_path>.part`，
+        成功後再就位、刪除來源。任一步失敗都不會在目的地留下半成品。
 
         Args:
             old_path: 原始檔案路徑
             new_path: 新檔案路徑
         """
-        os.rename(old_path, new_path)
+        try:
+            os.rename(old_path, new_path)
+        except OSError as e:
+            if e.errno != errno.EXDEV:
+                raise
+            self._move_across_devices(old_path, new_path)
         os.utime(new_path)
+
+    @staticmethod
+    def _move_across_devices(old_path: str, new_path: str) -> None:
+        """以「複製到 .part 再就位」的方式跨磁碟搬移檔案"""
+        part_path = new_path + ".part"
+        try:
+            shutil.copy2(old_path, part_path)
+            os.replace(part_path, new_path)
+        except BaseException:
+            if os.path.exists(part_path):
+                os.remove(part_path)
+            raise
+        os.remove(old_path)
 
     def create_directory(self, path: str) -> None:
         """建立目錄（含父目錄）
@@ -92,6 +114,15 @@ class FileService:
 
         Args:
             path: 檔案路徑
+        """
+        from send2trash import send2trash
+        send2trash(path)
+
+    def delete_directory(self, path: str) -> None:
+        """將整個目錄移至資源回收桶
+
+        Args:
+            path: 目錄路徑
         """
         from send2trash import send2trash
         send2trash(path)

@@ -57,6 +57,19 @@ class UndoRecord:
 
 
 @dataclass
+class WorkspaceEntry:
+    """工作區子資料夾的摘要，供清理對話框顯示"""
+    folder: str
+    source_name: str
+    source_path: str
+    project_path: str
+    file_count: int
+    total_bytes: int
+    modified_at: float
+    status: str
+
+
+@dataclass
 class RenameEntry:
     """重新命名計畫項目"""
     original_path: str

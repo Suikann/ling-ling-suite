@@ -6,6 +6,7 @@
 """
 import os
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Tuple
 
 APP_NAME = "LingLingSuite"
@@ -32,6 +33,20 @@ APPDATA_DIR = _get_user_data_dir()
 UNDO_DIR = os.path.join(APPDATA_DIR, "undo")
 REDO_DIR = os.path.join(APPDATA_DIR, "redo")
 BACKUP_DIR = os.path.join(APPDATA_DIR, "backups")
+WORKSPACE_DIR = os.path.join(APPDATA_DIR, "workspace")
+WORKSPACE_META_FILE = "meta.json"
+WORKSPACE_FOLDER_HASH_LENGTH = 8
+
+
+class WorkspaceStatus(str, Enum):
+    """工作區子資料夾相對於專案的引用狀態"""
+    IN_USE = "in_use"
+    OWNED_BY_OTHER = "owned_by_other"
+    OWNER_UNREADABLE = "owner_unreadable"
+    ORPHAN = "orphan"
+    UNKNOWN_SOURCE = "unknown_source"
+
+
 PROJECT_EXTENSION = ".llproj"
 DEFAULT_MASTER_TEMPLATE = "{序號}-{曲名}-{樂器}.pdf"
 DEFAULT_MASTER_TEMPLATE_EN = "{Number}-{PieceName}-{Instrument}.pdf"
