@@ -5,6 +5,8 @@
 提供專案檔案的儲存與載入功能。
 """
 import json
+import os
+from typing import List
 from core.constants import APP_VERSION
 from core.models import FileInfo, Group, Project
 
@@ -88,6 +90,24 @@ class ProjectService:
                     ]
             group.selected_instruments = list(range(len(group.instruments)))
         return project
+
+    @staticmethod
+    def find_missing_files(project: Project) -> List[str]:
+        """列出專案內指向不存在檔案的路徑
+
+        Args:
+            project: 專案資料
+
+        Returns:
+            找不到的檔案路徑清單（依群組順序）
+        """
+        missing = []
+        for group in project.groups:
+            paths = [f.original_path for f in group.files]
+            if group.score_file:
+                paths.append(group.score_file.original_path)
+            missing.extend(p for p in paths if p and not os.path.isfile(p))
+        return missing
 
     def _serialize_group(self, group: Group) -> dict:
         """序列化單一群組

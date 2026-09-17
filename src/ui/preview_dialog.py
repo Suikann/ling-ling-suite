@@ -33,6 +33,7 @@ class PreviewDialog(QDialog):
         self._plan = []
         self._conflicts = {}
         self._duplicate_sources = {}
+        self._missing = []
         self._build_ui()
         self._refresh_plan()
 
@@ -94,6 +95,11 @@ class PreviewDialog(QDialog):
         self._warn_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
         self._warn_label.setVisible(False)
         layout.addWidget(self._warn_label)
+        self._missing_label = QLabel("")
+        self._missing_label.setStyleSheet("color: #e0b060;")
+        self._missing_label.setWordWrap(True)
+        self._missing_label.setVisible(False)
+        layout.addWidget(self._missing_label)
         self._count_label = QLabel("")
         layout.addWidget(self._count_label)
         self._scroll = QScrollArea()
@@ -149,8 +155,8 @@ class PreviewDialog(QDialog):
         self._plan = self._rename_service.generate_rename_plan(self._project)
         if self._selected_ids is not None:
             self._plan = [e for e in self._plan if e.group_id in self._selected_ids]
-        missing = [e for e in self._plan if not os.path.isfile(e.original_path)]
-        if missing:
+        self._missing = [e.original_path for e in self._plan if not os.path.isfile(e.original_path)]
+        if self._missing:
             self._plan = [e for e in self._plan if os.path.isfile(e.original_path)]
         self._conflicts = self._rename_service.detect_conflicts(self._plan)
         self._duplicate_sources = self._rename_service.detect_duplicate_sources(self._plan)
@@ -161,6 +167,11 @@ class PreviewDialog(QDialog):
             item = self._scroll_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        if self._missing:
+            self._missing_label.setText(
+                t("preview.missing_warning", count=len(self._missing), files="\n".join(self._missing)),
+            )
+        self._missing_label.setVisible(bool(self._missing))
         if not self._plan:
             self._count_label.setText(t("dialog.info.no_files"))
             self._exec_btn.setEnabled(False)

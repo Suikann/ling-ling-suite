@@ -217,6 +217,7 @@ src/
     catalog_window.py            - 譜庫瀏覽器視窗（Google Sheets／Drive）
     catalog_settings_dialog.py   - 譜庫設定對話框
     drive_rename_dialog.py       - Drive 重新命名對話框
+    workspace_dialog.py          - 工作區清理對話框
     widgets.py                   - 共用增強元件
   core/                          - 模板引擎、資料模型、常數定義
     constants.py                 - 模板變數定義、預設值、應用程式路徑等常數
@@ -233,11 +234,14 @@ src/
     project_service.py           - 專案檔儲存/載入
     undo_service.py              - 復原/重做操作管理
     preferences_service.py       - 使用者偏好（語言、外觀）持久化
+    workspace_service.py         - 工作區（分割輸出的暫存地）管理：子資料夾、meta.json、掃描、清理
     google_auth_service.py       - Google API OAuth 認證
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、rename、import、project、undo）
+tests/                           - pytest 測試（template_engine、rename、import、project、undo、workspace）
+CONTEXT.md                       - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
+docs/adr/                        - 架構決策紀錄
 ```
 
 ### Layer Responsibilities
@@ -347,7 +351,20 @@ services/ 層
 執行階段（`RenameService.execute_rename`）先驗證來源存在、來源未重複、目標未被佔用，任一不符即整批取消；
 執行中途失敗則將已搬移的檔案回滾至原位，確保不會留下半完成狀態。
 
-PDF 分割輸出前檢查同名檔案，存在時詢問使用者是否覆蓋。
+PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後先清空該來源上次的輸出。
+指定資料夾模式下才做同名檔案覆蓋確認。
+
+---
+
+## Workspace
+
+分割產生的分譜先進工作區（`WORKSPACE_DIR`），重新命名時才搬到輸出位置；使用者匯入的檔案永遠不進工作區（見 `docs/adr/0001`）。
+
+- 每個來源合併譜對應一個子資料夾，名稱為來源絕對路徑 SHA-1 的前 8 碼；資料夾內 `meta.json` 記錄 `source_path`、`source_name`、`project_path`、`created_at`
+- 專案存檔時更新引用到的子資料夾的 `meta.project_path`
+- 重新命名成功後，搬空的子資料夾自動移除
+- 「工具 → 清理工作區」列出各子資料夾的引用狀態（使用中／屬於其他專案／屬於無法讀取的專案／未被引用／來源不明），只有「未被引用」預設勾選，刪除走資源回收桶
+- `rename_file` 跨磁碟時複製到 `.part` 再就位，失敗不留半成品
 
 ---
 
@@ -358,6 +375,7 @@ PDF 分割輸出前檢查同名檔案，存在時詢問使用者是否覆蓋。
 | 使用者資料目錄 | Windows：`%APPDATA%/LingLingSuite/`；Linux／macOS：`$XDG_CONFIG_HOME/LingLingSuite/`（預設 `~/.config/LingLingSuite/`），由 `core/constants.py` 的 `APPDATA_DIR` 決定 |
 | 偏好設定 | `<使用者資料目錄>/preferences.json` |
 | 復原／重做紀錄 | `<使用者資料目錄>/undo/`、`redo/`（每次操作一個 JSON 檔） |
+| 工作區 | `<使用者資料目錄>/workspace/<hash8>/`（分割輸出與 `meta.json`） |
 | PDF 旋轉備份 | `<使用者資料目錄>/backups/` |
 | 專案檔 | 使用者自選位置（儲存/載入對話框） |
 

@@ -22,6 +22,7 @@ from core.locale import t, get_locale, set_locale
 from core.models import Project, Group, FileInfo
 from services.file_service import FileService
 from services.import_service import ImportService
+from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from ui.instrument_list import InstrumentListEditor
 
@@ -35,6 +36,7 @@ class MainWindow(QMainWindow):
         self._preferences = preferences
         self.file_service = FileService()
         self.import_service = ImportService(self.file_service)
+        self.workspace_service = WorkspaceService(self.file_service)
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
         self._modified = False
@@ -72,6 +74,9 @@ class MainWindow(QMainWindow):
         self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf)
         tools_menu.addSeparator()
         self._add_action(tools_menu, t("menu.tools.rotate_pdf"), self._open_rotate_pdf)
+        tools_menu.addSeparator()
+        self._add_action(tools_menu, t("menu.tools.open_workspace"), self._open_workspace_folder)
+        self._add_action(tools_menu, t("menu.tools.cleanup_workspace"), self._open_workspace_cleanup)
         view_menu = mb.addMenu(t("menu.view"))
         lang_menu = view_menu.addMenu(t("menu.view.language"))
         for code, label_key in [("zh_TW", "menu.view.language.zh_TW"), ("en", "menu.view.language.en")]:
@@ -287,6 +292,17 @@ class MainWindow(QMainWindow):
             self._add_recent_project(path)
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.open_failed", error=e))
+            return
+        self._warn_missing_files()
+
+    def _warn_missing_files(self):
+        """專案內有找不到的檔案時提醒使用者"""
+        missing = self._project_service.find_missing_files(self.project)
+        if missing:
+            QMessageBox.warning(
+                self, t("dialog.warning"),
+                t("missing.on_load", count=len(missing), files="\n".join(missing)),
+            )
 
     def _save_project(self):
         if not self._project_path:
@@ -309,6 +325,7 @@ class MainWindow(QMainWindow):
                 from services.project_service import ProjectService
                 self._project_service = ProjectService()
             self._project_service.save_project(self.project, path)
+            self.workspace_service.update_project_path(self.project, path)
             self._project_path = path
             self._modified = False
             self._update_title()
@@ -363,6 +380,7 @@ class MainWindow(QMainWindow):
                 from services.undo_service import UndoService
                 self._undo_service = UndoService(self.file_service)
             self._undo_service.save_undo_record(record)
+            self.workspace_service.remove_empty_folders_for(m.original for m in record.mappings)
             self._update_project_paths(record.mappings)
             self._mark_modified()
             self._rebuild_tabs()
@@ -462,7 +480,38 @@ class MainWindow(QMainWindow):
             current_group = widget._group
         dialog = SplitPdfDialog(
             self.project, self._on_split_complete, current_group, self,
+            workspace_service=self.workspace_service,
+            project_path=self._project_path or "",
         )
+        dialog.exec()
+
+    # --- 工作區 ---
+
+    def _open_workspace_folder(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        folder = self.workspace_service.workspace_dir
+        if not os.path.isdir(folder):
+            QMessageBox.information(self, t("dialog.info"), t("workspace.open_failed"))
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+
+    def _scan_workspace(self):
+        """掃描工作區；最近清單中已不存在的專案檔順手移除"""
+        if not self._project_service:
+            from services.project_service import ProjectService
+            self._project_service = ProjectService()
+        recent = list(self._preferences.get("recent_projects") or [])
+        scan = self.workspace_service.scan(self.project, recent, self._project_service.load_project)
+        if scan.missing_projects:
+            self._preferences.remove_recent_projects(scan.missing_projects)
+            self._preferences.save()
+            self._refresh_recent_menu()
+        return scan
+
+    def _open_workspace_cleanup(self):
+        from ui.workspace_dialog import WorkspaceCleanupDialog
+        dialog = WorkspaceCleanupDialog(self.workspace_service, self._scan_workspace, self)
         dialog.exec()
 
     def _on_split_complete(self, files, instruments, source_group, source_path,
