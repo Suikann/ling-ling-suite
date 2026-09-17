@@ -7,7 +7,7 @@
 import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
-from core.constants import DEFAULT_MASTER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE
+from core.constants import DEFAULT_MASTER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE, WorkspaceStatus
 
 
 @dataclass
@@ -57,6 +57,27 @@ class UndoRecord:
 
 
 @dataclass
+class WorkspaceEntry:
+    """工作區子資料夾的摘要，供清理對話框顯示"""
+    folder: str
+    source_name: str
+    source_path: str
+    project_path: str
+    file_count: int
+    total_bytes: int
+    modified_at: float
+    status: WorkspaceStatus
+
+
+@dataclass
+class WorkspaceScan:
+    """清理前的掃描結果"""
+    entries: List[WorkspaceEntry] = field(default_factory=list)
+    missing_projects: List[str] = field(default_factory=list)
+    unreadable_projects: List[str] = field(default_factory=list)
+
+
+@dataclass
 class RenameEntry:
     """重新命名計畫項目"""
     original_path: str
@@ -81,6 +102,16 @@ class Project:
     master_template: str = DEFAULT_MASTER_TEMPLATE
     groups: List[Group] = field(default_factory=list)
     ungrouped_files: List[FileInfo] = field(default_factory=list)
+
+    def all_file_paths(self) -> List[str]:
+        """專案引用到的所有檔案路徑：各群組的分譜與總譜，以及未分組檔案"""
+        paths = []
+        for group in self.groups:
+            paths.extend(f.original_path for f in group.files)
+            if group.score_file:
+                paths.append(group.score_file.original_path)
+        paths.extend(f.original_path for f in self.ungrouped_files)
+        return [p for p in paths if p]
     use_subfolders: bool = False
     subfolder_template: str = DEFAULT_SUBFOLDER_TEMPLATE
     use_parts_subfolder: bool = False

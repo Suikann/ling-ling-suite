@@ -11,8 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 注重可維護性、可讀性與模組化
 - 遵循 SOLID 原則（SRP、OCP、LSP、ISP、DIP）
 - 遵循 DRY 原則：避免重複邏輯，將共用邏輯抽取為可重用的函數或模組
-- Use CRLF line endings
-- No consecutive blank lines
+- Use LF line endings
+- 函式與方法內不留連續空行；頂層定義之間依 PEP 8 留兩行
 
 ### Docstring 格式規範
 
@@ -179,7 +179,7 @@ After completing code changes, verify:
 
 ## Project Overview
 
-Ling Ling Suite（泠靈小工具）是一套專為樂團譜務設計的 Python + tkinter 桌面應用程式，用於解決分譜 PDF 檔案的批次重新命名問題。
+Ling Ling Suite（泠靈小工具）是一套專為樂團譜務設計的 Python + PySide6 桌面應用程式，用於解決分譜 PDF 檔案的批次重新命名問題。
 
 核心功能：
 - **雙層級模板系統**：通用大模板（Master Template）設定全域命名規則，曲目小模板（Track-Specific Template）基於大模板複製後編輯、可針對個別群組覆寫
@@ -194,31 +194,54 @@ Ling Ling Suite（泠靈小工具）是一套專為樂團譜務設計的 Python 
 ## Commands
 
 ```bash
-python src/main.py
+python src/main.py              # 啟動程式
+python -m pytest tests/ -v      # 執行測試
 ```
 
 ## Architecture
 
 ```
 src/
-  main.py                - 應用程式進入點
-  ui/                    - tkinter UI 元件
-    main_window.py       - 主視窗
-    template_editor.py   - 模板編輯面板
-    file_list.py         - 檔案清單（支援拖拉排序）
-    instrument_list.py   - 樂器表編輯器
-    group_panel.py       - 群組管理面板
-    preview_dialog.py    - 預覽與衝突警告對話框
-  core/                  - 模板引擎、資料模型、常數定義
-    constants.py         - 模板變數定義、預設值等常數
-    template_engine.py   - 模板解析與變數替換邏輯
-    models.py            - 資料模型（Project、Group、Template、FileInfo）
-  services/              - 檔案操作、重新命名服務
-    file_service.py      - 檔案系統操作（讀取、重新命名、建立資料夾）
-    import_service.py    - 檔案/資料夾匯入與自動分組
-    rename_service.py    - 批次重新命名邏輯編排
-    project_service.py   - 專案檔儲存/載入
-    undo_service.py      - 復原操作管理
+  main.py                        - 應用程式進入點（QApplication、深色主題）
+  assets/                        - 靜態資源（svg 圖示）
+  ui/                            - PySide6 UI 元件
+    main_window.py               - 主視窗
+    file_list.py                 - 檔案清單（支援拖拉排序）
+    instrument_list.py           - 樂器表編輯器
+    group_panel.py               - 群組管理面板
+    preview_dialog.py            - 預覽與衝突警告對話框
+    split_dialog.py              - PDF 分割對話框（縮圖標記分割點）
+    rotate_dialog.py             - PDF 旋轉對話框（分段設定角度）
+    merge_dialog.py              - 連結樂章對話框
+    page_preview.py              - 頁面預覽對話框
+    catalog_window.py            - 譜庫瀏覽器視窗（Google Sheets／Drive）
+    catalog_settings_dialog.py   - 譜庫設定對話框
+    drive_rename_dialog.py       - Drive 重新命名對話框
+    workspace_dialog.py          - 工作區清理對話框
+    widgets.py                   - 共用增強元件
+  core/                          - 模板引擎、資料模型、常數定義
+    constants.py                 - 模板變數定義、預設值、應用程式路徑等常數
+    catalog_constants.py         - 譜庫相關常數
+    template_engine.py           - 模板解析與變數替換邏輯
+    models.py                    - 資料模型（Project、Group、Template、FileInfo）
+    catalog_models.py            - 譜庫資料模型
+    locale.py                    - 國際化系統（zh_TW／en，模板變數雙語轉換）
+  services/                      - 檔案操作、PDF 處理、雲端整合
+    file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾）
+    import_service.py            - 檔案/資料夾匯入與自動分組
+    rename_service.py            - 批次重新命名邏輯編排
+    pdf_service.py               - PDF 分割、旋轉、縮圖產生
+    project_service.py           - 專案檔儲存/載入
+    undo_service.py              - 復原／重做操作管理
+    preferences_service.py       - 使用者偏好（語言、外觀）持久化
+    workspace_service.py         - 工作區（分割輸出的暫存地）管理：子資料夾、meta.json、掃描、清理
+    google_auth_service.py       - Google API OAuth 認證
+    sheets_service.py            - Google Sheets 譜庫存取
+    drive_service.py             - Google Drive 檔案存取
+    drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
+tests/                           - pytest 測試（template_engine、rename、import、project、undo、workspace）
+CONTEXT.md                       - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
+docs/adr/                        - 架構決策紀錄
 ```
 
 ### Layer Responsibilities
@@ -323,6 +346,28 @@ services/ 層
 預覽階段檢查所有產生的新檔名：
 - 若有重複，標記警告並顯示衝突的檔案
 - 使用者可選擇取消修改，或繼續執行（自動加後綴區分）
+- 若同一來源檔案被多個群組引用，標記警告並停用執行（無法自動修正，需使用者調整群組）
+
+執行階段（`RenameService.execute_rename`）先驗證來源存在、來源未重複、新檔名未重複、目標未被佔用，任一不符即整批取消；
+執行中途失敗則將已搬移的檔案回滾至原位；回滾也失敗的檔案以 `RenameRollbackError` 回報，UI 為其寫入復原紀錄並更新專案路徑，不留下無紀錄的半完成狀態。
+
+PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後先清空該來源上次的輸出。
+指定資料夾模式下才做同名檔案覆蓋確認。
+
+---
+
+## Workspace
+
+分割產生的分譜先進工作區（`WORKSPACE_DIR`），重新命名時才搬到輸出位置；使用者匯入的檔案永遠不進工作區（見 `docs/adr/0001`）。
+
+- 每個來源合併譜對應一個子資料夾，名稱為來源絕對路徑 SHA-1 的前 8 碼；資料夾內 `meta.json` 記錄 `source_path`、`source_name`、`project_path`、`created_at`
+- 專案存檔時更新引用到的子資料夾的 `meta.project_path`
+- 搬空的子資料夾保留 `meta.json`（復原重新命名時分譜會搬回來，需要它辨識來源）；「清理工作區」掃描時才移除既未被目前專案、也未被任何已知專案引用的空資料夾（`meta.json` 是程式自產的中繼資料，直接刪除不走資源回收桶）
+- 「工具 → 開啟工作區資料夾」以系統檔案總管開啟 `WORKSPACE_DIR`
+- 「工具 → 清理工作區」列出各子資料夾的引用狀態（使用中／屬於其他專案／屬於無法讀取的專案／未被引用／來源不明），只有「未被引用」預設勾選，刪除走資源回收桶。「已知專案」= 最近專案清單 + 各 `meta.project_path` 指向的專案檔；開啟對話框時會順手把最近清單中已不存在的專案檔移除
+- 引用關係涵蓋群組內分譜、總譜與未分組檔案（`Project.all_file_paths()`）
+- 分割輸出路徑等於來源合併譜時拒絕執行（`pdf_service.extract_pages` 與分割對話框各擋一層）；重新分割同一來源時，所有指向舊輸出的群組／未分組項目一併移除
+- `rename_file` 跨磁碟時複製到 `.part` 再就位，失敗不留半成品
 
 ---
 
@@ -330,7 +375,11 @@ services/ 層
 
 | 項目 | 位置 |
 |------|------|
-| 復原紀錄 | `%APPDATA%/LingLingSuite/undo/`（每次操作一個 JSON 檔） |
+| 使用者資料目錄 | Windows：`%APPDATA%/LingLingSuite/`；Linux／macOS：`$XDG_CONFIG_HOME/LingLingSuite/`（預設 `~/.config/LingLingSuite/`），由 `core/constants.py` 的 `APPDATA_DIR` 決定 |
+| 偏好設定 | `<使用者資料目錄>/preferences.json` |
+| 復原／重做紀錄 | `<使用者資料目錄>/undo/`、`redo/`（每次操作一個 JSON 檔） |
+| 工作區 | `<使用者資料目錄>/workspace/<hash8>/`（分割輸出與 `meta.json`） |
+| PDF 旋轉備份 | `<使用者資料目錄>/backups/` |
 | 專案檔 | 使用者自選位置（儲存/載入對話框） |
 
 ---

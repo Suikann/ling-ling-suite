@@ -24,6 +24,29 @@ def _sanitize_name(name: str) -> str:
     return name.strip()
 
 
+class RenameRollbackError(OSError):
+    """重新命名中途失敗且部分檔案無法搬回原位
+
+    Attributes:
+        cause: 觸發回滾的原始例外
+        residual: 仍留在新位置、需要記錄以便日後復原的對應
+    """
+
+    def __init__(self, cause: Exception, residual: List[UndoMapping]):
+        super().__init__(t("rename.error.rollback_failed",
+                           error=cause, files="\n".join(m.renamed for m in residual)))
+        self.cause = cause
+        self.residual = residual
+
+
+def _group_duplicates(plan: List[RenameEntry], key, value) -> Dict[str, List[str]]:
+    """依 key 分組，回傳出現多次的鍵及其對應值清單"""
+    grouped = defaultdict(list)
+    for entry in plan:
+        grouped[key(entry)].append(value(entry))
+    return {k: v for k, v in grouped.items() if len(v) > 1}
+
+
 class RenameService:
     """批次重新命名服務"""
 
@@ -136,11 +159,25 @@ class RenameService:
         Returns:
             衝突的新路徑（小寫）到原始路徑清單的對應
         """
-        path_map = defaultdict(list)
-        for entry in plan:
-            key = entry.new_path.lower()
-            path_map[key].append(entry.original_path)
-        return {k: v for k, v in path_map.items() if len(v) > 1}
+        return _group_duplicates(plan, lambda e: e.new_path.lower(), lambda e: e.original_path)
+
+    def detect_duplicate_sources(self, plan: List[RenameEntry]) -> Dict[str, List[str]]:
+        """偵測同一來源檔案被多個項目引用的情況
+
+        同一個檔案被兩個群組同時引用時，第一次搬移後第二次必定失敗，
+        且無法用自動加後綴解決，需由使用者修正群組內容。
+
+        Args:
+            plan: 重新命名計畫
+
+        Returns:
+            被重複引用的原始路徑到新路徑清單的對應
+        """
+        return _group_duplicates(plan, lambda e: os.path.normcase(e.original_path), lambda e: e.new_path)
+
+    def find_missing_sources(self, plan: List[RenameEntry]) -> List[str]:
+        """列出計畫中來源檔案已不存在的原始路徑"""
+        return [e.original_path for e in plan if not self.file_service.file_exists(e.original_path)]
 
     def apply_auto_suffix(self, plan: List[RenameEntry]) -> List[RenameEntry]:
         """為衝突的檔名自動加上後綴
@@ -181,20 +218,78 @@ class RenameService:
         Returns:
             復原紀錄
         """
+        self._validate_plan(plan)
         record = UndoRecord(
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
             description=t("rename.undo_description", count=len(plan)),
         )
         created_dirs = set()
-        for entry in plan:
-            target_dir = os.path.dirname(entry.new_path)
-            if target_dir and not os.path.isdir(target_dir):
-                self.file_service.create_directory(target_dir)
-                created_dirs.add(target_dir)
-            self.file_service.rename_file(entry.original_path, entry.new_path)
-            record.mappings.append(UndoMapping(
-                original=entry.original_path,
-                renamed=entry.new_path,
-            ))
+        try:
+            for entry in plan:
+                target_dir = os.path.dirname(entry.new_path)
+                if target_dir and not os.path.isdir(target_dir):
+                    self.file_service.create_directory(target_dir)
+                    created_dirs.add(target_dir)
+                self.file_service.rename_file(entry.original_path, entry.new_path)
+                record.mappings.append(UndoMapping(
+                    original=entry.original_path,
+                    renamed=entry.new_path,
+                ))
+        except Exception as e:
+            residual = self._rollback(record.mappings, created_dirs)
+            if residual:
+                raise RenameRollbackError(e, residual) from e
+            raise
         record.created_directories = sorted(created_dirs)
         return record
+
+    def _validate_plan(self, plan: List[RenameEntry]) -> None:
+        """執行前檢查計畫是否可安全執行
+
+        檢查來源檔案存在、來源未被重複引用、目標路徑未被其他檔案佔用。
+        任一項不符即拋出例外，不會搬動任何檔案。
+
+        Args:
+            plan: 重新命名計畫
+
+        Raises:
+            FileNotFoundError: 來源檔案不存在
+            FileExistsError: 目標路徑已有檔案，或同一來源被多個項目引用
+        """
+        missing = self.find_missing_sources(plan)
+        if missing:
+            raise FileNotFoundError(t("rename.error.source_missing", files="\n".join(missing)))
+        duplicates = self.detect_duplicate_sources(plan)
+        if duplicates:
+            raise FileExistsError(t("rename.error.duplicate_source", files="\n".join(duplicates)))
+        conflicts = self.detect_conflicts(plan)
+        if conflicts:
+            raise FileExistsError(t("rename.error.duplicate_target", files="\n".join(conflicts)))
+        occupied = [
+            e.new_path for e in plan
+            if os.path.normcase(e.new_path) != os.path.normcase(e.original_path)
+            and self.file_service.file_exists(e.new_path)
+        ]
+        if occupied:
+            raise FileExistsError(t("rename.error.target_exists", files="\n".join(occupied)))
+
+    def _rollback(self, mappings: List[UndoMapping], created_dirs: set) -> List[UndoMapping]:
+        """將已搬移的檔案搬回原位，並移除本次新建且仍為空的目錄
+
+        Args:
+            mappings: 已完成的搬移對應（依執行順序）
+            created_dirs: 本次執行新建的目錄
+
+        Returns:
+            搬不回去、仍留在新位置的對應（依執行順序）
+        """
+        residual: List[UndoMapping] = []
+        for mapping in reversed(mappings):
+            try:
+                self.file_service.rename_file(mapping.renamed, mapping.original)
+            except OSError:
+                residual.append(mapping)
+        for directory in sorted(created_dirs, key=len, reverse=True):
+            self.file_service.remove_empty_directory(directory)
+        residual.reverse()
+        return residual

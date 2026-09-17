@@ -125,6 +125,8 @@ def extract_pages(
     Returns:
         輸出檔案路徑
     """
+    if os.path.normcase(os.path.abspath(output_path)) == os.path.normcase(os.path.abspath(pdf_path)):
+        raise ValueError(f"輸出路徑與來源相同，拒絕覆蓋來源：{pdf_path}")
     reader = PdfReader(pdf_path)
     writer = PdfWriter()
     total = len(reader.pages)

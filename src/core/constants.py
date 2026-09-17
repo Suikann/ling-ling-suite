@@ -6,15 +6,47 @@
 """
 import os
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Tuple
 
 APP_NAME = "LingLingSuite"
 APP_DISPLAY_NAME = "泠靈小工具"
 APP_VERSION = "1.1.0-alpha"
-APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), APP_NAME)
+
+
+def _get_user_data_dir() -> str:
+    """取得使用者資料目錄
+
+    Windows 使用 %APPDATA%，其他平台遵循 XDG 規範（$XDG_CONFIG_HOME 或 ~/.config）。
+
+    Returns:
+        使用者資料目錄的絕對路徑
+    """
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, APP_NAME)
+
+
+APPDATA_DIR = _get_user_data_dir()
 UNDO_DIR = os.path.join(APPDATA_DIR, "undo")
 REDO_DIR = os.path.join(APPDATA_DIR, "redo")
 BACKUP_DIR = os.path.join(APPDATA_DIR, "backups")
+WORKSPACE_DIR = os.path.join(APPDATA_DIR, "workspace")
+WORKSPACE_META_FILE = "meta.json"
+WORKSPACE_FOLDER_HASH_LENGTH = 8
+
+
+class WorkspaceStatus(str, Enum):
+    """工作區子資料夾相對於專案的引用狀態"""
+    IN_USE = "in_use"
+    OWNED_BY_OTHER = "owned_by_other"
+    OWNER_UNREADABLE = "owner_unreadable"
+    ORPHAN = "orphan"
+    UNKNOWN_SOURCE = "unknown_source"
+
+
 PROJECT_EXTENSION = ".llproj"
 DEFAULT_MASTER_TEMPLATE = "{序號}-{曲名}-{樂器}.pdf"
 DEFAULT_MASTER_TEMPLATE_EN = "{Number}-{PieceName}-{Instrument}.pdf"

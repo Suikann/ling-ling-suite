@@ -13,7 +13,7 @@
 """
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 from core.constants import APPDATA_DIR
 
 PREFERENCES_FILE = os.path.join(APPDATA_DIR, "preferences.json")
@@ -86,3 +86,13 @@ class PreferencesService:
         recent = [p for p in recent if os.path.normpath(p) != path]
         recent.insert(0, path)
         self._data["recent_projects"] = recent[:MAX_RECENT]
+
+    def remove_recent_projects(self, paths: List[str]):
+        """從最近專案清單移除指定路徑
+
+        Args:
+            paths: 要移除的專案檔路徑
+        """
+        targets = {os.path.normpath(p) for p in paths}
+        recent = self._data.get("recent_projects", [])
+        self._data["recent_projects"] = [p for p in recent if os.path.normpath(p) not in targets]

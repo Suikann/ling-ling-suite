@@ -19,9 +19,11 @@ from core.constants import (
     TEMPLATE_VARIABLES,
 )
 from core.locale import t, get_locale, set_locale
-from core.models import Project, Group, FileInfo
+from core.models import Project, Group, FileInfo, UndoMapping, UndoRecord
 from services.file_service import FileService
 from services.import_service import ImportService
+from services.rename_service import RenameRollbackError
+from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from ui.instrument_list import InstrumentListEditor
 
@@ -35,6 +37,7 @@ class MainWindow(QMainWindow):
         self._preferences = preferences
         self.file_service = FileService()
         self.import_service = ImportService(self.file_service)
+        self.workspace_service = WorkspaceService(self.file_service)
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
         self._modified = False
@@ -72,6 +75,9 @@ class MainWindow(QMainWindow):
         self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf)
         tools_menu.addSeparator()
         self._add_action(tools_menu, t("menu.tools.rotate_pdf"), self._open_rotate_pdf)
+        tools_menu.addSeparator()
+        self._add_action(tools_menu, t("menu.tools.open_workspace"), self._open_workspace_folder)
+        self._add_action(tools_menu, t("menu.tools.cleanup_workspace"), self._open_workspace_cleanup)
         view_menu = mb.addMenu(t("menu.view"))
         lang_menu = view_menu.addMenu(t("menu.view.language"))
         for code, label_key in [("zh_TW", "menu.view.language.zh_TW"), ("en", "menu.view.language.en")]:
@@ -287,6 +293,17 @@ class MainWindow(QMainWindow):
             self._add_recent_project(path)
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.open_failed", error=e))
+            return
+        self._warn_missing_files()
+
+    def _warn_missing_files(self):
+        """專案內有找不到的檔案時提醒使用者"""
+        missing = self._project_service.find_missing_files(self.project)
+        if missing:
+            QMessageBox.warning(
+                self, t("dialog.warning"),
+                t("missing.on_load", count=len(missing), files="\n".join(missing)),
+            )
 
     def _save_project(self):
         if not self._project_path:
@@ -309,6 +326,7 @@ class MainWindow(QMainWindow):
                 from services.project_service import ProjectService
                 self._project_service = ProjectService()
             self._project_service.save_project(self.project, path)
+            self.workspace_service.update_project_path(self.project, path)
             self._project_path = path
             self._modified = False
             self._update_title()
@@ -371,8 +389,38 @@ class MainWindow(QMainWindow):
                 self, t("dialog.complete"),
                 t("dialog.complete.renamed", count=len(record.mappings)),
             )
+        except RenameRollbackError as e:
+            self._save_residual_rename(e)
+            QMessageBox.critical(self, t("dialog.error"), str(e))
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
+
+    def _save_residual_rename(self, error: RenameRollbackError):
+        """回滾失敗時，為仍留在新位置的檔案寫入復原紀錄並更新專案路徑"""
+        if not self._undo_service:
+            from services.undo_service import UndoService
+            self._undo_service = UndoService(self.file_service)
+        from datetime import datetime
+        record = UndoRecord(
+            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+            description=t("rename.undo_description", count=len(error.residual)),
+            mappings=list(error.residual),
+        )
+        self._undo_service.save_undo_record(record)
+        self._update_project_paths(error.residual)
+        self._mark_modified()
+        self._rebuild_tabs()
+
+    def _remove_file_references(self, paths):
+        """從所有群組與未分組清單移除指向指定路徑的檔案項目（重新分割取代舊輸出時使用）"""
+        removed = set(paths)
+        for group in self.project.groups:
+            group.files = [f for f in group.files if f.original_path not in removed]
+            if group.score_file and group.score_file.original_path in removed:
+                group.score_file = None
+        self.project.ungrouped_files = [
+            f for f in self.project.ungrouped_files if f.original_path not in removed
+        ]
 
     def _update_project_paths(self, mappings):
         """根據重新命名結果更新專案內的檔案路徑"""
@@ -399,12 +447,12 @@ class MainWindow(QMainWindow):
             from services.undo_service import UndoService
             self._undo_service = UndoService(self.file_service)
         from datetime import datetime
-        from core.models import UndoRecord
         record = UndoRecord(
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
             description=description,
             operation_type=op_type,
             created_files=kwargs.get("created_files", []),
+            created_directories=kwargs.get("created_directories", []),
             backup_path=kwargs.get("backup_path", ""),
             original_path=kwargs.get("original_path", ""),
         )
@@ -426,6 +474,12 @@ class MainWindow(QMainWindow):
             return
         try:
             self._undo_service.execute_undo(record)
+            if record.operation_type == "rename":
+                self._update_project_paths(
+                    [UndoMapping(original=m.renamed, renamed=m.original) for m in record.mappings],
+                )
+                self._mark_modified()
+                self._rebuild_tabs()
             self._set_status(t("status.undone"))
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.undo_failed", error=e))
@@ -449,6 +503,9 @@ class MainWindow(QMainWindow):
             return
         try:
             self._undo_service.execute_redo(record)
+            self._update_project_paths(record.mappings)
+            self._mark_modified()
+            self._rebuild_tabs()
             self._set_status(t("status.redone"))
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
@@ -461,11 +518,45 @@ class MainWindow(QMainWindow):
             current_group = widget._group
         dialog = SplitPdfDialog(
             self.project, self._on_split_complete, current_group, self,
+            workspace_service=self.workspace_service,
+            project_path=self._project_path or "",
         )
         dialog.exec()
 
-    def _on_split_complete(self, files, instruments, source_group, source_path):
+    # --- 工作區 ---
+
+    def _open_workspace_folder(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        folder = self.workspace_service.workspace_dir
+        if not self.file_service.directory_exists(folder):
+            QMessageBox.information(self, t("dialog.info"), t("workspace.open_failed"))
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+
+    def _scan_workspace(self):
+        """掃描工作區；最近清單中已不存在的專案檔順手移除"""
+        if not self._project_service:
+            from services.project_service import ProjectService
+            self._project_service = ProjectService()
+        recent = list(self._preferences.get("recent_projects") or [])
+        scan = self.workspace_service.scan(self.project, recent, self._project_service.load_project)
+        if scan.missing_projects:
+            self._preferences.remove_recent_projects(scan.missing_projects)
+            self._preferences.save()
+            self._refresh_recent_menu()
+        return scan
+
+    def _open_workspace_cleanup(self):
+        from ui.workspace_dialog import WorkspaceCleanupDialog
+        dialog = WorkspaceCleanupDialog(self.workspace_service, self._scan_workspace, self)
+        dialog.exec()
+
+    def _on_split_complete(self, files, instruments, source_group, source_path,
+                           created_directories=None, replaced_paths=None):
         selected = list(range(len(files)))
+        if replaced_paths:
+            self._remove_file_references(replaced_paths)
         if source_group:
             source_group.files = [
                 f for f in source_group.files if f.original_path != source_path
@@ -483,6 +574,7 @@ class MainWindow(QMainWindow):
         self._save_operation_undo(
             "split", t("undo.split_description", count=len(files)),
             created_files=[f.original_path for f in files],
+            created_directories=created_directories or [],
         )
         self._mark_modified()
         self._rebuild_tabs()
