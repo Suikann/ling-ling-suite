@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 注重可維護性、可讀性與模組化
 - 遵循 SOLID 原則（SRP、OCP、LSP、ISP、DIP）
 - 遵循 DRY 原則：避免重複邏輯，將共用邏輯抽取為可重用的函數或模組
-- Use CRLF line endings
+- Use LF line endings
 - No consecutive blank lines
 
 ### Docstring 格式規範
@@ -179,7 +179,7 @@ After completing code changes, verify:
 
 ## Project Overview
 
-Ling Ling Suite（泠靈小工具）是一套專為樂團譜務設計的 Python + tkinter 桌面應用程式，用於解決分譜 PDF 檔案的批次重新命名問題。
+Ling Ling Suite（泠靈小工具）是一套專為樂團譜務設計的 Python + PySide6 桌面應用程式，用於解決分譜 PDF 檔案的批次重新命名問題。
 
 核心功能：
 - **雙層級模板系統**：通用大模板（Master Template）設定全域命名規則，曲目小模板（Track-Specific Template）基於大模板複製後編輯、可針對個別群組覆寫
@@ -194,31 +194,50 @@ Ling Ling Suite（泠靈小工具）是一套專為樂團譜務設計的 Python 
 ## Commands
 
 ```bash
-python src/main.py
+python src/main.py              # 啟動程式
+python -m pytest tests/ -v      # 執行測試
 ```
 
 ## Architecture
 
 ```
 src/
-  main.py                - 應用程式進入點
-  ui/                    - tkinter UI 元件
-    main_window.py       - 主視窗
-    template_editor.py   - 模板編輯面板
-    file_list.py         - 檔案清單（支援拖拉排序）
-    instrument_list.py   - 樂器表編輯器
-    group_panel.py       - 群組管理面板
-    preview_dialog.py    - 預覽與衝突警告對話框
-  core/                  - 模板引擎、資料模型、常數定義
-    constants.py         - 模板變數定義、預設值等常數
-    template_engine.py   - 模板解析與變數替換邏輯
-    models.py            - 資料模型（Project、Group、Template、FileInfo）
-  services/              - 檔案操作、重新命名服務
-    file_service.py      - 檔案系統操作（讀取、重新命名、建立資料夾）
-    import_service.py    - 檔案/資料夾匯入與自動分組
-    rename_service.py    - 批次重新命名邏輯編排
-    project_service.py   - 專案檔儲存/載入
-    undo_service.py      - 復原操作管理
+  main.py                        - 應用程式進入點（QApplication、深色主題）
+  assets/                        - 靜態資源（svg 圖示）
+  ui/                            - PySide6 UI 元件
+    main_window.py               - 主視窗
+    file_list.py                 - 檔案清單（支援拖拉排序）
+    instrument_list.py           - 樂器表編輯器
+    group_panel.py               - 群組管理面板
+    preview_dialog.py            - 預覽與衝突警告對話框
+    split_dialog.py              - PDF 分割對話框（縮圖標記分割點）
+    rotate_dialog.py             - PDF 旋轉對話框（分段設定角度）
+    merge_dialog.py              - 連結樂章對話框
+    page_preview.py              - 頁面預覽對話框
+    catalog_window.py            - 譜庫瀏覽器視窗（Google Sheets／Drive）
+    catalog_settings_dialog.py   - 譜庫設定對話框
+    drive_rename_dialog.py       - Drive 重新命名對話框
+    widgets.py                   - 共用增強元件
+  core/                          - 模板引擎、資料模型、常數定義
+    constants.py                 - 模板變數定義、預設值、應用程式路徑等常數
+    catalog_constants.py         - 譜庫相關常數
+    template_engine.py           - 模板解析與變數替換邏輯
+    models.py                    - 資料模型（Project、Group、Template、FileInfo）
+    catalog_models.py            - 譜庫資料模型
+    locale.py                    - 國際化系統（zh_TW／en，模板變數雙語轉換）
+  services/                      - 檔案操作、PDF 處理、雲端整合
+    file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾）
+    import_service.py            - 檔案/資料夾匯入與自動分組
+    rename_service.py            - 批次重新命名邏輯編排
+    pdf_service.py               - PDF 分割、旋轉、縮圖產生
+    project_service.py           - 專案檔儲存/載入
+    undo_service.py              - 復原/重做操作管理
+    preferences_service.py       - 使用者偏好（語言、外觀）持久化
+    google_auth_service.py       - Google API OAuth 認證
+    sheets_service.py            - Google Sheets 譜庫存取
+    drive_service.py             - Google Drive 檔案存取
+    drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
+tests/                           - pytest 測試（template_engine、rename、import、project、undo）
 ```
 
 ### Layer Responsibilities
@@ -330,7 +349,10 @@ services/ 層
 
 | 項目 | 位置 |
 |------|------|
-| 復原紀錄 | `%APPDATA%/LingLingSuite/undo/`（每次操作一個 JSON 檔） |
+| 使用者資料目錄 | Windows：`%APPDATA%/LingLingSuite/`；Linux／macOS：`$XDG_CONFIG_HOME/LingLingSuite/`（預設 `~/.config/LingLingSuite/`），由 `core/constants.py` 的 `APPDATA_DIR` 決定 |
+| 偏好設定 | `<使用者資料目錄>/preferences.json` |
+| 復原／重做紀錄 | `<使用者資料目錄>/undo/`、`redo/`（每次操作一個 JSON 檔） |
+| PDF 旋轉備份 | `<使用者資料目錄>/backups/` |
 | 專案檔 | 使用者自選位置（儲存/載入對話框） |
 
 ---
