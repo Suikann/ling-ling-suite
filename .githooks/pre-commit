@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# hooks/pre-commit — branch-name 規範 + E 條三檢 + F.2 / F.4 lint
+# 規範來源：lingling-claude-template docs/notes/handoff-thin-layer-design.md D / E / F 條（vendored 進消費端時、此 spec 仍在 template repo）
+# E 條範圍：全 repo scan、異體字硬卡 + glossary allowlist
+# F.4 billing-discipline：全文字檔（md/sh/py/json/yaml）、含 H 條訂閱邊界
+# F.2 hook-script-xref：hooks/ 內 script 引用必存在
+# 排除：archive 目錄、hook data 自身、二進位副檔名
+# F.1 commit-spec-sync / F.3 no-manual-install-in-specs：本 repo 痛點不明顯、暫跳
+
+set -euo pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+# lib 目錄解析（三模式相容、見 ADR-0005）：
+#   1. shim：installer 注入 LINGLING_HOOK_LIB env（指向 plugin/template hooks/lib）→ 直接用
+#   2. vendor：本 hook 被複製進消費端 .githooks/，lib 為同層 lib/ → 自我定位
+#   3. template 自用：本 hook 在 <template>/hooks/，lib 在同層 lib/ → 自我定位（同 2）
+# 自我定位（相對 hook 自身）取代舊的 $REPO_ROOT/hooks/lib——後者 vendor 進消費端時不存在。
+_HOOK_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+LINGLING_HOOK_LIB="${LINGLING_HOOK_LIB:-$_HOOK_SELF_DIR/lib}"
+
+# node 是本 hook 的前置條件（所有 lint 皆以 node 實作、見 ADR-0029）、故先於任何檢查驗證。
+# 缺 node 時 fail-closed、明確報錯——舊版對每個 lint 加 `|| true`，會把「工具根本沒跑起來」
+# 誤當成「檢查通過」而靜默放行（Windows 上 python3 為 Store stub 時正是如此）。
+if ! command -v node >/dev/null 2>&1; then
+    echo "ERROR: pre-commit hook 需要 node（hook lint 以 node 實作、見 ADR-0029）" >&2
+    echo "  安裝 node 後重試；請勿以 --no-verify 繞過。" >&2
+    exit 1
+fi
+
+# === branch-name 規範（D 條）===
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+if [[ -n "$BRANCH" && "$BRANCH" != "HEAD" ]]; then
+    case "$BRANCH" in
+        main|master) ;;
+        *)
+            if printf '%s' "$BRANCH" | grep -q '[0-9]'; then
+                echo "ERROR: pre-commit hook 阻擋：" >&2
+                echo "  - branch 名 '$BRANCH' 含編號（完全無編號原則）" >&2
+                echo "" >&2
+                echo "規範詳本：lingling-claude-template 的 docs/notes/handoff-thin-layer-design.md（D 條）" >&2
+                exit 1
+            fi
+            ;;
+    esac
+fi
+
+# === E 條 三檢全 repo scan ===
+cd "$REPO_ROOT"
+
+mapfile -t FILES < <(
+    git ls-files \
+    | grep -vE '^(lib-v1-archive|skills-v1-archive)/' \
+    | grep -vE '^(hooks|\.githooks)/lib/data/' \
+    | grep -vE '\.(png|jpg|jpeg|gif|ico|pdf|zip|tar|gz|woff|woff2|ttf|ttc|otf|mp3|mp4|webp|svg)$'
+)
+
+if [[ ${#FILES[@]} -eq 0 ]]; then
+    exit 0
+fi
+
+# 各 lint 契約：exit 0 = 乾淨、1 = 有問題（明細在 stdout）、其他 = 工具本身壞了。
+# 只有 0/1 才是有效結果；>1 一律 fail-closed。
+# 注意：本函式必須直接呼叫（不可包在 $( ) 內）——否則其中的 exit 只會結束 subshell。
+LINT_OUT=""
+run_lint() {
+    local rc=0
+    LINT_OUT=$("$@" 2>&1) || rc=$?
+    if [[ $rc -gt 1 ]]; then
+        echo "ERROR: pre-commit hook lint 執行失敗（exit $rc）：$*" >&2
+        printf '%s\n' "$LINT_OUT" >&2
+        exit 1
+    fi
+}
+
+run_lint node "$LINGLING_HOOK_LIB/chinese_quality.js" "${FILES[@]}"
+CQ_OUTPUT="$LINT_OUT"
+run_lint node "$LINGLING_HOOK_LIB/billing_discipline.js" "${FILES[@]}"
+BD_OUTPUT="$LINT_OUT"
+run_lint node "$LINGLING_HOOK_LIB/hook_script_xref.js"
+XR_OUTPUT="$LINT_OUT"
+
+HAS_ERROR=0
+if [[ -n "$CQ_OUTPUT" ]]; then
+    echo "ERROR: pre-commit hook 阻擋（E 條 chinese_quality 三檢）：" >&2
+    printf '%s\n' "$CQ_OUTPUT" >&2
+    echo "規則：" >&2
+    echo "  simplified — 簡體字（衍生自 OpenCC STCharacters 去合併字）" >&2
+    echo "  encoding   — 冷僻編碼區（CJK Ext-A/B / 相容表意 / PUA）" >&2
+    echo "  variant    — 老式異體字（建議改用標準字、見 OpenCC TWVariants）" >&2
+    echo "異體字例外加入：$LINGLING_HOOK_LIB/data/variant_allowlist.txt" >&2
+    echo "" >&2
+    HAS_ERROR=1
+fi
+if [[ -n "$BD_OUTPUT" ]]; then
+    echo "ERROR: pre-commit hook 阻擋（F.4 billing-discipline）：" >&2
+    printf '%s\n' "$BD_OUTPUT" >&2
+    echo "規則：訂閱 only stance / 禁 claude -p / 禁 ANTHROPIC_API_KEY / 禁 Agent SDK import / 禁 Bedrock / Vertex / Foundry" >&2
+    echo "敘述性 doc 例外：docs/adr/ + docs/notes/ + CHANGELOG / RETROSPECTIVE" >&2
+    echo "" >&2
+    HAS_ERROR=1
+fi
+if [[ -n "$XR_OUTPUT" ]]; then
+    echo "ERROR: pre-commit hook 阻擋（F.2 hook-script-xref）：" >&2
+    printf '%s\n' "$XR_OUTPUT" >&2
+    echo "規則：hooks/ 內 script 引用 hooks/lib/ 與 hooks/ 下的檔案必須存在" >&2
+    echo "" >&2
+    HAS_ERROR=1
+fi
+
+if [[ $HAS_ERROR -eq 1 ]]; then
+    echo "規範詳本：lingling-claude-template 的 docs/notes/handoff-thin-layer-design.md（D / E / F 條）" >&2
+    exit 1
+fi
+
+exit 0

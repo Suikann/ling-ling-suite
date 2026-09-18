@@ -1,0 +1,55 @@
+# glossary_rejected.tsv — 汰換名冊：已被使用者否決的譯名
+# 格式：原文<TAB>被否決的譯名<TAB>為何否決
+#
+# 為何要留這張表：**被否決過的東西如果沒被記錄，下一輪就會重新提一次。** 補詞的人
+# （尤其是 agent）看不到否決史，只會照著英文字面再生一批同樣的直譯。
+#
+# 這張表由測試釘住——`glossary.tsv` 與 `glossary_domain.tsv` 裡若出現此處任一譯名，
+# 測試即紅。它不是文件，是有牙齒的護欄。
+#
+# 這裡的每一條都是同一種錯：**照著英文字面搬，沒先想清楚那東西是什麼。**
+# 補新詞前先讀 glossary.tsv 的表頭原則（信、達、雅；近民國風）。
+
+surrogate pair	代理對	surrogate 的字面直譯。讀者看完仍不知那是什麼——它其實是「兩個半截碼合成一個字」
+surrogate pair	二合碼	雖非直譯，但過於抽象、不易一眼看懂
+exit code	離開碼	exit 的字面直譯；此處指的是「回傳的那個數字」，非「離開」
+fail-open	失效放行	四字堆疊、生硬；未點出「守門者自己倒了」的意象
+fail-closed	失效攔阻	同上
+registry	註冊表	大陸慣用譯法（台灣微軟作「登錄檔」）；且此處指的是「記載裝了什麼的簿子」
+byte-identical	逐位元組相同	字面直譯、冗長
+dead reference	死引用	字面直譯、生硬
+context drift	脈絡漂移	字面直譯
+stub	佔位程式	尚可，但「空殼」更點出「有其名而無其實」
+Worker	作手	使用者否決
+Liveness escalation	存活升報	「升報」非慣用中文；且未與「停滯」形成乾淨對比
+dependency	相依	「相依」是形容詞／狀態，dependency 是名詞——被倚賴的那個東西
+CI	持續整合	Continuous Integration 的字面搬運，沒講出它實際幹什麼（推上去後自動跑建置與測試）
+regex	正則表達式	大陸慣用譯法。台灣作「正規表示式」（微軟另作「規則運算式」）
+CI	自動查驗	使用者否決；「驗收」更能點出它是 merge 前的關口（見 ADR-0020「遠端 CI 為驗證權威」）
+hook	掛鉤	字面搬運。「機關」更得神髓：預先布下、一觸即發
+rebase	換基	自造詞、無前例。「嫁接」與「分支」同一家族，意象吻合
+repo	儲存庫	台灣通行譯法，但三字偏長、且未點出「含全部歷史」
+session	工作階段	微軟譯法，四字偏長、帶公文味
+agent	代理	偏弱，且與 proxy 撞詞
+Worker	執事	改派給 agent（泛稱）；Worker 是「接下這一件的人」，故用「承辦」
+
+walking skeleton	行走骨架	字面直譯
+walking skeleton	通脈	名詞譯成了動賓結構，詞性不合
+walking skeleton	毛胚屋	使用者否決
+handler	處理器	字面直譯，且與硬體處理器撞名
+handler	承辦者	與既有譯名衝突——Worker＝承辦（glossary_domain.tsv）
+singleton	單例	業界直譯，未達信達雅
+deep module	深模組	字面直譯
+deep module	深宅	使用者否決
+deep module	深甕	概念對（口小腹深）但不直觀
+deep module	深井模組	使用者否決
+shallow module	淺碟模組	使用者否決
+optimistic lock	對戳鎖	使用者否決，改沿用業界通名
+functional core, imperative shell	內丹外功	比喻延伸過度
+functional core, imperative shell	內算外務	強制成對拼湊；兩詞實務上常單獨出現，須各自成立
+functional core, imperative shell	純算核心、辦事外殼	成對形被否決；前半後來單獨採用（見 functional core）
+imperative shell	辦事外殼	使用者否決
+imperative shell	務殼	強拼二字，讀來怪
+functional core	算核	強拼二字，讀來怪
+mixin	摻和類	使用者否決
+mixin	配料類	語意不合——mixin 是嫁接而非調味
