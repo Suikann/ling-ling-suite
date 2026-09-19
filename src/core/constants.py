@@ -42,6 +42,9 @@ ATOMIC_WRITE_TEMP_SUFFIX = ".tmp"
 ATOMIC_WRITE_RETRIES = 5
 ATOMIC_WRITE_RETRY_INTERVAL = 0.2
 
+# 兩階段搬移：來源同時是其他項目目標的檔案，第一階段先改成「<原檔名>{後綴}」讓出位置
+RENAME_STAGING_SUFFIX = ".moving"
+
 
 class WorkspaceStatus(str, Enum):
     """工作區子資料夾相對於專案的引用狀態"""

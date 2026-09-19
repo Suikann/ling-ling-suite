@@ -82,5 +82,39 @@ class TestFileServiceAtomicWrite(unittest.TestCase):
         self.assertEqual(self._leftovers(), [])
 
 
+class TestFileServiceRename(unittest.TestCase):
+    """FileService.rename_file 測試"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.file_service = FileService()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create(self, name, content):
+        path = os.path.join(self.temp_dir, name)
+        with open(path, "w") as f:
+            f.write(content)
+        return path
+
+    def _read(self, path):
+        with open(path) as f:
+            return f.read()
+
+    def test_refuses_to_overwrite_another_file(self):
+        src = self._create("src.pdf", "S")
+        dst = self._create("dst.pdf", "D")
+        with self.assertRaises(FileExistsError):
+            self.file_service.rename_file(src, dst)
+        self.assertEqual(self._read(src), "S")
+        self.assertEqual(self._read(dst), "D")
+
+    def test_renaming_onto_itself_is_allowed(self):
+        src = self._create("same.pdf", "S")
+        self.file_service.rename_file(src, src)
+        self.assertEqual(self._read(src), "S")
+
+
 if __name__ == '__main__':
     unittest.main()
