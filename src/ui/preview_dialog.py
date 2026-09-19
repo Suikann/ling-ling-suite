@@ -33,7 +33,7 @@ class PreviewDialog(QDialog):
         self._plan = []
         self._conflicts = {}
         self._duplicate_sources = {}
-        self._occupied = []
+        self._occupied_sources = []
         self._empty_names = []
         self._missing = []
         self._build_ui()
@@ -163,17 +163,25 @@ class PreviewDialog(QDialog):
             self._plan = [e for e in self._plan if e.original_path not in missing]
         self._conflicts = self._rename_service.detect_conflicts(self._plan)
         self._duplicate_sources = self._rename_service.detect_duplicate_sources(self._plan)
-        self._occupied = self._rename_service.find_occupied_targets(self._plan)
+        self._occupied_sources = self._find_occupied_sources()
         self._empty_names = self._rename_service.find_empty_names(self._plan)
         self._render_list()
+
+    def _find_occupied_sources(self):
+        """目標被計畫外檔案佔用的項目原始路徑；以實際會執行的計畫（衝突時為加後綴後）判定"""
+        plan = self._plan
+        if self._conflicts:
+            plan = self._rename_service.apply_auto_suffix(plan)
+        occupied = set(self._rename_service.find_occupied_targets(plan))
+        return [e.original_path for e in plan if e.new_path in occupied]
 
     def _blocking_warnings(self):
         """無法執行的原因清單：同一來源被多個群組引用、目標被計畫外檔案佔用、新檔名為空"""
         warnings = []
         if self._duplicate_sources:
             warnings.append(t("preview.duplicate_source_warning", count=len(self._duplicate_sources)))
-        if self._occupied:
-            warnings.append(t("preview.occupied_warning", count=len(self._occupied)))
+        if self._occupied_sources:
+            warnings.append(t("preview.occupied_warning", count=len(self._occupied_sources)))
         if self._empty_names:
             warnings.append(t("preview.empty_name_warning", count=len(self._empty_names)))
         return warnings
@@ -196,7 +204,7 @@ class PreviewDialog(QDialog):
         self._exec_btn.setEnabled(not blocking)
         conflict_keys = {k.lower() for k in self._conflicts}
         duplicate_keys = set(self._duplicate_sources)
-        occupied_keys = set(self._occupied)
+        occupied_keys = set(self._occupied_sources)
         empty_keys = set(self._empty_names)
         if blocking:
             self._warn_label.setText("\n".join(blocking))
@@ -217,7 +225,7 @@ class PreviewDialog(QDialog):
             row.setWordWrap(True)
             if (entry.new_path.lower() in conflict_keys
                     or os.path.normcase(entry.original_path) in duplicate_keys
-                    or entry.new_path in occupied_keys
+                    or entry.original_path in occupied_keys
                     or entry.original_path in empty_keys):
                 row.setStyleSheet("color: #e74c3c;")
             self._scroll_layout.addWidget(row)

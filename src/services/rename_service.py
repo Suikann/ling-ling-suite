@@ -207,9 +207,15 @@ class RenameService:
         return [e.original_path for e in plan if not self.file_service.file_exists(e.original_path)]
 
     def find_empty_names(self, plan: List[RenameEntry]) -> List[str]:
-        """列出新檔名去掉副檔名後為空的項目原始路徑
+        """列出新檔名去掉副檔名後為空的項目
 
         副檔名取最後一個點之後的部分，因此「.pdf」這種只剩副檔名的名字視為空。
+
+        Args:
+            plan: 重新命名計畫
+
+        Returns:
+            新檔名為空的項目原始路徑清單（依計畫順序）
         """
         return [e.original_path for e in plan if not _name_stem(e.new_path)]
 
@@ -284,7 +290,7 @@ class RenameService:
         try:
             for move in self._build_moves(plan):
                 target_dir = os.path.dirname(move.target)
-                if target_dir and not os.path.isdir(target_dir):
+                if target_dir and not self.file_service.directory_exists(target_dir):
                     self.file_service.create_directory(target_dir)
                     created_dirs.add(target_dir)
                 self.file_service.rename_file(move.source, move.target)
@@ -359,7 +365,16 @@ class RenameService:
             raise FileExistsError(t("rename.error.staging_exists", files="\n".join(staging_taken)))
 
     def _find_occupied_staging(self, plan: List[RenameEntry]) -> List[str]:
-        """列出讓位用暫名已存在於磁碟、或與計畫內其他路徑相撞的項目"""
+        """列出無法使用的讓位用暫名
+
+        暫名已存在於磁碟（檔案或目錄），或與計畫內任一來源、目標相同，都算被佔用。
+
+        Args:
+            plan: 重新命名計畫
+
+        Returns:
+            被佔用的暫名清單（依計畫順序）
+        """
         reserved = {os.path.normcase(e.new_path) for e in plan}
         reserved |= {os.path.normcase(e.original_path) for e in plan}
         taken = []
