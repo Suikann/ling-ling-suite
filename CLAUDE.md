@@ -413,9 +413,9 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 <!-- lingling:git-workflow -->
 ## Git workflow
 
-After merging a feature branch into `main`, delete that branch as part of the same workflow — both local (`git branch -d`) and remote (`git push origin --delete`). Don't leave merged branches around and don't ask first; cleanup is the final step of any commit → push → merge request.
+After merging a feature branch into `develop`, delete that branch as part of the same workflow — both local (`git branch -d`) and remote (`git push origin --delete`). Don't leave merged branches around and don't ask first; cleanup is the final step of any commit → push → merge request.
 
 After merging a ticket's PR, in the same workflow as the branch cleanup, run `/lingling-claude-template:spec-closeout`: it finds the ticket's spec and tells the user when every ticket under that spec is closed. It never closes the spec; close it only when the user says so. A ticket with no parent needs nothing here.
 
-Before any commit — including at the start of `/implement` — if the current branch is `main`, first branch off the latest `main` (`git fetch origin main && git switch -c <name> origin/main`, so the branch starts from `origin/main`, not from a possibly stale local `main`) and work there; never commit on `main` directly. The agent picks the branch name, and the name must not contain digits. Upstream `implement` only says "commit to the current branch" and never opens a branch itself; this rule fills that gap.
+Before any commit — including at the start of `/implement` — if the current branch is `develop`, first branch off the latest `develop` (`git fetch origin develop && git switch -c <name> origin/develop`, so the branch starts from `origin/develop`, not from a possibly stale local `develop`) and work there; never commit on `develop` directly. The agent picks the branch name, and the name must not contain digits. Upstream `implement` only says "commit to the current branch" and never opens a branch itself; this rule fills that gap.
 <!-- /lingling:git-workflow -->

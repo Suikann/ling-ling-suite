@@ -5,6 +5,7 @@
 # F.4 billing-discipline：全文字檔（md/sh/py/json/yaml）、含 H 條訂閱邊界
 # F.2 hook-script-xref：hooks/ 內 script 引用必存在
 # 排除：archive 目錄、hook data 自身、二進位副檔名
+# 擴充點：同層 pre-commit.local（消費端專案自己的閘門）、治理三檢通過後才跑（見 ADR-0035）
 # F.1 commit-spec-sync / F.3 no-manual-install-in-specs：本 repo 痛點不明顯、暫跳
 
 set -euo pipefail
@@ -51,7 +52,7 @@ mapfile -t FILES < <(
     git ls-files \
     | grep -vE '^(lib-v1-archive|skills-v1-archive)/' \
     | grep -vE '^(hooks|\.githooks)/lib/data/' \
-    | grep -vE '\.(png|jpg|jpeg|gif|ico|pdf|zip|tar|gz|woff|woff2|ttf|ttc|otf|mp3|mp4|webp|svg)$'
+    | grep -vE '\.(png|jpg|jpeg|gif|ico|bmp|tiff|avif|heic|webp|svg|pdf|zip|tar|gz|bz2|xz|zst|7z|jar|apk|woff|woff2|ttf|ttc|otf|mp3|mp4|flac|wav|ogg|opus|m4a|aac|aiff|mkv|webm|mov|avi|so|dylib|dll|exe|o|a|bin|dex|wasm|class|pyc|sqlite|db)$'
 )
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
@@ -110,6 +111,26 @@ fi
 if [[ $HAS_ERROR -eq 1 ]]; then
     echo "規範詳本：lingling-claude-template 的 docs/notes/handoff-thin-layer-design.md（D / E / F 條）" >&2
     exit 1
+fi
+
+# === 消費端自訂閘門：同層 pre-commit.local（ADR-0035）===
+# 本 hook 是 vendor 複本、必須與上游逐位元相同（SessionStart 漂移偵測比對它），故消費端
+# 專案自己的 pre-commit 邏輯（rustfmt / clippy / lint-staged / cargo test…）不能寫在這裡，
+# 放同層 pre-commit.local：installer 不覆蓋、不刪除它，漂移偵測也不比對它。
+# 治理三檢先跑（便宜、fail fast），專案閘門最後跑；.local 非零即擋 commit。
+# cwd 已是 repo root。有 +x 就直接執行（尊重 shebang）、沒有就交給 bash。
+LOCAL_HOOK="$_HOOK_SELF_DIR/pre-commit.local"
+if [[ -f "$LOCAL_HOOK" ]]; then
+    LOCAL_RC=0
+    if [[ -x "$LOCAL_HOOK" ]]; then
+        "$LOCAL_HOOK" || LOCAL_RC=$?
+    else
+        bash "$LOCAL_HOOK" || LOCAL_RC=$?
+    fi
+    if [[ $LOCAL_RC -ne 0 ]]; then
+        echo "ERROR: pre-commit hook 阻擋（消費端 pre-commit.local 退 $LOCAL_RC）" >&2
+        exit 1
+    fi
 fi
 
 exit 0
