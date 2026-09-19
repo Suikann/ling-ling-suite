@@ -1,0 +1,12 @@
+# variant_allowlist.txt — 異體字檢查的例外清單
+# 每行一個異體字（會略過該字的 variant 檢查、不報錯不阻 commit）。
+# 何時加入：
+#   1. 古文 / 經典引用必須保留原形（例：《老子》「玄之又玄」原作）
+#   2. 品牌 / 專名 / 人名（例：某外文姓氏中譯固定用某異體）
+#   3. 確認為作者刻意風格（非錯字）
+# 加入前先確認該字在 hooks/lib/data/variant_to_standard.txt 出現、
+# 並在 commit message 寫明理由。
+
+# 台灣教育部與一般出版通用標準字，OpenCC TWVariants 偏好 汙/秘 但實務以下列為主：
+污
+祕

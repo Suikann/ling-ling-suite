@@ -175,6 +175,20 @@ After completing code changes, verify:
 - 不生成額外文檔，除非明確要求
 - After code changes, automatically run `git add` and use `/commit-format` to do git commit in 繁體中文
 
+## Agent skills
+
+### Issue tracker
+
+issue 與 spec 都在 GitHub Issues（`Suikann/ling-ling-suite`），一律用 `gh` CLI 操作。見 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+五個標準 triage 角色直接用上游預設字串（`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`）。見 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+單一 context：根目錄 `CONTEXT.md` 加 `docs/adr/`。見 `docs/agents/domain.md`。
+
 ---
 
 ## Project Overview
@@ -395,3 +409,13 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 7. （選用）啟用子資料夾輸出，設定資料夾名稱模板
 8. 預覽結果，確認無衝突
 9. 執行重新命名
+
+<!-- lingling:git-workflow -->
+## Git workflow
+
+After merging a feature branch into `develop`, delete that branch as part of the same workflow — both local (`git branch -d`) and remote (`git push origin --delete`). Don't leave merged branches around and don't ask first; cleanup is the final step of any commit → push → merge request.
+
+After merging a ticket's PR, in the same workflow as the branch cleanup, run `/lingling-claude-template:spec-closeout`: it finds the ticket's spec and tells the user when every ticket under that spec is closed. It never closes the spec; close it only when the user says so. A ticket with no parent needs nothing here.
+
+Before any commit — including at the start of `/implement` — if the current branch is `develop`, first branch off the latest `develop` (`git fetch origin develop && git switch -c <name> origin/develop`, so the branch starts from `origin/develop`, not from a possibly stale local `develop`) and work there; never commit on `develop` directly. The agent picks the branch name, and the name must not contain digits. Upstream `implement` only says "commit to the current branch" and never opens a branch itself; this rule fills that gap.
+<!-- /lingling:git-workflow -->

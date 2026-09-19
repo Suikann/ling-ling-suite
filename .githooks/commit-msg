@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# hooks/commit-msg — commit 訊息格式檢查
+# 規範來源：lingling-claude-template docs/notes/handoff-thin-layer-design.md D 條（vendored 進消費端時、此 spec 仍在 template repo）
+# 規則：
+#   1. subject 行 `<type>：<主旨>`（全形冒號 U+FF1A）
+#   2. type 白名單：feat fix docs style refactor perf test chore revert
+#   3. subject ≤ 50 字
+#   4. 含「修改檔案：」區塊
+#   5. 含「修改內容：」區塊
+#   6. fix 類型加「問題簡述：」區塊
+#   7. 禁 emoji
+#   8. 禁 Co-Authored-By
+#   9. 簡繁混用 / 冷僻編碼 / 異體字（E 條 chinese_quality 三檢）
+#   merge commit（MERGE_HEAD 存在）：跳過結構規則 1-6、只跑衛生 7-9（ADR-0008）
+
+set -euo pipefail
+
+COMMIT_MSG_FILE="${1:?commit-msg hook 需 commit 訊息檔路徑}"
+MSG=$(cat "$COMMIT_MSG_FILE")
+CLEAN_MSG=$(printf '%s\n' "$MSG" | grep -v '^#' || true)
+REPO_ROOT=$(git rev-parse --show-toplevel)
+# lib 目錄解析（三模式相容、見 ADR-0005）：
+#   1. shim：installer 注入 LINGLING_HOOK_LIB env（指向 plugin/template hooks/lib）→ 直接用
+#   2. vendor：本 hook 被複製進消費端 .githooks/，lib 為同層 lib/ → 自我定位
+#   3. template 自用：本 hook 在 <template>/hooks/，lib 在同層 lib/ → 自我定位（同 2）
+# 自我定位（相對 hook 自身）取代舊的 $REPO_ROOT/hooks/lib——後者 vendor 進消費端時不存在。
+_HOOK_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+LINGLING_HOOK_LIB="${LINGLING_HOOK_LIB:-$_HOOK_SELF_DIR/lib}"
+
+# 檢查一律以 node 執行（ADR-0029）。缺 node 時 fail-closed、明確報錯而非讓 set -e
+# 在半途以看不懂的離開碼中止（舊版用 python3、在 Windows 上正是如此炸掉）。
+if ! command -v node >/dev/null 2>&1; then
+    echo "ERROR: commit-msg hook 需要 node（hook 檢查以 node 實作、見 ADR-0029）" >&2
+    echo "  安裝 node 後重試；請勿以 --no-verify 繞過。" >&2
+    exit 1
+fi
+
+# merge commit 判定（MERGE_HEAD 存在＝正在做 merge commit）：merge 訊息多為自動生成、
+# 結構不同於一般 commit，故只跑通用衛生（規則 7-9）、跳過結構規則 1-6（ADR-0008）。
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then IS_MERGE=yes; else IS_MERGE=no; fi
+
+ERRORS=()
+TYPE=""
+
+# 結構規則 1-6 僅對一般 commit 套用；merge commit 跳過（見上方 IS_MERGE）。
+if [[ "$IS_MERGE" != "yes" ]]; then
+# 規則 1+2+3：subject 行
+SUBJECT=$(printf '%s\n' "$CLEAN_MSG" | head -n 1)
+if [[ -z "$SUBJECT" ]]; then
+    ERRORS+=("subject 行為空")
+else
+    if ! printf '%s' "$SUBJECT" | grep -q '：'; then
+        ERRORS+=("subject 行缺全形冒號「：」分隔符（應為 <type>：<主旨>）")
+    else
+        TYPE=$(printf '%s' "$SUBJECT" | awk -F'：' '{print $1}' | xargs)
+        VALID_TYPES="feat fix docs style refactor perf test chore revert"
+        FOUND=0
+        for t in $VALID_TYPES; do
+            if [[ "$TYPE" == "$t" ]]; then FOUND=1; break; fi
+        done
+        if [[ $FOUND -eq 0 ]]; then
+            ERRORS+=("commit type '$TYPE' 不在白名單（$VALID_TYPES）")
+        fi
+    fi
+    # locale-無關的字元計數（LC_ALL=C 下 awk length 會回 byte 數而誤判中文 subject）
+    CHAR_LEN=$(printf '%s' "$SUBJECT" | node "$LINGLING_HOOK_LIB/text_util.js" charlen)
+    if [[ $CHAR_LEN -gt 50 ]]; then
+        ERRORS+=("subject 行超過 50 字（目前 $CHAR_LEN 字）")
+    fi
+fi
+
+# 規則 4：「修改檔案：」區塊
+if ! printf '%s\n' "$CLEAN_MSG" | grep -q '^修改檔案：'; then
+    ERRORS+=("缺少「修改檔案：」區塊")
+fi
+
+# 規則 5：「修改內容：」區塊
+if ! printf '%s\n' "$CLEAN_MSG" | grep -q '^修改內容：'; then
+    ERRORS+=("缺少「修改內容：」區塊")
+fi
+
+# 規則 6：fix 類型加「問題簡述：」區塊
+if [[ "$TYPE" == "fix" ]] && ! printf '%s\n' "$CLEAN_MSG" | grep -q '^問題簡述：'; then
+    ERRORS+=("fix 類型需要「問題簡述：」區塊")
+fi
+fi  # /IS_MERGE：結構規則 1-6 僅一般 commit
+
+# 規則 7：禁 emoji（unicode range 定義在 text_util.js、單一來源）
+# exit 0 = 有 emoji、1 = 沒有；node 已於檔首確保存在，故 127 之類的假陰性不會發生。
+if printf '%s' "$CLEAN_MSG" | node "$LINGLING_HOOK_LIB/text_util.js" has-emoji; then
+    ERRORS+=("commit 訊息含 emoji")
+fi
+
+# 規則 8：禁 Co-Authored-By
+if printf '%s\n' "$CLEAN_MSG" | grep -qi '^Co-Authored-By:'; then
+    ERRORS+=("commit 訊息含 Co-Authored-By（stance 禁）")
+fi
+
+# 規則 9：chinese_quality 三檢（簡繁 / 編碼 / 異體字）
+# exit 0 = 乾淨、1 = 有問題、其他 = 工具壞了（fail-closed，不再用 `|| true` 靜默吞掉）。
+CQ_RC=0
+CQ_OUTPUT=$(printf '%s' "$CLEAN_MSG" | node "$LINGLING_HOOK_LIB/chinese_quality.js" --stdin) || CQ_RC=$?
+if [[ $CQ_RC -gt 1 ]]; then
+    echo "ERROR: commit-msg hook 的 chinese_quality 執行失敗（exit $CQ_RC）" >&2
+    printf '%s\n' "$CQ_OUTPUT" >&2
+    exit 1
+fi
+if [[ -n "$CQ_OUTPUT" ]]; then
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && ERRORS+=("chinese_quality: $line")
+    done <<< "$CQ_OUTPUT"
+fi
+
+if [[ ${#ERRORS[@]} -gt 0 ]]; then
+    echo "ERROR: commit-msg hook 阻擋：" >&2
+    for e in "${ERRORS[@]}"; do
+        echo "  - $e" >&2
+    done
+    echo "" >&2
+    echo "規範詳本：lingling-claude-template 的 docs/notes/handoff-thin-layer-design.md（D 條）" >&2
+    exit 1
+fi
+
+exit 0

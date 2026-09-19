@@ -1,0 +1,98 @@
+# glossary.tsv — 一般技術術語譯名（唯一來源）
+# 格式：原文<TAB>譯名<TAB>備註（備註可省）
+#
+# 本檔**不整份載入 context**。需要譯名時以 hooks/lib/glossary.js 逐詞查詢、只取用到的
+# 條目——查詢成本與表的大小無關。見 ADR-0030。
+#
+# ── 譯名原則（比任何單一詞條都重要）─────────────────────────────
+#
+#   信、達、雅；避免字面直譯；近民國風。
+#
+#   「信」：意思要對。「達」：讀者看完就懂，不必回頭查原文。「雅」：讀得順、像中文。
+#
+#   字面直譯是最常見的失敗：surrogate pair 直譯成「代理對」，讀者看完仍不知那是什麼——
+#   它其實是「兩個半截碼合成一個字」，故取「雙碼合字」。同理 byte-identical 不作「逐位元組
+#   相同」而作「分毫不差」。**先想清楚那東西是什麼，再取名；不要照著英文字面搬。**
+#
+# ── 收錄原則 ────────────────────────────────────────────────
+#
+#   **與使用者互動一律中文，故技術名詞一律收錄**——包含 hook / commit / branch / PR /
+#   merge / session / skill / plugin 等日常字。ADR-0004 管的是**檔案層**、本表只管
+#   **對話層**：檔案裡仍寫 hooks.json，只是對話說「機關」，兩者不衝突。
+#
+#   仍**不**收專名（變數名、JSON 欄位名、產品名如 PATH、additionalContext）——那些照抄。
+#
+#   領域術語（CONTEXT.md 的 ubiquitous language）另見 glossary_domain.tsv。
+#
+# 新增／修改條目：改本檔、開 PR。**譯名以使用者在 PR 上核准為準。**
+
+exit code	回傳碼	程式結束時回傳的數字，0 慣例為成功
+surrogate pair	雙碼合字	UTF-16 中兩個半截碼合成一個字；單獨一半不成字。emoji、罕用漢字皆屬之
+code point	碼位	Unicode 給每個字元的編號（如 U+1F389）
+fail-open	失守	守門的機制自己壞掉時「放行」——最危險的失敗方向，因為它悄無聲息
+fail-closed	死守	自己壞掉時「擋下」；安全，但可能把人卡死
+stub	空殼程式	有其名而無其實；Windows 的 python3.exe 即是
+App Execution Alias	應用程式執行別名	Windows 功能，上述空殼程式的來源。微軟官方譯名，沿用
+lint	靜態檢查	不執行程式、只讀原始碼挑毛病
+linter	靜態檢查工具
+runtime	執行環境	程式跑起來所倚賴的直譯器／虛擬機（node、python）
+dependency	相依套件	所倚賴的外部套件
+registry	名冊	記載「裝了什麼」的簿子
+marketplace	市集	plugin 的來源站台
+snapshot	快照	某一刻的完整複本，此後原件再變也不影響它
+worktree	工作樹	git 的隔離工作副本，可同時檢出不同 branch
+upstream	上游	自己這份複本所源出的原始 repo
+allowlist	放行名單	明列可豁免檢查者
+regex	正規表示式
+CI	自動驗收	推上遠端後自動跑的建置、測試與靜態檢查；merge 前的關口（非字面之「持續整合」）
+CD	自動部署	自動推到正式環境。注意 CD 有二義：Continuous Deployment（自動上線、無人按鈕）與 Continuous Delivery（備妥待命、上線由人決定）；本表取前者
+dead reference	失效引用	指向已不存在之物的參照——文件裡最常見的謊
+context drift	文實脫節	文件與 repo 現況各說各話
+byte-identical	分毫不差	內容完全一致，無任何本地改動
+ubiquitous language	共通語彙	領域模型中團隊一致使用的詞彙，一詞一義
+supersede	廢止	ADR 用語：新決策推翻舊決策
+progressive disclosure	漸進揭露	資訊按需取用，而非一次全塞進來
+staged	已暫存	git 中已 add、待 commit 的變更
+
+# ── 日常核心詞彙 ──────────────────────────────────────────
+hook	機關	預先布在某個時機點上、一觸即發的一段程式
+commit	提交	把一組改動記進版本史；亦作名詞（一筆提交）
+branch	分支
+merge	合併
+rebase	嫁接	把自己的分支嫁接到新的基底上重放（與「分支」同一家族的園藝之喻）
+PR	合併請求	GitHub 的 pull request；GitLab 稱 MR，同義
+MR	合併請求	GitLab 的 merge request；GitHub 稱 PR，同義
+push	推送	把本地的提交送上遠端
+diff	差異
+repo	典藏	程式碼與其全部歷史的權威收存
+session	會期	與 agent 的一次對話，從開始到結束
+skill	技能
+plugin	外掛
+agent	執事	受託自主辦事的程式；泛稱。本 repo 的 Worker（承辦）即一種執事
+handler	司事	舊時會館掌理庶務者；事件發生時負責處理的函式——司其事者，如「效果司事」
+singleton	孤本	全程式僅此一份的物件，如藏書之孤本
+optimistic lock	樂觀鎖	業界通名沿用。實義：不先佔鎖、寫回時驗版本戳，不符即棄而重來
+module	模組	台灣通行譯名沿用
+deep module	深厚模組	介面精簡而內涵深厚（Ousterhout 語）；與淺薄模組成對
+shallow module	淺薄模組	介面鋪得大、內裡沒東西；貶義如原文
+functional core	純算核心	整個核心由純計算構成：資料進、結果出，不碰外界、零副作用
+imperative shell	應世外殼	應對外在世界的殼——存檔、網路、時鐘等副作用集中於此
+mixin	接枝類	不能自己活的枝條類別，以多重繼承接上宿主便長成其一部分；接多了性狀衝突（MRO 陷阱）
+walking skeleton	間架	書法／文章學語：先立起的結構骨架——間架既立、全篇已通，血肉後補。最薄但端到端全通的版本
+sandbox	沙盒	隔離的執行環境，程式在其中跑、傷不到外面。取台灣慣用（如監理沙盒），不作「沙箱」
+grill	質詢	對計畫窮追不捨的詰問，直到再無含糊處；立法院義。grilling 等 skill 識別名維持英文
+queue	輪候	依序等候承辦的工作序列；Pocock「queues, not loops」之義——票排著等、一張一張辦，不循環。資料結構義的 queue 仍作「佇列」
+overlay	附掛	掛在主體之上、不動主體的補充層；如附掛條款。本 repo 指疊在上游逐字 skill 之上的本地自建 skill
+invoke	呼叫	函式／skill 的 invoke。微軟 zh-TW 另作「叫用」亦可；不作「調用」——大陸用語，台灣原義為調派任用
+call	呼叫	函式呼叫（function call）；不作「調用」，理由同 invoke
+pull request	合併請求	PR 的全稱，同一詞；GitLab 稱 merge request（MR）
+idempotent	屢作如一	形容詞。做一次與做多次結果相同、重做不留痕（如「屢作如一的寫入器」）；數學譯名「冪等」對新手是黑話，不取
+label	標籤	GitHub 貼在工單上的分類字串，可多貼可撕；triage 五個角色各對映一個標籤（見 docs/agents/triage-labels.md）
+bounded context	語境	DDD：一套語彙在裡面說一不二的範圍，CONTEXT.md 就是它的詞表。不作「有界上下文」——借了「文章前後文」的字面義。LLM 的 context（context window）另字，不共用此譯
+single-context	單語境	形容詞：repo 只有一份 root CONTEXT.md、一套語彙
+multi-context	多語境	形容詞：repo 以 root CONTEXT-MAP.md（語境圖）指向多份 per-context CONTEXT.md
+shared kernel	共用核心	DDD：多個語境共用、定義一致的那一小塊模型與詞彙
+delivery layer	口岸	通商口岸之義：領域邏輯與外界交會的那一層，bot、編輯器、App、API 各是一個口岸；貨（邏輯與語彙）都是裡面同一套，口岸自己不產貨，故不是獨立語境。不作「交付層」（交付是 deliverable 的事）、「通路層」（銷售通路之義）
+vendor	抄錄	動詞：把外來檔案逐字抄進本 repo 版控，抄完即凍結、對底本零依賴，要跟上就重抄；成品叫抄本。一律兩字，不單用「抄」（有抄襲之嫌）。不作「供應商」——那是名詞義
+vendored	抄本	形容詞／名詞：抄錄進來的那份（抄本 skill、抄本 hook）；provenance 區塊即其底本記錄（來源 repo／pin commit／sha256）
+marker	起訖標記	成對的註解行（如 <!-- lingling:git-workflow --> 與 <!-- /lingling:git-workflow -->），圈出工具可整段覆寫的區塊。單指一條說起端／訖端，不縮成「起標」——那是拍賣的起標價
