@@ -22,7 +22,7 @@ from core.locale import t, get_locale, set_locale
 from core.models import Project, Group, FileInfo, UndoMapping, UndoRecord
 from services.file_service import FileService
 from services.import_service import ImportService
-from services.rename_service import RenameRollbackError
+from services.move_service import RenameRollbackError
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from ui.instrument_list import InstrumentListEditor
@@ -390,7 +390,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, t("dialog.error"), str(e))
 
     def _save_residual_rename(self, error: RenameRollbackError):
-        """回滾失敗時，為仍留在新位置的檔案寫入復原紀錄並更新專案路徑"""
+        """回滾失敗時，為搬不回去的檔案寫入復原紀錄並更新專案路徑（重新命名、復原、重做共用）"""
         if not self._undo_service:
             from services.undo_service import UndoService
             self._undo_service = UndoService(self.file_service)
@@ -475,6 +475,9 @@ class MainWindow(QMainWindow):
                 self._mark_modified()
                 self._rebuild_tabs()
             self._set_status(t("status.undone"))
+        except RenameRollbackError as e:
+            self._save_residual_rename(e)
+            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.undo_failed", error=e))
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.undo_failed", error=e))
 
@@ -501,6 +504,9 @@ class MainWindow(QMainWindow):
             self._mark_modified()
             self._rebuild_tabs()
             self._set_status(t("status.redone"))
+        except RenameRollbackError as e:
+            self._save_residual_rename(e)
+            QMessageBox.critical(self, t("dialog.error"), str(e))
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
 

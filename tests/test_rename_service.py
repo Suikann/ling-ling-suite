@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from core.models import FileInfo, Group, Project, RenameEntry
 from services.file_service import FileService
-from services.rename_service import RenameRollbackError, RenameService
+from services.move_service import RenameRollbackError
+from services.rename_service import RenameService
 
 
 class TestRenameService(unittest.TestCase):
