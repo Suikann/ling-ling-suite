@@ -281,10 +281,7 @@ class MainWindow(QMainWindow):
 
     def _do_open_project(self, path: str):
         try:
-            if not self._project_service:
-                from services.project_service import ProjectService
-                self._project_service = ProjectService(self.file_service)
-            self.project = self._project_service.load_project(path)
+            self.project = self._get_project_service().load_project(path)
             self._project_path = path
             self._suggested_name = ""
             self._modified = False
@@ -298,7 +295,7 @@ class MainWindow(QMainWindow):
 
     def _warn_missing_files(self):
         """專案內有找不到的檔案時提醒使用者"""
-        missing = self._project_service.find_missing_files(self.project)
+        missing = self._get_project_service().find_missing_files(self.project)
         if missing:
             QMessageBox.warning(
                 self, t("dialog.warning"),
@@ -322,10 +319,7 @@ class MainWindow(QMainWindow):
     def _do_save(self, path: str):
         try:
             self._sync_project_from_ui()
-            if not self._project_service:
-                from services.project_service import ProjectService
-                self._project_service = ProjectService(self.file_service)
-            self._project_service.save_project(self.project, path)
+            self._get_project_service().save_project(self.project, path)
             self.workspace_service.update_project_path(self.project, path)
             self._project_path = path
             self._modified = False
@@ -536,11 +530,8 @@ class MainWindow(QMainWindow):
 
     def _scan_workspace(self):
         """掃描工作區；最近清單中已不存在的專案檔順手移除"""
-        if not self._project_service:
-            from services.project_service import ProjectService
-            self._project_service = ProjectService(self.file_service)
         recent = list(self._preferences.get("recent_projects") or [])
-        scan = self.workspace_service.scan(self.project, recent, self._project_service.load_project)
+        scan = self.workspace_service.scan(self.project, recent, self._get_project_service().load_project)
         if scan.missing_projects:
             self._preferences.remove_recent_projects(scan.missing_projects)
             self._preferences.save()
@@ -623,6 +614,13 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     # --- 譜庫 ---
+
+    def _get_project_service(self):
+        """取得或建立專案服務"""
+        if not self._project_service:
+            from services.project_service import ProjectService
+            self._project_service = ProjectService(self.file_service)
+        return self._project_service
 
     def _get_auth_service(self):
         """取得或建立 Google 認證服務"""

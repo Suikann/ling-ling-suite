@@ -35,7 +35,7 @@ class PreferencesService:
 
     def __init__(self, file_service: Optional[FileService] = None):
         self._data: Dict[str, Any] = dict(_DEFAULTS)
-        self._file_service = file_service or FileService()
+        self.file_service = file_service or FileService()
 
     def load(self):
         """從檔案載入偏好設定，檔案不存在或格式錯誤時使用預設值"""
@@ -53,8 +53,7 @@ class PreferencesService:
 
     def save(self):
         """將偏好設定寫入檔案"""
-        self._file_service.create_directory(os.path.dirname(PREFERENCES_FILE))
-        self._file_service.write_json_atomic(PREFERENCES_FILE, self._data)
+        self.file_service.write_json_atomic(PREFERENCES_FILE, self._data)
 
     def get(self, key: str) -> Any:
         """取得偏好值

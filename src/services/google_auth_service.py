@@ -45,7 +45,7 @@ class GoogleAuthService:
         )
         self._token_path = os.path.join(APPDATA_DIR, TOKEN_FILE)
         self._credentials: Optional[Credentials] = None
-        self._file_service = file_service or FileService()
+        self.file_service = file_service or FileService()
 
     @property
     def is_authenticated(self) -> bool:
@@ -136,5 +136,4 @@ class GoogleAuthService:
 
     def _save_token(self, credentials: Credentials):
         """將權杖儲存至本地"""
-        self._file_service.create_directory(os.path.dirname(self._token_path))
-        self._file_service.write_text_atomic(self._token_path, credentials.to_json())
+        self.file_service.write_text_atomic(self._token_path, credentials.to_json())

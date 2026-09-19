@@ -62,12 +62,16 @@ class FileService:
     def write_text_atomic(self, path: str, text: str) -> None:
         """將文字原子寫入：磁碟上只會是完整的舊版或完整的新版
 
-        先寫到同資料夾的暫名並 fsync，再以 os.replace() 就位。
+        父目錄不存在時先建立；先寫到同資料夾的暫名並 fsync，再以 os.replace() 就位。
+        任一步失敗時清掉暫名（清不掉也不蓋過原始例外）、不動原檔。
 
         Args:
             path: 目標檔案路徑
             text: 要寫入的文字（UTF-8）
         """
+        parent = os.path.dirname(path)
+        if parent:
+            self.create_directory(parent)
         temp_path = path + ATOMIC_WRITE_TEMP_SUFFIX
         try:
             with open(temp_path, "w", encoding="utf-8") as f:
@@ -76,9 +80,16 @@ class FileService:
                 os.fsync(f.fileno())
             self._replace_with_retry(temp_path, path)
         except BaseException:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            self._remove_quietly(temp_path)
             raise
+
+    @staticmethod
+    def _remove_quietly(path: str) -> None:
+        """移除檔案；不存在或移除失敗都不拋出"""
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
     @staticmethod
     def _replace_with_retry(src: str, dst: str) -> None:

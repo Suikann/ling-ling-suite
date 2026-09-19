@@ -36,6 +36,12 @@ class TestFileServiceAtomicWrite(unittest.TestCase):
             self.assertEqual(json.load(f), {"曲名": "貝五", "n": [1, 2]})
         self.assertEqual(self._leftovers(), [])
 
+    def test_creates_missing_parent_directory(self):
+        path = os.path.join(self.temp_dir, "undo", "undo_x.json")
+        self.file_service.write_json_atomic(path, {"ok": True})
+        with open(path, "r", encoding="utf-8") as f:
+            self.assertEqual(json.load(f), {"ok": True})
+
     def test_failure_mid_write_keeps_original_and_leaves_no_temp(self):
         self.file_service.write_json_atomic(self.path, {"version": "old"})
         with patch("services.file_service.os.fsync", side_effect=OSError("disk full")):
