@@ -28,6 +28,23 @@ class TestUndoService(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    def _create(self, name, content="dummy"):
+        path = os.path.join(self.temp_dir, name)
+        with open(path, "w") as f:
+            f.write(content)
+        return path
+
+    def _read(self, path):
+        with open(path) as f:
+            return f.read()
+
+    def _record_dirs(self):
+        """把復原／重做紀錄目錄都導到暫存目錄"""
+        return patch.multiple(
+            "services.undo_service",
+            UNDO_DIR=self.undo_dir, REDO_DIR=os.path.join(self.temp_dir, "redo"),
+        )
+
     def _make_record(self, timestamp="20260101_120000"):
         return UndoRecord(
             timestamp=timestamp,
@@ -128,6 +145,50 @@ class TestUndoService(unittest.TestCase):
             self.assertFalse(os.path.isdir(sub_dir))
         finally:
             mod.UNDO_DIR = original_dir
+
+    def test_execute_undo_reverses_a_swap(self):
+        a = self._create("a.pdf", "B")
+        b = self._create("b.pdf", "A")
+        record = UndoRecord(
+            timestamp="20260101_140000", description="對調",
+            mappings=[UndoMapping(original=a, renamed=b), UndoMapping(original=b, renamed=a)],
+        )
+        with self._record_dirs():
+            self.undo_service.save_undo_record(record)
+            self.undo_service.execute_undo(record)
+            self.assertIsNone(self.undo_service.get_latest_undo_record())
+            self.assertIsNotNone(self.undo_service.get_latest_redo_record())
+        self.assertEqual([self._read(p) for p in (a, b)], ["A", "B"])
+        files = [n for n in os.listdir(self.temp_dir) if os.path.isfile(os.path.join(self.temp_dir, n))]
+        self.assertEqual(sorted(files), ["a.pdf", "b.pdf"])
+
+    def test_execute_redo_replays_a_swap(self):
+        a = self._create("a.pdf", "A")
+        b = self._create("b.pdf", "B")
+        record = UndoRecord(
+            timestamp="20260101_150000", description="對調",
+            mappings=[UndoMapping(original=a, renamed=b), UndoMapping(original=b, renamed=a)],
+        )
+        with self._record_dirs():
+            self.undo_service.execute_redo(record)
+            self.assertIsNotNone(self.undo_service.get_latest_undo_record())
+        self.assertEqual([self._read(p) for p in (a, b)], ["B", "A"])
+
+    def test_execute_undo_refuses_when_original_spot_is_taken(self):
+        old_path = os.path.join(self.temp_dir, "old.pdf")
+        new_path = self._create("new.pdf", "N")
+        self._create("old.pdf", "X")
+        record = UndoRecord(
+            timestamp="20260101_160000", description="測試",
+            mappings=[UndoMapping(original=old_path, renamed=new_path)],
+        )
+        with self._record_dirs():
+            self.undo_service.save_undo_record(record)
+            with self.assertRaises(FileExistsError):
+                self.undo_service.execute_undo(record)
+            self.assertIsNotNone(self.undo_service.get_latest_undo_record())
+        self.assertEqual(self._read(old_path), "X")
+        self.assertEqual(self._read(new_path), "N")
 
 
 if __name__ == '__main__':

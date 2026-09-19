@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from core.models import FileInfo, Group, Project, RenameEntry
 from services.file_service import FileService
-from services.rename_service import RenameRollbackError, RenameService
+from services.move_service import RenameRollbackError
+from services.rename_service import RenameService
 
 
 class TestRenameService(unittest.TestCase):
@@ -26,11 +27,154 @@ class TestRenameService(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def _create_file(self, name):
+    def _create_file(self, name, content='dummy'):
         path = os.path.join(self.temp_dir, name)
         with open(path, 'w') as f:
-            f.write('dummy')
+            f.write(content)
         return path
+
+    def _read(self, path):
+        with open(path) as f:
+            return f.read()
+
+    def test_execute_rename_swaps_two_files(self):
+        a = self._create_file("a.pdf", "A")
+        b = self._create_file("b.pdf", "B")
+        record = self.rename_service.execute_rename(
+            [RenameEntry(a, b), RenameEntry(b, a)], Project(),
+        )
+        self.assertEqual(self._read(a), "B")
+        self.assertEqual(self._read(b), "A")
+        self.assertEqual(
+            [(m.original, m.renamed) for m in record.mappings], [(a, b), (b, a)],
+        )
+        self.assertEqual(sorted(os.listdir(self.temp_dir)), ["a.pdf", "b.pdf"])
+
+    def test_execute_rename_follows_chain(self):
+        a = self._create_file("a.pdf", "A")
+        b = self._create_file("b.pdf", "B")
+        c = os.path.join(self.temp_dir, "c.pdf")
+        record = self.rename_service.execute_rename(
+            [RenameEntry(a, b), RenameEntry(b, c)], Project(),
+        )
+        self.assertFalse(os.path.exists(a))
+        self.assertEqual(self._read(b), "A")
+        self.assertEqual(self._read(c), "B")
+        self.assertEqual([m.renamed for m in record.mappings], [b, c])
+        self.assertEqual(sorted(os.listdir(self.temp_dir)), ["b.pdf", "c.pdf"])
+
+    def _fail_rename_when(self, predicate):
+        """把 rename_file 換成在 predicate(old, new) 成立時拋出 OSError 的版本"""
+        original_rename = self.file_service.rename_file
+
+        def flaky_rename(old_path, new_path):
+            if predicate(old_path, new_path):
+                raise OSError("simulated")
+            original_rename(old_path, new_path)
+
+        self.file_service.rename_file = flaky_rename
+
+    def test_execute_rename_rolls_back_first_phase_failure(self):
+        a = self._create_file("a.pdf", "A")
+        b = self._create_file("b.pdf", "B")
+        c = self._create_file("c.pdf", "C")
+        d = self._create_file("d.pdf", "D")
+        plan = [RenameEntry(a, b), RenameEntry(b, a), RenameEntry(c, d), RenameEntry(d, c)]
+        self._fail_rename_when(lambda old, new: old == c)
+        with self.assertRaises(OSError):
+            self.rename_service.execute_rename(plan, Project())
+        self.assertEqual(sorted(os.listdir(self.temp_dir)), ["a.pdf", "b.pdf", "c.pdf", "d.pdf"])
+        self.assertEqual([self._read(p) for p in (a, b, c, d)], ["A", "B", "C", "D"])
+
+    def test_execute_rename_rolls_back_second_phase_failure(self):
+        a = self._create_file("a.pdf", "A")
+        b = self._create_file("b.pdf", "B")
+        e = self._create_file("e.pdf", "E")
+        f = os.path.join(self.temp_dir, "f.pdf")
+        plan = [RenameEntry(a, b), RenameEntry(b, a), RenameEntry(e, f)]
+        self._fail_rename_when(lambda old, new: new == f)
+        with self.assertRaises(OSError):
+            self.rename_service.execute_rename(plan, Project())
+        self.assertEqual(sorted(os.listdir(self.temp_dir)), ["a.pdf", "b.pdf", "e.pdf"])
+        self.assertEqual([self._read(p) for p in (a, b, e)], ["A", "B", "E"])
+
+    def test_rollback_failure_reports_file_stuck_at_staging_name(self):
+        a = self._create_file("a.pdf", "A")
+        b = self._create_file("b.pdf", "B")
+        e = self._create_file("e.pdf", "E")
+        f = os.path.join(self.temp_dir, "f.pdf")
+        plan = [RenameEntry(a, b), RenameEntry(b, a), RenameEntry(e, f)]
+        staging = a + ".moving"
+        # 第三筆就位失敗觸發回滾；回滾最後一步（暫名搬回 a）失敗
+        self._fail_rename_when(lambda old, new: new == f or (old, new) == (staging, a))
+        with self.assertRaises(RenameRollbackError) as ctx:
+            self.rename_service.execute_rename(plan, Project())
+        self.assertEqual(
+            [(m.original, m.renamed) for m in ctx.exception.residual], [(a, staging)],
+        )
+        self.assertEqual(sorted(os.listdir(self.temp_dir)), ["a.pdf.moving", "b.pdf", "e.pdf"])
+        self.assertEqual(self._read(staging), "A")
+        self.assertEqual(self._read(b), "B")
+
+    def test_rollback_never_overwrites_a_file_stuck_in_the_way(self):
+        a = self._create_file("a.pdf", "A")
+        b = self._create_file("b.pdf", "B")
+        c = os.path.join(self.temp_dir, "c.pdf")
+        e = self._create_file("e.pdf", "E")
+        f = os.path.join(self.temp_dir, "f.pdf")
+        plan = [RenameEntry(a, b), RenameEntry(b, c), RenameEntry(e, f)]
+        staging = b + ".moving"
+        # 第三筆就位失敗觸發回滾；a 的檔案搬不回 a、卡在 b，b 的檔案就不能從暫名搬回 b
+        self._fail_rename_when(lambda old, new: new == f or (old, new) == (b, a))
+        with self.assertRaises(RenameRollbackError) as ctx:
+            self.rename_service.execute_rename(plan, Project())
+        self.assertEqual(
+            [(m.original, m.renamed) for m in ctx.exception.residual],
+            [(a, b), (b, staging)],
+        )
+        self.assertEqual(self._read(b), "A")
+        self.assertEqual(self._read(staging), "B")
+
+    def test_execute_rename_rejects_taken_staging_name(self):
+        a = self._create_file("a.pdf", "A")
+        b = self._create_file("b.pdf", "B")
+        self._create_file("a.pdf.moving", "X")
+        with self.assertRaises(FileExistsError) as ctx:
+            self.rename_service.execute_rename([RenameEntry(a, b), RenameEntry(b, a)], Project())
+        self.assertIn("a.pdf.moving", str(ctx.exception))
+        self.assertEqual([self._read(p) for p in (a, b)], ["A", "B"])
+
+    def test_find_occupied_targets_ignores_sources_within_plan(self):
+        a = self._create_file("a.pdf")
+        b = self._create_file("b.pdf")
+        taken = self._create_file("taken.pdf")
+        free = os.path.join(self.temp_dir, "free.pdf")
+        plan = [
+            RenameEntry(a, b),
+            RenameEntry(b, a),
+            RenameEntry(self._create_file("c.pdf"), taken),
+            RenameEntry(self._create_file("d.pdf"), free),
+        ]
+        self.assertEqual(self.rename_service.find_occupied_targets(plan), [taken])
+
+    def test_find_empty_names(self):
+        a = self._create_file("a.pdf")
+        b = self._create_file("b.pdf")
+        c = self._create_file("c.pdf")
+        plan = [
+            RenameEntry(a, os.path.join(self.temp_dir, ".pdf")),
+            RenameEntry(b, os.path.join(self.temp_dir, "ok.pdf")),
+            RenameEntry(c, os.path.join(self.temp_dir, "")),
+        ]
+        self.assertEqual(self.rename_service.find_empty_names(plan), [a, c])
+
+    def test_execute_rename_rejects_empty_name(self):
+        a = self._create_file("a.pdf")
+        with self.assertRaises(ValueError):
+            self.rename_service.execute_rename(
+                [RenameEntry(a, os.path.join(self.temp_dir, ".pdf"))], Project(),
+            )
+        self.assertTrue(os.path.isfile(a))
 
     def test_generate_rename_plan_basic(self):
         p1 = self._create_file("raw_fl.pdf")

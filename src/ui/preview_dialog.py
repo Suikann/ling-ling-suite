@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 from core.locale import t
 from core.models import Project
+from services.move_service import staging_path
 
 
 class PreviewDialog(QDialog):
@@ -33,6 +34,9 @@ class PreviewDialog(QDialog):
         self._plan = []
         self._conflicts = {}
         self._duplicate_sources = {}
+        self._occupied_sources = []
+        self._staging_taken_sources = []
+        self._empty_names = []
         self._missing = []
         self._build_ui()
         self._refresh_plan()
@@ -161,7 +165,38 @@ class PreviewDialog(QDialog):
             self._plan = [e for e in self._plan if e.original_path not in missing]
         self._conflicts = self._rename_service.detect_conflicts(self._plan)
         self._duplicate_sources = self._rename_service.detect_duplicate_sources(self._plan)
+        self._empty_names = self._rename_service.find_empty_names(self._plan)
+        self._check_disk_against_effective_plan()
         self._render_list()
+
+    def _effective_plan(self):
+        """實際會執行的計畫：有衝突時為加後綴後的版本"""
+        if self._conflicts:
+            return self._rename_service.apply_auto_suffix(self._plan)
+        return self._plan
+
+    def _check_disk_against_effective_plan(self):
+        """以實際會執行的計畫判定目標被佔用、暫名被佔用，記下受影響項目的原始路徑"""
+        plan = self._effective_plan()
+        occupied = set(self._rename_service.find_occupied_targets(plan))
+        self._occupied_sources = [e.original_path for e in plan if e.new_path in occupied]
+        taken = set(self._rename_service.find_taken_staging_names(plan))
+        self._staging_taken_sources = [
+            e.original_path for e in plan if staging_path(e.original_path) in taken
+        ]
+
+    def _blocking_warnings(self):
+        """無法執行的原因清單，與 RenameService 執行前驗證的阻擋條件一致"""
+        warnings = []
+        if self._duplicate_sources:
+            warnings.append(t("preview.duplicate_source_warning", count=len(self._duplicate_sources)))
+        if self._empty_names:
+            warnings.append(t("preview.empty_name_warning", count=len(self._empty_names)))
+        if self._occupied_sources:
+            warnings.append(t("preview.occupied_warning", count=len(self._occupied_sources)))
+        if self._staging_taken_sources:
+            warnings.append(t("preview.staging_warning", count=len(self._staging_taken_sources)))
+        return warnings
 
     def _render_list(self):
         while self._scroll_layout.count():
@@ -177,13 +212,15 @@ class PreviewDialog(QDialog):
             self._count_label.setText(t("dialog.info.no_files"))
             self._exec_btn.setEnabled(False)
             return
-        self._exec_btn.setEnabled(not self._duplicate_sources)
+        blocking = self._blocking_warnings()
+        self._exec_btn.setEnabled(not blocking)
         conflict_keys = {k.lower() for k in self._conflicts}
         duplicate_keys = set(self._duplicate_sources)
-        if self._duplicate_sources:
-            self._warn_label.setText(
-                t("preview.duplicate_source_warning", count=len(self._duplicate_sources)),
-            )
+        blocked_sources = (
+            set(self._occupied_sources) | set(self._staging_taken_sources) | set(self._empty_names)
+        )
+        if blocking:
+            self._warn_label.setText("\n".join(blocking))
             self._warn_label.setVisible(True)
             self._exec_btn.setText(t("preview.execute"))
         elif self._conflicts:
@@ -200,7 +237,8 @@ class PreviewDialog(QDialog):
             row = QLabel(f"{entry.original_path}\n  \u2192 {entry.new_path}")
             row.setWordWrap(True)
             if (entry.new_path.lower() in conflict_keys
-                    or os.path.normcase(entry.original_path) in duplicate_keys):
+                    or os.path.normcase(entry.original_path) in duplicate_keys
+                    or entry.original_path in blocked_sources):
                 row.setStyleSheet("color: #e74c3c;")
             self._scroll_layout.addWidget(row)
         self._scroll_layout.addStretch()

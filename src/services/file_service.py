@@ -22,13 +22,20 @@ class FileService:
     def rename_file(self, old_path: str, new_path: str) -> None:
         """重新命名（搬移）檔案並更新修改日期
 
+        目的地已有另一個檔案時拒絕（POSIX 的 os.rename 會靜默覆蓋，Windows 則拋出，
+        這裡讓兩者一致）；同一個檔案只改大小寫不算。
         同一磁碟內直接 rename；跨磁碟時先複製到 `<new_path>.part`，
         成功後再就位、刪除來源。任一步失敗都不會在目的地留下半成品。
 
         Args:
             old_path: 原始檔案路徑
             new_path: 新檔案路徑
+
+        Raises:
+            FileExistsError: 目的地已有另一個檔案
         """
+        if self._is_another_file(old_path, new_path):
+            raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), new_path)
         try:
             os.rename(old_path, new_path)
         except OSError as e:
@@ -36,6 +43,16 @@ class FileService:
                 raise
             self._move_across_devices(old_path, new_path)
         os.utime(new_path)
+
+    @staticmethod
+    def _is_another_file(old_path: str, new_path: str) -> bool:
+        """目的地是否已有不同於來源的檔案（來源不存在時交由 os.rename 回報）"""
+        if not os.path.lexists(new_path) or not os.path.lexists(old_path):
+            return False
+        try:
+            return not os.path.samefile(old_path, new_path)
+        except OSError:
+            return True
 
     @staticmethod
     def _move_across_devices(old_path: str, new_path: str) -> None:

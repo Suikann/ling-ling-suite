@@ -243,7 +243,8 @@ src/
   services/                      - 檔案操作、PDF 處理、雲端整合
     file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾、JSON 原子寫入）
     import_service.py            - 檔案/資料夾匯入與自動分組
-    rename_service.py            - 批次重新命名邏輯編排
+    rename_service.py            - 批次重新命名邏輯編排（計畫生成、空檔名檢查）
+    move_service.py              - 兩階段批次搬移引擎（驗證、對調／連鎖、回滾）；重新命名、復原、重做共用
     pdf_service.py               - PDF 分割、旋轉、縮圖產生
     project_service.py           - 專案檔儲存/載入
     undo_service.py              - 復原／重做操作管理
@@ -361,9 +362,14 @@ services/ 層
 - 若有重複，標記警告並顯示衝突的檔案
 - 使用者可選擇取消修改，或繼續執行（自動加後綴區分）
 - 若同一來源檔案被多個群組引用，標記警告並停用執行（無法自動修正，需使用者調整群組）
+- 若目標位置已有不屬於本次計畫的檔案（`find_occupied_targets`）、讓位用暫名已被佔用（`find_taken_staging_names`）、或產生的檔名去掉副檔名後為空（`find_empty_names`），同樣標記警告並停用執行；對調與連鎖的目標是計畫內來源，不算佔用。預覽的阻擋條件與執行前驗證一致，且以實際會執行的計畫（有衝突時為加後綴後）判定
 
-執行階段（`RenameService.execute_rename`）先驗證來源存在、來源未重複、新檔名未重複、目標未被佔用，任一不符即整批取消；
-執行中途失敗則將已搬移的檔案回滾至原位；回滾也失敗的檔案以 `RenameRollbackError` 回報，UI 為其寫入復原紀錄並更新專案路徑，不留下無紀錄的半完成狀態。
+執行階段（`RenameService.execute_rename`）先檢查新檔名不為空，再交給 `MoveService.execute`：驗證來源存在、來源未重複、目標未重複、目標未被計畫外的檔案佔用、讓位用的暫名未被佔用，任一不符即整批取消。
+「佔用」指磁碟上存在、且不是本次計畫任何一筆的來源（`find_occupied_targets`），所以對調（A→B、B→A）與連鎖（A→B、B→C）可以執行：
+來源同時是其他項目目標的檔案，第一階段先改成同資料夾的 `<原檔名>.moving` 暫名（`RENAME_STAGING_SUFFIX`）讓出位置，第二階段全部就位；復原紀錄只記原始位置到最終位置，暫名不出現。
+執行中途失敗則依搬移的反序回滾至原位；回滾也失敗的檔案（含停在暫名者）以 `RenameRollbackError` 回報，UI 為其寫入復原紀錄並更新專案路徑，不留下無紀錄的半完成狀態。
+復原與重做 rename 紀錄（`UndoService.execute_undo`／`execute_redo`）走同一個引擎，所以對調與連鎖的紀錄也能復原、重做，且中途失敗整批回滾；復原時已不在新位置的檔案略過。
+`FileService.rename_file` 在目的地已有另一個檔案時拒絕，POSIX 與 Windows 行為一致，回滾不會覆蓋卡在路上的檔案。
 
 PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後先清空該來源上次的輸出。
 指定資料夾模式下才做同名檔案覆蓋確認。
