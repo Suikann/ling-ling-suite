@@ -2,12 +2,18 @@
 """
 檔案服務
 
-提供檔案系統操作：列出、重新命名、建立目錄等。
+提供檔案系統操作：列出、重新命名、建立目錄、原子寫入等。
 """
 import errno
+import json
 import os
 import shutil
-from typing import List
+import time
+from typing import Any, List
+
+from core.constants import (
+    ATOMIC_WRITE_RETRIES, ATOMIC_WRITE_RETRY_INTERVAL, ATOMIC_WRITE_TEMP_SUFFIX,
+)
 
 
 class FileService:
@@ -43,6 +49,48 @@ class FileService:
                 os.remove(part_path)
             raise
         os.remove(old_path)
+
+    def write_json_atomic(self, path: str, data: Any) -> None:
+        """將資料序列化為 JSON 並原子寫入
+
+        Args:
+            path: 目標檔案路徑
+            data: 可序列化為 JSON 的資料
+        """
+        self.write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
+
+    def write_text_atomic(self, path: str, text: str) -> None:
+        """將文字原子寫入：磁碟上只會是完整的舊版或完整的新版
+
+        先寫到同資料夾的暫名並 fsync，再以 os.replace() 就位。
+
+        Args:
+            path: 目標檔案路徑
+            text: 要寫入的文字（UTF-8）
+        """
+        temp_path = path + ATOMIC_WRITE_TEMP_SUFFIX
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            self._replace_with_retry(temp_path, path)
+        except BaseException:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+
+    @staticmethod
+    def _replace_with_retry(src: str, dst: str) -> None:
+        """以 os.replace() 就位；遇 PermissionError（短暫鎖定）時重試數次再拋出"""
+        for attempt in range(ATOMIC_WRITE_RETRIES + 1):
+            try:
+                os.replace(src, dst)
+                return
+            except PermissionError:
+                if attempt == ATOMIC_WRITE_RETRIES:
+                    raise
+                time.sleep(ATOMIC_WRITE_RETRY_INTERVAL)
 
     def create_directory(self, path: str) -> None:
         """建立目錄（含父目錄）

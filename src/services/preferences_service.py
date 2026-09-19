@@ -13,8 +13,9 @@
 """
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from core.constants import APPDATA_DIR
+from services.file_service import FileService
 
 PREFERENCES_FILE = os.path.join(APPDATA_DIR, "preferences.json")
 
@@ -32,8 +33,9 @@ MAX_RECENT = 8
 class PreferencesService:
     """使用者偏好管理服務"""
 
-    def __init__(self):
+    def __init__(self, file_service: Optional[FileService] = None):
         self._data: Dict[str, Any] = dict(_DEFAULTS)
+        self._file_service = file_service or FileService()
 
     def load(self):
         """從檔案載入偏好設定，檔案不存在或格式錯誤時使用預設值"""
@@ -51,9 +53,8 @@ class PreferencesService:
 
     def save(self):
         """將偏好設定寫入檔案"""
-        os.makedirs(os.path.dirname(PREFERENCES_FILE), exist_ok=True)
-        with open(PREFERENCES_FILE, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=2)
+        self._file_service.create_directory(os.path.dirname(PREFERENCES_FILE))
+        self._file_service.write_json_atomic(PREFERENCES_FILE, self._data)
 
     def get(self, key: str) -> Any:
         """取得偏好值

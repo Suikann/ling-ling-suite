@@ -283,7 +283,7 @@ class MainWindow(QMainWindow):
         try:
             if not self._project_service:
                 from services.project_service import ProjectService
-                self._project_service = ProjectService()
+                self._project_service = ProjectService(self.file_service)
             self.project = self._project_service.load_project(path)
             self._project_path = path
             self._suggested_name = ""
@@ -324,7 +324,7 @@ class MainWindow(QMainWindow):
             self._sync_project_from_ui()
             if not self._project_service:
                 from services.project_service import ProjectService
-                self._project_service = ProjectService()
+                self._project_service = ProjectService(self.file_service)
             self._project_service.save_project(self.project, path)
             self.workspace_service.update_project_path(self.project, path)
             self._project_path = path
@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
         """掃描工作區；最近清單中已不存在的專案檔順手移除"""
         if not self._project_service:
             from services.project_service import ProjectService
-            self._project_service = ProjectService()
+            self._project_service = ProjectService(self.file_service)
         recent = list(self._preferences.get("recent_projects") or [])
         scan = self.workspace_service.scan(self.project, recent, self._project_service.load_project)
         if scan.missing_projects:
@@ -628,7 +628,7 @@ class MainWindow(QMainWindow):
         """取得或建立 Google 認證服務"""
         if not hasattr(self, "_auth_service"):
             from services.google_auth_service import GoogleAuthService
-            self._auth_service = GoogleAuthService()
+            self._auth_service = GoogleAuthService(self.file_service)
         return self._auth_service
 
     def _open_catalog(self):

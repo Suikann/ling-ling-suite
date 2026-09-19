@@ -6,13 +6,17 @@
 """
 import json
 import os
-from typing import List
+from typing import List, Optional
 from core.constants import APP_VERSION
 from core.models import FileInfo, Group, Project
+from services.file_service import FileService
 
 
 class ProjectService:
     """專案檔管理服務"""
+
+    def __init__(self, file_service: Optional[FileService] = None):
+        self.file_service = file_service or FileService()
 
     def save_project(self, project: Project, file_path: str) -> None:
         """將專案序列化為 JSON 並儲存
@@ -39,8 +43,7 @@ class ProjectService:
             ],
             "groups": [self._serialize_group(g) for g in project.groups],
         }
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        self.file_service.write_json_atomic(file_path, data)
 
     def load_project(self, file_path: str) -> Project:
         """從 JSON 檔案載入專案

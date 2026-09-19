@@ -153,8 +153,7 @@ class UndoService:
             "backup_path": record.backup_path,
             "original_path": record.original_path,
         }
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        self.file_service.write_json_atomic(filepath, data)
 
     def _move_to_redo(self, record: UndoRecord):
         os.makedirs(REDO_DIR, exist_ok=True)
