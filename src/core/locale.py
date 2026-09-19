@@ -192,6 +192,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "preview.execute": "執行重新命名",
         "preview.execute_with_suffix": "繼續（自動加後綴）",
         "preview.duplicate_source_warning": "有 {count} 個檔案被多個群組同時引用，無法執行。請先修正群組內容。",
+        "preview.occupied_warning": "有 {count} 個目標位置已有其他檔案，無法執行。請調整輸出設定或先移開該檔案。",
+        "preview.empty_name_warning": "有 {count} 個檔案產生的新檔名為空，無法執行。請檢查模板與群組資訊。",
         # 重新命名服務
         "rename.undo_description": "重新命名 {count} 個檔案",
         "rename.error.source_missing": "以下來源檔案不存在，已取消操作：\n{files}",
@@ -632,6 +634,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "preview.execute": "Execute Rename",
         "preview.execute_with_suffix": "Continue (auto suffix)",
         "preview.duplicate_source_warning": "{count} file(s) are referenced by more than one group. Fix the group contents before executing.",
+        "preview.occupied_warning": "{count} target path(s) are already taken by other files. Change the output settings or move those files first.",
+        "preview.empty_name_warning": "{count} file(s) would get an empty name. Check the template and group info.",
         # 重新命名服務
         "rename.undo_description": "Renamed {count} file(s)",
         "rename.error.source_missing": "The following source files do not exist. Operation cancelled:\n{files}",
