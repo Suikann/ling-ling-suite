@@ -241,7 +241,7 @@ src/
     catalog_models.py            - 譜庫資料模型
     locale.py                    - 國際化系統（zh_TW／en，模板變數雙語轉換）
   services/                      - 檔案操作、PDF 處理、雲端整合
-    file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾）
+    file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾、JSON 原子寫入）
     import_service.py            - 檔案/資料夾匯入與自動分組
     rename_service.py            - 批次重新命名邏輯編排
     pdf_service.py               - PDF 分割、旋轉、縮圖產生

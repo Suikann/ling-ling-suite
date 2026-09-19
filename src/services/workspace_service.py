@@ -144,9 +144,7 @@ class WorkspaceService:
 
     def _write_meta(self, folder: str, meta: Dict) -> None:
         """寫入子資料夾的 meta.json"""
-        meta_path = os.path.join(folder, WORKSPACE_META_FILE)
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        self.file_service.write_json_atomic(os.path.join(folder, WORKSPACE_META_FILE), meta)
 
     def update_project_path(self, project: Project, project_path: str) -> None:
         """專案存檔時，更新其引用到的所有工作區子資料夾的所屬專案

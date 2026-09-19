@@ -21,6 +21,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from core.catalog_constants import GOOGLE_SCOPES, TOKEN_FILE, CLIENT_SECRETS_FILE
 from core.constants import APPDATA_DIR
+from services.file_service import FileService
 
 
 def _get_app_dir() -> str:
@@ -38,12 +39,13 @@ def _get_app_dir() -> str:
 class GoogleAuthService:
     """Google OAuth2 認證管理"""
 
-    def __init__(self):
+    def __init__(self, file_service: Optional[FileService] = None):
         self._client_secrets_path = os.path.join(
             _get_app_dir(), CLIENT_SECRETS_FILE,
         )
         self._token_path = os.path.join(APPDATA_DIR, TOKEN_FILE)
         self._credentials: Optional[Credentials] = None
+        self.file_service = file_service or FileService()
 
     @property
     def is_authenticated(self) -> bool:
@@ -134,6 +136,4 @@ class GoogleAuthService:
 
     def _save_token(self, credentials: Credentials):
         """將權杖儲存至本地"""
-        os.makedirs(os.path.dirname(self._token_path), exist_ok=True)
-        with open(self._token_path, "w", encoding="utf-8") as f:
-            f.write(credentials.to_json())
+        self.file_service.write_text_atomic(self._token_path, credentials.to_json())

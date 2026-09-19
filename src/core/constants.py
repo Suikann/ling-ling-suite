@@ -37,6 +37,11 @@ WORKSPACE_DIR = os.path.join(APPDATA_DIR, "workspace")
 WORKSPACE_META_FILE = "meta.json"
 WORKSPACE_FOLDER_HASH_LENGTH = 8
 
+# 原子寫入：暫名副檔名，以及 os.replace() 遇 PermissionError（檔案被同步客戶端／防毒短暫鎖住）時的重試次數與間隔（秒）
+ATOMIC_WRITE_TEMP_SUFFIX = ".tmp"
+ATOMIC_WRITE_RETRIES = 5
+ATOMIC_WRITE_RETRY_INTERVAL = 0.2
+
 
 class WorkspaceStatus(str, Enum):
     """工作區子資料夾相對於專案的引用狀態"""

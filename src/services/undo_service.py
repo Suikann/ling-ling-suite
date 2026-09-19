@@ -23,7 +23,6 @@ class UndoService:
 
     def save_undo_record(self, record: UndoRecord) -> str:
         """儲存復原紀錄並清除重做堆疊"""
-        os.makedirs(UNDO_DIR, exist_ok=True)
         filepath = os.path.join(UNDO_DIR, f"undo_{record.timestamp}.json")
         self._write_record(filepath, record)
         self.clear_redo_stack()
@@ -153,11 +152,9 @@ class UndoService:
             "backup_path": record.backup_path,
             "original_path": record.original_path,
         }
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        self.file_service.write_json_atomic(filepath, data)
 
     def _move_to_redo(self, record: UndoRecord):
-        os.makedirs(REDO_DIR, exist_ok=True)
         redo_path = os.path.join(REDO_DIR, f"redo_{record.timestamp}.json")
         self._write_record(redo_path, record)
         undo_path = os.path.join(UNDO_DIR, f"undo_{record.timestamp}.json")
@@ -165,7 +162,6 @@ class UndoService:
             os.remove(undo_path)
 
     def _move_to_undo(self, record: UndoRecord):
-        os.makedirs(UNDO_DIR, exist_ok=True)
         undo_path = os.path.join(UNDO_DIR, f"undo_{record.timestamp}.json")
         self._write_record(undo_path, record)
         redo_path = os.path.join(REDO_DIR, f"redo_{record.timestamp}.json")
