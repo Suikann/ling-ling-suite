@@ -29,3 +29,6 @@ Spec	案卷	決定已做完、寫成文件長期留存的那一份（上游 to-s
 Issue	工單	案卷拆出的一件可交辦工作：一張一場 session 一個 PR，做完結單。上游 skill 原文的 ticket 同義（CONTEXT.md：read ticket as Issue）。派生：案卷底下的工單（子票）、這張工單的案卷（母票）、卡住它的工單（blocker）
 ticket	工單	上游 skill 原文的用字，即 Issue；譯名與派生同 Issue 條
 Understanding gate	會意關卡	合併前由人把的那道關：能用自己的話說出這張 PR 改了什麼、為什麼、怎麼驗證才放行（ADR-0034：demo ＋ 手寫 PR 第一段，兩級）。不作「理解閘」——閘是水閘、理解是直搬；關卡才是中文說法
+triage	甄別	對每張新進工單的第一輪處置：是什麼、能不能做、走哪條路；Triage role 即甄別角色。skill 名 triage 與標籤字串（待分類等）維持不動；skill 內 categorise（bug／enhancement）那步另作「歸類」
+wayfinder	斥候	大案子起霧時先派出去、把路一段段探明畫成共用地圖的那支隊伍；只決策、不動工，路清了交給主力。skill 名與 wayfinder:* 標籤維持英文
+Trunk	主幹	feature 分支從它開出、做完合回去的那條分支；各 repo 自有其名（本 repo 是 main、有的是 develop），規則裡以 {{trunk}} 佔位。不作 main（那是名字不是概念）、default branch（git-flow repo 兩者不同）、base branch（PR 用語，指單張 PR 的目標）

@@ -53,3 +53,12 @@ imperative shell	務殼	強拼二字，讀來怪
 functional core	算核	強拼二字，讀來怪
 mixin	摻和類	使用者否決
 mixin	配料類	語意不合——mixin 是嫁接而非調味
+bounded context	畛域	冷僻，讀者過不了「達」這一關
+delivery layer	通路層	銷售通路之義，跟領域邏輯無關，多一層要解釋的比喻
+delivery layer	窗口層	使用者否決
+delivery layer	對外層	使用者否決
+delivery layer	門面層	使用者否決；且撞 GoF 的 Facade
+vendor	隨附	只有「跟著附上」之義，沒帶到「抄進版控、從此脫鉤」
+marker	界標	地政用語，沒講到這是檔案裡的一行
+triage	初審	跟既有標籤「待分類」自打架，且暗示還有複審
+wayfinder	探路	動詞，wayfinder 是名詞

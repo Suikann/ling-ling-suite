@@ -88,3 +88,11 @@ call	呼叫	函式呼叫（function call）；不作「調用」，理由同 inv
 pull request	合併請求	PR 的全稱，同一詞；GitLab 稱 merge request（MR）
 idempotent	屢作如一	形容詞。做一次與做多次結果相同、重做不留痕（如「屢作如一的寫入器」）；數學譯名「冪等」對新手是黑話，不取
 label	標籤	GitHub 貼在工單上的分類字串，可多貼可撕；triage 五個角色各對映一個標籤（見 docs/agents/triage-labels.md）
+bounded context	語境	DDD：一套語彙在裡面說一不二的範圍，CONTEXT.md 就是它的詞表。不作「有界上下文」——借了「文章前後文」的字面義。LLM 的 context（context window）另字，不共用此譯
+single-context	單語境	形容詞：repo 只有一份 root CONTEXT.md、一套語彙
+multi-context	多語境	形容詞：repo 以 root CONTEXT-MAP.md（語境圖）指向多份 per-context CONTEXT.md
+shared kernel	共用核心	DDD：多個語境共用、定義一致的那一小塊模型與詞彙
+delivery layer	口岸	通商口岸之義：領域邏輯與外界交會的那一層，bot、編輯器、App、API 各是一個口岸；貨（邏輯與語彙）都是裡面同一套，口岸自己不產貨，故不是獨立語境。不作「交付層」（交付是 deliverable 的事）、「通路層」（銷售通路之義）
+vendor	抄錄	動詞：把外來檔案逐字抄進本 repo 版控，抄完即凍結、對底本零依賴，要跟上就重抄；成品叫抄本。一律兩字，不單用「抄」（有抄襲之嫌）。不作「供應商」——那是名詞義
+vendored	抄本	形容詞／名詞：抄錄進來的那份（抄本 skill、抄本 hook）；provenance 區塊即其底本記錄（來源 repo／pin commit／sha256）
+marker	起訖標記	成對的註解行（如 <!-- lingling:git-workflow --> 與 <!-- /lingling:git-workflow -->），圈出工具可整段覆寫的區塊。單指一條說起端／訖端，不縮成「起標」——那是拍賣的起標價
