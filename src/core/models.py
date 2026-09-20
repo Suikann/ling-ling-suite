@@ -57,6 +57,59 @@ class UndoRecord:
 
 
 @dataclass
+class MoveStep:
+    """兩階段搬移中的一次實際檔案搬移
+
+    Attributes:
+        index: 所屬搬移項目在批次中的索引
+        source: 搬移前的位置
+        target: 搬移後的位置
+    """
+    index: int
+    source: str
+    target: str
+
+
+@dataclass
+class MoveJournal:
+    """批次搬移的進行中紀錄
+
+    steps 是展開後的完整步驟清單，completed 是已確實完成的步驟數；
+    每個檔案目前的位置就是它最後一個已完成步驟的 target。
+
+    Attributes:
+        steps: 完整的搬移步驟（依執行順序）
+        completed: 已完成的步驟數
+        created_directories: 本次執行新建的目錄
+    """
+    steps: List[MoveStep] = field(default_factory=list)
+    completed: int = 0
+    created_directories: List[str] = field(default_factory=list)
+
+    def moved_indices(self) -> List[int]:
+        """已被搬動過的項目索引（依首次搬動順序）"""
+        seen = []
+        for step in self.steps[:self.completed]:
+            if step.index not in seen:
+                seen.append(step.index)
+        return seen
+
+
+@dataclass
+class MoveRecoveryResult:
+    """中斷批次還原的結果
+
+    Attributes:
+        restored: 已回到原位的檔案（原始路徑）
+        skipped: 已不在紀錄位置而略過的檔案：原始路徑到紀錄位置的對應
+        residual: 搬不回去的檔案：原始路徑到目前位置的對應
+    """
+    restored: List[str] = field(default_factory=list)
+    skipped: List[UndoMapping] = field(default_factory=list)
+    residual: List[UndoMapping] = field(default_factory=list)
+
+
+@dataclass
 class WorkspaceEntry:
     """工作區子資料夾的摘要，供清理對話框顯示"""
     folder: str

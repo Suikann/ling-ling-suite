@@ -10,7 +10,7 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from PySide6.QtWidgets import QApplication, QProxyStyle, QStyleFactory
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from core.locale import t, set_locale
 from core.models import Project
 from services.preferences_service import PreferencesService
@@ -43,6 +43,7 @@ def main():
     window.resize(1200, 800)
     window.setMinimumSize(900, 600)
     window.show()
+    QTimer.singleShot(0, window.prompt_pending_recovery)
     sys.exit(app.exec())
 
 

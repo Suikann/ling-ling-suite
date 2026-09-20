@@ -244,7 +244,8 @@ src/
     file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾、JSON 原子寫入）
     import_service.py            - 檔案/資料夾匯入與自動分組
     rename_service.py            - 批次重新命名邏輯編排（計畫生成、空檔名檢查）
-    move_service.py              - 兩階段批次搬移引擎（驗證、對調／連鎖、回滾）；重新命名、復原、重做共用
+    move_service.py              - 兩階段批次搬移引擎（驗證、對調／連鎖、回滾、進行中紀錄與中斷後還原）；重新命名、復原、重做共用
+    move_journal.py              - 批次搬移進行中紀錄的讀寫（pending_move.json）
     pdf_service.py               - PDF 分割、旋轉、縮圖產生
     project_service.py           - 專案檔儲存/載入
     undo_service.py              - 復原／重做操作管理
@@ -254,7 +255,7 @@ src/
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、rename、import、project、undo、workspace）
+tests/                           - pytest 測試（template_engine、rename、move、import、project、undo、workspace）；conftest 把使用者資料目錄導到暫存目錄
 CONTEXT.md                       - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 ```
@@ -368,6 +369,7 @@ services/ 層
 「佔用」指磁碟上存在、且不是本次計畫任何一筆的來源（`find_occupied_targets`），所以對調（A→B、B→A）與連鎖（A→B、B→C）可以執行：
 來源同時是其他項目目標的檔案，第一階段先改成同資料夾的 `<原檔名>.moving` 暫名（`RENAME_STAGING_SUFFIX`）讓出位置，第二階段全部就位；復原紀錄只記原始位置到最終位置，暫名不出現。
 執行中途失敗則依搬移的反序回滾至原位；回滾也失敗的檔案（含停在暫名者）以 `RenameRollbackError` 回報，UI 為其寫入復原紀錄並更新專案路徑，不留下無紀錄的半完成狀態。
+程式被中途關掉（當機、斷電、強制結束）也不留下無紀錄的半完成狀態：`MoveService.execute` 在搬第一個檔案前就把展開後的完整步驟清單與 `completed=0` 原子寫入進行中紀錄（`MOVE_JOURNAL_FILE`），每完成一步 `completed += 1` 重寫，成功或回滾結束即刪除。啟動時 `MainWindow.prompt_pending_recovery` 若發現紀錄仍在，提示「上次重新命名未完成（已搬移 N 個檔案）」，選「還原」則 `MoveService.recover` 依已完成步驟反序搬回（與回滾共用同一支走訪，對調、連鎖、停在暫名者都能還原），選「稍後」則保留紀錄下次再問。`load_pending` 會對照磁碟補正「搬完、來不及記就當機」的那一步（來源已不在、目標已出現＝已完成）。還原時檔案已不在紀錄位置者略過並列出；搬不回去者留在原地，UI 沿 residual 路徑寫入復原紀錄；紀錄損毀無法讀取時提示一次並捨棄。
 復原與重做 rename 紀錄（`UndoService.execute_undo`／`execute_redo`）走同一個引擎，所以對調與連鎖的紀錄也能復原、重做，且中途失敗整批回滾；復原時已不在新位置的檔案略過。
 `FileService.rename_file` 在目的地已有另一個檔案時拒絕，POSIX 與 Windows 行為一致，回滾不會覆蓋卡在路上的檔案。
 
@@ -398,6 +400,7 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 | 使用者資料目錄 | Windows：`%APPDATA%/LingLingSuite/`；Linux／macOS：`$XDG_CONFIG_HOME/LingLingSuite/`（預設 `~/.config/LingLingSuite/`），由 `core/constants.py` 的 `APPDATA_DIR` 決定 |
 | 偏好設定 | `<使用者資料目錄>/preferences.json` |
 | 復原／重做紀錄 | `<使用者資料目錄>/undo/`、`redo/`（每次操作一個 JSON 檔） |
+| 批次搬移進行中紀錄 | `<使用者資料目錄>/pending_move.json`（只在重新命名／復原／重做進行中存在；啟動時仍在即為上次中斷） |
 | 工作區 | `<使用者資料目錄>/workspace/<hash8>/`（分割輸出與 `meta.json`） |
 | PDF 旋轉備份 | `<使用者資料目錄>/backups/` |
 | 專案檔 | 使用者自選位置（儲存/載入對話框） |
