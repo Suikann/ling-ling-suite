@@ -44,6 +44,8 @@ ATOMIC_WRITE_RETRY_INTERVAL = 0.2
 
 # 兩階段搬移：來源同時是其他項目目標的檔案，第一階段先改成「<原檔名>{後綴}」讓出位置
 RENAME_STAGING_SUFFIX = ".moving"
+# 批次搬移的進行中紀錄：執行前寫入、每完成一步更新，成功或回滾後刪除；啟動時若仍存在即為上次中途中斷
+MOVE_JOURNAL_FILE = os.path.join(APPDATA_DIR, "pending_move.json")
 
 
 class WorkspaceStatus(str, Enum):

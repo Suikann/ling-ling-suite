@@ -143,6 +143,24 @@ class FileService:
         """
         return os.path.isfile(path)
 
+    def file_exists_exact(self, path: str) -> bool:
+        """檢查檔案是否存在且檔名大小寫完全相同
+
+        不分大小寫的檔案系統上 isfile 分不出只改大小寫的檔案，這裡改比對目錄列表的實際名稱。
+
+        Args:
+            path: 檔案路徑
+
+        Returns:
+            是否存在且名稱完全相同
+        """
+        directory, name = os.path.split(path)
+        try:
+            with os.scandir(directory or ".") as entries:
+                return any(entry.name == name and entry.is_file() for entry in entries)
+        except OSError:
+            return False
+
     def list_pdf_files(self, directory: str) -> List[str]:
         """列出目錄內的 PDF 檔案
 

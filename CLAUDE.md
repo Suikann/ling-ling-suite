@@ -244,7 +244,8 @@ src/
     file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾、JSON 原子寫入）
     import_service.py            - 檔案/資料夾匯入與自動分組
     rename_service.py            - 批次重新命名邏輯編排（計畫生成、空檔名檢查）
-    move_service.py              - 兩階段批次搬移引擎（驗證、對調／連鎖、回滾）；重新命名、復原、重做共用
+    move_service.py              - 兩階段批次搬移引擎（驗證、對調／連鎖、回滾、進行中紀錄與中斷後還原）；重新命名、復原、重做共用
+    move_journal.py              - 批次搬移進行中紀錄的讀寫（pending_move.json）
     pdf_service.py               - PDF 分割、旋轉、縮圖產生
     project_service.py           - 專案檔儲存/載入
     undo_service.py              - 復原／重做操作管理
@@ -254,7 +255,7 @@ src/
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、rename、import、project、undo、workspace）
+tests/                           - pytest 測試（template_engine、rename、move、import、project、undo、workspace）；conftest 把使用者資料目錄導到暫存目錄
 CONTEXT.md                       - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 ```
@@ -368,8 +369,7 @@ services/ 層
 「佔用」指磁碟上存在、且不是本次計畫任何一筆的來源（`find_occupied_targets`），所以對調（A→B、B→A）與連鎖（A→B、B→C）可以執行：
 來源同時是其他項目目標的檔案，第一階段先改成同資料夾的 `<原檔名>.moving` 暫名（`RENAME_STAGING_SUFFIX`）讓出位置，第二階段全部就位；復原紀錄只記原始位置到最終位置，暫名不出現。
 執行中途失敗則依搬移的反序回滾至原位；回滾也失敗的檔案（含停在暫名者）以 `RenameRollbackError` 回報，UI 為其寫入復原紀錄並更新專案路徑，不留下無紀錄的半完成狀態。
-復原與重做 rename 紀錄（`UndoService.execute_undo`／`execute_redo`）走同一個引擎，所以對調與連鎖的紀錄也能復原、重做，且中途失敗整批回滾；復原時已不在新位置的檔案略過。
-`FileService.rename_file` 在目的地已有另一個檔案時拒絕，POSIX 與 Windows 行為一致，回滾不會覆蓋卡在路上的檔案。
+程式被中途關掉（當機、斷電、強制結束）也不留下無紀錄的狀態：`MoveService.execute` 在搬第一個檔案前就把進行中紀錄（`MOVE_JOURNAL_FILE`）原子寫入，內容是「目前仍生效的步驟清單」加「即將執行的下一步（`pending`）」，每完成一步就把該步加進清單、下一步記為 `pending` 重寫；回滾與還原每逆轉一步就從清單移除並存檔，所以紀錄隨時反映每個檔案的實際位置。整批搬完先標記 `complete`、呼叫呼叫端傳入的 `on_complete` 寫正式紀錄（重新命名寫復原紀錄、復原轉入重做堆疊、重做轉回復原堆疊），寫完才刪除進行中紀錄，兩者之間沒有空窗；回滾結束也刪除。紀錄仍在時 `execute` 以 `PendingMoveError` 拒絕執行新批次（否則會蓋掉唯一的紀錄）。啟動時 `MainWindow.prompt_pending_recovery` 若發現紀錄仍在：未搬完的提示「上次重新命名未完成（已搬移 N 個檔案）」，「還原」則 `MoveService.recover` 依生效清單反序搬回（與回滾共用 `_reverse_all`，對調、連鎖、停在暫名者都能還原，還原途中再被中斷也能接續），「稍後」則保留紀錄下次再問；已搬完（`complete`）但正式紀錄未確認寫入的，提示「已完成但復原紀錄未寫入」，多一個「保留結果」（捨棄紀錄、無法復原）。重新命名、復原、重做前也會再問一次。`load_pending` 對照磁碟判定 `pending` 那一步（來源已不在、目標已出現＝已完成），補上「搬完、來不及記就當機」的那一步；比對用 `file_exists_exact`（目錄列表的實際名稱），只改大小寫的那一步在不分大小寫的檔案系統上才判得出。還原時檔案已不在紀錄位置者略過並列出；搬不回去者留在原地，UI 沿 residual 路徑寫入復原紀錄；紀錄損毀無法讀取時提示一次並捨棄。
 
 PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後先清空該來源上次的輸出。
 指定資料夾模式下才做同名檔案覆蓋確認。
@@ -398,6 +398,7 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 | 使用者資料目錄 | Windows：`%APPDATA%/LingLingSuite/`；Linux／macOS：`$XDG_CONFIG_HOME/LingLingSuite/`（預設 `~/.config/LingLingSuite/`），由 `core/constants.py` 的 `APPDATA_DIR` 決定 |
 | 偏好設定 | `<使用者資料目錄>/preferences.json` |
 | 復原／重做紀錄 | `<使用者資料目錄>/undo/`、`redo/`（每次操作一個 JSON 檔） |
+| 批次搬移進行中紀錄 | `<使用者資料目錄>/pending_move.json`（只在重新命名／復原／重做進行中存在；啟動時仍在即為上次中斷） |
 | 工作區 | `<使用者資料目錄>/workspace/<hash8>/`（分割輸出與 `meta.json`） |
 | PDF 旋轉備份 | `<使用者資料目錄>/backups/` |
 | 專案檔 | 使用者自選位置（儲存/載入對話框） |

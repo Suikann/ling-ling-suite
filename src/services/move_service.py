@@ -12,13 +12,13 @@
 """
 import os
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import Callable, Dict, List, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from core.constants import RENAME_STAGING_SUFFIX
 from core.locale import t
-from core.models import UndoMapping
+from core.models import MoveJournal, MoveRecoveryResult, MoveStep, UndoMapping
 from services.file_service import FileService
+from services.move_journal import MoveJournalStore
 
 
 Move = Tuple[str, str]
@@ -39,18 +39,11 @@ class RenameRollbackError(OSError):
         self.residual = residual
 
 
-@dataclass
-class _Step:
-    """兩階段搬移中的一次實際檔案搬移
+class PendingMoveError(OSError):
+    """上次中斷的批次尚未還原，拒絕執行新的批次（否則會蓋掉它唯一的紀錄）"""
 
-    Attributes:
-        index: 所屬搬移項目在批次中的索引
-        source: 搬移前的位置
-        target: 搬移後的位置
-    """
-    index: int
-    source: str
-    target: str
+    def __init__(self):
+        super().__init__(t("rename.error.pending_move"))
 
 
 def _group_duplicates(
@@ -71,8 +64,9 @@ def staging_path(path: str) -> str:
 class MoveService:
     """兩階段批次搬移服務"""
 
-    def __init__(self, file_service: FileService):
+    def __init__(self, file_service: FileService, journal_store: Optional[MoveJournalStore] = None):
         self.file_service = file_service
+        self._journal_store = journal_store or MoveJournalStore(file_service)
 
     def find_missing_sources(self, moves: List[Move]) -> List[str]:
         """列出來源檔案已不存在的來源路徑"""
@@ -154,39 +148,111 @@ class MoveService:
         if staging_taken:
             raise FileExistsError(t("rename.error.staging_exists", files="\n".join(staging_taken)))
 
-    def execute(self, moves: List[Move]) -> List[str]:
+    def execute(
+        self, moves: List[Move], on_complete: Optional[Callable[[List[str]], None]] = None,
+    ) -> List[str]:
         """驗證後以兩階段搬移執行整批
 
         來源同時是其他項目目標的檔案，第一階段先改成暫名讓出位置，
         第二階段所有檔案一併就位；目標的父目錄不存在時建立。
+        搬第一個檔案前先寫入進行中紀錄，每完成一步更新（下一步先記為 pending）；
+        整批搬完先標記 complete、呼叫 on_complete 寫正式紀錄，寫完才刪除進行中紀錄，
+        所以任何時點被關掉都留得下紀錄。回滾結束也刪除。上次的紀錄尚未處理時拒絕執行。
 
         Args:
             moves: 搬移項目清單
+            on_complete: 整批搬完後、刪除進行中紀錄前要做的事（通常是寫正式復原紀錄），
+                參數為本次新建的目錄；它拋出的例外原樣傳出、不回滾，進行中紀錄保留
 
         Returns:
             本次新建的目錄（排序後）
 
         Raises:
+            PendingMoveError: 上次的進行中紀錄尚未處理
             RenameRollbackError: 中途失敗且回滾時有檔案搬不回原位
             OSError: 中途失敗且已全部回滾
         """
+        if self._journal_store.exists():
+            raise PendingMoveError()
         self.validate(moves)
-        created_dirs: Set[str] = set()
-        done: List[_Step] = []
+        steps = self._build_steps(moves)
+        journal = MoveJournal(pending=steps[0] if steps else None, complete=not steps)
         try:
-            for step in self._build_steps(moves):
+            self._journal_store.save(journal)
+            for k, step in enumerate(steps):
                 target_dir = os.path.dirname(step.target)
                 if target_dir and not self.file_service.directory_exists(target_dir):
                     self.file_service.create_directory(target_dir)
-                    created_dirs.add(target_dir)
+                    journal.created_directories.append(target_dir)
+                    self._journal_store.save(journal)
                 self.file_service.rename_file(step.source, step.target)
-                done.append(step)
+                journal.steps.append(step)
+                journal.pending = steps[k + 1] if k + 1 < len(steps) else None
+                journal.complete = journal.pending is None
+                self._journal_store.save(journal)
         except Exception as e:
-            residual = self._rollback(moves, done, created_dirs)
+            journal.pending = None
+            residual = self._rollback(moves, journal)
             if residual:
                 raise RenameRollbackError(e, residual) from e
             raise
-        return sorted(created_dirs)
+        created_dirs = sorted(journal.created_directories)
+        if on_complete:
+            on_complete(created_dirs)
+        self._journal_store.clear()
+        return created_dirs
+
+    def load_pending(self) -> Optional[MoveJournal]:
+        """讀取上次中途中斷的批次；沒有時回傳 None
+
+        紀錄在每步搬移完成後才更新，搬完、來不及記就當機的那一步只記為 pending；
+        這裡對照磁碟判定：來源已不在、目標已出現即視為已完成，補進生效清單。
+        比對用檔名大小寫完全相同的檢查，只改大小寫的那一步在不分大小寫的檔案系統上才判得出。
+
+        Raises:
+            ValueError: 紀錄內容損毀
+        """
+        journal = self._journal_store.load()
+        if journal and journal.pending:
+            step = journal.pending
+            if (self.file_service.file_exists_exact(step.target)
+                    and not self.file_service.file_exists_exact(step.source)):
+                journal.steps.append(step)
+            journal.pending = None
+        return journal
+
+    def discard_pending(self) -> None:
+        """捨棄進行中紀錄（無法讀取，或已搬完的批次決定保留結果、不再需要它）"""
+        self._journal_store.clear()
+
+    def recover(self, journal: MoveJournal) -> MoveRecoveryResult:
+        """把中途中斷的批次已搬動的檔案依反序搬回原位，並清除進行中紀錄
+
+        走訪與回滾共用，每逆轉一步就更新紀錄，還原途中再被中斷也能接續。
+        檔案在紀錄位置就搬回；已不在紀錄位置、也不在原位的略過；
+        搬回途中失敗的留在目前位置回報，由呼叫端寫入復原紀錄。
+
+        Args:
+            journal: load_pending() 讀回的進行中紀錄
+
+        Returns:
+            還原結果
+        """
+        moved = journal.moved_indices()
+        origins = journal.origins()
+        locations = journal.locations()
+        stuck = self._reverse_all(journal)
+        result = MoveRecoveryResult(
+            residual=[UndoMapping(origins[i], location) for i, location in sorted(stuck.items())],
+        )
+        for i in moved:
+            if i in stuck:
+                continue
+            if self.file_service.file_exists(origins[i]):
+                result.restored.append(origins[i])
+            else:
+                result.skipped.append(UndoMapping(origins[i], locations[i]))
+        return result
 
     @staticmethod
     def _staged_indices(moves: List[Move]) -> Set[int]:
@@ -197,40 +263,57 @@ class MoveService:
         }
         return {i for i, (src, _) in enumerate(moves) if os.path.normcase(src) in targets}
 
-    def _build_steps(self, moves: List[Move]) -> List[_Step]:
+    def _build_steps(self, moves: List[Move]) -> List[MoveStep]:
         """展開兩階段搬移順序：先把需讓位的項目搬到暫名，再全部就位"""
         staged = self._staged_indices(moves)
-        steps = [_Step(i, moves[i][0], staging_path(moves[i][0])) for i in sorted(staged)]
+        steps = [MoveStep(i, moves[i][0], staging_path(moves[i][0])) for i in sorted(staged)]
         for i, (src, dst) in enumerate(moves):
-            steps.append(_Step(i, staging_path(src) if i in staged else src, dst))
+            steps.append(MoveStep(i, staging_path(src) if i in staged else src, dst))
         return steps
 
-    def _rollback(
-        self, moves: List[Move], done: List[_Step], created_dirs: Set[str],
-    ) -> List[UndoMapping]:
-        """依搬移的反序把檔案搬回原位，並移除本次新建且仍為空的目錄
-
-        某個項目一旦搬不回去，該項目更早的搬移也不再逆轉（檔案已不在那裡）。
+    def _rollback(self, moves: List[Move], journal: MoveJournal) -> List[UndoMapping]:
+        """依搬移的反序把檔案搬回原位
 
         Args:
             moves: 搬移項目清單
-            done: 已完成的搬移（依執行順序）
-            created_dirs: 本次執行新建的目錄
+            journal: 本次執行的進行中紀錄
 
         Returns:
             搬不回去的項目：來源到目前停留位置（可能是暫名）的對應，依批次順序
         """
+        stuck = self._reverse_all(journal)
+        return [
+            UndoMapping(original=moves[i][0], renamed=location)
+            for i, location in sorted(stuck.items())
+        ]
+
+    def _reverse_all(self, journal: MoveJournal) -> Dict[int, str]:
+        """依反序逆轉紀錄中仍生效的搬移，結束後移除新建且仍為空的目錄並刪除紀錄
+
+        每逆轉一步就從紀錄移除並存檔，紀錄隨時反映實際位置。
+        檔案已不在該步目標的步驟略過（檔案不見了，或上次逆轉完來不及記）；
+        某個項目一旦搬不回去，該項目更早的搬移也不再逆轉（檔案已不在那裡）。
+
+        Args:
+            journal: 進行中紀錄（pending 已清空）
+
+        Returns:
+            搬不回去的項目索引到目前停留位置的對應
+        """
+        self._journal_store.save(journal)
         stuck: Dict[int, str] = {}
-        for step in reversed(done):
-            if step.index in stuck:
+        for k in range(len(journal.steps) - 1, -1, -1):
+            step = journal.steps[k]
+            if step.index in stuck or not self.file_service.file_exists(step.target):
                 continue
             try:
                 self.file_service.rename_file(step.target, step.source)
             except OSError:
                 stuck[step.index] = step.target
-        for directory in sorted(created_dirs, key=len, reverse=True):
+                continue
+            del journal.steps[k]
+            self._journal_store.save(journal)
+        for directory in sorted(journal.created_directories, key=len, reverse=True):
             self.file_service.remove_empty_directory(directory)
-        return [
-            UndoMapping(original=moves[i][0], renamed=location)
-            for i, location in sorted(stuck.items())
-        ]
+        self._journal_store.clear()
+        return stuck
