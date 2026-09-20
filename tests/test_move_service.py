@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from services.file_service import FileService
 from services.move_journal import MoveJournalStore
-from services.move_service import MoveService
+from services.move_service import MoveService, PendingMoveError
 
 
 class _Crash(BaseException):
@@ -86,8 +86,8 @@ class TestMoveJournal(unittest.TestCase):
         self.mover.execute([(a, b)])
         self.assertEqual(len(seen), 1)
         journal = seen[0]
-        self.assertEqual([(s.index, s.source, s.target) for s in journal.steps], [(0, a, b)])
-        self.assertEqual(journal.completed, 0)
+        self.assertEqual(journal.steps, [])
+        self.assertEqual((journal.pending.index, journal.pending.source, journal.pending.target), (0, a, b))
         self.assertIsNone(self.store.load())
 
     def test_crash_in_first_phase_leaves_journal_of_actual_positions(self):
@@ -96,13 +96,11 @@ class TestMoveJournal(unittest.TestCase):
         with self.assertRaises(_Crash):
             self.mover.execute(moves)
         journal = self.mover.load_pending()
-        self.assertEqual(journal.completed, 1)
+        self.assertEqual([(s.source, s.target) for s in journal.steps], [(a, a + ".moving")])
+        self.assertIsNone(journal.pending)
         self.assertEqual(journal.moved_indices(), [0])
-        self.assertEqual(
-            [(s.source, s.target) for s in journal.steps],
-            [(a, a + ".moving"), (b, b + ".moving"), (a + ".moving", b), (b + ".moving", a)],
-        )
-        self.assertEqual(sorted(os.listdir(self.temp_dir)), ["a.pdf.moving", "b.pdf", "journal"])
+        self.assertEqual(journal.locations(), {0: a + ".moving"})
+        self.assertEqual(self._files(), ["a.pdf.moving", "b.pdf"])
 
     def _interrupt(self, moves, nth):
         """執行 moves 並在第 nth 次搬移前當機，回傳讀回的進行中紀錄"""
@@ -141,7 +139,7 @@ class TestMoveJournal(unittest.TestCase):
         saves = []
 
         def crash_on_second_save(journal):
-            saves.append(journal.completed)
+            saves.append(len(journal.steps))
             if len(saves) == 2:
                 raise _Crash()
             original_save(journal)
@@ -152,7 +150,7 @@ class TestMoveJournal(unittest.TestCase):
         self.store.save = original_save
         self.assertEqual(self._files(), ["a.pdf.moving", "b.pdf"])
         journal = self.mover.load_pending()
-        self.assertEqual(journal.completed, 1)
+        self.assertEqual([(s.source, s.target) for s in journal.steps], [(a, a + ".moving")])
         self.assertEqual(journal.moved_indices(), [0])
         result = self.mover.recover(journal)
         self.assertEqual(result.restored, [a])
@@ -213,6 +211,62 @@ class TestMoveJournal(unittest.TestCase):
         self.assertEqual(result.restored, [a])
         self.assertFalse(os.path.exists(sub))
         self.assertEqual(self._files(), ["a.pdf", "b.pdf"])
+
+    def test_recover_after_rollback_reversed_two_steps_then_crashed(self):
+        a, b, moves = self._swap()
+        # 第 4 步就位失敗觸發回滾；回滾逆轉了第 3、2 步之後、逆轉第 1 步之前當機
+        self._raise_on_rename(n4=OSError("simulated"), n7=_Crash())
+        with self.assertRaises(_Crash):
+            self.mover.execute(moves)
+        self.file_service.rename_file = FileService().rename_file
+        self.assertEqual(self._files(), ["a.pdf.moving", "b.pdf"])
+        journal = self.mover.load_pending()
+        self.assertEqual(journal.moved_indices(), [0])
+        result = self.mover.recover(journal)
+        self.assertEqual(result.restored, [a])
+        self.assertEqual(result.residual, [])
+        self.assertEqual(self._files(), ["a.pdf", "b.pdf"])
+        self.assertEqual([self._read(p) for p in (a, b)], ["A", "B"])
+
+    def test_recover_after_rollback_finished_but_crashed_before_clearing(self):
+        a, b, moves = self._swap()
+        self._raise_on_rename(n4=OSError("simulated"))
+        self.store.clear = lambda: (_ for _ in ()).throw(_Crash())
+        with self.assertRaises(_Crash):
+            self.mover.execute(moves)
+        self.store.clear = MoveJournalStore(self.file_service).clear
+        self.file_service.rename_file = FileService().rename_file
+        self.assertEqual(self._files(), ["a.pdf", "b.pdf"])
+        journal = self.mover.load_pending()
+        self.assertEqual(journal.moved_indices(), [])
+        result = self.mover.recover(journal)
+        self.assertEqual((result.restored, result.skipped, result.residual), ([], [], []))
+        self.assertEqual([self._read(p) for p in (a, b)], ["A", "B"])
+        self.assertIsNone(self.mover.load_pending())
+
+    def test_recover_resumes_after_crashing_midway(self):
+        a, b, moves = self._swap()
+        journal = self._interrupt(moves, 3)
+        self._raise_on_rename(n2=_Crash())
+        with self.assertRaises(_Crash):
+            self.mover.recover(journal)
+        self.file_service.rename_file = FileService().rename_file
+        self.assertEqual(self._files(), ["a.pdf.moving", "b.pdf"])
+        journal = self.mover.load_pending()
+        self.assertEqual(journal.moved_indices(), [0])
+        result = self.mover.recover(journal)
+        self.assertEqual(result.restored, [a])
+        self.assertEqual(self._files(), ["a.pdf", "b.pdf"])
+
+    def test_execute_refuses_while_an_interrupted_batch_is_pending(self):
+        a, b, moves = self._swap()
+        self._interrupt(moves, 2)
+        c = self._create("c.pdf", "C")
+        d = os.path.join(self.temp_dir, "d.pdf")
+        with self.assertRaises(PendingMoveError):
+            self.mover.execute([(c, d)])
+        self.assertEqual(self._files(), ["a.pdf.moving", "b.pdf", "c.pdf"])
+        self.assertEqual(self.mover.load_pending().moved_indices(), [0])
 
     def test_load_pending_returns_none_when_nothing_was_interrupted(self):
         self.assertIsNone(self.mover.load_pending())

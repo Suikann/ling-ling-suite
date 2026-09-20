@@ -74,25 +74,36 @@ class MoveStep:
 class MoveJournal:
     """批次搬移的進行中紀錄
 
-    steps 是展開後的完整步驟清單，completed 是已確實完成的步驟數；
-    每個檔案目前的位置就是它最後一個已完成步驟的 target。
+    steps 是目前仍生效的搬移（依執行順序），每個檔案目前的位置就是它最後一步的 target；
+    pending 是正向搬移時「即將執行、可能已做也可能沒做」的那一步，由 load_pending 對照磁碟判定。
 
     Attributes:
-        steps: 完整的搬移步驟（依執行順序）
-        completed: 已完成的步驟數
+        steps: 仍生效的搬移步驟（依執行順序）
+        pending: 正向搬移中尚未確認完成的下一步
         created_directories: 本次執行新建的目錄
     """
     steps: List[MoveStep] = field(default_factory=list)
-    completed: int = 0
+    pending: Optional[MoveStep] = None
     created_directories: List[str] = field(default_factory=list)
 
     def moved_indices(self) -> List[int]:
         """已被搬動過的項目索引（依首次搬動順序）"""
         seen = []
-        for step in self.steps[:self.completed]:
+        for step in self.steps:
             if step.index not in seen:
                 seen.append(step.index)
         return seen
+
+    def origins(self) -> Dict[int, str]:
+        """已被搬動過的項目索引到原始位置（第一步的 source）的對應"""
+        origins: Dict[int, str] = {}
+        for step in self.steps:
+            origins.setdefault(step.index, step.source)
+        return origins
+
+    def locations(self) -> Dict[int, str]:
+        """已被搬動過的項目索引到目前位置（最後一步的 target）的對應"""
+        return {step.index: step.target for step in self.steps}
 
 
 @dataclass
