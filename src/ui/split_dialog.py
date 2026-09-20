@@ -539,6 +539,9 @@ class SplitPdfDialog(QDialog):
         Args:
             previous_count: 工作區內上次分割留下的分譜數
             owner: 這些分譜所屬的另一個專案，就是目前專案或未記錄時為 None
+
+        Returns:
+            使用者是否同意取代
         """
         reply = QMessageBox.question(
             self, t("dialog.warning"),
@@ -605,9 +608,10 @@ class SplitPdfDialog(QDialog):
         replaced = []
         if self._use_workspace():
             replaced = self._workspace.list_outputs(output_dir)
-            owner = self._workspace.other_owner(output_dir, self._project_path)
-            if replaced and not self._confirm_resplit(len(replaced), owner):
-                return
+            if replaced:
+                owner = self._workspace.other_owner(output_dir, self._project_path)
+                if not self._confirm_resplit(len(replaced), owner):
+                    return
         else:
             existing = [out_path for _, _, out_path in plan if self._files.file_exists(out_path)]
             if existing and not self._confirm_overwrite(existing):

@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from PySide6.QtWidgets import QApplication
 
+from core.constants import WORKSPACE_META_FILE
 from core.locale import t
 from core.models import FileInfo, Group, Project
 from services.preferences_service import PreferencesService
@@ -70,7 +71,7 @@ class TestMainWindowOpenProject(unittest.TestCase):
         real_write = self.window.file_service.write_json_atomic
 
         def failing_write(path, data):
-            if os.path.basename(path) == "meta.json":
+            if os.path.basename(path) == WORKSPACE_META_FILE:
                 raise OSError("locked")
             real_write(path, data)
 

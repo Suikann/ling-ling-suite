@@ -2,6 +2,7 @@
 """
 復原服務單元測試
 """
+import json
 import os
 import sys
 import tempfile
@@ -10,10 +11,21 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from core.models import UndoMapping, UndoRecord
+from core.constants import WORKSPACE_META_FILE
+from core.models import FileInfo, Group, Project, RenameEntry, UndoMapping, UndoRecord
 from services.file_service import FileService
+from services.move_service import RenameRollbackError
+from services.project_service import ProjectService
+from services.rename_service import RenameService
 from services.undo_service import UndoService
 from services.workspace_service import WorkspaceService
+
+
+def _project_referencing(*paths):
+    """引用指定檔案的最小專案"""
+    project = Project()
+    project.groups.append(Group(name="g", files=[FileInfo(p, os.path.basename(p)) for p in paths]))
+    return project
 
 
 class TestUndoService(unittest.TestCase):
@@ -211,12 +223,14 @@ class TestUndoService(unittest.TestCase):
 
     def test_save_snapshots_meta_of_workspace_sources(self):
         folder, record = self._rename_out_of_workspace()
-        expected = self.workspace.read_meta(folder)
         with self._record_dirs():
             self.undo_service.save_undo_record(record)
             loaded = self.undo_service.get_latest_undo_record()
-        self.assertEqual(record.workspace_meta, {folder: expected})
-        self.assertEqual(loaded.workspace_meta, {folder: expected})
+        self.assertEqual(list(loaded.workspace_meta), [folder])
+        snapshot = loaded.workspace_meta[folder]
+        self.assertEqual(snapshot["source_name"], "合併譜.pdf")
+        self.assertEqual(snapshot["source_path"], os.path.join(self.temp_dir, "合併譜.pdf"))
+        self.assertEqual(snapshot["project_path"], "/proj/a.llproj")
 
     def test_save_does_not_snapshot_sources_outside_workspace(self):
         with self._record_dirs():
@@ -233,7 +247,28 @@ class TestUndoService(unittest.TestCase):
             self.assertFalse(os.path.exists(folder))
             self.undo_service.execute_undo(record)
         self.assertTrue(os.path.isfile(record.mappings[0].original))
-        self.assertEqual(self.workspace.read_meta(folder), record.workspace_meta[folder])
+        meta = self.workspace.read_meta(folder)
+        self.assertEqual(meta["source_name"], "合併譜.pdf")
+        self.assertEqual(meta["project_path"], "/proj/a.llproj")
+
+    def test_rename_then_cleanup_scan_then_undo_keeps_source_identifiable(self):
+        # 走真實的重新命名（快照在引擎 on_complete 內拍）與清理掃描（purge 在 scan 內）
+        source = self._create("合併譜.pdf")
+        folder = self.workspace.prepare_folder(source, "/proj/a.llproj")
+        part = os.path.join(folder, "高笙.pdf")
+        with open(part, "w") as f:
+            f.write("part")
+        out = os.path.join(self.temp_dir, "01-高笙.pdf")
+        with self._record_dirs():
+            RenameService(self.file_service).execute_rename(
+                [RenameEntry(part, out)], Project(), self.undo_service.save_undo_record,
+            )
+            self.workspace.scan(None, [], ProjectService().load_project)
+            self.assertFalse(os.path.exists(folder))
+            self.undo_service.execute_undo(self.undo_service.get_latest_undo_record())
+            scan = self.workspace.scan(None, [], ProjectService().load_project)
+        self.assertTrue(os.path.isfile(part))
+        self.assertEqual([(e.folder, e.source_name) for e in scan.entries], [(folder, "合併譜.pdf")])
 
     def test_undo_keeps_meta_written_in_the_meantime(self):
         folder, record = self._rename_out_of_workspace()
@@ -251,7 +286,7 @@ class TestUndoService(unittest.TestCase):
             real_write = self.file_service.write_json_atomic
 
             def failing_write(path, data):
-                if os.path.basename(path) == "meta.json":
+                if os.path.basename(path) == WORKSPACE_META_FILE:
                     raise OSError("locked")
                 real_write(path, data)
 
@@ -261,8 +296,52 @@ class TestUndoService(unittest.TestCase):
         self.assertTrue(os.path.isfile(record.mappings[0].original))
         self.assertIsNone(self.workspace.read_meta(folder))
 
+    def test_undo_restores_meta_even_when_rollback_strands_a_file_in_workspace(self):
+        source = self._create("合併譜.pdf")
+        folder = self.workspace.prepare_folder(source, "/proj/a.llproj")
+        parts = [os.path.join(folder, n) for n in ("高笙.pdf", "揚琴.pdf")]
+        outs = [os.path.join(self.temp_dir, n) for n in ("01-高笙.pdf", "02-揚琴.pdf")]
+        for part, out in zip(parts, outs):
+            with open(part, "w") as f:
+                f.write("part")
+            os.rename(part, out)
+        record = UndoRecord(
+            timestamp="20260101_190000", description="重新命名",
+            mappings=[UndoMapping(original=p, renamed=o) for p, o in zip(parts, outs)],
+        )
+        real_rename = self.file_service.rename_file
+
+        def failing_rename(old_path, new_path):
+            # 第二個檔案搬不回工作區觸發回滾；第一個檔案又搬不回輸出位置，卡在工作區
+            if new_path == parts[1] or (old_path, new_path) == (parts[0], outs[0]):
+                raise OSError("simulated")
+            real_rename(old_path, new_path)
+
+        with self._record_dirs():
+            self.undo_service.save_undo_record(record)
+            self.workspace.purge_empty_folders()
+            self.file_service.rename_file = failing_rename
+            with self.assertRaises(RenameRollbackError):
+                self.undo_service.execute_undo(record)
+        self.assertTrue(os.path.isfile(parts[0]))
+        self.assertEqual(self.workspace.read_meta(folder)["project_path"], "/proj/a.llproj")
+
+    def test_redo_refreshes_snapshot_so_later_undo_restores_current_owner(self):
+        folder, record = self._rename_out_of_workspace("/proj/a.llproj")
+        with self._record_dirs():
+            self.undo_service.save_undo_record(record)
+            self.undo_service.execute_undo(record)
+            # 復原與重做之間專案另存到新位置
+            self.workspace.update_project_path(
+                _project_referencing(record.mappings[0].original), "/proj/moved.llproj",
+            )
+            redo = self.undo_service.get_latest_redo_record()
+            self.undo_service.execute_redo(redo)
+            self.workspace.purge_empty_folders()
+            self.undo_service.execute_undo(self.undo_service.get_latest_undo_record())
+        self.assertEqual(self.workspace.read_meta(folder)["project_path"], "/proj/moved.llproj")
+
     def test_record_without_workspace_meta_field_still_loads(self):
-        import json
         os.makedirs(self.undo_dir)
         with open(os.path.join(self.undo_dir, "undo_20260101_180000.json"), "w", encoding="utf-8") as f:
             json.dump({

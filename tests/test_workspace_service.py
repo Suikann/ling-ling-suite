@@ -106,10 +106,11 @@ class TestWorkspaceService(unittest.TestCase):
         self.assertEqual(meta["project_path"], "/proj/a.llproj")
         self.assertIn("created_at", meta)
 
-    def test_prepare_folder_keeps_existing_project_path_when_unsaved(self):
+    def test_prepare_folder_by_unsaved_project_clears_previous_owner(self):
+        # 未存檔專案重新分割後，輸出已不是先前專案的，所屬專案回到未知
         folder = self.service.prepare_folder(self.source, "/proj/a.llproj")
         self.service.prepare_folder(self.source, "")
-        self.assertEqual(self.service.read_meta(folder)["project_path"], "/proj/a.llproj")
+        self.assertEqual(self.service.read_meta(folder)["project_path"], "")
 
     def test_clear_outputs_keeps_meta(self):
         folder = self.service.prepare_folder(self.source)
@@ -218,6 +219,14 @@ class TestWorkspaceService(unittest.TestCase):
         folder = self.service.prepare_folder(self.source, gone)
         owner = self.service.other_owner(folder, os.path.join(self.temp_dir, "mine.llproj"))
         self.assertEqual((owner.project_path, owner.exists), (gone, False))
+
+    def test_other_owner_forgets_previous_project_after_unsaved_resplit(self):
+        theirs = self._save_project(Project(), "theirs.llproj")
+        folder = self.service.prepare_folder(self.source, theirs)
+        self.assertIsNotNone(self.service.other_owner(folder, ""))
+        # 未存檔專案取代過一次後，再次重新分割取代的是自己上次的嘗試，不該再點名別人
+        self.service.prepare_folder(self.source, "")
+        self.assertIsNone(self.service.other_owner(folder, ""))
 
     def test_other_owner_is_none_without_meta(self):
         folder = os.path.join(self.workspace_dir, "deadbeef")

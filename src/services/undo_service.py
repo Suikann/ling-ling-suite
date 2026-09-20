@@ -70,16 +70,19 @@ class UndoService:
         """
         op = record.operation_type
         if op == "rename":
-            self._mover.execute(
-                [
-                    (m.renamed, m.original) for m in record.mappings
-                    if self.file_service.file_exists(m.renamed)
-                ],
-                on_complete=lambda _: self._move_to_redo(record),
-            )
+            try:
+                self._mover.execute(
+                    [
+                        (m.renamed, m.original) for m in record.mappings
+                        if self.file_service.file_exists(m.renamed)
+                    ],
+                    on_complete=lambda _: self._move_to_redo(record),
+                )
+            finally:
+                # 回滾失敗卡在工作區的檔案也要有 meta 才辨識得出來源
+                self._restore_workspace_meta(record)
             for dir_path in reversed(sorted(record.created_directories)):
                 self.file_service.remove_empty_directory(dir_path)
-            self._restore_workspace_meta(record)
             return
         if op == "split":
             for path in record.created_files:
@@ -114,6 +117,7 @@ class UndoService:
             record.created_directories = created_dirs
             self._move_to_undo(record)
 
+        self._refresh_workspace_meta(record)
         self._mover.execute([(m.original, m.renamed) for m in record.mappings], on_complete=complete)
 
     # --- 備份 ---
@@ -140,10 +144,16 @@ class UndoService:
 
     def _snapshot_workspace_meta(self, record: UndoRecord) -> None:
         """把來源位於工作區的項目其子資料夾的 meta.json 快照進紀錄"""
-        for mapping in record.mappings:
-            folder = self.workspace_service.folder_of(mapping.original)
-            if folder is None or folder in record.workspace_meta:
-                continue
+        folders = (self.workspace_service.folder_of(m.original) for m in record.mappings)
+        self._capture_workspace_meta(record, [f for f in folders if f])
+
+    def _refresh_workspace_meta(self, record: UndoRecord) -> None:
+        """重做前以子資料夾目前的 meta 更新快照：復原與重做之間專案可能另存到新位置"""
+        self._capture_workspace_meta(record, list(record.workspace_meta))
+
+    def _capture_workspace_meta(self, record: UndoRecord, folders) -> None:
+        """讀取各子資料夾目前的 meta 存進快照；沒有可讀的 meta 則保留原值"""
+        for folder in folders:
             meta = self.workspace_service.read_meta(folder)
             if meta is not None:
                 record.workspace_meta[folder] = meta
