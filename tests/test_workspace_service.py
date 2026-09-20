@@ -49,6 +49,10 @@ class TestWorkspaceService(unittest.TestCase):
             f.write(content)
         return path
 
+    def _project_file(self, name):
+        """專案檔的假想位置：temp_dir 下的絕對路徑，任何 OS 都能原樣寫進 meta 再讀回"""
+        return os.path.join(self.temp_dir, name + ".llproj")
+
     def _project_with(self, *paths, ungrouped=()):
         project = Project()
         project.groups.append(Group(
@@ -99,16 +103,23 @@ class TestWorkspaceService(unittest.TestCase):
     # --- 生命週期 ---
 
     def test_prepare_folder_writes_meta(self):
-        folder = self.service.prepare_folder(self.source, "/proj/a.llproj")
+        folder = self.service.prepare_folder(self.source, self._project_file("a"))
         meta = json.load(open(os.path.join(folder, WORKSPACE_META_FILE), encoding="utf-8"))
         self.assertEqual(meta["source_name"], "3307 分譜.pdf")
         self.assertEqual(meta["source_path"], os.path.abspath(self.source))
-        self.assertEqual(meta["project_path"], "/proj/a.llproj")
+        self.assertEqual(meta["project_path"], self._project_file("a"))
         self.assertIn("created_at", meta)
+
+    def test_prepare_folder_stores_project_path_absolute(self):
+        # meta 會被別的 session 讀，相對路徑離開當下的工作目錄就沒有意義
+        folder = self.service.prepare_folder(self.source, "a.llproj")
+        self.assertEqual(
+            self.service.read_meta(folder)["project_path"], os.path.join(os.getcwd(), "a.llproj"),
+        )
 
     def test_prepare_folder_by_unsaved_project_clears_previous_owner(self):
         # 未存檔專案重新分割後，輸出已不是先前專案的，所屬專案回到未知
-        folder = self.service.prepare_folder(self.source, "/proj/a.llproj")
+        folder = self.service.prepare_folder(self.source, self._project_file("a"))
         self.service.prepare_folder(self.source, "")
         self.assertEqual(self.service.read_meta(folder)["project_path"], "")
 
@@ -173,11 +184,11 @@ class TestWorkspaceService(unittest.TestCase):
         folder = self.service.prepare_folder(self.source)
         part = self._create_file("高笙.pdf", folder)
         project = self._project_with(part)
-        failed = self.service.update_project_path(project, os.path.join(self.temp_dir, "x.llproj"))
+        failed = self.service.update_project_path(project, self._project_file("x"))
         self.assertEqual(failed, [])
         self.assertEqual(
             self.service.read_meta(folder)["project_path"],
-            os.path.join(self.temp_dir, "x.llproj"),
+            self._project_file("x"),
         )
 
     def test_update_project_path_reports_folders_it_could_not_write(self):
@@ -192,9 +203,9 @@ class TestWorkspaceService(unittest.TestCase):
             real_write(path, data)
 
         self.file_service.write_json_atomic = failing_write
-        failed = self.service.update_project_path(project, "/proj/x.llproj")
+        failed = self.service.update_project_path(project, self._project_file("x"))
         self.assertEqual([os.path.normcase(f) for f in failed], [os.path.normcase(f_bad)])
-        self.assertEqual(self.service.read_meta(f_ok)["project_path"], "/proj/x.llproj")
+        self.assertEqual(self.service.read_meta(f_ok)["project_path"], self._project_file("x"))
 
     # --- 跨專案 ---
 
