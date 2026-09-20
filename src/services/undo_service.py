@@ -52,7 +52,7 @@ class UndoService:
         """執行復原操作
 
         重新命名紀錄交給搬移引擎整批搬回（對調與連鎖的紀錄也能復原；
-        中途失敗整批回滾），已不在新位置的檔案略過。
+        中途失敗整批回滾），已不在新位置的檔案略過；紀錄在引擎刪除進行中紀錄前轉入重做堆疊。
 
         Args:
             record: 要復原的紀錄
@@ -62,13 +62,17 @@ class UndoService:
         """
         op = record.operation_type
         if op == "rename":
-            self._mover.execute([
-                (m.renamed, m.original) for m in record.mappings
-                if self.file_service.file_exists(m.renamed)
-            ])
+            self._mover.execute(
+                [
+                    (m.renamed, m.original) for m in record.mappings
+                    if self.file_service.file_exists(m.renamed)
+                ],
+                on_complete=lambda _: self._move_to_redo(record),
+            )
             for dir_path in reversed(sorted(record.created_directories)):
                 self.file_service.remove_empty_directory(dir_path)
-        elif op == "split":
+            return
+        if op == "split":
             for path in record.created_files:
                 if os.path.isfile(path):
                     self.file_service.delete_file(path)
@@ -85,7 +89,7 @@ class UndoService:
     def execute_redo(self, record: UndoRecord) -> None:
         """執行重做操作（僅支援重新命名）
 
-        交給搬移引擎整批重放，中途失敗整批回滾。
+        交給搬移引擎整批重放，中途失敗整批回滾；紀錄在引擎刪除進行中紀錄前轉回復原堆疊。
 
         Args:
             record: 要重做的紀錄
@@ -93,11 +97,15 @@ class UndoService:
         Raises:
             RenameRollbackError: 重放途中失敗且回滾時有檔案搬不回去
         """
-        if record.operation_type == "rename":
-            record.created_directories = self._mover.execute(
-                [(m.original, m.renamed) for m in record.mappings],
-            )
-        self._move_to_undo(record)
+        if record.operation_type != "rename":
+            self._move_to_undo(record)
+            return
+
+        def complete(created_dirs) -> None:
+            record.created_directories = created_dirs
+            self._move_to_undo(record)
+
+        self._mover.execute([(m.original, m.renamed) for m in record.mappings], on_complete=complete)
 
     # --- 備份 ---
 

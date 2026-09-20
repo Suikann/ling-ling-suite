@@ -75,15 +75,18 @@ class MoveJournal:
     """批次搬移的進行中紀錄
 
     steps 是目前仍生效的搬移（依執行順序），每個檔案目前的位置就是它最後一步的 target；
-    pending 是正向搬移時「即將執行、可能已做也可能沒做」的那一步，由 load_pending 對照磁碟判定。
+    pending 是正向搬移時「即將執行、可能已做也可能沒做」的那一步，由 load_pending 對照磁碟判定；
+    complete 表示整批已搬完、只剩正式紀錄尚未確認寫入。
 
     Attributes:
         steps: 仍生效的搬移步驟（依執行順序）
         pending: 正向搬移中尚未確認完成的下一步
+        complete: 整批是否已搬完
         created_directories: 本次執行新建的目錄
     """
     steps: List[MoveStep] = field(default_factory=list)
     pending: Optional[MoveStep] = None
+    complete: bool = False
     created_directories: List[str] = field(default_factory=list)
 
     def moved_indices(self) -> List[int]:

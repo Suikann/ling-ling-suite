@@ -148,22 +148,27 @@ class MoveService:
         if staging_taken:
             raise FileExistsError(t("rename.error.staging_exists", files="\n".join(staging_taken)))
 
-    def execute(self, moves: List[Move]) -> List[str]:
+    def execute(
+        self, moves: List[Move], on_complete: Optional[Callable[[List[str]], None]] = None,
+    ) -> List[str]:
         """驗證後以兩階段搬移執行整批
 
         來源同時是其他項目目標的檔案，第一階段先改成暫名讓出位置，
         第二階段所有檔案一併就位；目標的父目錄不存在時建立。
-        搬第一個檔案前先寫入進行中紀錄，每完成一步更新（下一步先記為 pending），
-        成功或回滾結束即刪除；上次中斷的批次尚未還原時拒絕執行。
+        搬第一個檔案前先寫入進行中紀錄，每完成一步更新（下一步先記為 pending）；
+        整批搬完先標記 complete、呼叫 on_complete 寫正式紀錄，寫完才刪除進行中紀錄，
+        所以任何時點被關掉都留得下紀錄。回滾結束也刪除。上次的紀錄尚未處理時拒絕執行。
 
         Args:
             moves: 搬移項目清單
+            on_complete: 整批搬完後、刪除進行中紀錄前要做的事（通常是寫正式復原紀錄），
+                參數為本次新建的目錄；它拋出的例外原樣傳出、不回滾，進行中紀錄保留
 
         Returns:
             本次新建的目錄（排序後）
 
         Raises:
-            PendingMoveError: 上次中斷的批次尚未還原
+            PendingMoveError: 上次的進行中紀錄尚未處理
             RenameRollbackError: 中途失敗且回滾時有檔案搬不回原位
             OSError: 中途失敗且已全部回滾
         """
@@ -171,7 +176,7 @@ class MoveService:
             raise PendingMoveError()
         self.validate(moves)
         steps = self._build_steps(moves)
-        journal = MoveJournal(pending=steps[0] if steps else None)
+        journal = MoveJournal(pending=steps[0] if steps else None, complete=not steps)
         try:
             self._journal_store.save(journal)
             for k, step in enumerate(steps):
@@ -183,6 +188,7 @@ class MoveService:
                 self.file_service.rename_file(step.source, step.target)
                 journal.steps.append(step)
                 journal.pending = steps[k + 1] if k + 1 < len(steps) else None
+                journal.complete = journal.pending is None
                 self._journal_store.save(journal)
         except Exception as e:
             journal.pending = None
@@ -190,14 +196,18 @@ class MoveService:
             if residual:
                 raise RenameRollbackError(e, residual) from e
             raise
+        created_dirs = sorted(journal.created_directories)
+        if on_complete:
+            on_complete(created_dirs)
         self._journal_store.clear()
-        return sorted(journal.created_directories)
+        return created_dirs
 
     def load_pending(self) -> Optional[MoveJournal]:
         """讀取上次中途中斷的批次；沒有時回傳 None
 
         紀錄在每步搬移完成後才更新，搬完、來不及記就當機的那一步只記為 pending；
         這裡對照磁碟判定：來源已不在、目標已出現即視為已完成，補進生效清單。
+        比對用檔名大小寫完全相同的檢查，只改大小寫的那一步在不分大小寫的檔案系統上才判得出。
 
         Raises:
             ValueError: 紀錄內容損毀
@@ -205,14 +215,14 @@ class MoveService:
         journal = self._journal_store.load()
         if journal and journal.pending:
             step = journal.pending
-            if (self.file_service.file_exists(step.target)
-                    and not self.file_service.file_exists(step.source)):
+            if (self.file_service.file_exists_exact(step.target)
+                    and not self.file_service.file_exists_exact(step.source)):
                 journal.steps.append(step)
             journal.pending = None
         return journal
 
     def discard_pending(self) -> None:
-        """捨棄進行中紀錄（無法讀取時使用）"""
+        """捨棄進行中紀錄（無法讀取，或已搬完的批次決定保留結果、不再需要它）"""
         self._journal_store.clear()
 
     def recover(self, journal: MoveJournal) -> MoveRecoveryResult:

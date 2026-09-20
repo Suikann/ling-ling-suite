@@ -31,6 +31,7 @@ class MoveJournalStore:
         self.file_service.write_json_atomic(MOVE_JOURNAL_FILE, {
             "steps": [self._step_to_json(s) for s in journal.steps],
             "pending": self._step_to_json(journal.pending) if journal.pending else None,
+            "complete": journal.complete,
             "created_directories": journal.created_directories,
         })
 
@@ -52,6 +53,7 @@ class MoveJournalStore:
             return MoveJournal(
                 steps=[self._step_from_json(s) for s in data["steps"]],
                 pending=self._step_from_json(data["pending"]) if data.get("pending") else None,
+                complete=bool(data.get("complete", False)),
                 created_directories=data.get("created_directories", []),
             )
         except (KeyError, TypeError) as e:

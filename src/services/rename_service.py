@@ -7,7 +7,7 @@
 import os
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 from core.locale import t
 from core.models import Project, RenameEntry, UndoMapping, UndoRecord
 from core.template_engine import build_variables_for_file, substitute_template
@@ -219,15 +219,18 @@ class RenameService:
 
     def execute_rename(
         self, plan: List[RenameEntry], project: Project,
+        save_record: Optional[Callable[[UndoRecord], None]] = None,
     ) -> UndoRecord:
         """執行重新命名計畫
 
         先檢查新檔名不為空，再交給搬移引擎驗證並以兩階段搬移執行
         （對調與連鎖可執行；中途失敗回滾，搬不回去者以 RenameRollbackError 回報）。
+        復原紀錄透過 save_record 在引擎刪除進行中紀錄之前寫入，兩者之間沒有空窗。
 
         Args:
             plan: 重新命名計畫
             project: 專案資料（用於判斷子資料夾設定）
+            save_record: 整批搬完後用來寫入復原紀錄的函式
 
         Returns:
             復原紀錄（只記原始位置到最終位置，暫名不出現）
@@ -238,13 +241,19 @@ class RenameService:
         empty = self.find_empty_names(plan)
         if empty:
             raise ValueError(t("rename.error.empty_name", files="\n".join(empty)))
-        created_dirs = self._mover.execute(self._moves(plan))
-        return UndoRecord(
+        record = UndoRecord(
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
             description=t("rename.undo_description", count=len(plan)),
             mappings=[
                 UndoMapping(original=entry.original_path, renamed=entry.new_path)
                 for entry in plan
             ],
-            created_directories=created_dirs,
         )
+
+        def complete(created_dirs: List[str]) -> None:
+            record.created_directories = created_dirs
+            if save_record:
+                save_record(record)
+
+        self._mover.execute(self._moves(plan), on_complete=complete)
+        return record

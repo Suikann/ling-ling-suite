@@ -268,6 +268,58 @@ class TestMoveJournal(unittest.TestCase):
         self.assertEqual(self._files(), ["a.pdf.moving", "b.pdf", "c.pdf"])
         self.assertEqual(self.mover.load_pending().moved_indices(), [0])
 
+    def test_load_pending_resolves_a_case_only_rename_on_a_case_insensitive_filesystem(self):
+        a = self._create("a.pdf", "A")
+        upper = os.path.join(self.temp_dir, "A.pdf")
+        original_save = self.store.save
+        saves = []
+
+        def crash_on_second_save(journal):
+            saves.append(journal)
+            if len(saves) == 2:
+                raise _Crash()
+            original_save(journal)
+
+        self.store.save = crash_on_second_save
+        with self.assertRaises(_Crash):
+            self.mover.execute([(a, upper)])
+        self.store.save = original_save
+        self.assertEqual(self._files(), ["A.pdf"])
+        # 模擬不分大小寫的檔案系統：a.pdf 與 A.pdf 都算存在
+        self.file_service.file_exists = lambda p: os.path.isfile(p) or os.path.isfile(p.lower())
+        journal = self.mover.load_pending()
+        self.assertEqual([(s.source, s.target) for s in journal.steps], [(a, upper)])
+
+    def test_execute_runs_on_complete_before_clearing_the_journal(self):
+        a = self._create("a.pdf", "A")
+        b = os.path.join(self.temp_dir, "Sub", "b.pdf")
+        seen = []
+
+        def on_complete(created_dirs):
+            journal = self.store.load()
+            seen.append((journal.complete, [(s.source, s.target) for s in journal.steps], created_dirs))
+
+        self.mover.execute([(a, b)], on_complete=on_complete)
+        self.assertEqual(seen, [(True, [(a, b)], [os.path.join(self.temp_dir, "Sub")])])
+        self.assertIsNone(self.store.load())
+
+    def test_failure_in_on_complete_keeps_the_finished_batch_and_its_journal(self):
+        a, b, moves = self._swap()
+
+        def failing_on_complete(_):
+            raise OSError("disk full")
+
+        with self.assertRaises(OSError):
+            self.mover.execute(moves, on_complete=failing_on_complete)
+        self.assertEqual([self._read(p) for p in (a, b)], ["B", "A"])
+        journal = self.mover.load_pending()
+        self.assertTrue(journal.complete)
+        self.assertEqual(journal.moved_indices(), [0, 1])
+        result = self.mover.recover(journal)
+        self.assertEqual(result.restored, [a, b])
+        self.assertEqual([self._read(p) for p in (a, b)], ["A", "B"])
+        self.assertIsNone(self.mover.load_pending())
+
     def test_load_pending_returns_none_when_nothing_was_interrupted(self):
         self.assertIsNone(self.mover.load_pending())
 

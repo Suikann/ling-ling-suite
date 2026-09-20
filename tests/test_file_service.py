@@ -116,5 +116,28 @@ class TestFileServiceRename(unittest.TestCase):
         self.assertEqual(self._read(src), "S")
 
 
+class TestFileServiceExists(unittest.TestCase):
+    """FileService.file_exists_exact 測試"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.file_service = FileService()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_file_exists_exact_matches_name_case_sensitively(self):
+        path = os.path.join(self.temp_dir, "a.pdf")
+        with open(path, "w") as f:
+            f.write("A")
+        self.assertTrue(self.file_service.file_exists_exact(path))
+        self.assertFalse(self.file_service.file_exists_exact(os.path.join(self.temp_dir, "A.pdf")))
+
+    def test_file_exists_exact_is_false_for_directories_and_missing_parents(self):
+        os.makedirs(os.path.join(self.temp_dir, "sub"))
+        self.assertFalse(self.file_service.file_exists_exact(os.path.join(self.temp_dir, "sub")))
+        self.assertFalse(self.file_service.file_exists_exact(os.path.join(self.temp_dir, "nope", "x.pdf")))
+
+
 if __name__ == '__main__':
     unittest.main()

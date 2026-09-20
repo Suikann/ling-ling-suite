@@ -371,12 +371,13 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _execute_rename(self, plan):
+        if not self._undo_service:
+            from services.undo_service import UndoService
+            self._undo_service = UndoService(self.file_service)
         try:
-            record = self._rename_service.execute_rename(plan, self.project)
-            if not self._undo_service:
-                from services.undo_service import UndoService
-                self._undo_service = UndoService(self.file_service)
-            self._undo_service.save_undo_record(record)
+            record = self._rename_service.execute_rename(
+                plan, self.project, self._undo_service.save_undo_record,
+            )
             self._update_project_paths(record.mappings)
             self._mark_modified()
             self._rebuild_tabs()
@@ -428,7 +429,14 @@ class MainWindow(QMainWindow):
         if not journal:
             return True
         moved = len(journal.moved_indices())
-        if moved and not self._confirm_pending_recovery(moved):
+        if journal.complete and moved:
+            choice = self._confirm_finished_batch(moved)
+            if choice is None:
+                return False
+            if choice == "keep":
+                mover.discard_pending()
+                return True
+        elif moved and not self._confirm_pending_recovery(moved):
             return False
         try:
             result = mover.recover(journal)
@@ -451,15 +459,30 @@ class MainWindow(QMainWindow):
 
     def _confirm_pending_recovery(self, moved: int) -> bool:
         """詢問是否還原上次中斷的重新命名；選「稍後」回傳 False"""
+        return self._ask_pending_move(t("dialog.pending_move.message", count=moved)) == "restore"
+
+    def _confirm_finished_batch(self, moved: int) -> Optional[str]:
+        """上次重新命名已搬完但復原紀錄未確認寫入：回傳 "keep"、"restore"，選「稍後」回傳 None"""
+        return self._ask_pending_move(
+            t("dialog.pending_move.finished_message", count=moved), keep=True,
+        )
+
+    def _ask_pending_move(self, text: str, keep: bool = False) -> Optional[str]:
+        """進行中紀錄的共用問法：「還原」／「稍後」，keep 為 True 時多一個「保留結果」"""
         msg = QMessageBox(self)
         msg.setWindowTitle(t("dialog.pending_move.title"))
-        msg.setText(t("dialog.pending_move.message", count=moved))
+        msg.setText(text)
         msg.setIcon(QMessageBox.Question)
+        keep_btn = msg.addButton(t("dialog.pending_move.keep"), QMessageBox.AcceptRole) if keep else None
         restore_btn = msg.addButton(t("dialog.pending_move.restore"), QMessageBox.AcceptRole)
         msg.addButton(t("dialog.pending_move.later"), QMessageBox.RejectRole)
-        msg.setDefaultButton(restore_btn)
+        msg.setDefaultButton(keep_btn or restore_btn)
         msg.exec()
-        return msg.clickedButton() == restore_btn
+        if msg.clickedButton() == restore_btn:
+            return "restore"
+        if keep_btn and msg.clickedButton() == keep_btn:
+            return "keep"
+        return None
 
     def _remove_file_references(self, paths):
         """從所有群組與未分組清單移除指向指定路徑的檔案項目（重新分割取代舊輸出時使用）"""

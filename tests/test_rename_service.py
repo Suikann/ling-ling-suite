@@ -50,6 +50,16 @@ class TestRenameService(unittest.TestCase):
         )
         self.assertEqual(sorted(os.listdir(self.temp_dir)), ["a.pdf", "b.pdf"])
 
+    def test_execute_rename_hands_the_record_to_save_record_with_created_directories(self):
+        a = self._create_file("a.pdf", "A")
+        sub = os.path.join(self.temp_dir, "Sub")
+        saved = []
+        record = self.rename_service.execute_rename(
+            [RenameEntry(a, os.path.join(sub, "a.pdf"))], Project(), saved.append,
+        )
+        self.assertEqual(saved, [record])
+        self.assertEqual(record.created_directories, [sub])
+
     def test_execute_rename_follows_chain(self):
         a = self._create_file("a.pdf", "A")
         b = self._create_file("b.pdf", "B")
