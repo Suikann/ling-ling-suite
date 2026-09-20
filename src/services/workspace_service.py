@@ -19,7 +19,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Set
 from core.constants import (
     WORKSPACE_DIR, WORKSPACE_FOLDER_HASH_LENGTH, WORKSPACE_META_FILE, WorkspaceStatus,
 )
-from core.models import Project, WorkspaceEntry, WorkspaceScan
+from core.models import Project, WorkspaceEntry, WorkspaceOwner, WorkspaceScan
 from services.file_service import FileService
 
 
@@ -70,6 +70,9 @@ class WorkspaceService:
     def prepare_folder(self, source_path: str, project_path: str = "") -> str:
         """建立（或沿用）來源對應的子資料夾並寫入 meta.json
 
+        所屬專案一律改成目前專案：輸出被這次分割取代後就不再屬於先前的專案，
+        尚未存檔時記為未知（空字串），存檔時再由 update_project_path 補上。
+
         Args:
             source_path: 來源合併譜路徑
             project_path: 目前專案檔路徑，尚未存檔時為空字串
@@ -83,7 +86,7 @@ class WorkspaceService:
         meta.update({
             "source_path": os.path.abspath(source_path),
             "source_name": os.path.basename(source_path),
-            "project_path": project_path or meta.get("project_path", ""),
+            "project_path": project_path,
             "created_at": meta.get("created_at") or time.time(),
         })
         self._write_meta(folder, meta)
@@ -101,12 +104,16 @@ class WorkspaceService:
             self.file_service.delete_file(path)
 
     def remove_folder(self, folder: str) -> None:
-        """移除只剩 meta.json 的空子資料夾；仍有輸出檔時不動"""
+        """移除只剩 meta.json 的空子資料夾；仍有輸出檔時不動
+
+        連同 meta.json 原子寫入的殘留一起清掉，否則資料夾清不空、下次掃描會變成來源不明。
+        """
         if not os.path.isdir(folder) or self.list_outputs(folder):
             return
         meta_path = os.path.join(folder, WORKSPACE_META_FILE)
         if os.path.isfile(meta_path):
             os.remove(meta_path)
+        self.file_service.remove_atomic_residue(meta_path)
         self.file_service.remove_empty_directory(folder)
 
     def purge_empty_folders(self, in_use: Optional[Set[str]] = None) -> int:
@@ -132,6 +139,11 @@ class WorkspaceService:
 
     # --- meta.json ---
 
+    @staticmethod
+    def _owner_path(meta: Optional[Dict]) -> str:
+        """meta 記錄的所屬專案檔路徑；沒有 meta 或未記錄時為空字串"""
+        return (meta or {}).get("project_path") or ""
+
     def read_meta(self, folder: str) -> Optional[Dict]:
         """讀取子資料夾的 meta.json；不存在或損毀時回傳 None"""
         meta_path = os.path.join(folder, WORKSPACE_META_FILE)
@@ -146,19 +158,63 @@ class WorkspaceService:
         """寫入子資料夾的 meta.json"""
         self.file_service.write_json_atomic(os.path.join(folder, WORKSPACE_META_FILE), meta)
 
-    def update_project_path(self, project: Project, project_path: str) -> None:
-        """專案存檔時，更新其引用到的所有工作區子資料夾的所屬專案
+    def restore_meta(self, folder: str, meta: Dict) -> None:
+        """復原重新命名把分譜搬回後，子資料夾若已沒有可讀的 meta.json，用快照寫回
+
+        子資料夾不存在（分譜沒搬回來）或已有 meta（例如另一專案在這期間重新分割過）時不寫。
+
+        Args:
+            folder: 子資料夾路徑
+            meta: 先前快照的 meta.json 內容
+        """
+        if not os.path.isdir(folder) or self.read_meta(folder) is not None:
+            return
+        self._write_meta(folder, meta)
+
+    def update_project_path(self, project: Project, project_path: str) -> List[str]:
+        """專案開啟或存檔時，更新其引用到的所有工作區子資料夾的所屬專案
+
+        專案檔被搬到別處後從新位置開啟，meta 也要跟著記到新位置。
+        單一子資料夾寫入失敗不中斷其餘更新，由呼叫端決定如何提示。
 
         Args:
             project: 專案資料
-            project_path: 存檔路徑
+            project_path: 專案檔路徑
+
+        Returns:
+            meta 寫入失敗的子資料夾清單
         """
-        for folder in self._referenced_folders(project):
+        failed: List[str] = []
+        for folder in sorted(self._referenced_folders(project)):
             meta = self.read_meta(folder)
             if meta is None:
                 continue
             meta["project_path"] = os.path.abspath(project_path)
-            self._write_meta(folder, meta)
+            try:
+                self._write_meta(folder, meta)
+            except OSError:
+                failed.append(folder)
+        return failed
+
+    def other_owner(self, folder: str, current_project_path: str) -> Optional[WorkspaceOwner]:
+        """子資料夾的所屬專案若不是目前專案，回傳該專案
+
+        子資料夾以來源為鍵、跨專案共用，重新分割會取代另一個專案尚未重新命名的分譜，
+        提示時要點名。尚未存檔的專案（路徑為空）視為「不是」任何已記錄的所屬專案。
+
+        Args:
+            folder: 子資料夾路徑
+            current_project_path: 目前專案檔路徑，尚未存檔時為空字串
+
+        Returns:
+            所屬專案與其檔案是否仍存在；所屬專案為空或就是目前專案時回傳 None
+        """
+        owner_path = self._owner_path(self.read_meta(folder))
+        if not owner_path:
+            return None
+        if current_project_path and _normalize(owner_path) == _normalize(current_project_path):
+            return None
+        return WorkspaceOwner(project_path=owner_path, exists=self.file_service.file_exists(owner_path))
 
     # --- 清理 ---
 
@@ -198,7 +254,7 @@ class WorkspaceService:
         for folder in self._list_folders():
             key = _normalize(folder)
             meta = self.read_meta(folder)
-            owner_path = (meta or {}).get("project_path") or ""
+            owner_path = self._owner_path(meta)
             if key in in_use:
                 status = WorkspaceStatus.IN_USE
             elif key in owned:
@@ -242,7 +298,7 @@ class WorkspaceService:
         """需要載入以判定引用關係的專案檔：最近清單，加上各子資料夾 meta 指向的專案"""
         seen: Set[str] = set()
         candidates: List[str] = []
-        owners = [(self.read_meta(f) or {}).get("project_path") or "" for f in self._list_folders()]
+        owners = [self._owner_path(self.read_meta(f)) for f in self._list_folders()]
         for path in list(recent_projects) + owners:
             if path and _normalize(path) not in seen:
                 seen.add(_normalize(path))

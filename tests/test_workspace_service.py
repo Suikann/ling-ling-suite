@@ -11,7 +11,9 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from core.constants import WORKSPACE_FOLDER_HASH_LENGTH, WORKSPACE_META_FILE, WorkspaceStatus
+from core.constants import (
+    ATOMIC_WRITE_TEMP_SUFFIX, WORKSPACE_FOLDER_HASH_LENGTH, WORKSPACE_META_FILE, WorkspaceStatus,
+)
 from core.models import FileInfo, Group, Project
 from services.file_service import FileService
 from services.project_service import ProjectService
@@ -104,10 +106,11 @@ class TestWorkspaceService(unittest.TestCase):
         self.assertEqual(meta["project_path"], "/proj/a.llproj")
         self.assertIn("created_at", meta)
 
-    def test_prepare_folder_keeps_existing_project_path_when_unsaved(self):
+    def test_prepare_folder_by_unsaved_project_clears_previous_owner(self):
+        # 未存檔專案重新分割後，輸出已不是先前專案的，所屬專案回到未知
         folder = self.service.prepare_folder(self.source, "/proj/a.llproj")
         self.service.prepare_folder(self.source, "")
-        self.assertEqual(self.service.read_meta(folder)["project_path"], "/proj/a.llproj")
+        self.assertEqual(self.service.read_meta(folder)["project_path"], "")
 
     def test_clear_outputs_keeps_meta(self):
         folder = self.service.prepare_folder(self.source)
@@ -133,6 +136,20 @@ class TestWorkspaceService(unittest.TestCase):
         self.assertEqual(removed, 1)
         self.assertFalse(os.path.exists(folder))
 
+    def test_remove_folder_clears_atomic_write_residue(self):
+        # 寫 meta.json 途中當機留下的暫名不該讓搬空的子資料夾清不掉
+        folder = self.service.prepare_folder(self.source)
+        self._create_file(WORKSPACE_META_FILE + ATOMIC_WRITE_TEMP_SUFFIX, folder, "{partial")
+        self.service.remove_folder(folder)
+        self.assertFalse(os.path.exists(folder))
+
+    def test_remove_folder_clears_residue_even_without_meta(self):
+        folder = self.service.prepare_folder(self.source)
+        os.remove(os.path.join(folder, WORKSPACE_META_FILE))
+        self._create_file(WORKSPACE_META_FILE + ATOMIC_WRITE_TEMP_SUFFIX, folder, "{partial")
+        self.service.remove_folder(folder)
+        self.assertFalse(os.path.exists(folder))
+
     def test_purge_skips_in_use_and_non_empty(self):
         f_in_use = self.service.prepare_folder(self._create_file("a.pdf"))
         f_full = self.service.prepare_folder(self._create_file("b.pdf"))
@@ -156,11 +173,65 @@ class TestWorkspaceService(unittest.TestCase):
         folder = self.service.prepare_folder(self.source)
         part = self._create_file("高笙.pdf", folder)
         project = self._project_with(part)
-        self.service.update_project_path(project, os.path.join(self.temp_dir, "x.llproj"))
+        failed = self.service.update_project_path(project, os.path.join(self.temp_dir, "x.llproj"))
+        self.assertEqual(failed, [])
         self.assertEqual(
             self.service.read_meta(folder)["project_path"],
             os.path.join(self.temp_dir, "x.llproj"),
         )
+
+    def test_update_project_path_reports_folders_it_could_not_write(self):
+        f_ok = self.service.prepare_folder(self.source)
+        f_bad = self.service.prepare_folder(self._create_file("b.pdf"))
+        project = self._project_with(self._create_file("x.pdf", f_ok), self._create_file("x.pdf", f_bad))
+        real_write = self.file_service.write_json_atomic
+
+        def failing_write(path, data):
+            if os.path.normcase(path).startswith(os.path.normcase(f_bad)):
+                raise OSError("locked")
+            real_write(path, data)
+
+        self.file_service.write_json_atomic = failing_write
+        failed = self.service.update_project_path(project, "/proj/x.llproj")
+        self.assertEqual([os.path.normcase(f) for f in failed], [os.path.normcase(f_bad)])
+        self.assertEqual(self.service.read_meta(f_ok)["project_path"], "/proj/x.llproj")
+
+    # --- 跨專案 ---
+
+    def test_other_owner_is_none_for_same_project_or_unowned(self):
+        mine = os.path.join(self.temp_dir, "mine.llproj")
+        folder = self.service.prepare_folder(self.source, mine)
+        self.assertIsNone(self.service.other_owner(folder, mine))
+        unowned = self.service.prepare_folder(self._create_file("b.pdf"), "")
+        self.assertIsNone(self.service.other_owner(unowned, mine))
+        self.assertIsNone(self.service.other_owner(unowned, ""))
+
+    def test_other_owner_names_existing_project(self):
+        theirs = self._save_project(Project(), "theirs.llproj")
+        folder = self.service.prepare_folder(self.source, theirs)
+        owner = self.service.other_owner(folder, os.path.join(self.temp_dir, "mine.llproj"))
+        self.assertEqual((owner.project_path, owner.exists), (theirs, True))
+        # 尚未存檔的專案也算「不是目前專案」
+        self.assertEqual(self.service.other_owner(folder, "").project_path, theirs)
+
+    def test_other_owner_flags_missing_project(self):
+        gone = os.path.join(self.temp_dir, "gone.llproj")
+        folder = self.service.prepare_folder(self.source, gone)
+        owner = self.service.other_owner(folder, os.path.join(self.temp_dir, "mine.llproj"))
+        self.assertEqual((owner.project_path, owner.exists), (gone, False))
+
+    def test_other_owner_forgets_previous_project_after_unsaved_resplit(self):
+        theirs = self._save_project(Project(), "theirs.llproj")
+        folder = self.service.prepare_folder(self.source, theirs)
+        self.assertIsNotNone(self.service.other_owner(folder, ""))
+        # 未存檔專案取代過一次後，再次重新分割取代的是自己上次的嘗試，不該再點名別人
+        self.service.prepare_folder(self.source, "")
+        self.assertIsNone(self.service.other_owner(folder, ""))
+
+    def test_other_owner_is_none_without_meta(self):
+        folder = os.path.join(self.workspace_dir, "deadbeef")
+        os.makedirs(folder)
+        self.assertIsNone(self.service.other_owner(folder, ""))
 
     # --- 掃描與清理 ---
 

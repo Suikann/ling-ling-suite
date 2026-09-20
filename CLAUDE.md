@@ -255,7 +255,7 @@ src/
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、rename、move、import、project、undo、workspace）；conftest 把使用者資料目錄導到暫存目錄
+tests/                           - pytest 測試（template_engine、rename、move、import、project、undo、workspace；main_window、split_dialog 以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄
 CONTEXT.md                       - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 ```
@@ -381,8 +381,10 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 分割產生的分譜先進工作區（`WORKSPACE_DIR`），重新命名時才搬到輸出位置；使用者匯入的檔案永遠不進工作區（見 `docs/adr/0001`）。
 
 - 每個來源合併譜對應一個子資料夾，名稱為來源絕對路徑 SHA-1 的前 8 碼；資料夾內 `meta.json` 記錄 `source_path`、`source_name`、`project_path`、`created_at`
-- 專案存檔時更新引用到的子資料夾的 `meta.project_path`
-- 搬空的子資料夾保留 `meta.json`（復原重新命名時分譜會搬回來，需要它辨識來源）；「清理工作區」掃描時才移除既未被目前專案、也未被任何已知專案引用的空資料夾（`meta.json` 是程式自產的中繼資料，直接刪除不走資源回收桶）
+- 子資料夾以來源合併譜為鍵、跨專案共用：另一專案重新分割同一份合併譜會取代前者尚未重新命名的分譜，確認訊息點名所屬專案（`WorkspaceService.other_owner`），專案檔已不存在時加註「（找不到）」；`prepare_folder` 一律把所屬專案改成目前專案，未存檔時記為空（取代過一次後再分割就是自己的嘗試，不再點名別人）
+- 專案開啟與存檔時都更新引用到的子資料夾的 `meta.project_path`（`update_project_path` 回傳寫入失敗的子資料夾，UI 只在狀態列提示、不阻止開啟或存檔）
+- 搬空的子資料夾保留 `meta.json`（復原重新命名時分譜會搬回來，需要它辨識來源）；「清理工作區」掃描時才移除既未被目前專案、也未被任何已知專案引用的空資料夾（`meta.json` 是程式自產的中繼資料，直接刪除不走資源回收桶；連同原子寫入殘留 `meta.json.tmp` 一起清，由 `FileService.remove_atomic_residue` 認得暫名）
+- 復原紀錄寫入時對來源位於工作區的項目快照其子資料夾的 meta（`UndoRecord.workspace_meta`，因此 `UndoService` 注入 `WorkspaceService`）；復原後子資料夾若已沒有可讀的 meta 就用快照寫回（`restore_meta`；回滾失敗卡在工作區的檔案也寫回），寫回失敗不影響檔案復原；重做前先以子資料夾目前的 meta 更新快照；舊紀錄沒有此欄照常載入
 - 「工具 → 開啟工作區資料夾」以系統檔案總管開啟 `WORKSPACE_DIR`
 - 「工具 → 清理工作區」列出各子資料夾的引用狀態（使用中／屬於其他專案／屬於無法讀取的專案／未被引用／來源不明），只有「未被引用」預設勾選，刪除走資源回收桶。「已知專案」= 最近專案清單 + 各 `meta.project_path` 指向的專案檔；開啟對話框時會順手把最近清單中已不存在的專案檔移除
 - 引用關係涵蓋群組內分譜、總譜與未分組檔案（`Project.all_file_paths()`）
