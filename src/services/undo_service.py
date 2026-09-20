@@ -12,19 +12,27 @@ from core.constants import UNDO_DIR, REDO_DIR, BACKUP_DIR
 from core.models import UndoMapping, UndoRecord
 from services.file_service import FileService
 from services.move_service import MoveService
+from services.workspace_service import WorkspaceService
 
 
 class UndoService:
     """復原/重做操作管理服務"""
 
-    def __init__(self, file_service: FileService):
+    def __init__(self, file_service: FileService, workspace_service: WorkspaceService):
         self.file_service = file_service
+        self.workspace_service = workspace_service
         self._mover = MoveService(file_service)
 
     # --- 儲存與讀取 ---
 
     def save_undo_record(self, record: UndoRecord) -> str:
-        """儲存復原紀錄並清除重做堆疊"""
+        """儲存復原紀錄並清除重做堆疊
+
+        重新命名紀錄中來源位於工作區的項目，順便快照其子資料夾的 meta.json：
+        搬空的子資料夾會被清理掃描刪掉，復原時要靠快照把來源資訊寫回。
+        """
+        if record.operation_type == "rename":
+            self._snapshot_workspace_meta(record)
         filepath = os.path.join(UNDO_DIR, f"undo_{record.timestamp}.json")
         self._write_record(filepath, record)
         self.clear_redo_stack()
@@ -71,6 +79,7 @@ class UndoService:
             )
             for dir_path in reversed(sorted(record.created_directories)):
                 self.file_service.remove_empty_directory(dir_path)
+            self._restore_workspace_meta(record)
             return
         if op == "split":
             for path in record.created_files:
@@ -129,6 +138,24 @@ class UndoService:
 
     # --- 內部方法 ---
 
+    def _snapshot_workspace_meta(self, record: UndoRecord) -> None:
+        """把來源位於工作區的項目其子資料夾的 meta.json 快照進紀錄"""
+        for mapping in record.mappings:
+            folder = self.workspace_service.folder_of(mapping.original)
+            if folder is None or folder in record.workspace_meta:
+                continue
+            meta = self.workspace_service.read_meta(folder)
+            if meta is not None:
+                record.workspace_meta[folder] = meta
+
+    def _restore_workspace_meta(self, record: UndoRecord) -> None:
+        """檔案搬回後，用快照補回被清掉的 meta.json；寫回失敗不影響已完成的檔案復原"""
+        for folder, meta in record.workspace_meta.items():
+            try:
+                self.workspace_service.restore_meta(folder, meta)
+            except OSError:
+                continue
+
     def _get_latest_record(self, directory, prefix) -> Optional[UndoRecord]:
         if not os.path.isdir(directory):
             return None
@@ -152,6 +179,7 @@ class UndoService:
             created_files=data.get("created_files", []),
             backup_path=data.get("backup_path", ""),
             original_path=data.get("original_path", ""),
+            workspace_meta=data.get("workspace_meta", {}),
         )
         for m in data.get("mappings", []):
             record.mappings.append(UndoMapping(
@@ -173,6 +201,7 @@ class UndoService:
             "created_files": record.created_files,
             "backup_path": record.backup_path,
             "original_path": record.original_path,
+            "workspace_meta": record.workspace_meta,
         }
         self.file_service.write_json_atomic(filepath, data)
 

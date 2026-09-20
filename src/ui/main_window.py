@@ -291,7 +291,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.open_failed", error=e))
             return
+        self._sync_workspace_owner(path)
         self._warn_missing_files()
+
+    def _sync_workspace_owner(self, path: str):
+        """把專案引用到的工作區子資料夾記到目前的專案檔路徑；寫不進去只在狀態列提示，不阻止開啟或存檔"""
+        failed = self.workspace_service.update_project_path(self.project, path)
+        if failed:
+            self._set_status(t("status.workspace_owner_failed", count=len(failed)))
 
     def _warn_missing_files(self):
         """專案內有找不到的檔案時提醒使用者"""
@@ -320,7 +327,6 @@ class MainWindow(QMainWindow):
         try:
             self._sync_project_from_ui()
             self._get_project_service().save_project(self.project, path)
-            self.workspace_service.update_project_path(self.project, path)
             self._project_path = path
             self._modified = False
             self._update_title()
@@ -328,6 +334,8 @@ class MainWindow(QMainWindow):
             self._add_recent_project(path)
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.save_failed", error=e))
+            return
+        self._sync_workspace_owner(path)
 
     def _sync_ui_from_project(self):
         self._instrument_editor._project = self.project
@@ -371,12 +379,9 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _execute_rename(self, plan):
-        if not self._undo_service:
-            from services.undo_service import UndoService
-            self._undo_service = UndoService(self.file_service)
         try:
             record = self._rename_service.execute_rename(
-                plan, self.project, self._undo_service.save_undo_record,
+                plan, self.project, self._get_undo_service().save_undo_record,
             )
             self._update_project_paths(record.mappings)
             self._mark_modified()
@@ -394,16 +399,13 @@ class MainWindow(QMainWindow):
 
     def _save_residual_rename(self, residual):
         """為搬不回原位的檔案寫入復原紀錄並更新專案路徑（重新命名、復原、重做與中斷還原共用）"""
-        if not self._undo_service:
-            from services.undo_service import UndoService
-            self._undo_service = UndoService(self.file_service)
         from datetime import datetime
         record = UndoRecord(
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
             description=t("rename.undo_description", count=len(residual)),
             mappings=list(residual),
         )
-        self._undo_service.save_undo_record(record)
+        self._get_undo_service().save_undo_record(record)
         self._update_project_paths(residual)
         self._mark_modified()
         self._rebuild_tabs()
@@ -516,9 +518,6 @@ class MainWindow(QMainWindow):
 
     def _save_operation_undo(self, op_type, description, **kwargs):
         """儲存操作的復原紀錄"""
-        if not self._undo_service:
-            from services.undo_service import UndoService
-            self._undo_service = UndoService(self.file_service)
         from datetime import datetime
         record = UndoRecord(
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -529,15 +528,12 @@ class MainWindow(QMainWindow):
             backup_path=kwargs.get("backup_path", ""),
             original_path=kwargs.get("original_path", ""),
         )
-        self._undo_service.save_undo_record(record)
+        self._get_undo_service().save_undo_record(record)
 
     def _undo_last(self):
         if not self.prompt_pending_recovery():
             return
-        if not self._undo_service:
-            from services.undo_service import UndoService
-            self._undo_service = UndoService(self.file_service)
-        record = self._undo_service.get_latest_undo_record()
+        record = self._get_undo_service().get_latest_undo_record()
         if not record:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_undo"))
             return
@@ -548,7 +544,7 @@ class MainWindow(QMainWindow):
         if result != QMessageBox.Yes:
             return
         try:
-            self._undo_service.execute_undo(record)
+            self._get_undo_service().execute_undo(record)
             if record.operation_type == "rename":
                 self._update_project_paths(
                     [UndoMapping(original=m.renamed, renamed=m.original) for m in record.mappings],
@@ -565,10 +561,7 @@ class MainWindow(QMainWindow):
     def _redo_last(self):
         if not self.prompt_pending_recovery():
             return
-        if not self._undo_service:
-            from services.undo_service import UndoService
-            self._undo_service = UndoService(self.file_service)
-        record = self._undo_service.get_latest_redo_record()
+        record = self._get_undo_service().get_latest_redo_record()
         if not record:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_redo"))
             return
@@ -582,7 +575,7 @@ class MainWindow(QMainWindow):
         if result != QMessageBox.Yes:
             return
         try:
-            self._undo_service.execute_redo(record)
+            self._get_undo_service().execute_redo(record)
             self._update_project_paths(record.mappings)
             self._mark_modified()
             self._rebuild_tabs()
@@ -710,6 +703,13 @@ class MainWindow(QMainWindow):
             from services.project_service import ProjectService
             self._project_service = ProjectService(self.file_service)
         return self._project_service
+
+    def _get_undo_service(self):
+        """取得或建立復原服務"""
+        if not self._undo_service:
+            from services.undo_service import UndoService
+            self._undo_service = UndoService(self.file_service, self.workspace_service)
+        return self._undo_service
 
     def _get_auth_service(self):
         """取得或建立 Google 認證服務"""

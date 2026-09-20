@@ -45,7 +45,12 @@ class UndoMapping:
 
 @dataclass
 class UndoRecord:
-    """復原紀錄"""
+    """復原紀錄
+
+    Attributes:
+        workspace_meta: 來源位於工作區的項目，其子資料夾到 meta.json 內容的快照；
+            復原時子資料夾已被清理掃描刪掉的話，用它把 meta 寫回
+    """
     timestamp: str = ""
     description: str = ""
     operation_type: str = "rename"
@@ -54,6 +59,7 @@ class UndoRecord:
     created_files: List[str] = field(default_factory=list)
     backup_path: str = ""
     original_path: str = ""
+    workspace_meta: Dict[str, Dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -134,6 +140,13 @@ class WorkspaceEntry:
     total_bytes: int
     modified_at: float
     status: WorkspaceStatus
+
+
+@dataclass
+class WorkspaceOwner:
+    """工作區子資料夾所屬的另一個專案（供重新分割提示）"""
+    project_path: str
+    exists: bool
 
 
 @dataclass

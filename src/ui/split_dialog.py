@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPixmap, QImage, QColor
 from PySide6.QtCore import Qt, Signal, QObject
 from core.locale import t
-from core.models import FileInfo
+from core.models import FileInfo, WorkspaceOwner
 from services.workspace_service import WorkspaceService
 
 SECTION_COLORS = [
@@ -533,14 +533,28 @@ class SplitPdfDialog(QDialog):
         self._dir_label.setText(self._effective_output_dir())
         self._dir_label.setStyleSheet("font-size: 11px;")
 
-    def _confirm_resplit(self, previous_count: int) -> bool:
-        """工作區內已有上次的分割輸出時，詢問是否以這次結果取代"""
+    def _confirm_resplit(self, previous_count: int, owner: Optional[WorkspaceOwner]) -> bool:
+        """工作區內已有上次的分割輸出時，詢問是否以這次結果取代
+
+        Args:
+            previous_count: 工作區內上次分割留下的分譜數
+            owner: 這些分譜所屬的另一個專案，就是目前專案或未記錄時為 None
+        """
         reply = QMessageBox.question(
             self, t("dialog.warning"),
-            t("split.resplit_confirm", count=previous_count),
+            self._resplit_message(previous_count, owner),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         return reply == QMessageBox.Yes
+
+    @staticmethod
+    def _resplit_message(previous_count: int, owner: Optional[WorkspaceOwner]) -> str:
+        """組出重新分割的確認訊息；屬於另一專案時點名，讓使用者知道被取代的不是自己上次的嘗試"""
+        owner_line = ""
+        if owner:
+            missing = "" if owner.exists else t("split.resplit_owner_missing")
+            owner_line = "\n" + t("split.resplit_owner", project=owner.project_path, missing=missing)
+        return t("split.resplit_confirm", count=previous_count, owner=owner_line)
 
     def _build_split_plan(self, output_dir: str) -> List[Tuple[List[int], str, str]]:
         """依目前的分割點與名稱欄位建立分割計畫
@@ -591,7 +605,8 @@ class SplitPdfDialog(QDialog):
         replaced = []
         if self._use_workspace():
             replaced = self._workspace.list_outputs(output_dir)
-            if replaced and not self._confirm_resplit(len(replaced)):
+            owner = self._workspace.other_owner(output_dir, self._project_path)
+            if replaced and not self._confirm_resplit(len(replaced), owner):
                 return
         else:
             existing = [out_path for _, _, out_path in plan if self._files.file_exists(out_path)]

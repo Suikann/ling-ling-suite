@@ -100,6 +100,16 @@ class FileService:
             self._remove_quietly(temp_path)
             raise
 
+    def remove_atomic_residue(self, path: str) -> None:
+        """清除原子寫入在目標旁留下的暫名（寫到一半當機的殘留）
+
+        殘留不存在時什麼都不做；目標檔本身不動。
+
+        Args:
+            path: 原子寫入的目標檔案路徑
+        """
+        self._remove_quietly(path + ATOMIC_WRITE_TEMP_SUFFIX)
+
     @staticmethod
     def _remove_quietly(path: str) -> None:
         """移除檔案；不存在或移除失敗都不拋出"""
