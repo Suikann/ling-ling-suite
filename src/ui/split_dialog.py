@@ -15,7 +15,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPixmap, QImage, QColor
 from PySide6.QtCore import Qt, Signal, QObject
 from core.locale import t
-from core.models import FileInfo, WorkspaceOwner
+from core.models import FileInfo, SplitEntry, WorkspaceOwner
+from services.pdf_service import (
+    build_split_plan, extract_pages, get_page_count, render_page_thumbnails,
+)
 from services.workspace_service import WorkspaceService
 
 SECTION_COLORS = [
@@ -221,7 +224,6 @@ class SplitPdfDialog(QDialog):
             QMessageBox.critical(self, t("dialog.error"), f"File not found:\n{path}")
             return
         try:
-            from services.pdf_service import get_page_count
             self._pdf_path = path
             self._refresh_dir_label()
             self._page_count = get_page_count(path)
@@ -241,7 +243,6 @@ class SplitPdfDialog(QDialog):
 
     def _render_bg(self, path):
         try:
-            from services.pdf_service import render_page_thumbnails
             pil_images = render_page_thumbnails(path, max_width=_THUMB_WIDTH)
             self._signals.ready.emit(pil_images)
         except Exception as e:
@@ -559,27 +560,11 @@ class SplitPdfDialog(QDialog):
             owner_line = "\n" + t("split.resplit_owner", project=owner.project_path, missing=missing)
         return t("split.resplit_confirm", count=previous_count, owner=owner_line)
 
-    def _build_split_plan(self, output_dir: str) -> List[Tuple[List[int], str, str]]:
-        """依目前的分割點與名稱欄位建立分割計畫
-
-        Args:
-            output_dir: 輸出資料夾
-
-        Returns:
-            （頁面索引清單、顯示名稱、輸出路徑）的清單，已略過無頁面的區段
-        """
-        plan = []
-        for sec_idx, (start, end) in enumerate(self._get_sections()):
-            pages = [p for p in range(start, end + 1) if p not in self._deleted_pages]
-            if not pages:
-                continue
-            entry = self._section_name_entries.get(sec_idx)
-            name = entry.text().strip() if entry else f"Part {sec_idx + 1}"
-            safe = self._sanitize(name)
-            if not safe.lower().endswith(".pdf"):
-                safe += ".pdf"
-            plan.append((pages, name, os.path.join(output_dir, safe)))
-        return plan
+    def _build_split_plan(self, output_dir: str) -> List[SplitEntry]:
+        """把目前的分割點、名稱欄位與已刪頁面交給服務組出分割計畫"""
+        sections = self._get_sections()
+        names = [self._section_name_entries[idx].text() for idx in range(len(sections))]
+        return build_split_plan(sections, names, self._deleted_pages, output_dir)
 
     def _confirm_overwrite(self, existing: List[str]) -> bool:
         """輸出位置已有同名檔案時，詢問使用者是否覆蓋"""
@@ -601,9 +586,11 @@ class SplitPdfDialog(QDialog):
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
             return
         source_key = os.path.normcase(os.path.abspath(self._pdf_path))
-        for _, name, out_path in plan:
-            if os.path.normcase(os.path.abspath(out_path)) == source_key:
-                QMessageBox.critical(self, t("dialog.error"), t("split.error.overwrite_source", name=name))
+        for entry in plan:
+            if os.path.normcase(os.path.abspath(entry.output_path)) == source_key:
+                QMessageBox.critical(
+                    self, t("dialog.error"), t("split.error.overwrite_source", name=entry.display_name),
+                )
                 return
         replaced = []
         if self._use_workspace():
@@ -613,11 +600,10 @@ class SplitPdfDialog(QDialog):
                 if not self._confirm_resplit(len(replaced), owner):
                     return
         else:
-            existing = [out_path for _, _, out_path in plan if self._files.file_exists(out_path)]
+            existing = [e.output_path for e in plan if self._files.file_exists(e.output_path)]
             if existing and not self._confirm_overwrite(existing):
                 return
         try:
-            from services.pdf_service import extract_pages
             created_dirs = [] if self._files.directory_exists(output_dir) else [output_dir]
             if self._use_workspace():
                 self._workspace.clear_outputs(output_dir)
@@ -626,13 +612,13 @@ class SplitPdfDialog(QDialog):
                 self._files.create_directory(output_dir)
             split_files = []
             split_instruments = []
-            for pages, name, out_path in plan:
-                extract_pages(self._pdf_path, pages, out_path)
+            for entry in plan:
+                extract_pages(self._pdf_path, entry.pages, entry.output_path)
                 split_files.append(FileInfo(
-                    original_path=out_path,
-                    display_name=os.path.basename(out_path),
+                    original_path=entry.output_path,
+                    display_name=os.path.basename(entry.output_path),
                 ))
-                split_instruments.append(name)
+                split_instruments.append(entry.display_name)
             if self._on_split_complete:
                 self._on_split_complete(
                     split_files, split_instruments,
@@ -645,9 +631,3 @@ class SplitPdfDialog(QDialog):
             self.accept()
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
-
-    @staticmethod
-    def _sanitize(name):
-        for ch in '<>:"/\\|?*':
-            name = name.replace(ch, "_")
-        return name.strip() or "Part"

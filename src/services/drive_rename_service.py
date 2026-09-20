@@ -7,6 +7,7 @@ Drive 重新命名服務
 """
 from collections import defaultdict
 from typing import Dict, List, Tuple
+from core.filename import ensure_pdf_extension
 from core.models import DriveRenameEntry, FileInfo, Group
 from core.catalog_models import Composer, PieceDetail
 from core.template_engine import build_variables_for_file, substitute_template
@@ -109,9 +110,7 @@ def generate_drive_rename_plan(
             group.instruments = list(effective_instruments)
         for i, file_info in enumerate(group.files):
             variables = build_variables_for_file(i, group, instruments)
-            new_name = substitute_template(template, variables)
-            if not new_name.lower().endswith(".pdf"):
-                new_name += ".pdf"
+            new_name = ensure_pdf_extension(substitute_template(template, variables))
             plan.append(DriveRenameEntry(
                 file_id=file_info.original_path,
                 original_name=file_info.display_name,

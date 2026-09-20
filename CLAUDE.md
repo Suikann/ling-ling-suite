@@ -235,6 +235,7 @@ src/
     widgets.py                   - 共用增強元件
   core/                          - 模板引擎、資料模型、常數定義
     constants.py                 - 模板變數定義、預設值、應用程式路徑等常數
+    filename.py                  - 檔名清理（非法字元換底線、空名回退），重新命名與分割共用
     catalog_constants.py         - 譜庫相關常數
     template_engine.py           - 模板解析與變數替換邏輯
     models.py                    - 資料模型（Project、Group、Template、FileInfo）
@@ -246,7 +247,7 @@ src/
     rename_service.py            - 批次重新命名邏輯編排（計畫生成、空檔名檢查）
     move_service.py              - 兩階段批次搬移引擎（驗證、對調／連鎖、回滾、進行中紀錄與中斷後還原）；重新命名、復原、重做共用
     move_journal.py              - 批次搬移進行中紀錄的讀寫（pending_move.json）
-    pdf_service.py               - PDF 分割、旋轉、縮圖產生
+    pdf_service.py               - PDF 分割計畫組裝、頁面擷取、旋轉、縮圖產生
     project_service.py           - 專案檔儲存/載入
     undo_service.py              - 復原／重做操作管理
     preferences_service.py       - 使用者偏好（語言、外觀）持久化
@@ -255,7 +256,7 @@ src/
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、rename、move、import、project、undo、workspace；main_window、split_dialog 以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄
+tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、undo、workspace、pdf_service；main_window、split_dialog 以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄
 CONTEXT.md                       - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 ```
