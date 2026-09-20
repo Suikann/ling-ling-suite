@@ -8,21 +8,12 @@ import os
 from collections import defaultdict
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
+from core.filename import sanitize_filename
 from core.locale import t
 from core.models import Project, RenameEntry, UndoMapping, UndoRecord
 from core.template_engine import build_variables_for_file, substitute_template
 from services.file_service import FileService
 from services.move_service import Move, MoveService
-
-
-_ILLEGAL_CHARS = '<>:"/\\|?*'
-
-
-def _sanitize_name(name: str) -> str:
-    """替換檔名中的非法字元"""
-    for ch in _ILLEGAL_CHARS:
-        name = name.replace(ch, "_")
-    return name.strip()
 
 
 def _name_stem(path: str) -> str:
@@ -76,14 +67,14 @@ class RenameService:
                     "曲種": group.genre,
                     "Genre": group.genre,
                 }
-                score_name = _sanitize_name(substitute_template(template, score_vars))
+                score_name = sanitize_filename(substitute_template(template, score_vars))
                 base_dir = (
                     project.output_directory
                     if project.output_directory
                     else os.path.dirname(group.score_file.original_path)
                 )
                 if project.use_subfolders and project.subfolder_template:
-                    subfolder_name = _sanitize_name(substitute_template(
+                    subfolder_name = sanitize_filename(substitute_template(
                         project.subfolder_template, score_vars,
                     ))
                     target_dir = os.path.join(base_dir, subfolder_name)
@@ -102,14 +93,14 @@ class RenameService:
                 variables = build_variables_for_file(
                     i, group, project.instruments or None,
                 )
-                new_name = _sanitize_name(substitute_template(template, variables))
+                new_name = sanitize_filename(substitute_template(template, variables))
                 base_dir = (
                     project.output_directory
                     if project.output_directory
                     else os.path.dirname(file_info.original_path)
                 )
                 if project.use_subfolders and project.subfolder_template:
-                    subfolder_name = _sanitize_name(substitute_template(
+                    subfolder_name = sanitize_filename(substitute_template(
                         project.subfolder_template, variables,
                     ))
                     target_dir = os.path.join(base_dir, subfolder_name)
@@ -117,7 +108,7 @@ class RenameService:
                     target_dir = base_dir
                 if project.parts_output_mode == "parts" and project.parts_subfolder_name:
                     target_dir = os.path.join(
-                        target_dir, _sanitize_name(project.parts_subfolder_name),
+                        target_dir, sanitize_filename(project.parts_subfolder_name),
                     )
                 elif project.parts_output_mode == "section":
                     instrument = group.instruments[i] if i < len(group.instruments) else ""
@@ -125,10 +116,10 @@ class RenameService:
                     if not section:
                         from core.constants import detect_instrument_section
                         section = detect_instrument_section(instrument)
-                    target_dir = os.path.join(target_dir, _sanitize_name(section))
+                    target_dir = os.path.join(target_dir, sanitize_filename(section))
                 elif project.use_parts_subfolder and project.parts_subfolder_name:
                     target_dir = os.path.join(
-                        target_dir, _sanitize_name(project.parts_subfolder_name),
+                        target_dir, sanitize_filename(project.parts_subfolder_name),
                     )
                 new_path = os.path.join(target_dir, new_name)
                 plan.append(RenameEntry(

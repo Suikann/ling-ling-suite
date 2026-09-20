@@ -206,6 +206,25 @@ class TestRenameService(unittest.TestCase):
         self.assertIn("1. Flute - Sym5.pdf", os.path.basename(plan[0].new_path))
         self.assertIn("2. Oboe - Sym5.pdf", os.path.basename(plan[1].new_path))
 
+    def test_generate_plan_sanitizes_name_and_subfolder(self):
+        p1 = self._create_file("fl.pdf")
+        project = Project(
+            master_template="{序號}. {樂器} - {曲名}.pdf",
+            use_subfolders=True,
+            subfolder_template="{曲名}",
+            groups=[Group(
+                files=[FileInfo(p1, "fl.pdf")],
+                instruments=["Flute"],
+                selected_instruments=[0],
+                piece_name="Sym: No.5?",
+            )],
+        )
+        plan = self.rename_service.generate_rename_plan(project)
+        self.assertEqual(
+            plan[0].new_path,
+            os.path.join(self.temp_dir, "Sym_ No.5_", "1. Flute - Sym_ No.5_.pdf"),
+        )
+
     def test_generate_plan_with_subfolders(self):
         p1 = self._create_file("fl.pdf")
         project = Project(

@@ -47,6 +47,12 @@ RENAME_STAGING_SUFFIX = ".moving"
 # 批次搬移的進行中紀錄：執行前寫入、每完成一步更新，成功或回滾後刪除；啟動時若仍存在即為上次中途中斷
 MOVE_JOURNAL_FILE = os.path.join(APPDATA_DIR, "pending_move.json")
 
+# 檔名不得含有的字元（Windows 最嚴），一律換成底線；Windows 保留名（CON、NUL 等）與尾端點空白不處理，這類名字不應出現
+FILENAME_ILLEGAL_CHARS = '<>:"/\\|?*'
+PDF_EXTENSION = ".pdf"
+# 分割輸出：區段名清理後為空時的檔名
+SPLIT_FALLBACK_NAME = "Part"
+
 
 class WorkspaceStatus(str, Enum):
     """工作區子資料夾相對於專案的引用狀態"""

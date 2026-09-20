@@ -11,7 +11,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from PyPDF2 import PdfWriter
-from services.pdf_service import extract_pages, get_page_count
+from core.models import SplitEntry
+from services.pdf_service import build_split_plan, extract_pages, get_page_count
 
 
 class TestExtractPages(unittest.TestCase):
@@ -45,6 +46,39 @@ class TestExtractPages(unittest.TestCase):
         with self.assertRaises(ValueError):
             extract_pages(self.source, [0], alias)
         self.assertEqual(get_page_count(self.source), 3)
+
+
+class TestBuildSplitPlan(unittest.TestCase):
+    """build_split_plan：區段對應頁面與輸出路徑，對話框只提供 UI 狀態"""
+
+    OUT = os.path.join("out", "dir")
+
+    def test_names_each_section_and_appends_pdf(self):
+        plan = build_split_plan([(0, 1), (2, 2)], ["Flute", "Oboe"], set(), self.OUT)
+        self.assertEqual(plan, [
+            SplitEntry([0, 1], "Flute", os.path.join(self.OUT, "Flute.pdf")),
+            SplitEntry([2], "Oboe", os.path.join(self.OUT, "Oboe.pdf")),
+        ])
+
+    def test_keeps_existing_pdf_extension_case_insensitively(self):
+        plan = build_split_plan([(0, 0)], ["Flute.PDF"], set(), self.OUT)
+        self.assertEqual(plan[0].output_path, os.path.join(self.OUT, "Flute.PDF"))
+
+    def test_excludes_deleted_pages(self):
+        plan = build_split_plan([(0, 3)], ["Flute"], {1, 2}, self.OUT)
+        self.assertEqual(plan[0].pages, [0, 3])
+
+    def test_skips_section_with_no_pages_left(self):
+        plan = build_split_plan([(0, 0), (1, 2)], ["Flute", "Oboe"], {0}, self.OUT)
+        self.assertEqual([entry.display_name for entry in plan], ["Oboe"])
+
+    def test_empty_name_falls_back_to_part_for_the_file_only(self):
+        plan = build_split_plan([(0, 0)], ["   "], set(), self.OUT)
+        self.assertEqual(plan, [SplitEntry([0], "", os.path.join(self.OUT, "Part.pdf"))])
+
+    def test_sanitizes_file_name_but_keeps_display_name(self):
+        plan = build_split_plan([(0, 0)], [" Violin I/II "], set(), self.OUT)
+        self.assertEqual(plan, [SplitEntry([0], "Violin I/II", os.path.join(self.OUT, "Violin I_II.pdf"))])
 
 
 if __name__ == '__main__':

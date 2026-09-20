@@ -2,12 +2,16 @@
 """
 PDF 工具服務
 
-提供 PDF 檔案的頁面分割、旋轉與縮圖算繪功能。
+提供 PDF 檔案的分割計畫組裝、頁面分割、旋轉與縮圖算繪功能。
 """
 import os
-from typing import List, Tuple
+from typing import List, Set, Tuple
 
 from PyPDF2 import PdfReader, PdfWriter
+
+from core.constants import SPLIT_FALLBACK_NAME
+from core.filename import ensure_pdf_extension, sanitize_filename
+from core.models import SplitEntry
 
 
 def get_page_count(pdf_path: str) -> int:
@@ -55,13 +59,11 @@ def split_pdf(
         for page_num in range(start_idx, end_idx):
             writer.add_page(reader.pages[page_num])
         if name_pattern:
-            filename = name_pattern.replace(
+            filename = ensure_pdf_extension(name_pattern.replace(
                 "{index}", str(idx),
             ).replace(
                 "{pages}", f"{start}-{end}",
-            )
-            if not filename.lower().endswith(".pdf"):
-                filename += ".pdf"
+            ))
         else:
             filename = f"{base_name}_part{idx}.pdf"
         output_path = os.path.join(output_dir, filename)
@@ -108,6 +110,35 @@ def split_pdf_into_single_pages(
         產生的檔案路徑清單
     """
     return split_pdf_every_n_pages(pdf_path, 1, output_dir)
+
+
+def build_split_plan(
+    sections: List[Tuple[int, int]],
+    names: List[str],
+    deleted_pages: Set[int],
+    output_dir: str,
+) -> List[SplitEntry]:
+    """依區段與名稱組出分割計畫
+
+    Args:
+        sections: 區段清單，每項為 (起始頁, 結束頁)，0-based 且含結束頁
+        names: 各區段使用者輸入的名稱，與 sections 一一對應
+        deleted_pages: 已刪除、不輸出的頁面索引
+        output_dir: 輸出資料夾
+
+    Returns:
+        分割計畫項目清單；已略過刪光頁面的區段。顯示名稱為去頭尾空白的原始輸入，
+        檔名則清理非法字元、空名回退為 Part 並補上 .pdf
+    """
+    plan = []
+    for (start, end), name in zip(sections, names):
+        pages = [p for p in range(start, end + 1) if p not in deleted_pages]
+        if not pages:
+            continue
+        name = name.strip()
+        file_name = ensure_pdf_extension(sanitize_filename(name, fallback=SPLIT_FALLBACK_NAME))
+        plan.append(SplitEntry(pages, name, os.path.join(output_dir, file_name)))
+    return plan
 
 
 def extract_pages(

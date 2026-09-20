@@ -166,6 +166,14 @@ class RenameEntry:
 
 
 @dataclass
+class SplitEntry:
+    """分割計畫項目：一個區段要輸出的頁面、顯示名稱與輸出路徑"""
+    pages: List[int]
+    display_name: str
+    output_path: str
+
+
+@dataclass
 class DriveRenameEntry:
     """Drive 重新命名計畫項目"""
     file_id: str = ""
