@@ -213,6 +213,18 @@ test('glossary: 使用者裁定的譯名確實生效', () => {
   assert.strictEqual(pick('dependency'), '相依套件');
   assert.strictEqual(pick('CI'), '自動驗收');
   assert.strictEqual(pick('hook'), '機關');
+  assert.strictEqual(pick('mock'), '模擬');
+  assert.strictEqual(pick('daemon'), '常駐程式');
+  assert.strictEqual(pick('adapter'), '通事');
+  assert.strictEqual(pick('port'), '關口');
+  assert.strictEqual(pick('seam'), '關節');
+  assert.strictEqual(pick('chunk'), '截');
+  assert.strictEqual(pick('worker'), '差役');
+  assert.strictEqual(pick('fixture'), '底稿');
+  assert.strictEqual(pick('write-through'), '隨到隨寫');
+  assert.strictEqual(pick('transport'), '郵傳');
+  assert.strictEqual(pick('trait'), '行當');
+  assert.strictEqual(pick('streaming'), '串流');
   assert.strictEqual(pick('rebase'), '嫁接');
   assert.strictEqual(pick('repo'), '典藏');
   assert.strictEqual(pick('session'), '會期');

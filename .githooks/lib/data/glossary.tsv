@@ -96,3 +96,15 @@ delivery layer	口岸	通商口岸之義：領域邏輯與外界交會的那一�
 vendor	抄錄	動詞：把外來檔案逐字抄進本 repo 版控，抄完即凍結、對底本零依賴，要跟上就重抄；成品叫抄本。一律兩字，不單用「抄」（有抄襲之嫌）。不作「供應商」——那是名詞義
 vendored	抄本	形容詞／名詞：抄錄進來的那份（抄本 skill、抄本 hook）；provenance 區塊即其底本記錄（來源 repo／pin commit／sha256）
 marker	起訖標記	成對的註解行（如 <!-- lingling:git-workflow --> 與 <!-- /lingling:git-workflow -->），圈出工具可整段覆寫的區塊。單指一條說起端／訖端，不縮成「起標」——那是拍賣的起標價
+mock	模擬	測試用的假替身，行為由測試預先擺好（如 mock server 回固定回應）；名詞、動詞、形容詞皆通
+daemon	常駐程式	在背景長駐、不與使用者直接互動、由別的程式（CLI／TUI／D-Bus）驅動的服務行程
+adapter	通事	ports-and-adapters 之 adapter：口岸上替兩造傳話的譯員——一面對外頭的洋行（ureq／libmpv），一面對裡頭的關口（port），把彼此的話翻成對方聽得懂的。與 agent＝執事、handler＝司事同一字輩
+port	關口	ports-and-adapters 之 port：純核心定下形制（trait 簽章）、供外界進出的那道關卡，通事（adapter）守在上面辦事；有進（driving）有出（driven）。口岸（delivery layer）是整個通商地帶，關口是地帶上的一道門，尺度不同。不作「埠」——那是網路 port 號
+seam	關節	測試上的 seam：間架（walking skeleton）上能轉動、能拆開換件之處——測試從關節把 fake 接上去，不動骨頭本身。DESIGN 的 Seam A／B／C 即關節 A／B／C
+chunk	截	一截甘蔗之截：長度任意、隨手切下的一段，切點無關緊要；「逐 chunk 吐出」作「逐截吐出」、「chunk 邊界任意」作「截點任意」。不作「塊」——block 另有其義
+worker	差役	衙門派出去跑腿辦差的人：主事（event loop）發一道差，差役出去抓取／下載，辦妥回報；fetch worker 即抓取差役。worker 不必然是 thread，故不綁「執行緒」
+fixture	底稿	存檔備查的原稿：從真 API 錄下、去敏後留存的那份，測試每回拿它出來對；手寫的存檔亦是底稿
+write-through	隨到隨寫	仿「隨到隨辦」：位元組一到就落到檔案，中間不押、不囤（無使用者層緩衝），讀的一方才能邊長邊讀
+transport	郵傳	郵傳部之郵傳：專司把文書送出去、把回文帶回來的那一路，不問文書寫什麼（HTTP 收發層）。與 OSI 傳輸層不撞名
+trait	行當	Rust 之 trait：戲班的生旦淨丑——型別可扮某個行當（impl Player for MpvPlayer 即 MpvPlayer 扮 Player），亦可兼扮數個；行當規定戲路（方法簽章），不管誰來演。Rust 官方 zh-TW 作「特徵」，本表取行當
+streaming	串流	台灣通行譯法。tsukibox 領域內的 Streaming（串流播放）見該 repo 的 CONTEXT.md
