@@ -28,6 +28,11 @@ def _normalize(path: str) -> str:
     return os.path.normcase(os.path.abspath(path))
 
 
+def _stored_project_path(path: str) -> str:
+    """寫進 meta 的專案檔路徑：一律絕對（meta 會被別的 session 讀），未知（空字串）保持空"""
+    return os.path.abspath(path) if path else ""
+
+
 class WorkspaceService:
     """工作區管理服務"""
 
@@ -86,7 +91,7 @@ class WorkspaceService:
         meta.update({
             "source_path": os.path.abspath(source_path),
             "source_name": os.path.basename(source_path),
-            "project_path": project_path,
+            "project_path": _stored_project_path(project_path),
             "created_at": meta.get("created_at") or time.time(),
         })
         self._write_meta(folder, meta)
@@ -189,7 +194,7 @@ class WorkspaceService:
             meta = self.read_meta(folder)
             if meta is None:
                 continue
-            meta["project_path"] = os.path.abspath(project_path)
+            meta["project_path"] = _stored_project_path(project_path)
             try:
                 self._write_meta(folder, meta)
             except OSError:

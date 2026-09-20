@@ -66,7 +66,8 @@ class TestMainWindowOpenProject(unittest.TestCase):
         self.assertEqual(self.window._project_path, new_path)
 
     def test_open_project_still_opens_when_meta_cannot_be_written(self):
-        folder = self.workspace.prepare_folder(self._create("合併譜.pdf"), "/proj/old.llproj")
+        old_path = os.path.join(self.temp_dir, "old.llproj")
+        folder = self.workspace.prepare_folder(self._create("合併譜.pdf"), old_path)
         new_path = self._project_saved_at(folder, "new.llproj")
         real_write = self.window.file_service.write_json_atomic
 
@@ -78,7 +79,7 @@ class TestMainWindowOpenProject(unittest.TestCase):
         self.window.file_service.write_json_atomic = failing_write
         self.window._do_open_project(new_path)
         self.assertEqual(self.window._project_path, new_path)
-        self.assertEqual(self.workspace.read_meta(folder)["project_path"], "/proj/old.llproj")
+        self.assertEqual(self.workspace.read_meta(folder)["project_path"], old_path)
         self.assertEqual(self.window._status_label.text(), t("status.workspace_owner_failed", count=1))
 
 
