@@ -259,6 +259,7 @@ src/
 tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、undo、workspace、pdf_service；main_window、split_dialog 以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄
 CONTEXT.md                       - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
+docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
 ```
 
 ### Layer Responsibilities
