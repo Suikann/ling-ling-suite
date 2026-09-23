@@ -1,0 +1,1195 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>泠靈小工具架構檢視</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;900&display=swap">
+<style>
+:root {
+  --ground: #f3f5f2;
+  --surface: #ffffff;
+  --ink: #1b1f23;
+  --muted: #59616a;
+  --rule: #d3d8d2;
+  --accent: #26497a;
+  --accent-soft: #e2e9f3;
+  --leak: #b3322a;
+  --leak-soft: #f6e1de;
+  --warn: #8e5b0e;
+  --warn-soft: #f4e8d2;
+  --strong: #1f6b4b;
+  --strong-soft: #dbeee3;
+  --explore: #8e5b0e;
+  --explore-soft: #f4e8d2;
+  --spec: #56606a;
+  --spec-soft: #e6e9ea;
+  --deep: #1f2d40;
+  --deep-ink: #eef2f7;
+  --deep-faded: #8c9bb0;
+  --ui-cell: #f4e8d2;
+  --svc-cell: #e8ebee;
+  --font-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-display: "Noto Serif TC", "Songti TC", "PMingLiU", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #121518;
+    --surface: #1a1e23;
+    --ink: #e3e6e9;
+    --muted: #9aa3ad;
+    --rule: #2f353c;
+    --accent: #8fb1e2;
+    --accent-soft: #1f2c3e;
+    --leak: #f07b6d;
+    --leak-soft: #3b201d;
+    --warn: #e2b565;
+    --warn-soft: #382c17;
+    --strong: #72cba0;
+    --strong-soft: #173428;
+    --explore: #e2b565;
+    --explore-soft: #382c17;
+    --spec: #a7afb7;
+    --spec-soft: #272c32;
+    --deep: #2c4262;
+    --deep-ink: #eef3fa;
+    --deep-faded: #9fb2cc;
+    --ui-cell: #3a2f1a;
+    --svc-cell: #262b31;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #121518;
+  --surface: #1a1e23;
+  --ink: #e3e6e9;
+  --muted: #9aa3ad;
+  --rule: #2f353c;
+  --accent: #8fb1e2;
+  --accent-soft: #1f2c3e;
+  --leak: #f07b6d;
+  --leak-soft: #3b201d;
+  --warn: #e2b565;
+  --warn-soft: #382c17;
+  --strong: #72cba0;
+  --strong-soft: #173428;
+  --explore: #e2b565;
+  --explore-soft: #382c17;
+  --spec: #a7afb7;
+  --spec-soft: #272c32;
+  --deep: #2c4262;
+  --deep-ink: #eef3fa;
+  --deep-faded: #9fb2cc;
+  --ui-cell: #3a2f1a;
+  --svc-cell: #262b31;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.7;
+  padding-inline: 16px;
+  padding-block: 40px 64px;
+}
+main { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.3; }
+h1 { font-size: 34px; font-weight: 900; letter-spacing: 0.02em; }
+h2 { font-size: 23px; font-weight: 900; }
+h3 { font-size: 16px; font-weight: 600; }
+p { margin: 0; }
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+a { color: var(--accent); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 開頭 */
+.masthead { display: flex; flex-direction: column; gap: 14px; }
+.eyebrow { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+.scope { color: var(--muted); max-width: 70ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: 13px; color: var(--muted); padding-top: 6px; border-top: 1px solid var(--rule); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.lg-box { width: 22px; height: 14px; border: 1.5px solid var(--ink); display: inline-block; }
+.lg-deep { width: 22px; height: 14px; background: var(--deep); border: 3px solid var(--deep); display: inline-block; }
+.lg-seam { width: 26px; border-top: 2px dashed var(--accent); display: inline-block; }
+.lg-leak { width: 26px; border-top: 2px solid var(--leak); display: inline-block; position: relative; }
+.lg-ui { width: 22px; height: 14px; background: var(--ui-cell); display: inline-block; }
+.toc { display: flex; flex-wrap: wrap; gap: 8px; }
+.toc a { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; color: var(--ink); background: var(--surface); border: 1px solid var(--rule); padding: 4px 10px 4px 4px; font-size: 13.5px; }
+.toc a:hover { border-color: var(--accent); }
+.toc a.plain { padding-left: 10px; }
+
+/* 排練記號：候選代號 */
+.mark {
+  font-family: var(--font-display); font-weight: 900; font-size: 20px; line-height: 1;
+  width: 34px; height: 34px; flex: none;
+  display: inline-grid; place-items: center;
+  border: 2.5px solid var(--ink); color: var(--ink);
+}
+.toc .mark { width: 24px; height: 24px; font-size: 14px; border-width: 2px; }
+
+/* 候選卡 */
+.cand { background: var(--surface); border: 1px solid var(--rule); padding: 28px 28px 30px; display: flex; flex-direction: column; gap: 20px; scroll-margin-top: 20px; }
+.cand-head { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
+.cand-head h2 { flex: 1 1 320px; padding-top: 2px; }
+.badges { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.badge { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+.b-strong { color: var(--strong); background: var(--strong-soft); }
+.b-explore { color: var(--explore); background: var(--explore-soft); }
+.b-spec { color: var(--spec); background: var(--spec-soft); }
+.b-dep { color: var(--muted); border: 1px solid var(--rule); font-family: var(--font-mono); font-weight: 400; }
+.files { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }
+.files li::before { content: "▸ "; color: var(--rule); }
+
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 760px) { .ba { grid-template-columns: 1fr; } }
+.ba figure { margin: 0; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ba .tag { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.ba .tag.after { color: var(--accent); }
+.canvas { border: 1px solid var(--rule); background: var(--ground); padding: 14px; overflow-x: auto; }
+figcaption { font-size: 13px; color: var(--muted); }
+svg.dg { display: block; width: 100%; max-width: 100%; height: auto; color: var(--ink); font-family: var(--font-body); }
+svg.dg text { fill: currentColor; font-size: 12px; }
+svg.dg .sm { font-size: 11px; }
+svg.dg .lbl { fill: var(--muted); }
+svg.dg .mono { font-family: var(--font-mono); font-size: 10.5px; }
+svg.dg .box { fill: var(--surface); stroke: currentColor; stroke-width: 1.4; }
+svg.dg .uibox { fill: var(--ui-cell); stroke: currentColor; stroke-width: 1.2; }
+svg.dg .deep { fill: var(--deep); stroke: var(--deep); stroke-width: 3; }
+svg.dg .deep-t { fill: var(--deep-ink); font-weight: 700; font-size: 13.5px; }
+svg.dg .deep-s { fill: var(--deep-faded); font-size: 11px; }
+svg.dg .inner { fill: none; stroke: var(--deep-faded); stroke-width: 1; stroke-dasharray: 3 3; }
+svg.dg .inner-t { fill: var(--deep-faded); font-size: 11px; }
+svg.dg .ln { stroke: currentColor; stroke-width: 1.3; fill: none; }
+svg.dg .ret { stroke: currentColor; stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+svg.dg .life { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 4; }
+svg.dg .seam { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; fill: none; }
+svg.dg .seam-t { fill: var(--accent); font-size: 11px; font-weight: 700; }
+svg.dg .leak { stroke: var(--leak); stroke-width: 1.6; fill: none; }
+svg.dg .leak-t { fill: var(--leak); font-size: 11px; }
+svg.dg .leak-dot { fill: var(--leak); }
+svg.dg .ahead { fill: currentColor; }
+svg.dg .ahead-leak { fill: var(--leak); }
+svg.dg .ahead-seam { fill: var(--accent); }
+svg.dg .dup { fill: var(--leak-soft); stroke: var(--leak); stroke-width: 1; }
+
+/* A：四份流程矩陣 */
+.matrix { border-collapse: collapse; width: 100%; min-width: 440px; font-size: 12px; line-height: 1.35; }
+.matrix th { font-weight: 700; text-align: left; padding: 6px 6px; font-size: 12px; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+.matrix th.step { color: var(--muted); font-weight: 500; }
+.matrix td { padding: 5px 6px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.matrix td.step { color: var(--muted); white-space: nowrap; }
+.matrix .c { display: block; padding: 3px 6px; }
+.c.ui { background: var(--ui-cell); }
+.c.svc { background: var(--svc-cell); }
+.c.miss { outline: 1.5px solid var(--leak); outline-offset: -1.5px; color: var(--leak); background: var(--leak-soft); }
+.c.na { color: var(--muted); }
+.key { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+.key i { display: inline-block; width: 14px; height: 10px; margin-right: 6px; vertical-align: -1px; }
+.key .k-ui { background: var(--ui-cell); }
+.key .k-svc { background: var(--svc-cell); }
+.key .k-miss { background: var(--leak-soft); outline: 1.5px solid var(--leak); outline-offset: -1.5px; }
+
+/* E：命名管線 */
+.pipes { display: flex; flex-direction: column; gap: 14px; min-width: 420px; }
+.pipe { display: flex; flex-direction: column; gap: 6px; }
+.pipe-h { font-size: 12px; font-weight: 700; }
+.steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.st { font-size: 11.5px; padding: 3px 8px; border: 1.2px solid var(--ink); background: var(--surface); white-space: nowrap; }
+.st.bad { border-color: var(--leak); color: var(--leak); background: var(--leak-soft); }
+.st.ghost { border-style: dashed; color: var(--leak); border-color: var(--leak); background: transparent; }
+.st.deep { background: var(--deep); color: var(--deep-ink); border: 3px solid var(--deep); font-weight: 700; }
+.st.faded { border: 1px dashed var(--muted); color: var(--muted); background: transparent; }
+.arr { color: var(--muted); font-size: 12px; }
+.callers { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* F：剖面帶 */
+.bands { display: flex; flex-direction: column; gap: 6px; min-width: 380px; }
+.band { display: grid; grid-template-columns: 92px 1fr; gap: 8px; align-items: stretch; }
+.band-h { font-size: 12px; font-weight: 700; padding-top: 6px; }
+.band-b { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.band-b .st { font-size: 11.5px; }
+.st.ui { background: var(--ui-cell); }
+
+/* 文字區 */
+.ps { display: grid; grid-template-columns: 56px 1fr; gap: 8px 14px; margin: 0; }
+.ps dt { font-weight: 700; font-size: 13px; color: var(--muted); padding-top: 1px; }
+.ps dd { margin: 0; max-width: 72ch; }
+.wins { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px 18px; }
+.wins li { font-size: 14px; padding-left: 16px; position: relative; }
+.wins li::before { content: ""; position: absolute; left: 0; top: 0.72em; width: 7px; height: 7px; background: var(--accent); }
+.wins b { font-weight: 700; color: var(--accent); }
+.adr { font-size: 13.5px; padding: 10px 14px; background: var(--warn-soft); color: var(--ink); border-left: 3px solid var(--warn); }
+.adr b { color: var(--warn); }
+
+/* 首推 */
+.top { background: var(--deep); color: var(--deep-ink); padding: 32px 30px; display: flex; flex-direction: column; gap: 16px; }
+.top .eyebrow { color: var(--deep-faded); }
+.top h2 { font-size: 27px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.top .mark { border-color: var(--deep-ink); color: var(--deep-ink); }
+.top p { max-width: 72ch; }
+.top a { color: var(--deep-ink); font-weight: 700; }
+.top ol { margin: 0; padding-left: 20px; max-width: 72ch; display: flex; flex-direction: column; gap: 4px; }
+
+/* 缺陷附錄 */
+.defects h2 { margin-bottom: 6px; }
+.defects > p { color: var(--muted); margin-bottom: 14px; max-width: 72ch; }
+.tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); }
+.dtable { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 13.5px; }
+.dtable th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 700; padding: 10px 12px; border-bottom: 1.5px solid var(--ink); }
+.dtable td { padding: 10px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.dtable td:nth-child(2) { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.dtable td:nth-child(3) { white-space: nowrap; font-size: 12.5px; }
+.sev { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; margin-right: 6px; }
+.sev.hi { color: var(--leak); background: var(--leak-soft); }
+.sev.md { color: var(--warn); background: var(--warn-soft); }
+.sev.lo { color: var(--spec); background: var(--spec-soft); }
+.rel { font-size: 11.5px; color: var(--accent); white-space: nowrap; }
+.foot { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+
+/* 附錄 */
+.appx { display: flex; flex-direction: column; gap: 24px; }
+.appx-intro { display: flex; flex-direction: column; gap: 10px; }
+.appx-intro p { color: var(--muted); max-width: 72ch; }
+.appx-nav { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13.5px; }
+.appx-group { background: var(--surface); border: 1px solid var(--rule); padding: 24px 26px; display: flex; flex-direction: column; gap: 20px; scroll-margin-top: 20px; }
+.appx-group h3 { font-size: 18px; display: flex; gap: 10px; align-items: center; }
+.appx-group h3 .mark { width: 26px; height: 26px; font-size: 15px; border-width: 2px; }
+.appx-block { display: flex; flex-direction: column; gap: 8px; }
+.appx-block h4 { font-family: var(--font-body); font-size: 14px; font-weight: 700; margin: 0; color: var(--accent); }
+.appx ol, .appx ul { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; max-width: 82ch; }
+.appx li, .appx-block > p { font-size: 14px; }
+.appx-block > p { max-width: 82ch; }
+.appx .note { font-size: 12.5px; color: var(--muted); }
+.scroll { overflow-x: auto; }
+.atable { border-collapse: collapse; width: 100%; min-width: 600px; font-size: 13px; }
+.atable th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 700; padding: 8px 10px; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+.atable td { padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.atable .n { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.atable.narrow { min-width: 0; max-width: 560px; }
+@media (max-width: 520px) {
+  h1 { font-size: 27px; }
+  .cand { padding: 20px 16px 22px; }
+  .ps { grid-template-columns: 1fr; gap: 2px; }
+  .ps dd { margin-bottom: 8px; }
+  .top { padding: 24px 18px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<main>
+  <header class="masthead">
+    <div class="eyebrow">ling-ling-suite ・ develop @ 4f8c43c ・ 2026-09-24</div>
+    <h1>泠靈小工具架構檢視</h1>
+    <p class="scope">範圍依近三個月的提交熱區決定：<code>main_window.py</code>（11 次）、<code>split_dialog.py</code>、<code>workspace_service.py</code>、<code>rename_service.py</code>、<code>file_service.py</code>（各 7 次），以及 <code>undo_service.py</code>、<code>move_service.py</code>、<code>preview_dialog.py</code>。譜庫（Google Drive／Sheets）那一塊近期沒動，只在候選 E 旁及。</p>
+    <div class="legend">
+      <span><i class="lg-box"></i>模組</span>
+      <span><i class="lg-deep"></i>深厚模組</span>
+      <span><i class="lg-seam"></i>關節（seam）＝介面所在</span>
+      <span><i class="lg-leak"></i>外洩／漂移</span>
+      <span><i class="lg-ui"></i>寫在 UI 的業務順序</span>
+    </div>
+    <nav class="toc" aria-label="候選">
+      <a href="#cand-a"><span class="mark">A</span>搬移歷程</a>
+      <a href="#cand-b"><span class="mark">B</span>分割流程</a>
+      <a href="#cand-c"><span class="mark">C</span>專案的檔案引用</a>
+      <a href="#cand-d"><span class="mark">D</span>重新命名預檢</a>
+      <a href="#cand-e"><span class="mark">E</span>命名格式套用</a>
+      <a href="#cand-f"><span class="mark">F</span>專案開啟與存檔</a>
+      <a class="plain" href="#order">執行順序</a>
+      <a class="plain" href="#defects-h">沿途發現的缺陷</a>
+      <a class="plain" href="#appendix">附錄：走讀細節</a>
+    </nav>
+  </header>
+
+  <section id="candidates" style="display:flex;flex-direction:column;gap:40px;">
+
+    <!-- A -->
+    <article class="cand" id="cand-a">
+      <div class="cand-head">
+        <span class="mark">A</span>
+        <h2>把重新命名、復原、重做、中斷還原收進一個搬移歷程模組</h2>
+        <div class="badges"><span class="badge b-strong">Strong</span><span class="badge b-dep">local-substitutable</span></div>
+      </div>
+      <ul class="files">
+        <li>ui/main_window.py:359-587</li>
+        <li>services/undo_service.py</li>
+        <li>services/rename_service.py:211-250</li>
+        <li>services/move_service.py</li>
+        <li>services/move_journal.py</li>
+        <li>core/models.py（UndoRecord）</li>
+      </ul>
+      <div class="ba">
+        <figure>
+          <span class="tag">Before：四個入口各拼一次</span>
+          <div class="canvas">
+            <table class="matrix" aria-label="四個入口各自實作的步驟對照">
+              <thead><tr><th class="step">步驟</th><th>重新命名</th><th>復原</th><th>重做</th><th>中斷還原</th></tr></thead>
+              <tbody>
+                <tr><td class="step">擋下未完成批次</td><td><span class="c ui">UI</span></td><td><span class="c ui">UI</span></td><td><span class="c ui">UI</span></td><td><span class="c na">（本身）</span></td></tr>
+                <tr><td class="step">略過已不在的檔</td><td><span class="c ui">預覽丟掉</span></td><td><span class="c svc">服務</span></td><td><span class="c miss">沒有</span></td><td><span class="c svc">引擎</span></td></tr>
+                <tr><td class="step">寫正式紀錄</td><td><span class="c svc">存＋清重做</span></td><td><span class="c svc">轉入重做</span></td><td><span class="c miss">挑錯筆</span></td><td><span class="c na">—</span></td></tr>
+                <tr><td class="step">工作區 meta</td><td><span class="c svc">快照</span></td><td><span class="c svc">寫回</span></td><td><span class="c svc">重拍快照</span></td><td><span class="c miss">沒有</span></td></tr>
+                <tr><td class="step">殘留寫成紀錄</td><td><span class="c ui">UI</span></td><td><span class="c ui">UI</span></td><td><span class="c miss">UI・刪掉重做</span></td><td><span class="c ui">UI</span></td></tr>
+                <tr><td class="step">更新專案路徑</td><td><span class="c ui">UI</span></td><td><span class="c miss">UI 反轉・含略過</span></td><td><span class="c ui">UI</span></td><td><span class="c miss">「保留」沒有</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="key"><span><i class="k-ui"></i>寫在 main_window</span><span><i class="k-svc"></i>寫在服務</span><span><i class="k-miss"></i>缺漏或已漂移出錯</span></div>
+        </figure>
+        <figure>
+          <span class="tag after">After：一個介面、一種結果</span>
+          <div class="canvas">
+            <svg class="dg" viewBox="0 0 440 292" role="img" aria-label="main_window 只以四個動作呼叫搬移歷程模組，模組回傳同一種結果；堆疊、進行中紀錄、搬移引擎與 meta 快照都在模組內">
+              <defs>
+                <marker id="a-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahead" d="M0,0 L10,5 L0,10 z"/></marker>
+              </defs>
+              <rect class="uibox" x="20" y="12" width="400" height="40"/>
+              <text x="220" y="37" text-anchor="middle">main_window：只剩詢問與顯示</text>
+              <line class="ln" x1="60" y1="52" x2="60" y2="98" marker-end="url(#a-arr)"/>
+              <line class="ln" x1="140" y1="52" x2="140" y2="98" marker-end="url(#a-arr)"/>
+              <line class="ln" x1="220" y1="52" x2="220" y2="98" marker-end="url(#a-arr)"/>
+              <line class="ln" x1="300" y1="52" x2="300" y2="98" marker-end="url(#a-arr)"/>
+              <line class="ret" x1="388" y1="100" x2="388" y2="54" marker-end="url(#a-arr)"/>
+              <text class="sm" x="66" y="80">重新命名</text>
+              <text class="sm" x="146" y="80">復原</text>
+              <text class="sm" x="226" y="80">重做</text>
+              <text class="sm" x="306" y="80">中斷還原</text>
+              <text class="sm lbl" x="382" y="80" text-anchor="end">結果</text>
+              <rect class="deep" x="20" y="100" width="400" height="176"/>
+              <line class="seam" x1="14" y1="100" x2="426" y2="100"/>
+              <text class="deep-t" x="40" y="128">搬移歷程模組</text>
+              <text class="deep-s" x="40" y="146">結果＝路徑變動・略過的檔・搬不回去的殘留</text>
+              <rect class="inner" x="40" y="162" width="176" height="42"/>
+              <text class="inner-t" x="128" y="187" text-anchor="middle">復原／重做堆疊（順序）</text>
+              <rect class="inner" x="224" y="162" width="176" height="42"/>
+              <text class="inner-t" x="312" y="187" text-anchor="middle">進行中紀錄（含操作種類）</text>
+              <rect class="inner" x="40" y="214" width="176" height="42"/>
+              <text class="inner-t" x="128" y="239" text-anchor="middle">兩階段搬移引擎</text>
+              <rect class="inner" x="224" y="214" width="176" height="42"/>
+              <text class="inner-t" x="312" y="239" text-anchor="middle">工作區 meta 快照／寫回</text>
+            </svg>
+          </div>
+          <figcaption>虛線內框是內部關節，只給這個模組自己的測試用，不出現在介面上。</figcaption>
+        </figure>
+      </div>
+      <dl class="ps">
+        <dt>問題</dt>
+        <dd>四個入口各自拼「搬移批次＋寫紀錄＋回滾殘留＋更新專案路徑＋工作區 meta」，約 90 行排序規則住在 main_window，而且已經漂移出錯：重做挑錯筆、重做不略過遺失檔、失敗的重做刪掉自己的紀錄、中斷還原不寫回 meta。</dd>
+        <dt>解法</dt>
+        <dd>一個深厚模組擁有復原／重做堆疊、進行中紀錄與 meta 快照；UI 只以四個動作呼叫它，每個動作都回傳同一種結果，UI 據此更新專案與顯示訊息。</dd>
+      </dl>
+      <ul class="wins">
+        <li><b>locality</b>：搬移順序規則集中一處</li>
+        <li><b>leverage</b>：四個入口共用一條路</li>
+        <li>堆疊順序與殘留語意只寫一次</li>
+        <li>main_window 少約 90 行業務順序</li>
+        <li>測試走介面，不再 patch 全域目錄</li>
+        <li>move_journal 併入，淺薄模組少一個</li>
+      </ul>
+      <p class="adr"><b>ADR-0001 相容</b>：meta 快照仍存在復原紀錄內，只是改由同一個模組管理拍與寫回的時機。</p>
+    </article>
+
+    <!-- B -->
+    <article class="cand" id="cand-b">
+      <div class="cand-head">
+        <span class="mark">B</span>
+        <h2>把分割的整段流程從對話框收進一個分割模組</h2>
+        <div class="badges"><span class="badge b-strong">Strong</span><span class="badge b-dep">local-substitutable</span></div>
+      </div>
+      <ul class="files">
+        <li>ui/split_dialog.py:580-633、388-508</li>
+        <li>ui/main_window.py:628-654、489-498</li>
+        <li>services/workspace_service.py</li>
+        <li>services/pdf_service.py</li>
+        <li>services/undo_service.py（split 分支）</li>
+      </ul>
+      <div class="ba">
+        <figure>
+          <span class="tag">Before：順序即介面</span>
+          <div class="canvas">
+            <svg class="dg" viewBox="0 0 440 318" role="img" aria-label="分割對話框依固定順序呼叫工作區模組五個單一呼叫端方法，再用六個參數回呼 main_window；其中四處順序敏感，中途失敗會留下指向已刪檔案的專案">
+              <defs>
+                <marker id="b-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahead" d="M0,0 L10,5 L0,10 z"/></marker>
+                <marker id="b-arr-l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahead-leak" d="M0,0 L10,5 L0,10 z"/></marker>
+              </defs>
+              <rect class="uibox" x="14" y="10" width="112" height="28"/>
+              <text x="70" y="29" text-anchor="middle" class="sm">分割對話框</text>
+              <rect class="box" x="164" y="10" width="112" height="28"/>
+              <text x="220" y="29" text-anchor="middle" class="sm">工作區模組</text>
+              <rect class="uibox" x="314" y="10" width="112" height="28"/>
+              <text x="370" y="29" text-anchor="middle" class="sm">main_window</text>
+              <line class="life" x1="70" y1="38" x2="70" y2="306"/>
+              <line class="life" x1="220" y1="38" x2="220" y2="306"/>
+              <line class="life" x1="370" y1="38" x2="370" y2="306"/>
+              <line class="ln" x1="70" y1="60" x2="218" y2="60" marker-end="url(#b-arr)"/>
+              <text class="mono" x="80" y="55">list_outputs</text>
+              <line class="ln" x1="70" y1="86" x2="218" y2="86" marker-end="url(#b-arr)"/>
+              <text class="mono" x="80" y="81">other_owner</text>
+              <circle class="leak-dot" cx="232" cy="86" r="3"/>
+              <text class="leak-t" x="240" y="90">須在 prepare 前</text>
+              <text class="sm" x="80" y="111">確認取代（UI）</text>
+              <line class="ln" x1="70" y1="132" x2="218" y2="132" marker-end="url(#b-arr)"/>
+              <text class="mono" x="80" y="127">clear_outputs</text>
+              <circle class="leak-dot" cx="232" cy="132" r="3"/>
+              <text class="leak-t" x="240" y="136">舊分譜進回收桶</text>
+              <line class="ln" x1="70" y1="158" x2="218" y2="158" marker-end="url(#b-arr)"/>
+              <text class="mono" x="80" y="153">prepare_folder</text>
+              <text class="mono" x="80" y="183">extract_pages ×N</text>
+              <line class="leak" x1="74" y1="192" x2="92" y2="206"/>
+              <line class="leak" x1="92" y1="192" x2="74" y2="206"/>
+              <text class="leak-t" x="100" y="204">中途失敗：舊檔已刪、無紀錄</text>
+              <line class="ln" x1="70" y1="232" x2="368" y2="232" marker-end="url(#b-arr)"/>
+              <text class="sm" x="80" y="227">回呼（6 個位置參數）</text>
+              <text class="sm" x="362" y="258" text-anchor="end">移除舊引用 → 加入新分譜</text>
+              <circle class="leak-dot" cx="382" cy="254" r="3"/>
+              <text class="leak-t" x="362" y="274" text-anchor="end">順序反過來就丟掉新分譜</text>
+              <text class="sm" x="362" y="298" text-anchor="end">UI 自己組分割紀錄</text>
+            </svg>
+          </div>
+          <figcaption>五個方法各只有一個呼叫端；紅點是呼叫端必須記住、介面卻不保證的順序。</figcaption>
+        </figure>
+        <figure>
+          <span class="tag after">After：先問、再做、一次交回</span>
+          <div class="canvas">
+            <svg class="dg" viewBox="0 0 440 318" role="img" aria-label="分割對話框對分割模組只做兩件事：檢查取得需要確認的事項，執行取得新分譜與被取代的路徑；工作區步驟、抽頁、同名檢查與失敗撤回都在模組內">
+              <defs>
+                <marker id="b2-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahead" d="M0,0 L10,5 L0,10 z"/></marker>
+              </defs>
+              <rect class="uibox" x="14" y="10" width="112" height="28"/>
+              <text x="70" y="29" text-anchor="middle" class="sm">分割對話框</text>
+              <line class="life" x1="70" y1="38" x2="70" y2="306"/>
+              <rect class="deep" x="200" y="48" width="226" height="210"/>
+              <line class="seam" x1="200" y1="42" x2="200" y2="264"/>
+              <text class="deep-t" x="214" y="74">分割模組</text>
+              <line class="ln" x1="70" y1="80" x2="198" y2="80" marker-end="url(#b2-arr)"/>
+              <text class="sm" x="78" y="74">檢查：合併譜＋分段</text>
+              <line class="ret" x1="198" y1="106" x2="72" y2="106" marker-end="url(#b2-arr)"/>
+              <text class="sm lbl" x="78" y="100">需確認的事</text>
+              <text class="sm lbl" x="78" y="124">取代・他專案・覆蓋</text>
+              <line class="ln" x1="70" y1="160" x2="198" y2="160" marker-end="url(#b2-arr)"/>
+              <text class="sm" x="78" y="154">執行</text>
+              <line class="ret" x1="198" y1="186" x2="72" y2="186" marker-end="url(#b2-arr)"/>
+              <text class="sm lbl" x="78" y="180">新分譜＋被取代路徑</text>
+              <rect class="inner" x="214" y="90" width="198" height="30"/>
+              <text class="inner-t" x="313" y="110" text-anchor="middle">工作區子資料夾（5 步變內部）</text>
+              <rect class="inner" x="214" y="128" width="198" height="30"/>
+              <text class="inner-t" x="313" y="148" text-anchor="middle">同名／覆蓋來源檢查</text>
+              <rect class="inner" x="214" y="166" width="198" height="30"/>
+              <text class="inner-t" x="313" y="186" text-anchor="middle">抽頁（pypdf）</text>
+              <rect class="inner" x="214" y="204" width="198" height="30"/>
+              <text class="inner-t" x="313" y="224" text-anchor="middle">失敗整批撤回・分割紀錄</text>
+              <rect class="uibox" x="14" y="270" width="412" height="30"/>
+              <text class="sm" x="220" y="290" text-anchor="middle">main_window：把結果套用到專案（見 C）</text>
+            </svg>
+          </div>
+          <figcaption>子資料夾仍以來源合併譜為鍵；list／owner／clear／prepare 的順序只存在模組內。</figcaption>
+        </figure>
+      </div>
+      <dl class="ps">
+        <dt>問題</dt>
+        <dd>分割對話框依固定順序呼叫工作區模組 5 個各只有一個呼叫端的方法，順序錯就丟資料；中途失敗時舊分譜已進回收桶、專案卻還指著它們，也沒有復原紀錄；同名分段互相覆蓋；復原分割不修正專案。整段沒有任何測試。</dd>
+        <dt>解法</dt>
+        <dd>一個分割模組先回報需要使用者確認的事，確認後一次執行並交回新分譜與被取代的路徑；工作區的步驟、抽頁與失敗撤回都成為它的 implementation。</dd>
+      </dl>
+      <ul class="wins">
+        <li><b>介面縮小</b>：工作區少掉 5 個公開方法</li>
+        <li><b>locality</b>：取代語意一處定義</li>
+        <li>分割可在無 Qt 下測試</li>
+        <li>同名分段在檢查階段擋下</li>
+        <li>失敗不留半套狀態</li>
+      </ul>
+      <p class="adr"><b>ADR-0001 相容</b>：不動「子資料夾以來源合併譜為鍵、跨專案共用」與「匯入檔不進工作區」，只改由誰負責執行順序。</p>
+    </article>
+
+    <!-- C -->
+    <article class="cand" id="cand-c">
+      <div class="cand-head">
+        <span class="mark">C</span>
+        <h2>專案自己管理它引用的檔案</h2>
+        <div class="badges"><span class="badge b-strong">Strong</span><span class="badge b-dep">in-process</span></div>
+      </div>
+      <ul class="files">
+        <li>core/models.py:194-202</li>
+        <li>ui/main_window.py:489-517</li>
+        <li>ui/split_dialog.py:195-211</li>
+        <li>ui/rotate_dialog.py:173-189</li>
+        <li>ui/group_panel.py</li>
+      </ul>
+      <div class="ba">
+        <figure>
+          <span class="tag">Before：同一趟走訪寫五次</span>
+          <div class="canvas">
+            <svg class="dg" viewBox="0 0 440 300" role="img" aria-label="五個呼叫端各自走訪群組分譜、總譜與未分組清單，路徑比對用了四種不同寫法；Project 模型本身幾乎沒有行為">
+              <rect class="box" x="14" y="14" width="190" height="44"/>
+              <text class="mono" x="24" y="32">models.all_file_paths</text>
+              <rect class="dup" x="24" y="38" width="110" height="14"/><text class="sm" x="30" y="49">走訪 3 處・==</text>
+              <rect class="uibox" x="14" y="70" width="190" height="44"/>
+              <text class="mono" x="24" y="88">_remove_file_references</text>
+              <rect class="dup" x="24" y="94" width="110" height="14"/><text class="sm" x="30" y="105">走訪 3 處・==</text>
+              <rect class="uibox" x="14" y="126" width="190" height="44"/>
+              <text class="mono" x="24" y="144">_update_project_paths</text>
+              <rect class="dup" x="24" y="150" width="138" height="14"/><text class="sm" x="30" y="161">走訪 3 處・== ×3</text>
+              <rect class="uibox" x="14" y="182" width="190" height="44"/>
+              <text class="mono" x="24" y="200">split_dialog._collect_files</text>
+              <rect class="dup" x="24" y="206" width="110" height="14"/><text class="sm" x="30" y="217">走訪 3 處</text>
+              <rect class="uibox" x="14" y="238" width="190" height="44"/>
+              <text class="mono" x="24" y="256">rotate_dialog._collect_files</text>
+              <rect class="dup" x="24" y="262" width="110" height="14"/><text class="sm" x="30" y="273">複製貼上</text>
+              <rect class="box" x="262" y="14" width="164" height="60"/>
+              <text x="344" y="38" text-anchor="middle">Project／Group</text>
+              <text class="sm lbl" x="344" y="58" text-anchor="middle">1 個方法，其餘全是欄位</text>
+              <text class="sm" x="262" y="118">路徑同一性四種寫法</text>
+              <text class="mono leak-t" x="262" y="140">== 字串相等</text>
+              <text class="mono leak-t" x="262" y="160">normcase</text>
+              <text class="mono leak-t" x="262" y="180">normcase(abspath)</text>
+              <text class="mono leak-t" x="262" y="200">normpath</text>
+              <text class="sm lbl" x="262" y="232">UI 直接改 Group／FileInfo</text>
+              <text class="sm lbl" x="262" y="250">約 28 處</text>
+            </svg>
+          </div>
+          <figcaption>淡紅條是重複的走訪；右側四種寫法對同一條路徑可能給出不同答案。</figcaption>
+        </figure>
+        <figure>
+          <span class="tag after">After：走訪一次、比對一種</span>
+          <div class="canvas">
+            <svg class="dg" viewBox="0 0 440 300" role="img" aria-label="重新命名、復原、分割、旋轉等呼叫端只對 Project 表達意圖：列出引用、依路徑取代、依路徑移除；走訪與路徑同一性都在 Project 內">
+              <defs>
+                <marker id="c-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahead" d="M0,0 L10,5 L0,10 z"/></marker>
+              </defs>
+              <rect class="box" x="14" y="16" width="96" height="32"/><text class="sm" x="62" y="37" text-anchor="middle">搬移歷程（A）</text>
+              <rect class="box" x="120" y="16" width="96" height="32"/><text class="sm" x="168" y="37" text-anchor="middle">分割（B）</text>
+              <rect class="uibox" x="226" y="16" width="96" height="32"/><text class="sm" x="274" y="37" text-anchor="middle">分割／旋轉選檔</text>
+              <rect class="uibox" x="332" y="16" width="94" height="32"/><text class="sm" x="379" y="37" text-anchor="middle">群組面板</text>
+              <line class="ln" x1="62" y1="48" x2="62" y2="104" marker-end="url(#c-arr)"/>
+              <line class="ln" x1="168" y1="48" x2="168" y2="104" marker-end="url(#c-arr)"/>
+              <line class="ln" x1="274" y1="48" x2="274" y2="104" marker-end="url(#c-arr)"/>
+              <line class="ln" x1="379" y1="48" x2="379" y2="104" marker-end="url(#c-arr)"/>
+              <text class="sm lbl" x="68" y="80">依路徑取代</text>
+              <text class="sm lbl" x="174" y="80">依路徑移除</text>
+              <text class="sm lbl" x="280" y="80">列出引用</text>
+              <text class="sm lbl" x="385" y="80">增刪檔案</text>
+              <rect class="deep" x="14" y="106" width="412" height="176"/>
+              <line class="seam" x1="8" y1="106" x2="432" y2="106"/>
+              <text class="deep-t" x="32" y="134">Project（core/models.py）</text>
+              <text class="deep-s" x="32" y="152">純記憶體，沒有 I/O</text>
+              <rect class="inner" x="32" y="168" width="180" height="44"/>
+              <text class="inner-t" x="122" y="194" text-anchor="middle">走訪：分譜・總譜・未分組</text>
+              <rect class="inner" x="228" y="168" width="180" height="44"/>
+              <text class="inner-t" x="318" y="194" text-anchor="middle">路徑同一性（單一定義）</text>
+              <rect class="inner" x="32" y="222" width="376" height="44"/>
+              <text class="inner-t" x="220" y="248" text-anchor="middle">顯示名稱跟著路徑更新・總譜也算數</text>
+            </svg>
+          </div>
+          <figcaption>箭頭上是呼叫端要表達的意圖，不是方法簽名；介面形狀留到深入討論時再定。</figcaption>
+        </figure>
+      </div>
+      <dl class="ps">
+        <dt>問題</dt>
+        <dd>「走訪群組分譜＋總譜＋未分組」寫了 5 次，路徑比對有 4 種寫法，UI 直接改 Group／FileInfo 約 28 處；例如分割後只從 <code>group.files</code> 移除來源，來源若是總譜就漏掉。</dd>
+        <dt>解法</dt>
+        <dd>Project 自己提供列出引用、依路徑取代、依路徑移除，路徑同一性只有一種定義；A 與 B 回傳的結果直接交給它套用。</dd>
+      </dl>
+      <ul class="wins">
+        <li><b>locality</b>：路徑比對規則只有一處</li>
+        <li><b>leverage</b>：5 份走訪收成 1 份</li>
+        <li>純記憶體，測試零 I/O</li>
+        <li>A、B 的結果有地方落地</li>
+      </ul>
+    </article>
+
+    <!-- D -->
+    <article class="cand" id="cand-d">
+      <div class="cand-head">
+        <span class="mark">D</span>
+        <h2>重新命名預檢一次給結論</h2>
+        <div class="badges"><span class="badge b-explore">Worth exploring</span><span class="badge b-dep">local-substitutable</span></div>
+      </div>
+      <ul class="files">
+        <li>ui/preview_dialog.py:158-199、246-250</li>
+        <li>services/rename_service.py:131-182</li>
+        <li>services/move_service.py:71-149</li>
+      </ul>
+      <div class="ba">
+        <figure>
+          <span class="tag">Before：預覽自己組裝判定</span>
+          <div class="canvas">
+            <svg class="dg" viewBox="0 0 440 300" role="img" aria-label="預覽對話框對 RenameService 發出七次呼叫，其中五次原封不動轉給 MoveService；預覽還直接匯入 staging_path 反推來源；執行時 MoveService.validate 再跑一次同樣五項檢查，兩邊一致只靠註解">
+              <defs>
+                <marker id="d-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahead" d="M0,0 L10,5 L0,10 z"/></marker>
+                <marker id="d-arr-l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahead-leak" d="M0,0 L10,5 L0,10 z"/></marker>
+              </defs>
+              <rect class="uibox" x="14" y="14" width="120" height="176"/>
+              <text x="74" y="36" text-anchor="middle">預覽對話框</text>
+              <text class="sm lbl" x="74" y="56" text-anchor="middle">丟掉／加後綴／阻擋</text>
+              <text class="sm lbl" x="74" y="72" text-anchor="middle">政策寫在這裡</text>
+              <rect class="box" x="172" y="14" width="110" height="176"/>
+              <text x="227" y="36" text-anchor="middle" class="sm">RenameService</text>
+              <rect class="box" x="320" y="14" width="106" height="176"/>
+              <text x="373" y="36" text-anchor="middle" class="sm">MoveService</text>
+              <line class="ln" x1="134" y1="92" x2="170" y2="92" marker-end="url(#d-arr)"/>
+              <line class="ln" x1="134" y1="104" x2="170" y2="104" marker-end="url(#d-arr)"/>
+              <line class="ln" x1="134" y1="116" x2="170" y2="116" marker-end="url(#d-arr)"/>
+              <line class="ln" x1="134" y1="128" x2="170" y2="128" marker-end="url(#d-arr)"/>
+              <line class="ln" x1="134" y1="140" x2="170" y2="140" marker-end="url(#d-arr)"/>
+              <line class="ln" x1="134" y1="152" x2="170" y2="152" marker-end="url(#d-arr)"/>
+              <line class="ln" x1="134" y1="164" x2="170" y2="164" marker-end="url(#d-arr)"/>
+              <text class="sm" x="152" y="84" text-anchor="middle">×7</text>
+              <line class="ln" x1="282" y1="104" x2="318" y2="104" marker-end="url(#d-arr)"/>
+              <line class="ln" x1="282" y1="116" x2="318" y2="116" marker-end="url(#d-arr)"/>
+              <line class="ln" x1="282" y1="128" x2="318" y2="128" marker-end="url(#d-arr)"/>
+              <line class="ln" x1="282" y1="140" x2="318" y2="140" marker-end="url(#d-arr)"/>
+              <line class="ln" x1="282" y1="152" x2="318" y2="152" marker-end="url(#d-arr)"/>
+              <text class="sm lbl" x="227" y="176" text-anchor="middle">5 個一行轉呼叫</text>
+              <path class="leak" d="M74,190 L74,214 L373,214 L373,192" marker-end="url(#d-arr-l)"/>
+              <text class="leak-t" x="84" y="208">import staging_path 反推來源</text>
+              <rect class="box" x="320" y="236" width="106" height="40"/>
+              <text class="mono" x="373" y="260" text-anchor="middle">validate()</text>
+              <text class="sm lbl" x="172" y="252">執行時同樣 5 項再跑一次</text>
+              <text class="leak-t" x="172" y="270">兩邊一致只靠註解</text>
+            </svg>
+          </div>
+          <figcaption>RenameService 在這條路上是淺薄模組：介面寬度幾乎等於它轉給引擎的內容。</figcaption>
+        </figure>
+        <figure>
+          <span class="tag after">After：一次檢查，執行吃同一份</span>
+          <div class="canvas">
+            <svg class="dg" viewBox="0 0 440 300" role="img" aria-label="預覽對話框只呼叫一次檢查，得到實際會執行的計畫與分類好的問題；執行吃同一份檢查結果；後綴、暫名、阻擋條件都在模組內">
+              <defs>
+                <marker id="d2-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahead" d="M0,0 L10,5 L0,10 z"/></marker>
+              </defs>
+              <rect class="uibox" x="14" y="14" width="120" height="120"/>
+              <text x="74" y="40" text-anchor="middle">預覽對話框</text>
+              <text class="sm lbl" x="74" y="60" text-anchor="middle">只負責顯示</text>
+              <rect class="deep" x="196" y="14" width="230" height="262"/>
+              <line class="seam" x1="196" y1="8" x2="196" y2="282"/>
+              <text class="deep-t" x="212" y="40">重新命名計畫模組</text>
+              <line class="ln" x1="134" y1="72" x2="194" y2="72" marker-end="url(#d2-arr)"/>
+              <text class="sm" x="142" y="66">檢查</text>
+              <line class="ret" x1="194" y1="100" x2="136" y2="100" marker-end="url(#d2-arr)"/>
+              <text class="sm lbl" x="142" y="94">判定</text>
+              <line class="ln" x1="74" y1="134" x2="74" y2="200" />
+              <line class="ln" x1="74" y1="200" x2="194" y2="200" marker-end="url(#d2-arr)"/>
+              <text class="sm" x="84" y="194">執行（同一份判定）</text>
+              <text class="deep-s" x="212" y="62">判定＝實際會執行的計畫</text>
+              <text class="deep-s" x="212" y="78">＋分類好的問題（以來源為鍵）</text>
+              <rect class="inner" x="212" y="96" width="198" height="30"/>
+              <text class="inner-t" x="311" y="116" text-anchor="middle">自動加後綴（只算一次）</text>
+              <rect class="inner" x="212" y="134" width="198" height="30"/>
+              <text class="inner-t" x="311" y="154" text-anchor="middle">阻擋條件（與引擎共用）</text>
+              <rect class="inner" x="212" y="172" width="198" height="30"/>
+              <text class="inner-t" x="311" y="192" text-anchor="middle">暫名換算回來源</text>
+              <rect class="inner" x="212" y="210" width="198" height="50"/>
+              <text class="inner-t" x="311" y="231" text-anchor="middle">兩階段搬移引擎</text>
+              <text class="inner-t" x="311" y="248" text-anchor="middle">（validate 同一份規則）</text>
+            </svg>
+          </div>
+          <figcaption>預覽與執行不可能判得不一樣，因為執行吃的就是預覽拿到的那一份。</figcaption>
+        </figure>
+      </div>
+      <dl class="ps">
+        <dt>問題</dt>
+        <dd>預覽自己拼 7 次呼叫、自己決定哪些丟掉／自動加後綴／阻擋，還直接匯入 <code>staging_path</code> 反推來源；「預覽阻擋條件＝執行前驗證」靠註解手動維持，自動加後綴在預覽與執行各算一次。</dd>
+        <dt>解法</dt>
+        <dd>一個檢查動作回傳實際會執行的計畫與分類好的問題，執行吃同一份結果；RenameService 的 5 個一行轉呼叫消失。</dd>
+      </dl>
+      <ul class="wins">
+        <li><b>介面縮小</b>：刪 5 個 pass-through</li>
+        <li>預覽與執行不會判得不一樣</li>
+        <li>staging_path 不再外洩到 UI</li>
+        <li>可與 A 同一個切片做</li>
+      </ul>
+    </article>
+
+    <!-- E -->
+    <article class="cand" id="cand-e">
+      <div class="cand-head">
+        <span class="mark">E</span>
+        <h2>命名格式套用：本機與 Drive 共用一條規則</h2>
+        <div class="badges"><span class="badge b-explore">Worth exploring</span><span class="badge b-dep">in-process</span></div>
+      </div>
+      <ul class="files">
+        <li>services/rename_service.py:37-130</li>
+        <li>services/drive_rename_service.py:91-120</li>
+        <li>core/template_engine.py:30-80</li>
+        <li>ui/preview_dialog.py:139-156</li>
+      </ul>
+      <div class="ba">
+        <figure>
+          <span class="tag">Before：兩條管線各走各的</span>
+          <div class="canvas">
+            <div class="pipes" role="img" aria-label="本機重新命名與 Drive 重新命名各自組變數、套模板、清理檔名，步驟不一致：本機不補副檔名，Drive 不清理非法字元且會改寫傳入群組">
+              <div class="pipe">
+                <span class="pipe-h">本機・總譜</span>
+                <div class="steps"><span class="st bad">手寫中英變數表</span><span class="arr">→</span><span class="st">套模板</span><span class="arr">→</span><span class="st">清理非法字元</span><span class="arr">→</span><span class="st ghost">補 .pdf：無</span><span class="arr">→</span><span class="st">資料夾計算 #1</span></div>
+              </div>
+              <div class="pipe">
+                <span class="pipe-h">本機・分譜</span>
+                <div class="steps"><span class="st">build_variables_for_file</span><span class="arr">→</span><span class="st">套模板</span><span class="arr">→</span><span class="st">清理非法字元</span><span class="arr">→</span><span class="st ghost">補 .pdf：無</span><span class="arr">→</span><span class="st bad">資料夾計算 #2＋3 種存放模式</span></div>
+              </div>
+              <div class="pipe">
+                <span class="pipe-h">Drive</span>
+                <div class="steps"><span class="st bad">改寫 group.instruments</span><span class="arr">→</span><span class="st">build_variables_for_file</span><span class="arr">→</span><span class="st">套模板</span><span class="arr">→</span><span class="st ghost">清理：無</span><span class="arr">→</span><span class="st">補 .pdf</span></div>
+              </div>
+            </div>
+          </div>
+          <figcaption>虛線紅框是另一條管線有、這條沒有的步驟；同一個命名格式在本機與 Drive 可能產出不同檔名。</figcaption>
+        </figure>
+        <figure>
+          <span class="tag after">After：一格進、一個名字出</span>
+          <div class="canvas">
+            <div class="pipes" role="img" aria-label="本機重新命名與 Drive 重新命名都把群組中的一格交給命名模組，拿回檔名與相對資料夾">
+              <div class="callers"><span class="st">本機重新命名</span><span class="st">Drive 重新命名</span><span class="st">預覽</span></div>
+              <div class="arr">↓ 群組中的一格（總譜，或第 N 份分譜）</div>
+              <div class="steps"><span class="st deep">命名模組</span></div>
+              <div class="steps"><span class="st faded">變數表（總譜＝序號 00）</span><span class="st faded">套模板</span><span class="st faded">清理＋補 .pdf</span><span class="st faded">子資料夾＋分譜存放模式</span></div>
+              <div class="arr">↓ 檔名＋相對資料夾</div>
+            </div>
+          </div>
+          <figcaption>分譜存放模式的 <code>"root"／"parts"／"section"</code> 字串收進常數。</figcaption>
+        </figure>
+      </div>
+      <dl class="ps">
+        <dt>問題</dt>
+        <dd>總譜的變數表在 rename_service 手寫一份（中英鍵各一），分譜走 <code>build_variables_for_file</code>；資料夾計算寫兩次；本機清理非法字元但不補 .pdf，Drive 補 .pdf 但不清理，還會改寫傳入群組的樂器表。</dd>
+        <dt>解法</dt>
+        <dd>一個純函式模組負責「群組中的一格 → 檔名與相對資料夾」，本機重新命名、Drive 重新命名與預覽都經過它。</dd>
+      </dl>
+      <ul class="wins">
+        <li><b>leverage</b>：兩條命名規則合一</li>
+        <li>總譜與分譜共用變數表</li>
+        <li>純函式，測試不碰磁碟</li>
+      </ul>
+    </article>
+
+    <!-- F -->
+    <article class="cand" id="cand-f">
+      <div class="cand-head">
+        <span class="mark">F</span>
+        <h2>專案開啟與存檔的附帶動作歸位</h2>
+        <div class="badges"><span class="badge b-spec">Speculative</span><span class="badge b-dep">local-substitutable</span></div>
+      </div>
+      <ul class="files">
+        <li>ui/main_window.py:282-338、613-621</li>
+        <li>services/preferences_service.py</li>
+        <li>services/workspace_service.py:179-311</li>
+        <li>services/project_service.py</li>
+      </ul>
+      <div class="ba">
+        <figure>
+          <span class="tag">Before：每個入口手動成對呼叫</span>
+          <div class="canvas">
+            <div class="bands" role="img" aria-label="開啟與存檔各自在 UI 內手動加入最近清單並更新工作區 meta 所屬專案；清理掃描由 UI 串起偏好設定與專案載入，掃描本身還會刪資料夾">
+              <div class="band"><span class="band-h">開啟</span><div class="band-b"><span class="st">讀專案檔</span><span class="st ui">加入最近清單</span><span class="st ui">更新 meta 所屬專案</span><span class="st ui">警告遺失檔</span></div></div>
+              <div class="band"><span class="band-h">存檔</span><div class="band-b"><span class="st">寫專案檔</span><span class="st ui">加入最近清單</span><span class="st ui">更新 meta 所屬專案</span></div></div>
+              <div class="band"><span class="band-h">清理掃描</span><div class="band-b"><span class="st ui">讀最近清單</span><span class="st ui">傳入 load_project</span><span class="st bad">scan 會刪資料夾</span><span class="st ui">修剪最近清單</span></div></div>
+              <div class="band"><span class="band-h">已知專案</span><div class="band-b"><span class="st">偏好設定</span><span class="st ui">main_window</span><span class="st">工作區模組</span></div></div>
+            </div>
+          </div>
+          <figcaption>琥珀色是寫在 main_window 的步驟；「已知專案」這個概念散在三個模組。</figcaption>
+        </figure>
+        <figure>
+          <span class="tag after">After：專案存取模組擁有附帶動作</span>
+          <div class="canvas">
+            <div class="bands" role="img" aria-label="開啟與存檔由專案存取模組處理，最近清單與 meta 所屬專案一併維護；掃描改為唯讀">
+              <div class="band"><span class="band-h">開啟</span><div class="band-b"><span class="st deep">專案存取模組</span></div></div>
+              <div class="band"><span class="band-h">存檔</span><div class="band-b"><span class="st deep">專案存取模組</span></div></div>
+              <div class="band"><span class="band-h">內部</span><div class="band-b"><span class="st faded">最近清單</span><span class="st faded">meta 所屬專案</span><span class="st faded">已知專案清單</span></div></div>
+              <div class="band"><span class="band-h">清理掃描</span><div class="band-b"><span class="st">唯讀掃描</span><span class="st">清理（重驗狀態）</span></div></div>
+            </div>
+          </div>
+          <figcaption>目前只有兩個入口，關節（seam）的回報偏小，所以列為 Speculative。</figcaption>
+        </figure>
+      </div>
+      <dl class="ps">
+        <dt>問題</dt>
+        <dd>開啟與存檔各自在 UI 手動做「加入最近清單＋更新 meta 所屬專案」，「已知專案」散在偏好設定、main_window、工作區模組三處；名叫掃描的 <code>scan</code> 會刪資料夾，哪些可刪由對話框決定。</dd>
+        <dt>解法</dt>
+        <dd>專案存取模組負責開啟／存檔的全部附帶動作與已知專案清單，掃描不做寫入。</dd>
+      </dl>
+      <ul class="wins">
+        <li>新入口不會漏更新 meta</li>
+        <li>scan 名實相符</li>
+      </ul>
+    </article>
+  </section>
+
+  <section id="top-recommendation" class="top">
+    <span class="eyebrow">Top recommendation</span>
+    <h2><span class="mark">A</span>先做搬移歷程模組</h2>
+    <p>這是最熱的一塊：兩階段搬移、中斷還原、meta 生命週期三個分支（PR #9、#10、#11）有 5 次提交改到 main_window，光中斷還原一個分支就在上面動了約 130 行；四份流程之間的漂移已經產出至少四個實際缺陷（見下表）。收進一個模組後，這些缺陷會變成同一個介面上的測試案例，而不是四處分開的修補。</p>
+    <ol>
+      <li>C 的「依路徑取代」是 A 的結果落地處，同一個切片一起做。</li>
+      <li>D 的預檢判定是 A 的「重新命名」動作的入口，可以順勢收進來，也可以之後再做。</li>
+      <li>B 之後做：分割紀錄屬於 A 的堆疊，A 先定型，B 才有地方寫紀錄。</li>
+    </ol>
+    <p><a href="#cand-a">回到候選 A</a></p>
+  </section>
+
+  <section class="appx-group" id="order" aria-labelledby="order-h">
+    <h3 id="order-h">六個都做時的順序</h3>
+    <div class="appx-block">
+      <div class="scroll">
+        <table class="atable">
+          <thead><tr><th>輪次</th><th>內容</th><th>前提</th><th>變成這一輪測試的缺陷</th></tr></thead>
+          <tbody>
+            <tr><td>先修</td><td>缺陷表中的資料遺失（取消另存仍當作已處理）；順帶旋轉對話框缺的字串鍵、CLAUDE.md 的 locale 描述</td><td>無</td><td>就是這三項本身</td></tr>
+            <tr><td>第一輪</td><td>A＋C＋D：搬移歷程、專案的檔案引用、重新命名預檢</td><td>無</td><td>重做挑錯筆、重做不略過遺失檔、失敗的重做刪掉自己的紀錄、進行中紀錄不記操作種類</td></tr>
+            <tr><td>第二輪</td><td>B：分割流程</td><td>第一輪（分割紀錄進 A 的堆疊、結果交給 C 套用）</td><td>復原分割不修正專案、分割中途失敗、同名分段互蓋、自動指派樂器讀不到樂器表</td></tr>
+            <tr><td>第二輪（並行）</td><td>E：命名格式套用</td><td>第一輪（與 D 都改 <code>rename_service</code>）</td><td>本機與 Drive 產出不同檔名</td></tr>
+            <tr><td>最後</td><td>F：專案開啟與存檔；深入討論的第一題是「還值不值得做」，不做就記成 ADR</td><td>第二輪（與 B 都改 <code>workspace_service</code>）</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>A、C、D 同一輪，因為它們是同一條重新命名路徑的三段：C 是 A 結果的落地處，D 是 A 的入口。B 與 E 改的檔案不重疊，可以開兩個分支並行。每一輪一個 spec，依 grill-with-docs → to-spec → to-tickets → 每張 ticket 各跑一次 implement 的流程走；報告裡的缺陷先寫成失敗的測試。</p>
+    </div>
+  </section>
+
+  <section class="defects" aria-labelledby="defects-h">
+    <h2 id="defects-h">沿途發現的缺陷</h2>
+    <p>這些不必等重構，現在就是錯的。「確認方式」欄說明是實際跑過還是讀程式碼推得。</p>
+    <div class="tbl-wrap">
+      <table class="dtable">
+        <thead><tr><th>缺陷</th><th>位置</th><th>確認方式</th><th>相關</th></tr></thead>
+        <tbody>
+          <tr><td><span class="sev hi">資料遺失</span>未存檔時關閉或開新專案，選「儲存」後取消另存對話框，仍當作已處理，專案直接被丟掉。</td><td>main_window.py:823-837</td><td>讀碼</td><td><span class="rel">F</span></td></tr>
+          <tr><td><span class="sev hi">重做</span>連做兩次復原後，重做挑到較晚那一筆（重做檔以原操作時間命名、取最新），失敗後重做卡住直到下一次操作。</td><td>undo_service.py:45、169-179、218</td><td>腳本重現</td><td><span class="rel">A</span></td></tr>
+          <tr><td><span class="sev hi">重做</span>復原會略過已不在的檔，重做不會，之後每次重做整批失敗；UI 還把略過的檔的專案路徑也改回去。</td><td>undo_service.py:75-78、121；main_window.py:548-551</td><td>腳本重現</td><td><span class="rel">A</span></td></tr>
+          <tr><td><span class="sev md">重做</span>重做失敗時把殘留寫成紀錄會呼叫 <code>save_undo_record</code>，連帶清空重做堆疊，剛失敗的那筆也被刪掉。</td><td>undo_service.py:38；main_window.py:400-411</td><td>讀碼</td><td><span class="rel">A</span></td></tr>
+          <tr><td><span class="sev hi">分割</span>復原分割只刪檔，群組仍指向已刪的分譜，被移出群組的合併譜也沒放回來。</td><td>main_window.py:547-553；undo_service.py:87-92</td><td>讀碼</td><td><span class="rel">A・B</span></td></tr>
+          <tr><td><span class="sev hi">分割</span>分割中途失敗：舊分譜已進回收桶、meta 所屬專案已改寫，專案引用指向已刪或只寫一半的分譜，且沒有復原紀錄。</td><td>split_dialog.py:607-633</td><td>讀碼</td><td><span class="rel">B</span></td></tr>
+          <tr><td><span class="sev md">分割</span>兩個分段同名（或清理後同名，例如 <code>A/B</code> 與 <code>A_B</code>，或多個空名都回退成 Part）時，後者覆蓋前者，沒有警告。</td><td>pdf_service.py:115-141</td><td>讀碼</td><td><span class="rel">B</span></td></tr>
+          <tr><td><span class="sev md">分割</span>分割對話框的自動指派樂器讀 <code>Project.instruments</code>，這個舊欄位只在載入舊專案時有值，新專案拿不到樂器表。</td><td>split_dialog.py:397、413、481</td><td>grep 確認</td><td><span class="rel">B</span></td></tr>
+          <tr><td><span class="sev md">中斷還原</span>進行中紀錄不記操作種類：中斷的是復原而且已轉入重做堆疊時，會被說成「重新命名已完成但復原紀錄未寫入」，選還原後兩個堆疊都失真；選「保留結果」不更新專案路徑。</td><td>move_journal.py；main_window.py:415-460</td><td>讀碼</td><td><span class="rel">A</span></td></tr>
+          <tr><td><span class="sev lo">介面字串</span>旋轉對話框用了不存在的字串鍵 <code>split.same_as_source</code>，畫面上直接顯示鍵名。</td><td>rotate_dialog.py:118</td><td>grep 確認</td><td></td></tr>
+          <tr><td><span class="sev lo">文件</span>CLAUDE.md 說 locale.py 負責模板變數雙語轉換，實際在 <code>template_engine.convert_template_language</code>。</td><td>CLAUDE.md</td><td>讀碼</td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="appx" id="appendix" aria-labelledby="appendix-h">
+    <div class="appx-intro">
+      <h2 id="appendix-h">附錄：走讀細節</h2>
+      <p>兩個子代理分頭走讀的原始發現，依候選分組，保留行號，深入討論時可直接對照程式碼。行號以 develop @ 4f8c43c 為準；ui＝<code>ui/main_window.py</code>、rs＝<code>services/rename_service.py</code>、us＝<code>services/undo_service.py</code>。</p>
+      <nav class="appx-nav" aria-label="附錄">
+        <a href="#appx-method">方法與可信度</a>
+        <a href="#appx-a">A 搬移歷程</a>
+        <a href="#appx-b">B 分割流程</a>
+        <a href="#appx-c">C 專案的檔案引用</a>
+        <a href="#appx-e">E 命名格式</a>
+        <a href="#appx-f">F 開啟與存檔</a>
+        <a href="#appx-misc">其他</a>
+      </nav>
+    </div>
+
+    <section class="appx-group" id="appx-method">
+      <h3>方法與可信度</h3>
+      <ul>
+        <li>範圍：以 <code>git log</code> 找近三個月的提交熱區，再從熱區往外走讀。</li>
+        <li>兩個唯讀子代理：一個走重新命名／搬移／復原／重做／中斷還原，一個走工作區／分割／專案存取；候選 E 的命名格式由我自己讀。</li>
+        <li>「腳本重現」＝子代理把 <code>XDG_CONFIG_HOME</code> 指到暫存目錄後，用一次性腳本實際觸發；「讀碼」＝依程式碼推得，未實際執行。</li>
+        <li>我親自核對過的部分：分割流程（split_dialog.py:580-633）、復原與重做的處理函式（ui:485-587）、<code>undo_service.py</code> 全檔、<code>_confirm_discard</code>、<code>Project.instruments</code> 的寫入點、預覽的判定組裝（preview_dialog.py:158-199）、各測試的全域路徑 patch、零呼叫端函式、main_window 各處理函式的起始行號。子代理報告中 test_main_window.py 的兩處行號有誤，已依實際檔案更正。</li>
+      </ul>
+    </section>
+
+    <section class="appx-group" id="appx-a">
+      <h3><span class="mark">A</span>搬移歷程（含 D 的預覽判定）</h3>
+
+      <div class="appx-block">
+        <h4>A1　四條路徑的呼叫鏈</h4>
+        <p><b>重新命名</b>（牽涉 8 個 ui／services 模組，外加 core 的 models、template_engine、filename、locale、constants）</p>
+        <ol>
+          <li><code>_preview_and_rename</code>（ui:359）：先過 <code>prompt_pending_recovery()</code> 關卡（360），延遲建立 <code>RenameService</code>（366-368），開 <code>PreviewDialog</code> 並把 <code>self._execute_rename</code> 當回呼傳入（375-379）。</li>
+          <li><code>PreviewDialog._refresh_plan</code>（preview_dialog.py:158-170）分別呼叫 7 次：<code>generate_rename_plan</code>、<code>find_missing_sources</code>（遺失者直接從計畫丟掉）、<code>detect_conflicts</code>、<code>detect_duplicate_sources</code>、<code>find_empty_names</code>；再由 <code>_check_disk_against_effective_plan</code> 呼叫 <code>apply_auto_suffix</code>、<code>find_occupied_targets</code>、<code>find_taken_staging_names</code>，最後一項的結果用 <code>staging_path</code> 換算回來源（185）。<code>_execute</code>（246-250）再加一次後綴。</li>
+          <li><code>_execute_rename</code>（ui:381）呼叫 <code>RenameService.execute_rename(plan, project, undo.save_undo_record)</code>（rs:211-250）：檢查空檔名 → 建 <code>UndoRecord</code> → <code>MoveService.execute(moves, on_complete=complete)</code>（move_service.py:151-203）。引擎依序：確認沒有進行中紀錄 → <code>validate</code>（預覽剛跑過的同樣 5 項）→ <code>_build_steps</code> → <code>MoveJournalStore.save</code>，之後每一步 <code>create_directory</code>、<code>FileService.rename_file</code>、再 <code>save</code> → <code>on_complete</code> 設 <code>created_directories</code> 並呼叫 <code>save_undo_record</code>（us:28-39：<code>_snapshot_workspace_meta</code> → <code>_write_record</code> → <code>clear_redo_stack</code>）→ 最後才清除進行中紀錄。</li>
+          <li>回到 UI：成功時 <code>_update_project_paths(record.mappings)</code>、<code>_mark_modified</code>、<code>_rebuild_tabs</code>、狀態列與訊息框；遇 <code>RenameRollbackError</code> 走 <code>_save_residual_rename</code>。</li>
+        </ol>
+        <p><b>復原</b>：<code>_undo_last</code>（ui:533）過關卡 → <code>get_latest_undo_record</code>（依檔名排序取最新）→ 確認 → <code>execute_undo</code>（us:59-97）：以 <code>file_exists(m.renamed)</code> 過濾（75-78）→ <code>MoveService.execute(..., on_complete=lambda _: self._move_to_redo(record))</code>（79，新建資料夾清單被丟掉）→ <code>finally</code> 內 <code>_restore_workspace_meta</code>，再移除 <code>record.created_directories</code>（81-85）。UI 必須知道只有 <code>"rename"</code> 要動專案（548），並手動反轉對照（550）；<code>execute_undo</code> 回傳 <code>None</code>，UI 無從得知哪些檔被略過。</p>
+        <p><b>重做</b>：<code>_redo_last</code>（ui:561）過關卡 → 取最新重做紀錄 → UI 拒絕非 rename 紀錄（568-570），這和 <code>execute_redo</code>（us:112-114）默默把非 rename 紀錄轉回復原堆疊的行為互相矛盾 → <code>_refresh_workspace_meta</code>（120）→ <code>MoveService.execute</code> 全部對照、不過濾存在與否（121），<code>on_complete</code>＝設資料夾清單＋<code>_move_to_undo</code> → UI <code>_update_project_paths(record.mappings)</code>。</p>
+        <p><b>中斷還原</b>：入口是 main.py:46（<code>QTimer.singleShot(0, window.prompt_pending_recovery)</code>）加上三個關卡。<code>prompt_pending_recovery</code>（ui:415-460）自己建新的 <code>MoveService</code>（423-424）→ <code>load_pending</code>（以 <code>file_exists_exact</code> 判定 pending 那一步，紀錄損毀則 <code>discard_pending</code>）→ 自己讀 <code>journal.moved_indices()</code> 與 <code>journal.complete</code>（433-434）跑三分支決策 →「保留」呼叫 <code>discard_pending</code>，否則 <code>recover</code>（→ <code>_reverse_all</code>）→ <code>_save_residual_rename(result.residual)</code>，再用 <code>restored</code>／<code>skipped</code>／<code>residual</code> 組訊息。和另外三條相比，它沒有寫回 meta，「保留」時也不更新專案路徑。</p>
+      </div>
+
+      <div class="appx-block">
+        <h4>A2　呼叫端必須記住、介面卻不保證的順序</h4>
+        <ol type="a">
+          <li>先呼叫 <code>prompt_pending_recovery</code>；<code>PendingMoveError</code> 沒有被特別處理。</li>
+          <li><code>save_undo_record</code> 必須當回呼傳入，不能等 <code>execute_rename</code> 回傳後才存。e6b46b0 之前正是後者，造成當機空窗。</li>
+          <li><code>UndoService</code> 必須和 app 共用同一個 <code>WorkspaceService</code>，否則快照從錯的地方拍。</li>
+          <li>預覽與執行的自動加後綴判斷必須一致，卻寫了兩次（preview_dialog.py:172-176、246-250）。</li>
+          <li>用 <code>record.mappings</code> 更新專案路徑。</li>
+          <li>遇回滾錯誤時，把殘留轉成紀錄、存檔、更新路徑。</li>
+          <li><code>on_complete</code> 若拋例外，檔案其實已搬完，但看起來是一般 <code>Exception</code>；UI 在 397 當成「什麼都沒發生」，專案路徑不會更新。</li>
+        </ol>
+      </div>
+
+      <div class="appx-block">
+        <h4>A3　main_window 內的業務順序</h4>
+        <div class="scroll">
+          <table class="atable">
+            <thead><tr><th>處理函式</th><th>行</th><th>業務／UI 行數</th><th>業務行在做什麼</th></tr></thead>
+            <tbody>
+              <tr><td><code>_execute_rename</code></td><td class="n">381-398</td><td>6／11</td><td>回呼接線（383-385）、更新路徑（386）、殘留分支（394-395）</td></tr>
+              <tr><td><code>_save_residual_rename</code></td><td class="n">400-411</td><td>8／2</td><td>自己組 <code>UndoRecord</code>（<code>strftime("%Y%m%d_%H%M%S")</code> 與 <code>t("rename.undo_description")</code>，和 rs:235-242 重複）、存檔、更新路徑</td></tr>
+              <tr><td><code>prompt_pending_recovery</code></td><td class="n">423-460</td><td>約 23／15</td><td>擁有進行中紀錄的狀態機：<code>complete and moved</code>／<code>moved</code>／<code>not moved</code> 三分支</td></tr>
+              <tr><td><code>_undo_last</code></td><td class="n">533-559</td><td>10／15</td><td><code>if record.operation_type == "rename"</code> 與手動反轉 <code>UndoMapping</code></td></tr>
+              <tr><td><code>_redo_last</code></td><td class="n">561-587</td><td>8／17</td><td>重複的「只接受 rename」政策</td></tr>
+              <tr><td><code>_update_project_paths</code></td><td class="n">500-517</td><td>17／0</td><td>純粹改 Project 模型；<code>_remove_file_references</code>（489-498）亦同</td></tr>
+              <tr><td><code>_save_operation_undo</code></td><td class="n">519-531</td><td>11／0</td><td>純粹組紀錄；時間戳格式的第三份複本</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>合計約 90 行業務順序。中斷還原分支三次提交在 main_window 上的改動：265eb59（+54／−8）、ee15020（+21／−7）、e6b46b0（+32／−9）。preview_dialog.py:158-199（約 42 行）同樣是政策而非 UI：它決定哪些驗證失敗要丟掉（遺失來源）、自動修正（重複目標加後綴）、阻擋（其餘），189 的 docstring 自承一致性靠手動維持。</p>
+      </div>
+
+      <div class="appx-block">
+        <h4>A4　四個入口逐步對照</h4>
+        <div class="scroll">
+          <table class="atable">
+            <thead><tr><th>步驟</th><th>重新命名</th><th>復原</th><th>重做</th><th>中斷還原</th></tr></thead>
+            <tbody>
+              <tr><td>關卡</td><td class="n">ui:360</td><td class="n">ui:534</td><td class="n">ui:562</td><td>—</td></tr>
+              <tr><td>組搬移清單</td><td><code>_moves(plan)</code> <span class="n">rs:33</span></td><td>反轉並過濾 <span class="n">us:75-78</span></td><td>正向、不過濾 <span class="n">us:121</span></td><td>來自進行中紀錄</td></tr>
+              <tr><td>前置</td><td>空檔名檢查 <span class="n">rs:232</span></td><td>無</td><td><code>_refresh_workspace_meta</code> <span class="n">us:120</span></td><td>無</td></tr>
+              <tr><td>執行＋on_complete</td><td>設資料夾＋<code>save_undo_record</code>（快照、寫檔、清重做）<span class="n">rs:244-249</span></td><td><code>_move_to_redo</code>，資料夾清單丟掉 <span class="n">us:79</span></td><td>設資料夾＋<code>_move_to_undo</code> <span class="n">us:116-118</span></td><td>—</td></tr>
+              <tr><td>後置</td><td>無</td><td>finally 寫回 meta＋移除資料夾 <span class="n">us:81-85</span></td><td>無</td><td>無</td></tr>
+              <tr><td>專案路徑</td><td class="n">ui:386</td><td>反轉 <span class="n">ui:548-551</span></td><td class="n">ui:579</td><td>沒有</td></tr>
+              <tr><td>標記＋重建＋狀態列</td><td class="n">ui:387-389</td><td class="n">ui:552-554</td><td class="n">ui:580-582</td><td>只有訊息</td></tr>
+              <tr><td>RenameRollbackError</td><td class="n">ui:394-396</td><td class="n">ui:555-557</td><td class="n">ui:583-585</td><td><code>result.residual</code> <span class="n">ui:450-451</span></td></tr>
+              <tr><td>其他例外</td><td class="n">ui:397-398</td><td class="n">ui:558-559</td><td class="n">ui:586-587</td><td class="n">ui:445-447</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>「寫正式紀錄」有兩條路：<code>save_undo_record</code> 會拍 meta 快照並清空重做堆疊，<code>_move_to_undo</code>／<code>_move_to_redo</code> 兩件都不做。meta 維護是逐一補在各入口上的（5c5f37e 補復原寫回、e2f7c17 補回滾失敗與重做），中斷還原始終沒補到。</p>
+      </div>
+
+      <div class="appx-block">
+        <h4>A5　deletion test</h4>
+        <ul>
+          <li><b><code>move_journal.py</code>（75 行）：淺薄。</b>唯一正式呼叫端是 <code>MoveService</code>；介面（<code>save</code>／<code>load</code>／<code>exists</code>／<code>clear</code>）幾乎和 implementation 一樣大，刪掉只會把約 45 行搬進 <code>MoveService</code>，不會在其他呼叫端重現。它真正的價值是測試注入當機的關節，但路徑是模組常數。I/O 不一致：<code>save</code> 走 <code>FileService.write_json_atomic</code>，<code>exists</code>／<code>load</code>／<code>clear</code> 直接用 <code>os</code>／<code>open</code>（40、48-51、73）。</li>
+          <li><b><code>rename_service.py</code>（250 行）：一半深、一半轉手。</b><code>generate_rename_plan</code>（37-130）、<code>apply_auto_suffix</code>、<code>find_empty_names</code> 有實質內容；143、157、161、178、182 五個方法是 <code>self._mover.X(self._moves(plan))</code> 一行轉呼叫，只為讓預覽能一片一片拼回引擎的驗證。<code>execute_rename</code> 約 15 行，組的是復原領域的 <code>UndoRecord</code>，本質是把 UI 的 <code>save_record</code> 串進 <code>on_complete</code>；<code>project</code> 參數沒用到（212），docstring 卻說用於子資料夾設定（223）。</li>
+          <li><b><code>undo_service.py</code>（230 行）：有存在價值，但混了好幾件事。</b>刪掉會讓堆疊儲存（目錄、命名、187-192 的舊欄位容錯）與 meta 生命週期（145-167）散到 UI、重新命名與測試。它另外寄放了不相干的靜態方法 <code>create_backup</code>（rotate_dialog.py:465 呼叫）。<code>execute_undo</code>／<code>execute_redo</code> 對 <code>MoveService.execute</code> 而言是淺包裝。呼叫端必須知道的隱藏副作用：<code>save_undo_record</code> 同時清空重做堆疊，而且只對 <code>"rename"</code> 拍 meta 快照。</li>
+        </ul>
+      </div>
+
+      <div class="appx-block">
+        <h4>A6　跨越關節的外洩</h4>
+        <ul>
+          <li>UI 匯入並依引擎型別分支：<code>RenameRollbackError</code>（ui:25）與 <code>.residual</code>（395、556、584；復原與重做也拋這個帶「Rename」的例外）、直接建 <code>MoveService</code>（423）、讀 <code>MoveJournal.complete</code>／<code>moved_indices()</code> 與 <code>MoveRecoveryResult.restored</code>／<code>skipped</code>／<code>residual</code>。</li>
+          <li><code>PreviewDialog</code> 匯入 <code>staging_path</code>（preview_dialog.py:16、185），把「暫名被佔用」換算回來源：服務回傳的鍵不是 UI 需要的鍵，UI 只好照命名規則自己反推。</li>
+          <li>UI 自己組 <code>UndoRecord</code>（402-407、521-530），並寫死 <code>"rename"</code>（548、568）。</li>
+          <li>殘留的語意依操作而不同，UI 卻一視同仁：復原的殘留是「重新命名後位置 → 目前位置」，卻標成「重新命名 N 個檔案」；所有殘留都走 <code>save_undo_record</code>，它清空重做堆疊的副作用原本是為全新的重新命名設計的。</li>
+          <li>進行中紀錄不記操作種類與所屬紀錄。中斷的是復原、且 <code>_move_to_redo</code> 已執行（<code>complete=True</code>）時，會被說成「已完成但復原紀錄未寫入」；選「還原」把檔案搬回重新命名後的位置，紀錄卻留在重做堆疊，兩個堆疊都失真；選「保留結果」不更新專案路徑。啟動時 <code>self.project</code> 還是空的，<code>_save_residual_rename</code> 的路徑更新落空，卻仍把空專案標成已修改。</li>
+          <li><code>execute_undo</code> 的 meta 寫回在進行中紀錄清除之後才執行，若在那一刻當機，會留下沒有 <code>meta.json</code> 的子資料夾。</li>
+        </ul>
+      </div>
+
+      <div class="appx-block">
+        <h4>A7　測試現況</h4>
+        <ul>
+          <li>這一群的 UI 處理函式沒有任何測試。test_main_window.py 只有 2 個測試，都是開啟專案與 meta；<code>_execute_rename</code>、<code>_undo_last</code>、<code>_redo_last</code>、<code>_save_residual_rename</code>、<code>_update_project_paths</code>、<code>prompt_pending_recovery</code> 都是 0。要測就得驅動 <code>QMessageBox</code> 的 <code>exec</code>／<code>question</code>／<code>clickedButton</code>。</li>
+          <li>test_undo_service.py:258-275 手動重演 UI 的接線（<code>RenameService(...).execute_rename([...], Project(), self.undo_service.save_undo_record)</code>），259 的註解「快照在引擎 on_complete 內拍」記錄了順序規則；這是唯一一個重新命名 → 復原的端到端測試。</li>
+          <li>路徑無法注入，只能 patch 全域：<code>patch("services.move_journal.MOVE_JOURNAL_FILE")</code>（test_move_service.py:28）、<code>patch.multiple("services.undo_service", UNDO_DIR=..., REDO_DIR=...)</code>（test_undo_service.py:61-63）；另有 5 個測試（78-165）在 try／finally 裡直接改 <code>mod.UNDO_DIR</code>，其中 3 個上面還疊著已無作用的 <code>@patch</code>。<code>test_execute_undo</code> 與 <code>test_execute_undo_cleans_empty_dirs</code> 沒有導開 <code>REDO_DIR</code>，重做紀錄寫進 conftest 整個測試階段共用的目錄。重新命名與復原的測試沒有隔離進行中紀錄，整個測試階段共用一個 <code>pending_move.json</code>，若殘留一份，後面的測試會因 <code>PendingMoveError</code> 失敗。</li>
+          <li>以替換實例方法注入錯誤：test_rename_service 在 3 處換掉 <code>file_service.rename_file</code>（其中 77-85 是多個測試共用的輔助函式）；test_move_service 用間諜輔助函式，並替換 <code>store.save</code>／<code>store.clear</code> 模擬當機（147、234、283）與 <code>file_service.file_exists</code>（289）；test_undo_service.py:290-297 與 test_main_window.py:72-79 替換 <code>write_json_atomic</code>。</li>
+          <li><code>UndoService</code> 與 <code>RenameService</code> 各自在建構子裡建 <code>MoveService</code>（us:24、rs:30），進行中紀錄的儲存無法經由它們注入。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="appx-group" id="appx-b">
+      <h3><span class="mark">B</span>分割流程</h3>
+
+      <div class="appx-block">
+        <h4>B1　呼叫鏈</h4>
+        <p><code>_open_split_pdf</code>（ui:589-600）建立 <code>SplitPdfDialog(project, self._on_split_complete, current_group, self, workspace_service=..., project_path=self._project_path or "")</code>；對話框經由工作區模組取 file service（<code>self._files = workspace_service.file_service</code>，split_dialog.py:55）。整段業務順序在 <code>SplitPdfDialog._execute_split</code>（580-633）：</p>
+        <ol>
+          <li><code>_effective_output_dir()</code>（525-529）→ <code>WorkspaceService.folder_for_source</code>，或自訂資料夾，或 <code>dirname(source)</code>。</li>
+          <li><code>_build_split_plan</code>（563-567）→ <code>pdf_service.build_split_plan</code>（pdf_service.py:115-141）。</li>
+          <li>覆蓋來源檢查，就地以 <code>normcase(abspath)</code> 比對（588-594），與 <code>extract_pages</code> 的檢查（pdf_service.py:159-160）重複；CLAUDE.md 說這是刻意的兩層。</li>
+          <li>工作區模式：<code>list_outputs</code>（597）→ <code>other_owner</code>（599）→ <code>_confirm_resplit</code>（537-561）。自訂資料夾模式：檢查磁碟上已存在的檔並確認覆蓋（603-605）。</li>
+          <li><code>created_dirs = [] if directory_exists(output_dir) else [output_dir]</code>（607），必須在第 6 步之前。</li>
+          <li><code>clear_outputs</code>（609）→ <code>prepare_folder(pdf, project_path)</code>（610）。</li>
+          <li>迴圈 <code>extract_pages</code>，並在 UI 裡組 <code>FileInfo</code> 與樂器清單（613-621）。</li>
+          <li>回呼 <code>_on_split_complete(split_files, split_instruments, source_group, pdf_path, created_dirs, replaced)</code>，6 個位置參數（622-626）。</li>
+        </ol>
+        <p>回到 <code>_on_split_complete</code>（ui:628-654）：<code>_remove_file_references(replaced)</code>（489-498）→ 以字串完全相等從 <code>source_group.files</code> 移除來源（634-636）→ 加入新檔並覆寫 <code>instruments</code> 與 <code>selected_instruments</code>，或建新群組 → <code>_save_operation_undo</code> 建分割紀錄（519-531，時間戳在 UI 產生）→ <code>_mark_modified</code>、<code>_rebuild_tabs</code>。</p>
+      </div>
+
+      <div class="appx-block">
+        <h4>B2　順序限制（介面都不保證）</h4>
+        <ul>
+          <li><code>other_owner</code> 必須在 <code>prepare_folder</code> 之前讀，因為後者會改寫 <code>project_path</code>（workspace_service.py:91-96）。</li>
+          <li><code>list_outputs</code> 必須在 <code>clear_outputs</code> 之前，否則之後清引用要用的「被取代」清單就沒了。</li>
+          <li><code>clear_outputs</code> 必須在抽頁之前：新輸出通常與舊輸出同名。</li>
+          <li><code>created_dirs</code> 必須在 <code>prepare_folder</code>／<code>create_directory</code> 之前算。</li>
+          <li><code>_on_split_complete</code> 內 <code>_remove_file_references(replaced)</code> 必須在 <code>extend(files)</code> 之前：被取代與新產生的路徑通常一模一樣（<code>workspace/&lt;hash&gt;/Flute.pdf</code>），順序反過來會默默丟掉新分譜。</li>
+          <li>只有 <code>replaced</code> 非空才查 <code>other_owner</code>（598）：輸出已全部被重新命名搬走的子資料夾，所屬專案會被 <code>prepare_folder</code> 默默改掉。</li>
+        </ul>
+        <p>寫在 UI 的業務邏輯還包括：樂器自動指派（<code>_get_used_instruments</code>、<code>_next_unused</code>、<code>_cycle_instrument</code>、<code>_update_assignments</code>，split_dialog.py:388-508）、段落計算（<code>_get_sections</code>，354-360）、以 <code>.endswith(".pdf")</code> 過濾 PDF（195-211，沒用 <code>core.constants.PDF_EXTENSION</code>）。</p>
+      </div>
+
+      <div class="appx-block">
+        <h4>B3　失敗模式</h4>
+        <ul>
+          <li>抽頁中途拋例外（616）：舊輸出已進回收桶（609）、所屬專案已改（610），回呼不會觸發，專案仍引用已刪的檔；寫了一半的新輸出無人引用，也沒有復原紀錄。</li>
+          <li>自訂資料夾模式傳 <code>replaced=[]</code>（595、602-605）：以 <code>source_group=None</code> 重新分割到同一資料夾，會多出一個路徑與前一個群組重複的群組，重新命名預覽接著以「同一來源被多個群組引用」擋下。清舊引用只在工作區模式有效。</li>
+          <li><code>build_split_plan</code> 不檢查輸出路徑重複：兩段都叫「Violin」，或清理後同名（<code>A/B</code> 與 <code>A_B</code>、多個空名回退成 Part），後者覆蓋前者，兩種模式都沒有警告，也沒有測試。</li>
+          <li>復原分割（us:87-92）把產生的檔丟進回收桶，但 <code>_undo_last</code>（ui:547-553）只替 <code>"rename"</code> 修專案：群組仍指向已刪的檔，634-636 移除的合併譜沒放回，被取代的舊輸出也沒恢復。</li>
+          <li>樂器自動指派實際上是死碼：它讀 <code>self._project.instruments</code>（split_dialog.py:397、413、481），而 <code>Project.instruments</code> 只有 <code>ProjectService.load_project</code> 從舊格式讀入時寫入（project_service.py:60），85-86 再用它補舊群組；樂器表編輯器寫的是 <code>group.instruments</code>（ui:216、group_panel.py:400）。新專案永遠拿到預設名稱；test_split_dialog.py:60 能過，是因為它自己設了舊欄位 <code>Project(instruments=[...])</code>。</li>
+          <li><code>_on_split_complete</code> 只從 <code>group.files</code> 移除來源，來源是 <code>score_file</code> 時不處理，但 <code>_collect_files</code> 會列出總譜（split_dialog.py:204-207）。</li>
+        </ul>
+      </div>
+
+      <div class="appx-block">
+        <h4>B4　工作區模組的介面</h4>
+        <div class="scroll">
+          <table class="atable narrow">
+            <thead><tr><th>公開方法</th><th>正式呼叫端</th></tr></thead>
+            <tbody>
+              <tr><td><code>folder_for_source</code></td><td>1（split_dialog:528）</td></tr>
+              <tr><td><code>list_outputs</code></td><td>1（split_dialog:597）</td></tr>
+              <tr><td><code>other_owner</code></td><td>1（split_dialog:599）</td></tr>
+              <tr><td><code>clear_outputs</code></td><td>1（split_dialog:609）</td></tr>
+              <tr><td><code>prepare_folder</code></td><td>1（split_dialog:610）</td></tr>
+              <tr><td><code>update_project_path</code></td><td>1（main_window:299）</td></tr>
+              <tr><td><code>scan</code></td><td>1（main_window:616）</td></tr>
+              <tr><td><code>cleanup</code></td><td>1（workspace_dialog:164）</td></tr>
+              <tr><td><code>folder_of</code></td><td>1（undo_service:147）</td></tr>
+              <tr><td><code>read_meta</code></td><td>1（undo_service:157）</td></tr>
+              <tr><td><code>restore_meta</code></td><td>1（undo_service:165）</td></tr>
+              <tr><td><code>is_in_workspace</code></td><td>0（僅內部）</td></tr>
+              <tr><td><code>remove_folder</code></td><td>0（內部與測試）</td></tr>
+              <tr><td><code>purge_empty_folders</code></td><td>0（內部與測試）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <ul>
+          <li>另有兩個被呼叫端直接取用的公開屬性：<code>workspace_dir</code>（ui:607）、<code>file_service</code>（split_dialog.py:55）。</li>
+          <li>對分割而言是淺薄模組：5 個單一呼叫端方法必須依固定順序呼叫，順序本身就是介面。</li>
+          <li>對清理而言是深厚模組：<code>scan</code> 把狀態分類、清空資料夾、載入候選專案與組項目藏在一個呼叫後面；但它要求傳入 <code>load_project</code> 函式與最近清單，把組裝推回 main_window。</li>
+          <li>meta 快照／寫回外洩：<code>UndoService</code> 擁有 <code>_snapshot</code>／<code>_refresh</code>／<code>_capture</code>／<code>_restore_workspace_meta</code>（us:145-167），透過 <code>folder_of</code>、<code>read_meta</code>、<code>restore_meta</code> 把原始 meta dict 塞進 <code>UndoRecord.workspace_meta: Dict[str, Dict]</code>（models.py:62），meta 的欄位結構因此暴露給復原、紀錄與測試。「資料夾存在且沒有可讀 meta 才寫」（workspace_service.py:175）是工作區的規則，「何時寫」（us:81-83 的 finally）卻是復原的規則。</li>
+          <li>關節只蓋一半：部分 I/O 走 <code>FileService</code>，其餘直接用 <code>os</code>：<code>isdir</code>（102、116、175、298）、<code>os.remove</code>（120）、<code>open</code>（156）、<code>getsize</code>／<code>getmtime</code>（337-338）、<code>isfile</code>（119、247），因此換上假的 <code>FileService</code> 也測不到全部。</li>
+        </ul>
+      </div>
+
+      <div class="appx-block">
+        <h4>B5　測試現況</h4>
+        <ul>
+          <li>沒有測試：<code>_execute_split</code>（整段順序與失敗模式）、<code>_on_split_complete</code>／<code>_remove_file_references</code>、<code>_update_project_paths</code>、存檔時的所屬專案更新、<code>_scan_workspace</code> 的最近清單修剪、復原分割對專案的影響、同名分段、<code>ProjectService</code> 舊格式遷移（project_service.py:82-94；只被往返測試 test_project_service.py:45、68 附帶觸發，驗了 <code>selected_instruments</code>，沒驗改寫後的 <code>group.instruments</code>）。</li>
+          <li>test_split_dialog.py 透過私有成員驅動對話框：設 <code>_page_count</code>、<code>_split_starts</code>、<code>_deleted_pages</code>，呼叫 <code>_update_assignments</code>、<code>_section_name_entries[1].setText</code>、<code>_build_split_plan</code>（66-76），並呼叫靜態私有方法 <code>_resplit_message</code>（35-47）；訊息組字放在 UI，所以只能在 UI 測。</li>
+          <li>test_main_window.py 建構 <code>MainWindow</code>，而它寫死建立 <code>FileService</code>、<code>ImportService</code>、<code>WorkspaceService</code>（ui:38-40）；測試事後替換 <code>window.workspace_service</code>（38），能成立只因 <code>UndoService</code> 是延遲建立的。測試也呼叫私有的 <code>_do_open_project</code>，讀 <code>_project_path</code> 與 <code>_status_label.text()</code>。</li>
+          <li>test_workspace_service.py 需要 <code>_NoTrashFileService</code> 子類別（23-30），替換實例的 <code>write_json_atomic</code>（198-205）；檔尾的 <code>TestFileServiceCrossDevice</code>（335-398）全域改寫 <code>os.rename</code> 與 <code>shutil.copy2</code>，測的是 FileService，放錯檔案。test_import_service.py:115-150 也有 FileService 測試，包括正式碼零呼叫端的 <code>has_subdirectories</code>。</li>
+          <li><code>PreferencesService</code> 寫死 <code>PREFERENCES_FILE</code>，conftest.py 只好在任何模組匯入前設環境變數。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="appx-group" id="appx-c">
+      <h3><span class="mark">C</span>專案的檔案引用</h3>
+      <div class="appx-block">
+        <ul>
+          <li><code>Project</code> 只有一個方法 <code>all_file_paths</code>（models.py:194-202，還夾在欄位宣告之間）；<code>Group</code> 沒有方法。</li>
+          <li>main_window.py 單檔約 28 處直接改 <code>Project</code>／<code>Group</code>／<code>FileInfo</code>，例如 176、191-194、216-217、231、241-243、493-496、506-517、634-646、681-689。</li>
+          <li>「走訪群組分譜＋總譜＋未分組」寫了 5 次：models.py:194-202；<code>_remove_file_references</code>（ui:489-498）；<code>_update_project_paths</code>（ui:500-517，「改路徑＋顯示名稱」在函式內又重複 3 次）；split_dialog.py:195-211；rotate_dialog.py:173-189。</li>
+          <li><code>split_dialog._collect_files</code> 與 <code>_build_group_filter</code> 被複製貼上到 rotate_dialog.py:150-189。</li>
+          <li><code>Group.selected_instruments</code> 永遠是 <code>range(len(instruments))</code>，在 5 處重算（project_service.py:94；ui:217、639；group_panel.py:401、416），除了序列化與遷移沒有人讀；和 <code>Project.instruments</code> 一樣是遺留欄位。</li>
+          <li>group_panel 自己建 <code>FileService</code> 與 <code>ImportService</code>（group_panel.py:270-271、305-306），刪檔失敗時吞掉例外、仍移除引用（308-313），並呼叫 main_window 的私有方法（<code>_mark_modified</code>、<code>_rebuild_tabs</code>）。</li>
+        </ul>
+      </div>
+      <div class="appx-block">
+        <h4>路徑同一性的四種寫法</h4>
+        <div class="scroll">
+          <table class="atable narrow">
+            <thead><tr><th>寫法</th><th>位置</th></tr></thead>
+            <tbody>
+              <tr><td>字串完全相等</td><td>main_window.py:493、504-515、635</td></tr>
+              <tr><td><code>normcase</code></td><td>move_service.py:77-116、preview_dialog.py:240</td></tr>
+              <tr><td><code>normcase(abspath)</code></td><td>workspace_service.py:26-28、split_dialog.py:588-590、pdf_service.py:159</td></tr>
+              <tr><td><code>normpath</code></td><td>preferences_service.py:85-98</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="appx-group" id="appx-e">
+      <h3><span class="mark">E</span>命名格式</h3>
+      <div class="appx-block">
+        <ul>
+          <li>總譜的變數表在 rs:55-69 手寫，中英鍵各列一次；分譜走 <code>build_variables_for_file</code>（template_engine.py:30-78），兩者各自維護同一組變數名。</li>
+          <li>「輸出位置＋子資料夾」的計算在總譜（rs:71-82）與分譜（rs:97-108）各寫一次；分譜另有三種存放模式的分支（rs:109-122，其中 120 是舊旗標的後備分支），<code>detect_instrument_section</code> 在迴圈內延遲匯入。</li>
+          <li>本機：<code>sanitize_filename</code> 有、<code>ensure_pdf_extension</code> 沒有；Drive（drive_rename_service.py:112-113）：<code>ensure_pdf_extension</code> 有、<code>sanitize_filename</code> 沒有。</li>
+          <li><code>generate_drive_rename_plan</code> 會改寫傳入群組的 <code>group.instruments</code>（drive_rename_service.py:108-110）。</li>
+          <li><code>parts_output_mode</code> 的 <code>"root"</code>／<code>"parts"</code>／<code>"section"</code> 是散落的字串（models.py:207、preview_dialog.py:82-87、144-155、rs:109-113），與舊旗標 <code>use_parts_subfolder</code> 並存：預覽每次同步寫兩個欄位，載入時由 project_service.py:82-83 遷移。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="appx-group" id="appx-f">
+      <h3><span class="mark">F</span>開啟與存檔</h3>
+      <div class="appx-block">
+        <ul>
+          <li>開啟：<code>_do_open_project</code>（ui:282-295）<code>load_project</code> → 設 <code>_project_path</code> → <code>_sync_ui_from_project</code> → <code>_add_recent_project</code>（偏好設定新增＋存檔＋重建選單，861-864）；接著在 try 區塊之外 <code>_sync_workspace_owner(path)</code> → <code>WorkspaceService.update_project_path</code>（297-301），再 <code>_warn_missing_files</code> → <code>ProjectService.find_missing_files</code>。</li>
+          <li>存檔：<code>_do_save</code>（ui:326-338）<code>_sync_project_from_ui</code> → <code>save_project</code> → 設路徑 → <code>_add_recent_project</code> → <code>_sync_workspace_owner</code>。</li>
+          <li>「最近清單＋meta 所屬專案」這一對在兩條路徑各手寫一次（290／294 與 334／338），沒有東西把它們綁在一起；第三個存檔入口（例如自動存檔）必須自己記得兩件都做。</li>
+          <li>「已知專案」散在三個模組：儲存在 <code>PreferencesService.recent_projects</code>（preferences_service.py:78-98，<code>normpath</code>）；膠水在 <code>_scan_workspace</code>（ui:613-621，讀偏好設定、傳入 <code>ProjectService.load_project</code>、修剪已不存在的專案並存檔）；與 meta 所屬專案取聯集在 <code>WorkspaceService._candidate_projects</code>（302-311）。</li>
+          <li>最近清單只在開清理對話框時修剪；<code>_open_recent</code>（ui:853-859）發現檔案不存在也不修剪。</li>
+          <li><code>scan</code> 不是唯讀：它呼叫 <code>purge_empty_folders</code> 刪資料夾（workspace_service.py:258），UI 的包裝還改寫偏好設定；對話框每次清理後又呼叫一次（workspace_dialog.py:169）。</li>
+          <li>刪除政策在 UI：只有「未被引用」預設勾選、「使用中」不可勾（workspace_dialog.py:114-117）；<code>WorkspaceService.cleanup</code>（278-292）照單全收，不重驗狀態。</li>
+          <li><code>PREFERENCES_FILE</code>、<code>_DEFAULTS</code>、<code>MAX_RECENT</code> 定義在 preferences_service.py:20-30，不在 <code>core/constants.py</code>，違反專案「常數統一定義於 core/constants.py」的規則。</li>
+          <li><code>_confirm_discard</code>（ui:823-837）選「儲存」後，不論存檔成功與否、另存是否取消，都回傳 True（缺陷表第一列）。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="appx-group" id="appx-misc">
+      <h3>其他</h3>
+      <div class="appx-block">
+        <h4>main_window.py 的職責地圖（882 行，近三個月 11 次提交）</h4>
+        <div class="scroll">
+          <table class="atable narrow">
+            <thead><tr><th>職責</th><th>行</th></tr></thead>
+            <tbody>
+              <tr><td>服務建構與延遲工廠（三種不同寫法，含 716 的 <code>hasattr</code>）</td><td class="n">34-49、700-719</td></tr>
+              <tr><td>選單</td><td class="n">53-93</td></tr>
+              <tr><td>版面</td><td class="n">97-152</td></tr>
+              <tr><td>分頁、新增群組、連結樂章（含改模型）</td><td class="n">156-208</td></tr>
+              <tr><td>樂器表編輯器同步（直接碰 <code>_instrument_editor._group</code>、<code>._project</code>）</td><td class="n">203-219、341</td></tr>
+              <tr><td>匯入</td><td class="n">223-251</td></tr>
+              <tr><td>新增／開啟／存檔、所屬專案、遺失檔警告、UI 與模型同步</td><td class="n">255-355</td></tr>
+              <tr><td>重新命名編排與殘留紀錄</td><td class="n">359-411</td></tr>
+              <tr><td>中斷還原</td><td class="n">415-487</td></tr>
+              <tr><td>專案路徑改寫</td><td class="n">489-517</td></tr>
+              <tr><td>復原紀錄組裝</td><td class="n">519-531</td></tr>
+              <tr><td>復原與重做</td><td class="n">533-587</td></tr>
+              <tr><td>分割啟動與完成</td><td class="n">589-600、628-654</td></tr>
+              <tr><td>工作區開啟與清理、偏好設定修剪</td><td class="n">604-626</td></tr>
+              <tr><td>旋轉</td><td class="n">656-671</td></tr>
+              <tr><td>切換語言、模板轉換、整個 UI 重建</td><td class="n">673-696</td></tr>
+              <tr><td>譜庫</td><td class="n">721-737</td></tr>
+              <tr><td>命令式群組選擇對話框</td><td class="n">741-782</td></tr>
+              <tr><td>變數選單</td><td class="n">784-801</td></tr>
+              <tr><td>標題、修改旗標、狀態列</td><td class="n">803-821</td></tr>
+              <tr><td>放棄與關閉提示</td><td class="n">823-837、866-882</td></tr>
+              <tr><td>最近清單選單</td><td class="n">839-864</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="appx-block">
+        <h4>locale.py（978 行，近三個月改最多次，13 次）</h4>
+        <p>中英兩份字典（zh_TW 18-475、en 476-933）各 423 個鍵，目前一致；函式約 40 行（937-978），依賴模組層級的 <code>_current_locale</code>。每加一個功能要改相隔約 458 行的兩處，沒有鍵值一致性測試；<code>t()</code> 找不到鍵時默默回傳鍵名，rotate_dialog.py:118 的 <code>split.same_as_source</code> 就是這樣上了畫面。</p>
+      </div>
+      <div class="appx-block">
+        <h4>零呼叫端的程式碼</h4>
+        <ul>
+          <li>pdf_service.py 的 <code>split_pdf</code>、<code>split_pdf_every_n_pages</code>、<code>split_pdf_into_single_pages</code>（30-112）只互相呼叫，<code>rotate_pdf</code>（265-300）沒有呼叫端；合計約 120 行，佔該檔 300 行的四成。</li>
+          <li><code>FileService.has_subdirectories</code> 正式碼零呼叫端，只有測試在用。</li>
+        </ul>
+      </div>
+    </section>
+  </section>
+</main>
+
+</body></html>
