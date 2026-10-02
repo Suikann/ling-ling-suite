@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# hooks/reference-transaction — Guarded branch 的機關：agent 不在 Guarded branch 上產生本地提交
+# 判定在 lib/git_guard.js（規則、訊息、紀錄都在那裡）；本檔是薄殼。
+#
+# git 做的每一次 ref 更新都會跑本檔三到四次（preparing／prepared／committed／aborted），包含
+# HEAD、AUTO_MERGE、ORIG_HEAD、遠端 ref。下面三道篩子在 shell 裡放行、不啟動 node，人手操作
+# 與無關的更新幾乎零成本：
+#   1. CLAUDECODE 不是 1（人手操作）。Guarded branch 只擋 agent，不設開關。
+#   2. 不是 prepared 階段——只在 ref 已鎖定的 prepared 判一次（preparing 也能中止但 ref 還沒鎖、
+#      committed／aborted 已中止不了）；`--no-verify` 跳不過它。
+#   3. 沒有「refs/heads/ 開頭且舊值≠新值」的行。
+set -euo pipefail
+
+[[ "${CLAUDECODE:-}" == 1 && "${1:-}" == prepared ]] || exit 0
+
+INPUT=$(cat)
+RELEVANT=
+while read -r old new ref; do
+    if [[ "$ref" == refs/heads/* && "$old" != "$new" ]]; then RELEVANT=1; break; fi
+done <<<"$INPUT"
+[[ -n "$RELEVANT" ]] || exit 0
+
+# lib 目錄解析同 commit-msg／pre-commit（ADR-0005）：shim 模式由 installer 注入
+# LINGLING_HOOK_LIB；vendor 模式與 template 自用都是同層 lib/。
+_HOOK_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+LINGLING_HOOK_LIB="${LINGLING_HOOK_LIB:-$_HOOK_SELF_DIR/lib}"
+
+# 判定以 node 執行（ADR-0029）。缺 node 或 lib 時 fail-closed：agent 的這次更新擋下、講明原因。
+_deny_setup() {
+    echo "lingling-deny: git 機關 reference-transaction 跑不起來（$1），保守起見擋下" >&2
+    echo "原因：判定程式在 lib/git_guard.js、以 node 執行（ADR-0029），缺了就無法判斷這次是否動到 Guarded branch。" >&2
+    echo "下一步：把這則錯誤告訴使用者：$2" >&2
+    echo "真的要做，請使用者在 Claude Code 以外的終端機自己跑。" >&2
+    exit 1
+}
+command -v node >/dev/null 2>&1 || _deny_setup "找不到 node" "裝好 node 再重試。"
+[[ -f "$LINGLING_HOOK_LIB/git_guard.js" ]] ||
+    _deny_setup "找不到 $LINGLING_HOOK_LIB/git_guard.js" "lingling 的 git hook 要重裝（setup-lingling 第 1 步，或重跑 scripts/install-git-hooks.sh）。"
+
+exec node "$LINGLING_HOOK_LIB/git_guard.js" reference-transaction <<<"$INPUT"

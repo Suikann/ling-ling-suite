@@ -183,11 +183,11 @@ issue 與 spec 都在 GitHub Issues（`Suikann/ling-ling-suite`），一律用 `
 
 ### Triage labels
 
-五個標準 triage 角色直接用上游預設字串（`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`）。見 `docs/agents/triage-labels.md`。
+五個標準 triage 角色對映到中文標籤（`待分類`、`待補資訊`、`待派工`、`待人工`、`不處理`）。見 `docs/agents/triage-labels.md`。
 
 ### Domain docs
 
-單一 context：根目錄 `CONTEXT.md` 加 `docs/adr/`。見 `docs/agents/domain.md`。
+單一 context：根目錄 `GLOSSARY.md` 加 `docs/adr/`。見 `docs/agents/domain.md`。
 
 ---
 
@@ -257,7 +257,7 @@ src/
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
 tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、undo、workspace、pdf_service；main_window、split_dialog 以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄
-CONTEXT.md                       - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
+GLOSSARY.md                      - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
 ```
@@ -421,12 +421,20 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 8. 預覽結果，確認無衝突
 9. 執行重新命名
 
-<!-- lingling:git-workflow -->
+<!-- lingling:git-workflow trunk=develop guarded=main -->
+
 ## Git workflow
 
-After merging a feature branch into `develop`, delete that branch as part of the same workflow — both local (`git branch -d`) and remote (`git push origin --delete`). Don't leave merged branches around and don't ask first; cleanup is the final step of any commit → push → merge request.
+Merge a PR only when the user says to, and only with `lingling-merge <n>`, which ships in the `lingling-claude-template` plugin's `bin/` and is on `PATH` while the plugin is enabled. When it refuses, its second line is the next step: do that, then run it again. When that line hands the merge to the user, stop and tell them; don't merge any other way.
 
-After merging a ticket's PR, in the same workflow as the branch cleanup, run `/lingling-claude-template:spec-closeout`: it finds the ticket's spec and tells the user when every ticket under that spec is closed. It never closes the spec; close it only when the user says so. A ticket with no parent needs nothing here.
+Before running it, if the user has not yet explained the PR in their own words in this session (what changed, why, and how it was verified), ask them to, once. If they say to skip it, merge. When they explain, check what they said against the diff and name anything wrong or missing, then let them choose: explain again, ask for a re-explanation (`/wait-what`, `/teach`, `/show-me`), or merge. Never refuse to merge over it.
+
+After merging a feature branch into `develop`, delete that branch as part of the same workflow — both local (`git branch -d`) and remote. GitHub deletes the remote branch on merge where `delete_branch_on_merge` is on, so run `git push origin --delete <branch>` only when `git ls-remote --exit-code --heads origin <branch>` still finds it, then `git fetch --prune origin` to drop the stale `origin/<branch>`. Don't leave merged branches around and don't ask first; cleanup is the final step of any commit → push → merge request.
+
+After merging a ticket's PR, in the same workflow as the branch cleanup, run `/lingling-claude-template:spec-closeout`: it finds the ticket's spec and tells the user when every ticket under that spec is closed. It never closes the spec; close it only when the user says so. A PR opened by `/implement-spec` is the exception: it closes the spec along with its tickets when it merges, and merging it is the user's call. A ticket with no parent needs nothing here.
 
 Before any commit — including at the start of `/implement` — if the current branch is `develop`, first branch off the latest `develop` (`git fetch origin develop && git switch -c <name> origin/develop`, so the branch starts from `origin/develop`, not from a possibly stale local `develop`) and work there; never commit on `develop` directly. The agent picks the branch name, and the name must not contain digits. Upstream `implement` only says "commit to the current branch" and never opens a branch itself; this rule fills that gap.
+
+No merge commit may land inside a branch, and `lingling-merge` refuses a branch that holds one. A branch catches up with `develop` only by rebasing onto it (`git fetch origin && git rebase origin/develop`, then `git push --force-with-lease`), resolving any conflict during the rebase; one branch takes another's commits only by fast-forward (`git merge --ff-only`).
+
 <!-- /lingling:git-workflow -->

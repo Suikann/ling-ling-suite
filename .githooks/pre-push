@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# hooks/pre-push — Guarded branch 的機關：agent 不推送、不刪除 Guarded branch，不 force push 主幹類分支
+# 判定在 lib/git_guard.js（stdin 是 git 給的「本地 ref、本地 sha、遠端 ref、遠端 sha」，
+# `--all`／`--mirror`／refspec 怎麼寫都由 git 逐條列出）；本檔是薄殼。
+# CLAUDECODE 不是 1（人手操作）就放行、不啟動 node：Guarded branch 只擋 agent，不設開關。
+set -euo pipefail
+
+[[ "${CLAUDECODE:-}" == 1 ]] || exit 0
+
+# lib 目錄解析同 commit-msg／pre-commit（ADR-0005）：shim 模式由 installer 注入
+# LINGLING_HOOK_LIB；vendor 模式與 template 自用都是同層 lib/。
+_HOOK_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+LINGLING_HOOK_LIB="${LINGLING_HOOK_LIB:-$_HOOK_SELF_DIR/lib}"
+
+# 判定以 node 執行（ADR-0029）。缺 node 或 lib 時 fail-closed：agent 的這次推送擋下、講明原因。
+_deny_setup() {
+    echo "lingling-deny: git 機關 pre-push 跑不起來（$1），保守起見擋下" >&2
+    echo "原因：判定程式在 lib/git_guard.js、以 node 執行（ADR-0029），缺了就無法判斷這次是否動到 Guarded branch。" >&2
+    echo "下一步：把這則錯誤告訴使用者：$2" >&2
+    echo "真的要做，請使用者在 Claude Code 以外的終端機自己跑。" >&2
+    exit 1
+}
+command -v node >/dev/null 2>&1 || _deny_setup "找不到 node" "裝好 node 再重試。"
+[[ -f "$LINGLING_HOOK_LIB/git_guard.js" ]] ||
+    _deny_setup "找不到 $LINGLING_HOOK_LIB/git_guard.js" "lingling 的 git hook 要重裝（setup-lingling 第 1 步，或重跑 scripts/install-git-hooks.sh）。"
+
+exec node "$LINGLING_HOOK_LIB/git_guard.js" pre-push "$@"

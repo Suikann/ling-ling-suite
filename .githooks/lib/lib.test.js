@@ -148,7 +148,7 @@ test('glossary: 領域專名有中譯，並標明檔案內識別名不動', () =
   const r = gl.lookup('Reference skill');
   assert.strictEqual(r[0].zh, '參照 skill', '領域專名在對話中要有中譯');
   assert.match(r[0].note, /DOMAIN/);
-  assert.match(r[0].note, /識別名維持英文/, '必須提醒：CONTEXT.md／程式碼裡不得改動');
+  assert.match(r[0].note, /識別名維持英文/, '必須提醒：GLOSSARY.md／程式碼裡不得改動');
 });
 
 test('glossary: 查無時 CLI 回 NOT-FOUND 且 exit 1（提報使用者、不得自創譯名）', () => {
@@ -226,10 +226,19 @@ test('glossary: 使用者裁定的譯名確實生效', () => {
   assert.strictEqual(pick('trait'), '行當');
   assert.strictEqual(pick('streaming'), '串流');
   assert.strictEqual(pick('rebase'), '嫁接');
+  assert.strictEqual(pick('squash'), '熔鑄');
+  assert.strictEqual(pick('classifier'), '審判官');
+  assert.strictEqual(pick('fast-forward'), '跟上');
+  assert.strictEqual(pick('seed'), '粉本');
   assert.strictEqual(pick('repo'), '典藏');
   assert.strictEqual(pick('session'), '會期');
   assert.strictEqual(pick('agent'), '執事');
   assert.strictEqual(pick('regex'), '正規表示式', '「正則表達式」是大陸譯法');
+  assert.strictEqual(pick('road upgrade'), '道路附屬設施');
+  assert.strictEqual(pick('composition'), '斷面');
+  assert.strictEqual(pick('discretionary lane change'), '自主換道');
+  assert.strictEqual(pick('master lane'), '代表車道');
+  assert.strictEqual(pick('slave lane'), '成員車道');
 });
 
 // ── text_util ──────────────────────────────────────────────────
