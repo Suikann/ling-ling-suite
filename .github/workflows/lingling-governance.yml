@@ -1,0 +1,109 @@
+# lingling 治理三檢在 CI 再跑一次（ADR-0036）：本機 hook 沒啟用或被 --no-verify 繞過時的第二雙眼睛。
+# 本檔由 /lingling-claude-template:setup-lingling 寫入、整檔屬 lingling，重跑 setup-lingling 會整檔覆蓋：
+# 不要手改；repo 自己的 CI 寫在別的工序檔。換 runner 設 repo variable LINGLING_RUNNER，不改本檔。
+name: lingling governance
+
+on:
+  pull_request:
+    # 明寫 edited：預設型別不含它，改 PR 標題就不會重跑 pr-title。
+    types: [opened, edited, synchronize, reopened]
+  push:
+    # 只為兜住直推主幹的內容（governance）；驗證閘仍只在 PR。
+    branches: ["develop"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  governance:
+    runs-on: ${{ vars.LINGLING_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+      # 與本機同一份腳本、掃全部 tracked 檔。.local 一律不跑：本 job 只為治理三檢負責，
+      # repo 自己的閘門要進 CI 就寫在自己的工序檔。
+      - run: LINGLING_SKIP_LOCAL=1 bash .githooks/pre-commit
+
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ vars.LINGLING_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+      # 標題經 env 傳入、不內插進 run（script injection）。只有「沒有 emoji」（has-emoji 退 1）
+      # 且「中文三檢乾淨」（chinese_quality 退 0）才綠；其餘一律紅，含工具壞了或用法錯的退 2。
+      - env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # has-emoji 的「沒有」是退 1，node 當掉也退 1：先拿一個已知 emoji 驗它會退 0，
+          # 否則當掉會被讀成「沒有 emoji」而放行。
+          if ! printf '\xf0\x9f\x98\x80' | node .githooks/lib/text_util.js has-emoji; then
+            echo "::error::has-emoji 認不出已知的 emoji，工具壞了；PR 標題無法把關"
+            exit 1
+          fi
+          emoji_rc=0
+          printf '%s' "$PR_TITLE" | node .githooks/lib/text_util.js has-emoji || emoji_rc=$?
+          cq_rc=0
+          cq_out=$(printf '%s' "$PR_TITLE" | node .githooks/lib/chinese_quality.js --stdin) || cq_rc=$?
+          if [ "$emoji_rc" -eq 1 ] && [ "$cq_rc" -eq 0 ]; then
+            exit 0
+          fi
+          case "$emoji_rc" in
+            0) echo "PR 標題含 emoji" ;;
+            1) ;;
+            *) echo "has-emoji 執行失敗（exit $emoji_rc）" ;;
+          esac
+          if [ -n "$cq_out" ]; then printf '%s\n' "$cq_out"; fi
+          if [ "$cq_rc" -gt 1 ]; then echo "chinese_quality 執行失敗（exit $cq_rc）"; fi
+          echo "::error::PR 標題會成為 merge commit 訊息，不得含 emoji、簡體字、冷僻編碼或異體字"
+          echo "改標題後會自動重跑。"
+          exit 1
+
+  commit-msg:
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ vars.LINGLING_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+      # 本 PR 的每筆提交都跑一次本機的 commit-msg hook。CI 裡沒有 MERGE_HEAD，兩個父的提交
+      # 由這裡設 LINGLING_MERGE_COMMIT=1，hook 走 merge commit 豁免（只跑衛生規則）。
+      - env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # 先取到變數：rev-list 失敗時 bash -e 在這裡就紅；寫在 for 的清單裡失敗會被吞掉、一筆都沒驗就綠。
+          shas=$(git rev-list --reverse "$BASE_SHA..$HEAD_SHA")
+          msg_file=$(mktemp)
+          bad=0
+          for sha in $shas; do
+            git log -1 --format=%B "$sha" > "$msg_file"
+            if [ "$(git rev-list --parents -n 1 "$sha" | wc -w)" -gt 2 ]; then
+              merge=1
+            else
+              merge=
+            fi
+            rc=0
+            out=$(LINGLING_MERGE_COMMIT="$merge" bash .githooks/commit-msg "$msg_file" 2>&1) || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "提交 $(git log -1 --format='%h「%s」' "$sha")："
+              printf '%s\n' "$out"
+              bad=$((bad + 1))
+            fi
+          done
+          if [ "$bad" -gt 0 ]; then
+            echo "::error::$bad 筆提交訊息不合格式（明細見上方）"
+            echo "用 git rebase -i 改寫那筆訊息，再 git push --force-with-lease 推回自己的分支。"
+            exit 1
+          fi

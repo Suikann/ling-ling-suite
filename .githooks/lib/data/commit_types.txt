@@ -1,0 +1,15 @@
+# commit_types.txt — commit 訊息的 type 白名單（唯一來源）
+# 每行一個 type（小寫英文字母）；# 開頭的行與空行略過。
+# 讀取者：
+#   - hooks/commit-msg：subject 的 <type> 不在此清單即擋。
+#   - bin/lingling-merge：合併主旨「merge：<PR 標題>（#n）」去掉標題開頭的這些前綴。
+# 改這裡就同時改了兩邊。README 慣例段與 git-commit skill 的說明文字另需手動同步。
+feat
+fix
+docs
+style
+refactor
+perf
+test
+chore
+revert

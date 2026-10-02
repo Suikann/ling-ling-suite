@@ -22,7 +22,7 @@
 #
 #   仍**不**收專名（變數名、JSON 欄位名、產品名如 PATH、additionalContext）——那些照抄。
 #
-#   領域術語（CONTEXT.md 的 ubiquitous language）另見 glossary_domain.tsv。
+#   領域術語（GLOSSARY.md 的 ubiquitous language）另見 glossary_domain.tsv。
 #
 # 新增／修改條目：改本檔、開 PR。**譯名以使用者在 PR 上核准為準。**
 
@@ -60,6 +60,8 @@ commit	提交	把一組改動記進版本史；亦作名詞（一筆提交）
 branch	分支
 merge	合併
 rebase	嫁接	把自己的分支嫁接到新的基底上重放（與「分支」同一家族的園藝之喻）
+squash	熔鑄	動詞：把一條分支的多筆提交熔成一筆再合入主幹——改動全留，各筆提交與分支邊界拆不回來；squash merge 作「熔鑄合併」、squash commit 作「熔鑄提交」。本 repo 由 setup-lingling 在 repo 層關閉，合併一律留 merge commit
+fast-forward	跟上	動詞；名詞作「一次跟上」：落後的分支自分開以後沒有自己的提交，直接移到對方的最新提交，不產生合併提交、不改寫歷史。推送時指遠端直接移到推上去的提交；non-fast-forward 作「不是跟上」（推上去會蓋掉遠端的提交），--ff-only 作「只准跟上」。與 lingling-merge 驗的「跟上 base」是同一種關係
 PR	合併請求	GitHub 的 pull request；GitLab 稱 MR，同義
 MR	合併請求	GitLab 的 merge request；GitHub 稱 PR，同義
 push	推送	把本地的提交送上遠端
@@ -88,9 +90,9 @@ call	呼叫	函式呼叫（function call）；不作「調用」，理由同 inv
 pull request	合併請求	PR 的全稱，同一詞；GitLab 稱 merge request（MR）
 idempotent	屢作如一	形容詞。做一次與做多次結果相同、重做不留痕（如「屢作如一的寫入器」）；數學譯名「冪等」對新手是黑話，不取
 label	標籤	GitHub 貼在工單上的分類字串，可多貼可撕；triage 五個角色各對映一個標籤（見 docs/agents/triage-labels.md）
-bounded context	語境	DDD：一套語彙在裡面說一不二的範圍，CONTEXT.md 就是它的詞表。不作「有界上下文」——借了「文章前後文」的字面義。LLM 的 context（context window）另字，不共用此譯
-single-context	單語境	形容詞：repo 只有一份 root CONTEXT.md、一套語彙
-multi-context	多語境	形容詞：repo 以 root CONTEXT-MAP.md（語境圖）指向多份 per-context CONTEXT.md
+bounded context	語境	DDD：一套語彙在裡面說一不二的範圍，GLOSSARY.md 就是它的詞表。不作「有界上下文」——借了「文章前後文」的字面義。LLM 的 context（context window）另字，不共用此譯
+single-context	單語境	形容詞：repo 只有一份 root GLOSSARY.md、一套語彙
+multi-context	多語境	形容詞：repo 以 root GLOSSARY-MAP.md（語境圖）指向多份 per-context GLOSSARY.md
 shared kernel	共用核心	DDD：多個語境共用、定義一致的那一小塊模型與詞彙
 delivery layer	口岸	通商口岸之義：領域邏輯與外界交會的那一層，bot、編輯器、App、API 各是一個口岸；貨（邏輯與語彙）都是裡面同一套，口岸自己不產貨，故不是獨立語境。不作「交付層」（交付是 deliverable 的事）、「通路層」（銷售通路之義）
 vendor	抄錄	動詞：把外來檔案逐字抄進本 repo 版控，抄完即凍結、對底本零依賴，要跟上就重抄；成品叫抄本。一律兩字，不單用「抄」（有抄襲之嫌）。不作「供應商」——那是名詞義
@@ -107,4 +109,42 @@ fixture	底稿	存檔備查的原稿：從真 API 錄下、去敏後留存的那
 write-through	隨到隨寫	仿「隨到隨辦」：位元組一到就落到檔案，中間不押、不囤（無使用者層緩衝），讀的一方才能邊長邊讀
 transport	郵傳	郵傳部之郵傳：專司把文書送出去、把回文帶回來的那一路，不問文書寫什麼（HTTP 收發層）。與 OSI 傳輸層不撞名
 trait	行當	Rust 之 trait：戲班的生旦淨丑——型別可扮某個行當（impl Player for MpvPlayer 即 MpvPlayer 扮 Player），亦可兼扮數個；行當規定戲路（方法簽章），不管誰來演。Rust 官方 zh-TW 作「特徵」，本表取行當
-streaming	串流	台灣通行譯法。tsukibox 領域內的 Streaming（串流播放）見該 repo 的 CONTEXT.md
+streaming	串流	台灣通行譯法。tsukibox 領域內的 Streaming（串流播放）見該 repo 的釋名
+workflow	工序	GitHub Actions 的 workflow：一份 yml，寫明什麼事件觸發、要跑哪幾件差事。不作「流程」——太泛
+job	差事	工序裡可獨立派到一副伺服顱骨上跑、各自掛綠勾紅叉的一組步驟；與 worker＝差役同一字輩
+runner	伺服顱骨	真正把差事跑起來的那台機器，GitHub 代管或自架（自架伺服顱骨）。典出戰鎚 40K 的 servo-skull——替人跑腿辦雜務的顱骨機
+template	範本	預先寫好、抄出去再填空的底稿。台灣通行譯法，沿用
+seed	粉本	skill 附帶、抄進各 repo 當起手的原稿（如 setup-matt-pocock-skills 的 seed template）：各 repo 照著改寫、擴充，改到與原稿不同是常態；重跑 setup 時再拿它比對有無文實脫節。典出古時畫師臨摹所據之稿——依粉本起手、再自出新意。與 template＝範本有別：範本抄出去填空，粉本照著改。不作「種子檔」——字面直譯
+first-parent	嫡系	順著每顆 merge commit 的第一個父提交走出來的主線（first-parent 鏈）；單顆父提交仍稱「第一父」
+merge-base	分岔點	兩條分支最近的共同祖先提交
+trigger	觸發	動詞；名詞作「觸發條件」：使工序開跑的事件（push／pull_request）。台灣通用，沿用
+shallow clone	截史複本	只帶最近幾筆歷史的複本；祖先關係被截斷，分岔點會算錯而不是報錯。GitHub Actions 的 checkout 預設就是（fetch-depth 1）
+clone	複本	名詞：連同全部歷史抄下來的一份典藏；動詞作「複製」
+semi-linear	串珠	形容詞：主幹嫡系一條直線、PR 如珠掛線不交叉、珠內也是直線；名詞短語 semi-linear history 見領域表「串珠歷史」
+classifier	審判官	auto mode 裡，每次工具呼叫執行前逐案審定放行或擋下的判斷程式；與 agent＝執事成對（執事辦事、審判官放行）。典出戰鎚 40K 的 Inquisitor。機器學習泛稱的 classifier 仍作「分類器」，本條只指這個審查角色
+hotfix	搶修	名詞兼動詞：正式版已出問題，從發行分支直接切出、修完隨即合回的緊急修正；hotfix branch 作「搶修分支」。取台灣「電力搶修」「道路搶修」之語：出事立刻動工、先恢復運作
+guard	崗哨	名詞：機關裡守在某個動作之前、只攔下特定危險動作的一條規則，如「合併崗哨」「PR 發佈崗哨」。由機器攔，與人把的會意關卡不同
+release	發行	名詞兼動詞：把主幹上累積的改動定成一個有版號的版本、交到使用者手上；release branch 作「發行分支」。取書刊、唱片發行之義
+patch	修訂	名詞兼動詞：一份寫成差異、可交人審查後套用的改動；patch series 作「一組修訂」。版號的 patch（1.2.3 的 3）作「修訂號」，與 semver 官方繁中譯本「主版號.次版號.修訂號」一致
+mutation test	查哨	名詞：故意把程式改壞一處，看測試會不會轉紅，藉此檢驗測試本身有沒有用。取軍中查哨之義：長官夜裡去看哨兵有沒有打瞌睡——測試是哨兵，改壞程式就是去查哨。查的是測試，不是機關的崗哨。學界通稱「變異測試」，偏字面直譯
+code smell	病兆	名詞：程式碼裡暗示設計可能有問題的徵兆，不一定真的有錯。取中醫望診之義：看得出病的徵兆，未必已是病。《重構》中譯本作「壞味道」
+race condition	時序裂隙	名詞：結果取決於兩件事誰先發生的時序漏洞，如 PR 剛推上去的頭幾秒 check 還沒登記、此時合併就繞過 CI。典出戰鎚 40K 的亞空間裂隙：時序上的一道縫，東西會從縫裡溜過去。通稱「競態」
+fixed point	紀元	名詞：diff-review 拿來圈範圍的那一點（commit、branch、tag 或 merge-base），審的是自此以來的所有改動。取「民國紀元」之義：年份自此起算。電腦的 epoch（如 Unix 紀元）同義，日後收錄可沿用。數學的 fixed point（不動點）不在此條
+stack trace	機魂遺言	名詞：程式出錯時印出的呼叫路徑，一行一層，從出錯處往回列到起點。典出戰鎚 40K 機械神教的機魂：當掉是機魂倒下，這串路徑是它留下的遺言。直譯作「堆疊追蹤」
+tokenizer	斷詞器	名詞：把一串文字切成一個個詞的元件，如機關用來找出命令位置的 hooks/lib/shell_parse.js。取台灣自然語言處理界「斷詞」之語
+single source of truth	定本	名詞：同一件事只寫在一個地方，其他地方都從那裡讀，如 commit type 白名單的 hooks/lib/data/commit_types.txt。取校勘學「定本」之義：眾本之中公認為準的那一本
+sediment	積垢	名詞：功能退場後留下、已經沒人讀的程式或文字，一層層積下來，越久越難清；writing-for-agents 的用語。取灰垢層層積累之義
+# ── 抄錄對帳與工序 ────────────────────────────────────────
+orphan	遺本	名詞：上游已刪、本地還留著的抄本（provenance 的 sync: orphaned），待人決定留成別本或撤銷抄錄。取遺稿、遺作之義：源頭已逝，留下這一份
+companion file	附冊	名詞：skill 資料夾裡 SKILL.md 以外、會被它連去讀的附屬檔（格式說明、範本、腳本）。正文之外另訂的分冊
+delta	異文	名詞：provenance 登記、核准過的一處抄本與上游的偏離，附可定位的錨。取文獻學「版本之間的文字差異」之義，與抄本、定本同族。數學的 delta（差量）不在此條
+fork	別本	名詞：分歧已遍布全檔、只記血緣、不求與上游一致的抄本（provenance 的 sync: forked）。取文獻學「同源而自成一系的版本」之義。GitHub 的 fork（複製別人的 repo）不在此條
+graduate	轉正	動詞：skill 從 in-progress（草稿、不出貨）升入正式 bucket，隨 plugin 出貨。取試用轉正職之義
+frontier	前線	名詞：先決條件都已滿足、當下就能開工的那一批，如 implement-spec 可同時開工的工單、grilling 一輪可問的題。取此刻正在交火的那一排之義
+integration branch	匯流分支	名詞：從主幹切出、各工單依序嫁接上來並以跟上（fast-forward）接進，最後整條以一個合併請求併回主幹的分支（implement-spec）。取眾流匯為一流之義
+task graph	相依圖表	名詞：工單連同「誰卡住誰」的阻擋關係構成的圖。「相依」沿用 dependency 的譯名
+subagent	機僕	名詞：主執事派出去辦一件事、辦完回報的下屬執事，不帶主線的對話脈絡。典出戰鎚 40K 的 servitor：只受派單一差事、不帶主人的記憶，與 runner 的「伺服顱骨」同族
+retrospective	行動後檢討	名詞：事後回顧一場 session，找出該改的環境（導覽、自動檢查、規範、工具）而不是程式碼；skill 名 /retro 照抄。取軍中 after-action review 之義
+glossary	釋名	名詞：一個專案自訂的領域用詞表（GLOSSARY.md），每個概念只選一個名字，其餘列為避用。取東漢劉熙《釋名》解釋名物之義。本 repo 的 glossary.tsv 是譯名表，不叫釋名
+drift	走樣	名詞：抄本與上游之間沒有登記成異文的差異。照著範本卻走了樣。context drift 另有譯名「文實脫節」
+blast radius	殃及範圍	名詞：一次改動合併後可能波及的範圍，如版面跑位、消費端壞掉；pr 範本的欄位名。取「殃及池魚」之義

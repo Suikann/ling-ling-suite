@@ -24,7 +24,7 @@ const path = require('node:path');
 
 const DATA = path.join(__dirname, 'data');
 
-const DOMAIN_NOTE = 'DOMAIN：對話用此中譯（首次標原文）；CONTEXT.md／程式碼／ADR 內識別名維持英文';
+const DOMAIN_NOTE = 'DOMAIN：對話用此中譯（首次標原文）；GLOSSARY.md／程式碼／ADR 內識別名維持英文';
 
 function loadTsv(file) {
   const p = path.join(DATA, file);

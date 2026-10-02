@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# hooks/pre-commit — branch-name 規範 + E 條三檢 + F.2 / F.4 lint
+# hooks/pre-commit — branch-name 規範 + E 條中文三檢 + F.2 / F.4 lint
 # 規範來源：lingling-claude-template docs/notes/handoff-thin-layer-design.md D / E / F 條（vendored 進消費端時、此 spec 仍在 template repo）
 # E 條範圍：全 repo scan、異體字硬卡 + glossary allowlist
 # F.4 billing-discipline：全文字檔（md/sh/py/json/yaml）、含 H 條訂閱邊界
 # F.2 hook-script-xref：hooks/ 內 script 引用必存在
 # 排除：archive 目錄、hook data 自身、二進位副檔名
 # 擴充點：同層 pre-commit.local（消費端專案自己的閘門）、治理三檢通過後才跑（見 ADR-0035）
+# 開關：LINGLING_SKIP_LOCAL=1 時不跑 .local（CI 的 governance job 用：它只為治理三檢負責、見 ADR-0036）
 # F.1 commit-spec-sync / F.3 no-manual-install-in-specs：本 repo 痛點不明顯、暫跳
 
 set -euo pipefail
@@ -45,7 +46,7 @@ if [[ -n "$BRANCH" && "$BRANCH" != "HEAD" ]]; then
     esac
 fi
 
-# === E 條 三檢全 repo scan ===
+# === 治理三檢全 repo scan（E 條中文三檢、F.4、F.2）===
 cd "$REPO_ROOT"
 
 mapfile -t FILES < <(
@@ -82,7 +83,7 @@ XR_OUTPUT="$LINT_OUT"
 
 HAS_ERROR=0
 if [[ -n "$CQ_OUTPUT" ]]; then
-    echo "ERROR: pre-commit hook 阻擋（E 條 chinese_quality 三檢）：" >&2
+    echo "ERROR: pre-commit hook 阻擋（E 條 chinese_quality 中文三檢）：" >&2
     printf '%s\n' "$CQ_OUTPUT" >&2
     echo "規則：" >&2
     echo "  simplified — 簡體字（衍生自 OpenCC STCharacters 去合併字）" >&2
@@ -119,8 +120,9 @@ fi
 # 放同層 pre-commit.local：installer 不覆蓋、不刪除它，漂移偵測也不比對它。
 # 治理三檢先跑（便宜、fail fast），專案閘門最後跑；.local 非零即擋 commit。
 # cwd 已是 repo root。有 +x 就直接執行（尊重 shebang）、沒有就交給 bash。
+# LINGLING_SKIP_LOCAL=1 一律跳過：.local 是消費端自己的工具鏈，要進 CI 寫在自己的 ci.yml（ADR-0036）。
 LOCAL_HOOK="$_HOOK_SELF_DIR/pre-commit.local"
-if [[ -f "$LOCAL_HOOK" ]]; then
+if [[ -f "$LOCAL_HOOK" && "${LINGLING_SKIP_LOCAL:-}" != 1 ]]; then
     LOCAL_RC=0
     if [[ -x "$LOCAL_HOOK" ]]; then
         "$LOCAL_HOOK" || LOCAL_RC=$?

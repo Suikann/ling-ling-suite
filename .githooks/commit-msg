@@ -3,15 +3,15 @@
 # 規範來源：lingling-claude-template docs/notes/handoff-thin-layer-design.md D 條（vendored 進消費端時、此 spec 仍在 template repo）
 # 規則：
 #   1. subject 行 `<type>：<主旨>`（全形冒號 U+FF1A）
-#   2. type 白名單：feat fix docs style refactor perf test chore revert
+#   2. type 白名單：lib/data/commit_types.txt（唯一來源；bin/lingling-merge 去合併主旨前綴也讀它）
 #   3. subject ≤ 50 字
 #   4. 含「修改檔案：」區塊
 #   5. 含「修改內容：」區塊
 #   6. fix 類型加「問題簡述：」區塊
 #   7. 禁 emoji
 #   8. 禁 Co-Authored-By
-#   9. 簡繁混用 / 冷僻編碼 / 異體字（E 條 chinese_quality 三檢）
-#   merge commit（MERGE_HEAD 存在）：跳過結構規則 1-6、只跑衛生 7-9（ADR-0008）
+#   9. 簡繁混用 / 冷僻編碼 / 異體字（E 條 chinese_quality 中文三檢）
+#   merge commit（MERGE_HEAD 存在，或 LINGLING_MERGE_COMMIT=1）：跳過結構規則 1-6、只跑衛生 7-9（ADR-0008）
 
 set -euo pipefail
 
@@ -37,7 +37,13 @@ fi
 
 # merge commit 判定（MERGE_HEAD 存在＝正在做 merge commit）：merge 訊息多為自動生成、
 # 結構不同於一般 commit，故只跑通用衛生（規則 7-9）、跳過結構規則 1-6（ADR-0008）。
-if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then IS_MERGE=yes; else IS_MERGE=no; fi
+# CI 裡沒有 MERGE_HEAD：governance 工序的 commit-msg job 對兩個父的提交設
+# LINGLING_MERGE_COMMIT=1，與 MERGE_HEAD 同效（ADR-0036）。
+if [[ "${LINGLING_MERGE_COMMIT:-}" == 1 ]] || git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+    IS_MERGE=yes
+else
+    IS_MERGE=no
+fi
 
 ERRORS=()
 TYPE=""
@@ -53,7 +59,14 @@ else
         ERRORS+=("subject 行缺全形冒號「：」分隔符（應為 <type>：<主旨>）")
     else
         TYPE=$(printf '%s' "$SUBJECT" | awk -F'：' '{print $1}' | xargs)
-        VALID_TYPES="feat fix docs style refactor perf test chore revert"
+        # 讀不到或讀出空清單就擋（fail-closed）：空白名單會把每個 type 都判成不合格，訊息卻指不出原因。
+        TYPES_FILE="$LINGLING_HOOK_LIB/data/commit_types.txt"
+        VALID_TYPES=$(grep -v -E '^[[:space:]]*(#|$)' "$TYPES_FILE" 2>/dev/null | xargs || true)
+        if [[ -z "$VALID_TYPES" ]]; then
+            echo "ERROR: commit-msg hook 讀不到 type 白名單：$TYPES_FILE" >&2
+            echo "  重跑 /lingling-claude-template:setup-lingling 同步 .githooks/lib/；請勿以 --no-verify 繞過。" >&2
+            exit 1
+        fi
         FOUND=0
         for t in $VALID_TYPES; do
             if [[ "$TYPE" == "$t" ]]; then FOUND=1; break; fi
@@ -96,7 +109,7 @@ if printf '%s\n' "$CLEAN_MSG" | grep -qi '^Co-Authored-By:'; then
     ERRORS+=("commit 訊息含 Co-Authored-By（stance 禁）")
 fi
 
-# 規則 9：chinese_quality 三檢（簡繁 / 編碼 / 異體字）
+# 規則 9：chinese_quality 中文三檢（簡繁 / 編碼 / 異體字）
 # exit 0 = 乾淨、1 = 有問題、其他 = 工具壞了（fail-closed，不再用 `|| true` 靜默吞掉）。
 CQ_RC=0
 CQ_OUTPUT=$(printf '%s' "$CLEAN_MSG" | node "$LINGLING_HOOK_LIB/chinese_quality.js" --stdin) || CQ_RC=$?
