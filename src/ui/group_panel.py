@@ -346,6 +346,12 @@ class GroupTab(QWidget):
         menu.exec(self.sender().mapToGlobal(self.sender().rect().bottomLeft()))
 
     def _do_set_score(self, index: int):
+        """使用者指定總譜，標記未存檔"""
+        self._assign_score(index)
+        self.main_window._mark_modified()
+
+    def _assign_score(self, index: int):
+        """把群組第 index 個檔案設為總譜並更新畫面；原本的總譜放回檔案清單，不標記未存檔"""
         if self._group.score_file:
             self._group.files.append(self._group.score_file)
         if 0 <= index < len(self._group.files):
@@ -353,7 +359,6 @@ class GroupTab(QWidget):
         self._update_score_display()
         self._refresh_file_list()
         self._check_mismatch()
-        self.main_window._mark_modified()
 
     def _clear_score_file(self):
         if self._group.score_file:
@@ -365,13 +370,14 @@ class GroupTab(QWidget):
             self.main_window._mark_modified()
 
     def _auto_detect_score(self):
+        """建立分頁時依檔名偵測總譜；程式自動偵測，與自動偵測曲名一樣不算使用者的修改"""
         if self._group.score_file:
             return
         for i, f in enumerate(self._group.files):
             name_lower = os.path.splitext(f.display_name)[0].lower()
             for kw in self._SCORE_KEYWORDS:
                 if kw in name_lower:
-                    self._do_set_score(i)
+                    self._assign_score(i)
                     return
 
     def _auto_detect_piece_name(self):

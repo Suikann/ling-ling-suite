@@ -295,6 +295,14 @@ class TestMainWindowMarksUserEdits(MainWindowTestCase):
         self._open_from_menu(Project())
         self.assertFalse(self.is_marked_unsaved())
 
+    def test_opening_a_project_with_an_unassigned_score_does_not_mark_unsaved(self):
+        """群組裡有像總譜的檔案但沒指定總譜（例如存檔前清掉了），開啟時程式自動偵測總譜不算修改"""
+        score = os.path.join(self.temp_dir, "Full Score.pdf")
+        with open(score, "w") as f:
+            f.write("dummy")
+        self._open_from_menu(Project(groups=[Group(name="g", files=[FileInfo(score, "Full Score.pdf")])]))
+        self.assertFalse(self.is_marked_unsaved())
+
     def test_changing_output_settings_in_preview_marks_unsaved(self):
         def toggle_subfolders(dialog):
             button_in(dialog, QCheckBox, t("panel.subfolder")).click()
