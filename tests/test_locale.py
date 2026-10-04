@@ -21,7 +21,7 @@ def _literal_keys_in_source():
     """掃描 src/ 下所有以字面值呼叫的 t("…")
 
     Returns:
-        (鍵, 「相對路徑:行號」) 的清單
+        （鍵，「相對路徑:行號」）的清單
     """
     found = []
     for root, _dirs, files in os.walk(SRC_DIR):

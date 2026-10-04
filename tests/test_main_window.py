@@ -48,7 +48,7 @@ def answering_prompts(*answers: str):
         answers: 依序要按下的按鈕文字
 
     Yields:
-        跳出過的提示框（標題, 訊息）清單
+        跳出過的提示框（標題，訊息）清單
     """
     remaining = list(answers)
     shown = []
@@ -74,7 +74,7 @@ def answering_prompts(*answers: str):
             mock.patch.object(QMessageBox, "information", fake_static):
         yield shown
     if unexpected:
-        raise AssertionError(f"提示框與預期的答案不符（訊息, 答案）：{unexpected}")
+        raise AssertionError(f"提示框與預期的答案不符（訊息，答案）：{unexpected}")
 
 
 def saving_as(path: str):
