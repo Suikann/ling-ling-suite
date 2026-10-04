@@ -26,6 +26,7 @@ from services.move_service import RenameRollbackError
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from ui.instrument_list import InstrumentListEditor
+from ui.widgets import ensure_file_exists
 
 
 class MainWindow(QMainWindow):
@@ -888,8 +889,7 @@ class MainWindow(QMainWindow):
             )
 
     def _open_recent(self, path: str):
-        if not os.path.isfile(path):
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.file_not_found", path=path))
+        if not ensure_file_exists(self, path):
             return
         if not self._confirm_unsaved():
             return
