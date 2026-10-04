@@ -221,7 +221,7 @@ class SplitPdfDialog(QDialog):
 
     def _load_pdf(self, path):
         if not os.path.isfile(path):
-            QMessageBox.critical(self, t("dialog.error"), f"File not found:\n{path}")
+            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.file_not_found", path=path))
             return
         try:
             self._pdf_path = path

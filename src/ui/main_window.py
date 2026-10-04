@@ -852,7 +852,7 @@ class MainWindow(QMainWindow):
 
     def _open_recent(self, path: str):
         if not os.path.isfile(path):
-            QMessageBox.critical(self, t("dialog.error"), f"File not found:\n{path}")
+            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.file_not_found", path=path))
             return
         if self._modified and not self._confirm_discard():
             return
