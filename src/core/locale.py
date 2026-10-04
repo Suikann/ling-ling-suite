@@ -10,7 +10,7 @@
     label_text = t("menu.file")
     status = t("status.imported_files", count=5)
 """
-from typing import Dict, Optional
+from typing import Dict, FrozenSet, Optional
 
 _current_locale = "zh_TW"
 
@@ -78,6 +78,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "dialog.error.open_failed": "無法開啟專案：\n{error}",
         "dialog.error.save_failed": "儲存失敗：\n{error}",
         "dialog.error.undo_failed": "復原失敗：\n{error}",
+        "dialog.error.file_not_found": "找不到檔案：\n{path}",
         "dialog.pending_move.title": "上次重新命名未完成",
         "dialog.pending_move.message": "上次重新命名未完成（已搬移 {count} 個檔案）。\n要把這些檔案還原到原位嗎？",
         "dialog.pending_move.finished_message": "上次重新命名已完成（{count} 個檔案），但程式在寫入復原紀錄前被關掉，之後將無法復原這次操作。\n要保留結果，還是把這些檔案還原到原位？",
@@ -274,6 +275,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "rotate.cancel": "取消",
         "rotate.execute": "執行旋轉",
         "rotate.save_as": "另存新檔",
+        "rotate.same_as_source": "（與來源檔案相同）",
         "rotate.done": "PDF 旋轉完成。",
         "rotate.invalid_pages": "頁面範圍格式不正確。",
         "rotate.assignments": "旋轉指派",
@@ -506,7 +508,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "dialog.close": "Close",
         "dialog.close.message": "Save current project before closing?",
         "dialog.unsaved": "Unsaved Changes",
-        "dialog.unsaved.message": "Save current project before closing?",
+        "dialog.unsaved.message": "Save changes to the current project?",
         "dialog.save_btn": "Save",
         "dialog.discard_btn": "Don't Save",
         "dialog.cancel_btn": "Cancel",
@@ -536,6 +538,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "dialog.error.open_failed": "Cannot open project:\n{error}",
         "dialog.error.save_failed": "Save failed:\n{error}",
         "dialog.error.undo_failed": "Undo failed:\n{error}",
+        "dialog.error.file_not_found": "File not found:\n{path}",
         "dialog.pending_move.title": "Last Rename Incomplete",
         "dialog.pending_move.message": "The last rename did not finish ({count} file(s) had been moved).\nMove these files back to where they were?",
         "dialog.pending_move.finished_message": "The last rename finished ({count} file(s)), but the application was closed before the undo record was written, so it cannot be undone later.\nKeep the result, or move these files back to where they were?",
@@ -732,6 +735,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "rotate.cancel": "Cancel",
         "rotate.execute": "Rotate",
         "rotate.save_as": "Save As",
+        "rotate.same_as_source": "(same as source file)",
         "rotate.done": "PDF rotation complete.",
         "rotate.invalid_pages": "Invalid page range format.",
         "rotate.assignments": "Rotation Assignment",
@@ -953,6 +957,18 @@ def set_locale(locale_code: str):
 def get_available_locales():
     """取得所有可用語言代碼"""
     return list(_STRINGS.keys())
+
+
+def get_keys(locale_code: str) -> FrozenSet[str]:
+    """取得某語言字典的所有字串鍵
+
+    Args:
+        locale_code: 語言代碼，"zh_TW" 或 "en"
+
+    Returns:
+        該語言的字串鍵集合
+    """
+    return frozenset(_STRINGS[locale_code])
 
 
 def t(key: str, **kwargs) -> str:

@@ -1,10 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-共用增強元件
+共用增強元件與 UI 輔助函式
 """
-from PySide6.QtWidgets import QListWidget, QAbstractItemView
+import os
+from PySide6.QtWidgets import QListWidget, QAbstractItemView, QMessageBox, QWidget
 from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QRect
+from core.locale import t
+
+
+def ensure_file_exists(parent: QWidget, path: str) -> bool:
+    """確認檔案存在；不存在時顯示「找不到檔案」錯誤訊息
+
+    Args:
+        parent: 錯誤訊息框的父元件
+        path: 要確認的檔案路徑
+
+    Returns:
+        檔案存在時為 True
+    """
+    if os.path.isfile(path):
+        return True
+    QMessageBox.critical(parent, t("dialog.error"), t("dialog.error.file_not_found", path=path))
+    return False
 
 
 class DragListWidget(QListWidget):

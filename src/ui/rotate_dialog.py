@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt, Signal, QObject
 from core.locale import t
+from ui.widgets import ensure_file_exists
 
 SECTION_COLORS = [
     "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
@@ -115,7 +116,7 @@ class RotatePdfDialog(QDialog):
         outdir_row = QHBoxLayout(outdir_widget)
         outdir_row.setContentsMargins(0, 2, 0, 2)
         outdir_row.addWidget(QLabel(t("rotate.save_as") + ":"))
-        self._dir_label = QLabel(t("split.same_as_source"))
+        self._dir_label = QLabel(t("rotate.same_as_source"))
         self._dir_label.setStyleSheet("color: gray; font-size: 11px;")
         outdir_row.addWidget(self._dir_label, stretch=1)
         dir_btn = QPushButton("...")
@@ -210,8 +211,7 @@ class RotatePdfDialog(QDialog):
     # --- PDF 載入 ---
 
     def _load_pdf(self, path):
-        if not os.path.isfile(path):
-            QMessageBox.critical(self, t("dialog.error"), f"File not found:\n{path}")
+        if not ensure_file_exists(self, path):
             return
         try:
             from services.pdf_service import get_page_count

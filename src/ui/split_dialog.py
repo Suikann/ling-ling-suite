@@ -20,6 +20,7 @@ from services.pdf_service import (
     build_split_plan, extract_pages, get_page_count, render_page_thumbnails,
 )
 from services.workspace_service import WorkspaceService
+from ui.widgets import ensure_file_exists
 
 SECTION_COLORS = [
     "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
@@ -220,8 +221,7 @@ class SplitPdfDialog(QDialog):
     # --- PDF loading ---
 
     def _load_pdf(self, path):
-        if not os.path.isfile(path):
-            QMessageBox.critical(self, t("dialog.error"), f"File not found:\n{path}")
+        if not ensure_file_exists(self, path):
             return
         try:
             self._pdf_path = path

@@ -232,15 +232,15 @@ src/
     catalog_settings_dialog.py   - 譜庫設定對話框
     drive_rename_dialog.py       - Drive 重新命名對話框
     workspace_dialog.py          - 工作區清理對話框
-    widgets.py                   - 共用增強元件
+    widgets.py                   - 共用增強元件與 UI 輔助函式（如找不到檔案的提示）
   core/                          - 模板引擎、資料模型、常數定義
     constants.py                 - 模板變數定義、預設值、應用程式路徑等常數
     filename.py                  - 檔名清理（非法字元換底線、空名回退），重新命名與分割共用
     catalog_constants.py         - 譜庫相關常數
-    template_engine.py           - 模板解析與變數替換邏輯
+    template_engine.py           - 模板解析與變數替換邏輯、模板變數雙語轉換
     models.py                    - 資料模型（Project、Group、Template、FileInfo）
     catalog_models.py            - 譜庫資料模型
-    locale.py                    - 國際化系統（zh_TW／en，模板變數雙語轉換）
+    locale.py                    - 國際化系統（zh_TW／en 介面字串）
   services/                      - 檔案操作、PDF 處理、雲端整合
     file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾、JSON 原子寫入）
     import_service.py            - 檔案/資料夾匯入與自動分組
@@ -256,7 +256,7 @@ src/
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、undo、workspace、pdf_service；main_window、split_dialog 以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄
+tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、undo、workspace、pdf_service、locale；main_window、split_dialog 以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄
 GLOSSARY.md                      - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
