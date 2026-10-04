@@ -27,6 +27,7 @@ class InstrumentListEditor(QWidget):
     """樂器表編輯面板"""
 
     instruments_changed = Signal(list)
+    ensemble_settings_changed = Signal()
 
     def __init__(self, project: Optional["Project"] = None, parent=None):
         super().__init__(parent)
@@ -179,7 +180,7 @@ class InstrumentListEditor(QWidget):
             self.set_instruments(unique)
 
     def _edit_headcount(self):
-        """開啟建議人數編輯對話框"""
+        """開啟編制設定（人數、聲部）對話框；按下儲存後寫回專案並發出 ensemble_settings_changed"""
         instruments = self.get_instruments()
         if not instruments:
             return
@@ -235,6 +236,7 @@ class InstrumentListEditor(QWidget):
             for row, inst in enumerate(instruments):
                 self._project.instrument_headcounts[inst] = spinboxes[row].value()
                 self._project.instrument_sections[inst] = section_items[row].text().strip()
+            self.ensemble_settings_changed.emit()
 
     def _export_instruments(self):
         """匯出編制表為文字檔"""

@@ -105,6 +105,7 @@ class MainWindow(QMainWindow):
         self._instrument_editor = InstrumentListEditor(project=self.project)
         self._instrument_editor.setFixedWidth(260)
         self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
+        self._instrument_editor.ensemble_settings_changed.connect(self._mark_modified)
         splitter.addWidget(self._instrument_editor)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
@@ -136,6 +137,7 @@ class MainWindow(QMainWindow):
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel(t("panel.master_template")))
         self._master_template_entry = QLineEdit(self.project.master_template)
+        self._master_template_entry.textEdited.connect(self._mark_modified)
         template_row.addWidget(self._master_template_entry, stretch=1)
         vars_btn = QPushButton(t("panel.insert_variable"))
         vars_btn.clicked.connect(self._show_variable_menu)
@@ -203,9 +205,13 @@ class MainWindow(QMainWindow):
     def _sync_instrument_editor_to_group(self, group):
         if group:
             self._instrument_editor._group = group
-            self._instrument_editor.instruments_changed.disconnect(self._on_instruments_changed)
-            self._instrument_editor.set_instruments(group.instruments)
-            self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
+            self._fill_instrument_editor(group.instruments)
+
+    def _fill_instrument_editor(self, instruments):
+        """由程式填入樂器表；不經過樂器表變更的回呼，所以不算使用者的修改"""
+        self._instrument_editor.instruments_changed.disconnect(self._on_instruments_changed)
+        self._instrument_editor.set_instruments(instruments)
+        self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
 
     # --- 樂器表回呼 ---
 
@@ -357,7 +363,7 @@ class MainWindow(QMainWindow):
         if self.project.groups:
             self._tab_widget.setCurrentIndex(1)
         else:
-            self._instrument_editor.set_instruments([])
+            self._fill_instrument_editor([])
         self._update_title()
 
     def _sync_project_from_ui(self):
@@ -389,6 +395,7 @@ class MainWindow(QMainWindow):
             self.project, self._rename_service,
             self._execute_rename, selected_ids, self,
         )
+        dialog.settings_changed.connect(self._mark_modified)
         dialog.exec()
 
     def _execute_rename(self, plan):

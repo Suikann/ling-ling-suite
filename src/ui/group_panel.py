@@ -218,9 +218,20 @@ class GroupTab(QWidget):
         self._small_template_cb.toggled.connect(self._small_template_entry.setEnabled)
         bottom_row.addWidget(self._small_template_entry, stretch=1)
         layout.addLayout(bottom_row)
+        self._mark_modified_on_user_edit()
         self._refresh_file_list()
         self._update_score_display()
         self._check_mismatch()
+
+    def _mark_modified_on_user_edit(self):
+        """使用者編輯欄位或切換小模板時標記未存檔；只接使用者操作的訊號，程式填值不算修改"""
+        for entry in (
+            self._name_entry, self._piece_name_entry, self._movement_num_entry,
+            self._movement_name_entry, self._composer_entry, self._genre_entry,
+            self._score_label_entry, self._small_template_entry,
+        ):
+            entry.textEdited.connect(self.main_window._mark_modified)
+        self._small_template_cb.clicked.connect(self.main_window._mark_modified)
 
     def _check_mismatch(self):
         n_inst = len(self._group.instruments)

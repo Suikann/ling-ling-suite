@@ -3,7 +3,7 @@
 主視窗測試（offscreen）
 
 只測主視窗與服務層的接線，不測畫面；以 QT_QPA_PLATFORM=offscreen 執行，不需要顯示器。
-提示框與檔案對話框以替換的方式模擬使用者的選擇，不會跳出真的對話框。
+提示框、檔案對話框與預覽對話框以替換的方式模擬使用者的操作，不會跳出真的對話框；文字欄位以 QTest 模擬鍵入。
 """
 import os
 import shutil
@@ -11,13 +11,19 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
+from typing import Callable
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import (
+    QApplication, QCheckBox, QDialog, QFileDialog, QLineEdit, QMessageBox, QPushButton, QRadioButton,
+    QWidget,
+)
 
 from core.constants import WORKSPACE_META_FILE
 from core.locale import t
@@ -26,6 +32,7 @@ from services.preferences_service import PreferencesService
 from services.project_service import ProjectService
 from services.workspace_service import WorkspaceService
 from ui.main_window import MainWindow
+from ui.preview_dialog import PreviewDialog
 
 
 @contextmanager
@@ -74,6 +81,51 @@ def saving_as(path: str):
     return mock.patch.object(QFileDialog, "getSaveFileName", return_value=(path, ""))
 
 
+def opening(path: str):
+    """模擬開啟專案對話框選了 path"""
+    return mock.patch.object(QFileDialog, "getOpenFileName", return_value=(path, ""))
+
+
+@contextmanager
+def previewing(operate: Callable[[QDialog], None]):
+    """模擬使用者在預覽對話框操作後按取消關閉
+
+    替換 PreviewDialog.exec：對話框開啟時呼叫 operate 操作設定元件，接著以取消關閉，不執行重新命名。
+    operate 拋出的例外（在 Qt 事件裡會被吞掉）與對話框沒有開啟，都在離開區塊時判定失敗。
+
+    Args:
+        operate: 接收對話框、操作其設定元件的函式
+    """
+    opened = []
+    errors = []
+
+    def fake_exec(dialog):
+        opened.append(dialog)
+        try:
+            operate(dialog)
+        except Exception as e:
+            errors.append(e)
+        dialog.reject()
+        return dialog.result()
+
+    with mock.patch.object(PreviewDialog, "exec", fake_exec):
+        yield
+    if errors:
+        raise errors[0]
+    if not opened:
+        raise AssertionError("預覽對話框沒有開啟")
+
+
+def button_in(parent: QWidget, button_type, text: str):
+    """parent 中文字相符的按鈕（勾選框、選項按鈕等）"""
+    return next(b for b in parent.findChildren(button_type) if b.text() == text)
+
+
+def field_in(parent: QWidget, text: str) -> QLineEdit:
+    """parent 中目前顯示指定文字的欄位"""
+    return next(e for e in parent.findChildren(QLineEdit) if e.text() == text)
+
+
 class MainWindowTestCase(unittest.TestCase):
     """主視窗測試的共用骨架；收尾時「是否儲存」一律按「不儲存」，留下未存檔標記也不會卡住測試"""
 
@@ -97,8 +149,7 @@ class MainWindowTestCase(unittest.TestCase):
 
     def click_button(self, text: str):
         """按下主視窗中文字相符的按鈕"""
-        button = next(b for b in self.window.findChildren(QPushButton) if b.text() == text)
-        button.click()
+        button_in(self.window, QPushButton, text).click()
 
     def is_marked_unsaved(self) -> bool:
         """視窗標題是否帶有未存檔標記"""
@@ -206,6 +257,60 @@ class TestMainWindowUnsavedPrompt(MainWindowTestCase):
             closed = self.window.close()
         self.assertTrue(closed)
         self.assertFalse(self.window.isVisible())
+
+
+class TestMainWindowMarksUserEdits(MainWindowTestCase):
+    """使用者對專案內容的編輯立刻標記未存檔；程式填入的值不算修改"""
+
+    def _open_from_menu(self, project: Project):
+        """把專案存成檔案後從選單開啟"""
+        path = os.path.join(self.temp_dir, "opened.llproj")
+        ProjectService().save_project(project, path)
+        with answering_prompts(), opening(path):
+            self.trigger_menu(t("menu.file.open"))
+
+    def _open_project_with_group(self) -> Group:
+        """從選單開啟一份含一個群組、大模板與預設值不同的專案，回傳存進專案檔的群組"""
+        group = Group(
+            name="第一樂章", piece_name="貝多芬第五號交響曲", movement_number="1",
+            movement_name="Allegro con brio", composer="Beethoven", genre="交響曲",
+        )
+        self._open_from_menu(Project(master_template="{序號} {樂器} - {曲名}.pdf", groups=[group]))
+        return group
+
+    def test_typing_in_master_template_marks_unsaved(self):
+        QTest.keyClicks(field_in(self.window, self.window.project.master_template), "x")
+        self.assertTrue(self.is_marked_unsaved())
+
+    def test_typing_in_group_piece_name_marks_unsaved(self):
+        group = self._open_project_with_group()
+        QTest.keyClicks(field_in(self.window, group.piece_name), "x")
+        self.assertTrue(self.is_marked_unsaved())
+
+    def test_opening_a_project_does_not_mark_unsaved(self):
+        self._open_project_with_group()
+        self.assertFalse(self.is_marked_unsaved())
+
+    def test_opening_a_project_without_groups_does_not_mark_unsaved(self):
+        self._open_from_menu(Project())
+        self.assertFalse(self.is_marked_unsaved())
+
+    def test_changing_output_settings_in_preview_marks_unsaved(self):
+        def toggle_subfolders(dialog):
+            button_in(dialog, QCheckBox, t("panel.subfolder")).click()
+
+        with previewing(toggle_subfolders):
+            self.click_button(t("panel.preview_rename"))
+        self.assertTrue(self.is_marked_unsaved())
+
+    def test_closing_preview_without_changing_settings_does_not_mark_unsaved(self):
+        def touch_without_changing(dialog):
+            button_in(dialog, QRadioButton, t("panel.parts_mode_root")).click()
+            QTest.keyClick(field_in(dialog, self.window.project.subfolder_template), Qt.Key_Return)
+
+        with previewing(touch_without_changing):
+            self.click_button(t("panel.preview_rename"))
+        self.assertFalse(self.is_marked_unsaved())
 
 
 if __name__ == '__main__':

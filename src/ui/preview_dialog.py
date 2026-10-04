@@ -6,6 +6,7 @@
 """
 import os
 from typing import Callable, Optional, Set
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QCheckBox, QLineEdit, QScrollArea, QWidget, QFileDialog,
@@ -18,6 +19,8 @@ from services.move_service import staging_path
 
 class PreviewDialog(QDialog):
     """預覽重新命名對話框"""
+
+    settings_changed = Signal()
 
     def __init__(
         self, project: Project, rename_service,
@@ -38,6 +41,7 @@ class PreviewDialog(QDialog):
         self._staging_taken_sources = []
         self._empty_names = []
         self._missing = []
+        self._last_settings = self._output_settings()
         self._build_ui()
         self._refresh_plan()
 
@@ -131,13 +135,13 @@ class PreviewDialog(QDialog):
             self._project.output_directory = folder
             self._output_label.setText(folder)
             self._output_label.setStyleSheet("")
-            self._refresh_plan()
+            self._after_settings_written()
 
     def _clear_output(self):
         self._project.output_directory = ""
         self._output_label.setText(t("panel.output_dir_hint"))
         self._output_label.setStyleSheet("color: gray;")
-        self._refresh_plan()
+        self._after_settings_written()
 
     def _on_settings_changed(self, *_args):
         self._project.use_subfolders = self._subfolder_cb.isChecked()
@@ -153,6 +157,22 @@ class PreviewDialog(QDialog):
             self._project.parts_output_mode = "root"
             self._project.use_parts_subfolder = False
         self._project.parts_subfolder_name = self._parts_entry.text()
+        self._after_settings_written()
+
+    def _output_settings(self) -> tuple:
+        """專案中由本對話框編輯的輸出設定"""
+        p = self._project
+        return (
+            p.output_directory, p.use_subfolders, p.subfolder_template,
+            p.parts_output_mode, p.use_parts_subfolder, p.parts_subfolder_name,
+        )
+
+    def _after_settings_written(self):
+        """設定寫回專案後重新產生預覽；值實際改變時才發出 settings_changed，讓主視窗標記未存檔"""
+        settings = self._output_settings()
+        if settings != self._last_settings:
+            self._last_settings = settings
+            self.settings_changed.emit()
         self._refresh_plan()
 
     def _refresh_plan(self):
