@@ -35,7 +35,8 @@ if [[ -n "$BRANCH" && "$BRANCH" != "HEAD" ]]; then
     case "$BRANCH" in
         main|master) ;;
         *)
-            if printf '%s' "$BRANCH" | grep -q '[0-9]'; then
+            # here-string 而非 `printf | grep -q`：與 commit-msg 同一慣用法（理由見該檔檔首）
+            if grep -q '[0-9]' <<< "$BRANCH"; then
                 echo "ERROR: pre-commit hook 阻擋：" >&2
                 echo "  - branch 名 '$BRANCH' 含編號（完全無編號原則）" >&2
                 echo "" >&2

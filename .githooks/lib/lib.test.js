@@ -213,6 +213,7 @@ test('glossary: 使用者裁定的譯名確實生效', () => {
   assert.strictEqual(pick('dependency'), '相依套件');
   assert.strictEqual(pick('CI'), '自動驗收');
   assert.strictEqual(pick('hook'), '機關');
+  assert.strictEqual(pick('webhook'), '星語中繼', 'webhook 不能落到 hook 的「機關」');
   assert.strictEqual(pick('mock'), '模擬');
   assert.strictEqual(pick('daemon'), '常駐程式');
   assert.strictEqual(pick('adapter'), '通事');
