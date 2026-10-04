@@ -334,7 +334,10 @@ class MainWindow(QMainWindow):
     def _do_save(self, path: str) -> bool:
         """執行存檔流程；任一步失敗即顯示「儲存失敗」並回報沒存成
 
-        工作區 meta 的所屬專案更新不在存檔流程內，失敗只提示在狀態列，不影響是否存成。
+        工作區 meta 的所屬專案更新不在存檔流程內：只要專案檔已寫出就更新，
+        即使之後加入最近清單或寫入偏好設定失敗、整體算沒存成也一樣，
+        否則「清理工作區」會把這個專案引用的子資料夾當成未被引用。
+        這項更新失敗只提示在狀態列，不影響是否存成。
 
         Args:
             path: 專案檔路徑
@@ -342,9 +345,11 @@ class MainWindow(QMainWindow):
         Returns:
             是否存成
         """
+        written = False
         try:
             self._sync_project_from_ui()
             self._get_project_service().save_project(self.project, path)
+            written = True
             self._project_path = path
             self._modified = False
             self._update_title()
@@ -353,7 +358,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.save_failed", error=e))
             return False
-        self._sync_workspace_owner(path)
+        finally:
+            if written:
+                self._sync_workspace_owner(path)
         return True
 
     def _sync_ui_from_project(self):

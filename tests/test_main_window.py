@@ -28,7 +28,8 @@ from PySide6.QtWidgets import (
 from core.constants import WORKSPACE_META_FILE
 from core.locale import t
 from core.models import FileInfo, Group, Project
-from services.preferences_service import PreferencesService
+from services.file_service import FileService
+from services.preferences_service import PREFERENCES_FILE, PreferencesService
 from services.project_service import ProjectService
 from services.workspace_service import WorkspaceService
 from ui.main_window import MainWindow
@@ -156,8 +157,8 @@ class MainWindowTestCase(unittest.TestCase):
         return self.window.windowTitle().endswith(" *")
 
 
-class TestMainWindowOpenProject(MainWindowTestCase):
-    """開啟專案後工作區 meta 的所屬專案要跟著更新"""
+class TestMainWindowWorkspaceOwner(MainWindowTestCase):
+    """開啟專案或寫出專案檔後，工作區 meta 的所屬專案要跟著更新"""
 
     def setUp(self):
         super().setUp()
@@ -204,6 +205,27 @@ class TestMainWindowOpenProject(MainWindowTestCase):
         self.assertEqual(self.window._project_path, new_path)
         self.assertEqual(self.workspace.read_meta(folder)["project_path"], old_path)
         self.assertEqual(self.window._status_label.text(), t("status.workspace_owner_failed", count=1))
+
+    def test_save_records_its_location_in_workspace_meta_when_recent_list_cannot_be_written(self):
+        """專案檔已寫好、只有最近清單寫不進去時，存檔仍算沒存成，但 meta 要記到專案檔的位置"""
+        folder = self.workspace.prepare_folder(self._create("合併譜.pdf"))
+        part = self._create("高笙.pdf", folder)
+        with mock.patch.object(QFileDialog, "getOpenFileNames", return_value=([part], "")):
+            self.trigger_menu(t("menu.import.files"))
+        path = os.path.join(self.temp_dir, "saved.llproj")
+        real_write = FileService.write_json_atomic
+
+        def failing_write(file_service, target, data):
+            if target == PREFERENCES_FILE:
+                raise OSError("read-only")
+            real_write(file_service, target, data)
+
+        with mock.patch.object(FileService, "write_json_atomic", failing_write), \
+                answering_prompts(t("dialog.save_btn")) as shown, saving_as(path):
+            closed = self.window.close()
+        self.assertFalse(closed)
+        self.assertIn((t("dialog.error"), t("dialog.error.save_failed", error="read-only")), shown)
+        self.assertEqual(self.workspace.read_meta(folder)["project_path"], path)
 
 
 class TestMainWindowUnsavedPrompt(MainWindowTestCase):
