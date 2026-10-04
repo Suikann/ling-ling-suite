@@ -253,7 +253,7 @@ class MainWindow(QMainWindow):
     # --- 專案管理 ---
 
     def _new_project(self):
-        if self._modified and not self._confirm_discard():
+        if not self._confirm_unsaved():
             return
         locale = get_locale()
         self.project = Project()
@@ -269,7 +269,7 @@ class MainWindow(QMainWindow):
         self._sync_ui_from_project()
 
     def _open_project(self):
-        if self._modified and not self._confirm_discard():
+        if not self._confirm_unsaved():
             return
         path, _ = QFileDialog.getOpenFileName(
             self, t("filedialog.open_project"), "",
@@ -309,21 +309,33 @@ class MainWindow(QMainWindow):
                 t("missing.on_load", count=len(missing), files="\n".join(missing)),
             )
 
-    def _save_project(self):
+    def _save_project(self) -> bool:
+        """存到目前的專案檔，尚未存過時改走另存新檔；回傳是否存成"""
         if not self._project_path:
-            self._save_project_as()
-            return
-        self._do_save(self._project_path)
+            return self._save_project_as()
+        return self._do_save(self._project_path)
 
-    def _save_project_as(self):
+    def _save_project_as(self) -> bool:
+        """詢問位置後存檔；在對話框按取消也算沒存成，回傳是否存成"""
         path, _ = QFileDialog.getSaveFileName(
             self, t("filedialog.save_project"), "",
             f"{t('filedialog.project_files')} (*.llproj)",
         )
-        if path:
-            self._do_save(path)
+        if not path:
+            return False
+        return self._do_save(path)
 
-    def _do_save(self, path: str):
+    def _do_save(self, path: str) -> bool:
+        """執行存檔流程；任一步失敗即顯示「儲存失敗」並回報沒存成
+
+        工作區 meta 的所屬專案更新不在存檔流程內，失敗只提示在狀態列，不影響是否存成。
+
+        Args:
+            path: 專案檔路徑
+
+        Returns:
+            是否存成
+        """
         try:
             self._sync_project_from_ui()
             self._get_project_service().save_project(self.project, path)
@@ -334,8 +346,9 @@ class MainWindow(QMainWindow):
             self._add_recent_project(path)
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.save_failed", error=e))
-            return
+            return False
         self._sync_workspace_owner(path)
+        return True
 
     def _sync_ui_from_project(self):
         self._instrument_editor._project = self.project
@@ -820,21 +833,31 @@ class MainWindow(QMainWindow):
     def _set_status(self, text: str):
         self._status_label.setText(text)
 
-    def _confirm_discard(self) -> bool:
+    def _confirm_unsaved(self, title: Optional[str] = None, message: Optional[str] = None) -> bool:
+        """有未存檔的修改時詢問是否儲存，開新專案、開啟專案、開啟最近專案、關閉程式共用
+
+        Args:
+            title: 提示框標題，省略時用「未儲存的變更」
+            message: 提示框訊息，省略時用「是否儲存目前的專案？」
+
+        Returns:
+            可以繼續原本的操作時為 True（沒有未存檔的修改、選「不儲存」、或選「儲存」且存成）；
+            選「取消」或選「儲存」但沒存成時為 False
+        """
+        if not self._modified:
+            return True
         msg = QMessageBox(self)
-        msg.setWindowTitle(t("dialog.unsaved"))
-        msg.setText(t("dialog.unsaved.message"))
+        msg.setWindowTitle(title or t("dialog.unsaved"))
+        msg.setText(message or t("dialog.unsaved.message"))
         msg.setIcon(QMessageBox.Question)
         save_btn = msg.addButton(t("dialog.save_btn"), QMessageBox.AcceptRole)
-        msg.addButton(t("dialog.discard_btn"), QMessageBox.DestructiveRole)
-        cancel_btn = msg.addButton(t("dialog.cancel_btn"), QMessageBox.RejectRole)
+        discard_btn = msg.addButton(t("dialog.discard_btn"), QMessageBox.DestructiveRole)
+        msg.addButton(t("dialog.cancel_btn"), QMessageBox.RejectRole)
         msg.setDefaultButton(save_btn)
         msg.exec()
-        if msg.clickedButton() == cancel_btn:
-            return False
         if msg.clickedButton() == save_btn:
-            self._save_project()
-        return True
+            return self._save_project()
+        return msg.clickedButton() == discard_btn
 
     def _refresh_recent_menu(self):
         self._recent_menu.clear()
@@ -854,7 +877,7 @@ class MainWindow(QMainWindow):
         if not os.path.isfile(path):
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.file_not_found", path=path))
             return
-        if self._modified and not self._confirm_discard():
+        if not self._confirm_unsaved():
             return
         self._do_open_project(path)
 
@@ -864,19 +887,7 @@ class MainWindow(QMainWindow):
         self._refresh_recent_menu()
 
     def closeEvent(self, event):
-        if self._modified:
-            msg = QMessageBox(self)
-            msg.setWindowTitle(t("dialog.close"))
-            msg.setText(t("dialog.close.message"))
-            msg.setIcon(QMessageBox.Question)
-            save_btn = msg.addButton(t("dialog.save_btn"), QMessageBox.AcceptRole)
-            msg.addButton(t("dialog.discard_btn"), QMessageBox.DestructiveRole)
-            cancel_btn = msg.addButton(t("dialog.cancel_btn"), QMessageBox.RejectRole)
-            msg.setDefaultButton(save_btn)
-            msg.exec()
-            if msg.clickedButton() == cancel_btn:
-                event.ignore()
-                return
-            if msg.clickedButton() == save_btn:
-                self._save_project()
+        if not self._confirm_unsaved(t("dialog.close"), t("dialog.close.message")):
+            event.ignore()
+            return
         event.accept()

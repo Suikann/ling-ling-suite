@@ -3,17 +3,21 @@
 主視窗測試（offscreen）
 
 只測主視窗與服務層的接線，不測畫面；以 QT_QPA_PLATFORM=offscreen 執行，不需要顯示器。
+提示框與檔案對話框以替換的方式模擬使用者的選擇，不會跳出真的對話框。
 """
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
 
 from core.constants import WORKSPACE_META_FILE
 from core.locale import t
@@ -24,8 +28,54 @@ from services.workspace_service import WorkspaceService
 from ui.main_window import MainWindow
 
 
-class TestMainWindowOpenProject(unittest.TestCase):
-    """開啟專案後工作區 meta 的所屬專案要跟著更新"""
+@contextmanager
+def answering_prompts(*answers: str):
+    """模擬使用者在提示框的選擇
+
+    替換 QMessageBox.exec：每跳出一個提示框，依序按下文字等於下一個答案的按鈕。
+    提示框比答案多、或找不到該按鈕時不按任何按鈕，離開區塊時才判定失敗（Qt 事件裡拋出的例外會被吞掉）。
+    QMessageBox.critical、warning、information 也一併替換，只記錄標題與訊息，不會卡住測試。
+
+    Args:
+        answers: 依序要按下的按鈕文字
+
+    Yields:
+        跳出過的提示框（標題, 訊息）清單
+    """
+    remaining = list(answers)
+    shown = []
+    unexpected = []
+
+    def fake_exec(box):
+        shown.append((box.windowTitle(), box.text()))
+        answer = remaining.pop(0) if remaining else None
+        button = next((b for b in box.buttons() if b.text() == answer), None)
+        if button is None:
+            unexpected.append((box.text(), answer))
+            return QMessageBox.Cancel
+        button.click()
+        return box.result()
+
+    def fake_static(parent, title, text, *args, **kwargs):
+        shown.append((title, text))
+        return QMessageBox.Ok
+
+    with mock.patch.object(QMessageBox, "exec", fake_exec), \
+            mock.patch.object(QMessageBox, "critical", fake_static), \
+            mock.patch.object(QMessageBox, "warning", fake_static), \
+            mock.patch.object(QMessageBox, "information", fake_static):
+        yield shown
+    if unexpected:
+        raise AssertionError(f"提示框與預期的答案不符（訊息, 答案）：{unexpected}")
+
+
+def saving_as(path: str):
+    """模擬另存對話框的選擇；path 為空字串表示按了取消"""
+    return mock.patch.object(QFileDialog, "getSaveFileName", return_value=(path, ""))
+
+
+class MainWindowTestCase(unittest.TestCase):
+    """主視窗測試的共用骨架；收尾時「是否儲存」一律按「不儲存」，留下未存檔標記也不會卡住測試"""
 
     @classmethod
     def setUpClass(cls):
@@ -33,13 +83,35 @@ class TestMainWindowOpenProject(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, True)
         self.window = MainWindow(PreferencesService())
-        self.workspace = WorkspaceService(self.window.file_service, os.path.join(self.temp_dir, "workspace"))
-        self.window.workspace_service = self.workspace
 
     def tearDown(self):
-        self.window.close()
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        with answering_prompts(t("dialog.discard_btn")):
+            self.window.close()
+
+    def trigger_menu(self, text: str):
+        """觸發主視窗選單中文字相符的動作"""
+        action = next(a for a in self.window.findChildren(QAction) if a.text() == text)
+        action.trigger()
+
+    def click_button(self, text: str):
+        """按下主視窗中文字相符的按鈕"""
+        button = next(b for b in self.window.findChildren(QPushButton) if b.text() == text)
+        button.click()
+
+    def is_marked_unsaved(self) -> bool:
+        """視窗標題是否帶有未存檔標記"""
+        return self.window.windowTitle().endswith(" *")
+
+
+class TestMainWindowOpenProject(MainWindowTestCase):
+    """開啟專案後工作區 meta 的所屬專案要跟著更新"""
+
+    def setUp(self):
+        super().setUp()
+        self.workspace = WorkspaceService(self.window.file_service, os.path.join(self.temp_dir, "workspace"))
+        self.window.workspace_service = self.workspace
 
     def _create(self, name, directory=None):
         path = os.path.join(directory or self.temp_dir, name)
@@ -81,6 +153,59 @@ class TestMainWindowOpenProject(unittest.TestCase):
         self.assertEqual(self.window._project_path, new_path)
         self.assertEqual(self.workspace.read_meta(folder)["project_path"], old_path)
         self.assertEqual(self.window._status_label.text(), t("status.workspace_owner_failed", count=1))
+
+
+class TestMainWindowUnsavedPrompt(MainWindowTestCase):
+    """有未存檔的修改時，「是否儲存」選了儲存卻沒存成，就中止原本的操作"""
+
+    def setUp(self):
+        super().setUp()
+        self.window.show()
+        self.click_button(t("group.add"))
+
+    def test_close_is_blocked_when_save_as_is_cancelled(self):
+        with answering_prompts(t("dialog.save_btn")), saving_as(""):
+            closed = self.window.close()
+        self.assertFalse(closed)
+        self.assertTrue(self.window.isVisible())
+        self.assertTrue(self.is_marked_unsaved())
+
+    def test_new_project_is_blocked_when_save_as_is_cancelled(self):
+        with answering_prompts(t("dialog.save_btn")), saving_as(""):
+            self.trigger_menu(t("menu.file.new"))
+        self.assertEqual(len(self.window.project.groups), 1)
+        self.assertTrue(self.is_marked_unsaved())
+
+    def test_close_is_blocked_when_project_file_cannot_be_written(self):
+        path = os.path.join(self.temp_dir, "saved.llproj")
+        real_write = self.window.file_service.write_json_atomic
+
+        def failing_write(target, data):
+            if target == path:
+                raise OSError("disk full")
+            real_write(target, data)
+
+        self.window.file_service.write_json_atomic = failing_write
+        with answering_prompts(t("dialog.save_btn")) as shown, saving_as(path):
+            closed = self.window.close()
+        self.assertFalse(closed)
+        self.assertTrue(self.window.isVisible())
+        self.assertTrue(self.is_marked_unsaved())
+        self.assertIn((t("dialog.error"), t("dialog.error.save_failed", error="disk full")), shown)
+
+    def test_close_proceeds_after_saving(self):
+        path = os.path.join(self.temp_dir, "saved.llproj")
+        with answering_prompts(t("dialog.save_btn")), saving_as(path):
+            closed = self.window.close()
+        self.assertTrue(closed)
+        self.assertFalse(self.window.isVisible())
+        self.assertEqual(len(ProjectService().load_project(path).groups), 1)
+
+    def test_close_proceeds_without_saving_when_discarding(self):
+        with answering_prompts(t("dialog.discard_btn")), saving_as(""):
+            closed = self.window.close()
+        self.assertTrue(closed)
+        self.assertFalse(self.window.isVisible())
 
 
 if __name__ == '__main__':

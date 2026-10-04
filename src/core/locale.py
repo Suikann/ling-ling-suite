@@ -508,7 +508,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "dialog.close": "Close",
         "dialog.close.message": "Save current project before closing?",
         "dialog.unsaved": "Unsaved Changes",
-        "dialog.unsaved.message": "Save current project before closing?",
+        "dialog.unsaved.message": "Save changes to the current project?",
         "dialog.save_btn": "Save",
         "dialog.discard_btn": "Don't Save",
         "dialog.cancel_btn": "Cancel",
