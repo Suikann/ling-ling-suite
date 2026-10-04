@@ -115,7 +115,7 @@ class RotatePdfDialog(QDialog):
         outdir_row = QHBoxLayout(outdir_widget)
         outdir_row.setContentsMargins(0, 2, 0, 2)
         outdir_row.addWidget(QLabel(t("rotate.save_as") + ":"))
-        self._dir_label = QLabel(t("split.same_as_source"))
+        self._dir_label = QLabel(t("rotate.same_as_source"))
         self._dir_label.setStyleSheet("color: gray; font-size: 11px;")
         outdir_row.addWidget(self._dir_label, stretch=1)
         dir_btn = QPushButton("...")

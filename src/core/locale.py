@@ -10,7 +10,7 @@
     label_text = t("menu.file")
     status = t("status.imported_files", count=5)
 """
-from typing import Dict, Optional
+from typing import Dict, FrozenSet, Optional
 
 _current_locale = "zh_TW"
 
@@ -274,6 +274,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "rotate.cancel": "取消",
         "rotate.execute": "執行旋轉",
         "rotate.save_as": "另存新檔",
+        "rotate.same_as_source": "（與來源檔案相同）",
         "rotate.done": "PDF 旋轉完成。",
         "rotate.invalid_pages": "頁面範圍格式不正確。",
         "rotate.assignments": "旋轉指派",
@@ -732,6 +733,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "rotate.cancel": "Cancel",
         "rotate.execute": "Rotate",
         "rotate.save_as": "Save As",
+        "rotate.same_as_source": "(same as source file)",
         "rotate.done": "PDF rotation complete.",
         "rotate.invalid_pages": "Invalid page range format.",
         "rotate.assignments": "Rotation Assignment",
@@ -953,6 +955,18 @@ def set_locale(locale_code: str):
 def get_available_locales():
     """取得所有可用語言代碼"""
     return list(_STRINGS.keys())
+
+
+def get_keys(locale_code: str) -> FrozenSet[str]:
+    """取得某語言字典的所有字串鍵
+
+    Args:
+        locale_code: 語言代碼，"zh_TW" 或 "en"
+
+    Returns:
+        該語言的字串鍵集合
+    """
+    return frozenset(_STRINGS[locale_code])
 
 
 def t(key: str, **kwargs) -> str:
