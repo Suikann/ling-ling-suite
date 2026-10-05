@@ -218,20 +218,41 @@ class GroupTab(QWidget):
         self._small_template_cb.toggled.connect(self._small_template_entry.setEnabled)
         bottom_row.addWidget(self._small_template_entry, stretch=1)
         layout.addLayout(bottom_row)
-        self._mark_modified_on_user_edit()
+        self._write_back_user_edits()
         self._refresh_file_list()
         self._update_score_display()
         self._check_mismatch()
 
-    def _mark_modified_on_user_edit(self):
-        """使用者編輯欄位或切換小模板時標記未存檔；只接使用者操作的訊號，程式填值不算修改"""
-        for entry in (
-            self._name_entry, self._piece_name_entry, self._movement_num_entry,
-            self._movement_name_entry, self._composer_entry, self._genre_entry,
-            self._score_label_entry, self._small_template_entry,
-        ):
-            entry.textEdited.connect(self.main_window._mark_modified)
-        self._small_template_cb.clicked.connect(self.main_window._mark_modified)
+    def _text_fields(self):
+        """文字欄位與它對應的群組屬性"""
+        return (
+            (self._name_entry, "name"),
+            (self._piece_name_entry, "piece_name"),
+            (self._movement_num_entry, "movement_number"),
+            (self._movement_name_entry, "movement_name"),
+            (self._composer_entry, "composer"),
+            (self._genre_entry, "genre"),
+            (self._score_label_entry, "score_label"),
+        )
+
+    def _write_back_user_edits(self):
+        """使用者編輯欄位或切換小模板時立即寫回群組並標記未存檔
+
+        重建分頁會丟掉元件，元件上的值不能等存檔時才收回模型；只接使用者操作的訊號，程式填值不算修改。
+        """
+        for entry, attr in self._text_fields():
+            entry.textEdited.connect(lambda text, a=attr: self._apply_user_edit(a, text.strip()))
+        self._small_template_entry.textEdited.connect(
+            lambda text: self._apply_user_edit("small_template", text),
+        )
+        self._small_template_cb.clicked.connect(
+            lambda checked: self._apply_user_edit("use_small_template", checked),
+        )
+
+    def _apply_user_edit(self, attr: str, value):
+        """把使用者的編輯寫進群組並標記未存檔"""
+        setattr(self._group, attr, value)
+        self.main_window._mark_modified()
 
     def _check_mismatch(self):
         n_inst = len(self._group.instruments)
@@ -395,7 +416,7 @@ class GroupTab(QWidget):
         detected = detect_piece_name(filenames)
         if detected:
             self._piece_name_entry.setText(detected)
-            self.main_window._mark_modified()
+            self._apply_user_edit("piece_name", detected)
         else:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.cannot_detect"))
 
@@ -421,14 +442,9 @@ class GroupTab(QWidget):
 
     def sync_to_group(self):
         """將 UI 狀態寫回群組模型"""
-        self._group.name = self._name_entry.text().strip()
-        self._group.piece_name = self._piece_name_entry.text().strip()
-        self._group.movement_number = self._movement_num_entry.text().strip()
-        self._group.movement_name = self._movement_name_entry.text().strip()
-        self._group.composer = self._composer_entry.text().strip()
-        self._group.genre = self._genre_entry.text().strip()
+        for entry, attr in self._text_fields():
+            setattr(self._group, attr, entry.text().strip())
         self._group.use_small_template = self._small_template_cb.isChecked()
         if self._group.use_small_template:
             self._group.small_template = self._small_template_entry.text()
         self._group.selected_instruments = list(range(len(self._group.instruments)))
-        self._group.score_label = self._score_label_entry.text().strip()

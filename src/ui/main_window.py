@@ -200,13 +200,13 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index: int):
         widget = self._tab_widget.widget(index)
-        if widget and hasattr(widget, '_group'):
-            self._sync_instrument_editor_to_group(widget._group)
+        self._sync_instrument_editor_to_group(getattr(widget, '_group', None))
 
     def _sync_instrument_editor_to_group(self, group):
-        if group:
-            self._instrument_editor._group = group
-            self._fill_instrument_editor(group.instruments)
+        """樂器表跟著目前分頁的群組；目前分頁不是群組時清空並停用，輸入的樂器才不會沒有地方寫入"""
+        self._instrument_editor._group = group
+        self._instrument_editor.setEnabled(group is not None)
+        self._fill_instrument_editor(group.instruments if group else [])
 
     def _fill_instrument_editor(self, instruments):
         """由程式填入樂器表；不經過樂器表變更的回呼，所以不算使用者的修改"""
@@ -370,8 +370,6 @@ class MainWindow(QMainWindow):
         self._rebuild_tabs()
         if self.project.groups:
             self._tab_widget.setCurrentIndex(1)
-        else:
-            self._fill_instrument_editor([])
         self._update_title()
 
     def _sync_project_from_ui(self):
