@@ -3,7 +3,7 @@
 主視窗測試（offscreen）
 
 只測主視窗與服務層的接線，不測畫面；以 QT_QPA_PLATFORM=offscreen 執行，不需要顯示器。
-提示框、檔案對話框與預覽對話框以替換的方式模擬使用者的操作，不會跳出真的對話框；文字欄位以 QTest 模擬鍵入。
+提示框、檔案對話框與預覽對話框以替換的方式模擬使用者的操作，不會跳出真的對話框；文字欄位以 QTest 模擬鍵入（QTest 只能輸入 ASCII 字元，中文會讓 Qt 直接中止）。
 """
 import os
 import shutil
@@ -11,7 +11,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
-from typing import Callable
+from typing import Callable, List
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -21,8 +21,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFileDialog, QLineEdit, QMessageBox, QPushButton, QRadioButton,
-    QWidget,
+    QApplication, QCheckBox, QDialog, QFileDialog, QLineEdit, QListWidget, QMessageBox, QPushButton,
+    QRadioButton, QTabWidget, QWidget,
 )
 
 from core.constants import WORKSPACE_META_FILE
@@ -156,6 +156,14 @@ class MainWindowTestCase(unittest.TestCase):
         """視窗標題是否帶有未存檔標記"""
         return self.window.windowTitle().endswith(" *")
 
+    def open_from_menu(self, project: Project) -> str:
+        """把專案存成檔案後從選單開啟，回傳專案檔路徑"""
+        path = os.path.join(self.temp_dir, "opened.llproj")
+        ProjectService().save_project(project, path)
+        with answering_prompts(), opening(path):
+            self.trigger_menu(t("menu.file.open"))
+        return path
+
 
 class TestMainWindowWorkspaceOwner(MainWindowTestCase):
     """開啟專案或寫出專案檔後，工作區 meta 的所屬專案要跟著更新"""
@@ -284,20 +292,13 @@ class TestMainWindowUnsavedPrompt(MainWindowTestCase):
 class TestMainWindowMarksUserEdits(MainWindowTestCase):
     """使用者對專案內容的編輯立刻標記未存檔；程式填入的值不算修改"""
 
-    def _open_from_menu(self, project: Project):
-        """把專案存成檔案後從選單開啟"""
-        path = os.path.join(self.temp_dir, "opened.llproj")
-        ProjectService().save_project(project, path)
-        with answering_prompts(), opening(path):
-            self.trigger_menu(t("menu.file.open"))
-
     def _open_project_with_group(self) -> Group:
         """從選單開啟一份含一個群組、大模板與預設值不同的專案，回傳存進專案檔的群組"""
         group = Group(
             name="第一樂章", piece_name="貝多芬第五號交響曲", movement_number="1",
             movement_name="Allegro con brio", composer="Beethoven", genre="交響曲",
         )
-        self._open_from_menu(Project(master_template="{序號} {樂器} - {曲名}.pdf", groups=[group]))
+        self.open_from_menu(Project(master_template="{序號} {樂器} - {曲名}.pdf", groups=[group]))
         return group
 
     def test_typing_in_master_template_marks_unsaved(self):
@@ -314,7 +315,7 @@ class TestMainWindowMarksUserEdits(MainWindowTestCase):
         self.assertFalse(self.is_marked_unsaved())
 
     def test_opening_a_project_without_groups_does_not_mark_unsaved(self):
-        self._open_from_menu(Project())
+        self.open_from_menu(Project())
         self.assertFalse(self.is_marked_unsaved())
 
     def test_opening_a_project_with_an_unassigned_score_does_not_mark_unsaved(self):
@@ -322,7 +323,7 @@ class TestMainWindowMarksUserEdits(MainWindowTestCase):
         score = os.path.join(self.temp_dir, "Full Score.pdf")
         with open(score, "w") as f:
             f.write("dummy")
-        self._open_from_menu(Project(groups=[Group(name="g", files=[FileInfo(score, "Full Score.pdf")])]))
+        self.open_from_menu(Project(groups=[Group(name="g", files=[FileInfo(score, "Full Score.pdf")])]))
         self.assertFalse(self.is_marked_unsaved())
 
     def test_changing_output_settings_in_preview_marks_unsaved(self):
@@ -341,6 +342,74 @@ class TestMainWindowMarksUserEdits(MainWindowTestCase):
         with previewing(touch_without_changing):
             self.click_button(t("panel.preview_rename"))
         self.assertFalse(self.is_marked_unsaved())
+
+
+class TestMainWindowKeepsTypedInput(MainWindowTestCase):
+    """使用者在群組分頁輸入的內容，經過重建分頁的操作後仍在，存檔也存得進去"""
+
+    def _saved_group(self, path: str) -> Group:
+        """從選單儲存後，讀回專案檔裡的第一個群組"""
+        with answering_prompts():
+            self.trigger_menu(t("menu.file.save"))
+        return ProjectService().load_project(path).groups[0]
+
+    def test_typed_piece_name_survives_adding_a_group(self):
+        path = self.open_from_menu(Project(groups=[Group(name="第一樂章", piece_name="命運")]))
+        QTest.keyClicks(field_in(self.window, "命運"), " No.5")
+        self.click_button(t("group.add"))
+        self.assertEqual(self._saved_group(path).piece_name, "命運 No.5")
+
+    def test_turning_on_small_template_survives_adding_a_group(self):
+        path = self.open_from_menu(Project(groups=[Group(name="第一樂章", small_template="{曲名}.pdf")]))
+        button_in(self.window, QCheckBox, t("group.use_small_template")).click()
+        self.click_button(t("group.add"))
+        self.assertTrue(self._saved_group(path).use_small_template)
+
+    def test_auto_detected_piece_name_survives_adding_a_group(self):
+        files = []
+        for name in ("Brahms Symphony - Flute.pdf", "Brahms Symphony - Oboe.pdf"):
+            file_path = os.path.join(self.temp_dir, name)
+            with open(file_path, "w") as f:
+                f.write("dummy")
+            files.append(FileInfo(file_path, name))
+        path = self.open_from_menu(Project(groups=[Group(name="第一樂章", piece_name="暫名", files=files)]))
+        self.click_button(t("group.auto_detect"))
+        self.click_button(t("group.add"))
+        self.assertEqual(self._saved_group(path).piece_name, "Brahms Symphony")
+
+
+class TestMainWindowInstrumentListFollowsGroup(MainWindowTestCase):
+    """樂器表跟著目前的群組分頁；目前分頁不是群組時清空並停用，輸入的樂器才不會沒有地方寫入"""
+
+    def _instrument_entry(self) -> QLineEdit:
+        """樂器表的輸入欄"""
+        return next(
+            e for e in self.window.findChildren(QLineEdit)
+            if e.placeholderText() == t("instrument.placeholder")
+        )
+
+    def _shown_instruments(self) -> List[str]:
+        """樂器表目前列出的樂器"""
+        listing = self._instrument_entry().parentWidget().findChild(QListWidget)
+        return [listing.item(i).text() for i in range(listing.count())]
+
+    def test_instrument_list_is_disabled_before_any_group_exists(self):
+        self.assertFalse(self._instrument_entry().isEnabled())
+
+    def test_instrument_list_is_cleared_and_disabled_on_ungrouped_tab(self):
+        self.open_from_menu(Project(groups=[Group(name="g", instruments=["Flute", "Oboe"])]))
+        self.window.findChild(QTabWidget).setCurrentIndex(0)
+        self.assertFalse(self._instrument_entry().isEnabled())
+        self.assertEqual(self._shown_instruments(), [])
+
+    def test_instruments_entered_after_adding_a_group_are_saved(self):
+        self.click_button(t("group.add"))
+        QTest.keyClicks(self._instrument_entry(), "Flute")
+        QTest.keyClick(self._instrument_entry(), Qt.Key_Return)
+        path = os.path.join(self.temp_dir, "saved.llproj")
+        with answering_prompts(), saving_as(path):
+            self.trigger_menu(t("menu.file.save"))
+        self.assertEqual(ProjectService().load_project(path).groups[0].instruments, ["Flute"])
 
 
 if __name__ == '__main__':
