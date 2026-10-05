@@ -7,7 +7,9 @@
 // 不呼叫 git、不解析 Guarded branch。
 //
 // 介面：
-//   evaluate(command) → null（放行）或 { rule, message }（擋下；message 給 stderr）。
+//   evaluate(command, { cwd }?) → null（放行）或 { rule, message }（擋下；message 給 stderr）。
+//     cwd 只用來找 PR／MR 內文檔的相對路徑（預設 process.cwd()）；`$VAR`／`${VAR}`／`~` 以
+//     process.env 展開。
 //   hasManagedCommand(command) → 命令位置上有沒有受管的詞（MANAGED）。
 //     判定途中丟例外時，hook 靠它決定擋（有）或放行（沒有）。
 //   MANAGED：受管的詞。
@@ -15,8 +17,12 @@
 // 只比對命令位置（shell_parse.js）。
 'use strict';
 
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { parse, simpleCommand } = require('./shell_parse.js');
 const { HARDCODED } = require('./guarded_branch.js');
+const { SIGNATURE } = require('./text_util.js');
 
 const MANAGED = Object.freeze(['git', 'gh', 'glab', 'rm', 'curl', 'wget']);
 const MANAGED_SET = new Set(MANAGED);
@@ -26,12 +32,18 @@ const ESCAPE_ROUTE = '真的要做，請使用者在提示列用 `! <指令>` �
 
 // PR/MR 發佈崗哨：git hook 看不到 GitHub/GitLab 的 PR/MR 內文（那是 API metadata、不經
 // commit-msg/pre-commit），故在此補洞——命令位置上是 gh/glab 的發佈命令時，擋整條指令裡的
-// (1) 自動簽名行、(2) 任何 emoji。限 inline --body/-m 可見；--body-file 取不到內容（已知盲點）。
+// (1) 自動簽名行（署名字樣定義在 text_util.js，與 commit-msg 共用，不分位置一律擋）、(2) 任何
+// emoji。內文檔（BODY_FILE）另外讀進來、用同一套比對，讀不到就擋（ADR-0038）。
 const PUBLISH = {
   gh: { pr: ['create', 'edit', 'comment'], issue: ['create', 'edit', 'comment'] },
   glab: { mr: ['create', 'update', 'note'], issue: ['create', 'update', 'note'] },
 };
-const SIGNATURE = /Generated with \[Claude Code\]|Co-Authored-By/i;
+// 內文檔的旗標；兩者的值是 `-` 時從 stdin 讀。不拆 `-dF file` 這類合併短旗標。
+const BODY_FILE = {
+  gh: { long: '--body-file', short: '-F' },
+  glab: { long: '--description-file', short: null },
+};
+const CD_COMMANDS = new Set(['cd', 'pushd', 'popd']);
 // emoji 範圍：主要 emoji 平面 + 雜項符號/dingbats + 技術符號 + 區域指示(旗) + 變體選擇子。
 // 刻意**不**含 U+2190–21FF 箭頭（→ ← 等技術寫作常用、非 emoji）與 CJK 標點。
 // 需 u flag：JS 無 u flag 時字元類別以 UTF-16 code unit 比對、astral 範圍會失效。
@@ -158,9 +170,80 @@ function mergeNext(target) {
   return `使用者說「合」之後，改跑 \`lingling-merge ${n}\`；它拒絕時，照它印出的下一步做。`;
 }
 
+// ── PR／MR 內文檔 ───────────────────────────────────────────────
+
+/**
+ * 發佈命令參數裡的內文檔（原樣、未展開）。`--` 之後不算旗標。旗標後面沒有值（值是被 parser
+ * 拆走的 `<(…)` 等）記成 null。
+ */
+function bodyFileArgs(tool, args) {
+  const { long, short } = BODY_FILE[tool];
+  const out = [];
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === '--') break;
+    if (a === long || a === short) {
+      out.push(k + 1 < args.length ? args[++k] : null);
+    } else if (a.startsWith(`${long}=`)) {
+      out.push(a.slice(long.length + 1));
+    } else if (short && a.startsWith(short)) {
+      out.push(a.slice(short.length).replace(/^=/, ''));
+    }
+  }
+  return out;
+}
+
+/**
+ * 內文檔的絕對路徑 { file }，或看不準的原因 { problem }。hook 讀到的必須就是 gh／glab 會送出的
+ * 那份：同一條指令裡還提到這個檔（可能在送出前才寫入）、路徑的變數在指令裡另外設定、`cd` 之後
+ * 的相對路徑，都看不準。`$VAR`、`${VAR}`、開頭的 `~` 不分引號一律以 process.env 展開。
+ */
+function locateBodyFile(spec, { cwd, command, hasCd }) {
+  if (!spec) return { problem: '旗標後面看不到檔名（例如 process substitution `<(…)`）' };
+  if (spec === '-') return { problem: 'hook 看不到 stdin 的內容' };
+  if (command.split(spec).length > 2) {
+    return { problem: '同一條指令裡還有別處提到這個檔，可能在送出前才寫入或改動；hook 讀到的是這條指令執行前的內容' };
+  }
+  let p = spec;
+  if (p === '~' || p.startsWith('~/')) p = (process.env.HOME || os.homedir()) + p.slice(1);
+  let unset = null;
+  p = p.replace(/\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g, (m, braced, bare) => {
+    const name = braced ?? bare;
+    const assigned = new RegExp(`(?:^|[^\\w$])${name}=`).test(command);
+    const v = assigned ? undefined : process.env[name];
+    if (v === undefined) unset ??= m;
+    return v ?? m;
+  });
+  if (unset !== null || /[$`]/.test(p)) {
+    return {
+      problem: `路徑裡的 \`${unset ?? spec}\` 展不開：hook 只展開自己環境裡有、這條指令也沒有另外設定的 $VAR／\${VAR}，命令替換也看不到`,
+    };
+  }
+  if (!path.isAbsolute(p)) {
+    if (hasCd) return { problem: '指令裡有 cd／pushd／popd，相對路徑看不準是哪個檔' };
+    p = path.resolve(cwd, p);
+  }
+  return { file: p };
+}
+
+/** 讀內文檔：{ text } 或讀不到的原因 { problem }。 */
+function readBodyFile(file) {
+  try {
+    if (!fs.statSync(file).isFile()) return { problem: `${file} 不是一般檔案` };
+    return { text: fs.readFileSync(file, 'utf8') };
+  } catch (err) {
+    return { problem: `${file}：${err.code || err.message}` };
+  }
+}
+
+/** 第一個符合 re 的行號（從 1 起算）；沒有回 0。 */
+function lineOf(text, re) {
+  return text.split(/\r\n|\r|\n/).findIndex((l) => re.test(l)) + 1;
+}
+
 // ── 主判定 ──────────────────────────────────────────────────────
 
-function evaluate(command) {
+function evaluate(command, { cwd = process.cwd() } = {}) {
   const parsed = parse(command);
   if (!parsed.ok) return null; // 引號不成對等語法錯誤：bash 不會執行它
 
@@ -247,7 +330,7 @@ function evaluate(command) {
         'reset-hard',
         `\`git reset --hard ${t.rev}\``,
         '`--hard` 直接丟掉未提交的改動，目前分支上沒推的提交也跟著不見，收不回來。',
-        `先留住現況：未提交的改動 \`git stash\`、本地提交 \`git branch <備份名>\`，再 \`git reset --keep ${t.rev}\`（有未提交改動會拒絕、不會吃掉）。`
+        `先留住現況：未提交的改動 \`git stash push -- <自己改的檔>\`、本地提交 \`git branch <備份名>\`，再 \`git reset --keep ${t.rev}\`（有未提交改動會拒絕、不會吃掉）。`
       );
     }
 
@@ -287,13 +370,17 @@ function evaluate(command) {
       if (SIGNATURE.test(command)) {
         return new Deny(
           'publish-signature',
-          'PR／MR 內文含自動簽名行（Generated with [Claude Code]／Co-Authored-By）',
-          'lingling 規範禁止這兩種簽名行進 PR／MR 內文。',
+          'PR／MR 內文含自動簽名行（共同作者、Generated with Claude Code、Claude-Session 或 session 連結）',
+          'lingling 規範禁止署名字樣進 PR／MR 與 issue 內文，不分位置，說明規則時也一樣。',
           '移除該行後重打。'
         );
       }
       if (EMOJI.test(command)) {
         return new Deny('publish-emoji', 'PR／MR 內文含 emoji', '全域禁 emoji。', '移除 emoji 後重打。');
+      }
+      for (const spec of bodyFileArgs(tool, args)) {
+        const d = checkBodyFile(tool, spec);
+        if (d) return d;
       }
       return null;
     }
@@ -313,6 +400,34 @@ function evaluate(command) {
         'GitLab 還沒有對應 `lingling-merge` 的合併腳本（ADR-0036 的已知空缺），沒有人驗 MR 分支跟上 target branch、pipeline 全綠。',
         '請使用者確認 MR 已跟上 target branch、pipeline 綠了之後自己合。'
       );
+    }
+    return null;
+  }
+
+  function checkBodyFile(tool, spec) {
+    const hasCd = parsed.items.some((it) => CD_COMMANDS.has(simpleCommand(it.words).name));
+    const loc = locateBodyFile(spec, { cwd, command, hasCd });
+    const body = loc.problem ? loc : readBodyFile(loc.file);
+    if (body.problem) {
+      return new Deny(
+        'publish-body-file-unreadable',
+        `讀不到 PR／MR 內文檔 \`${spec ?? ''}\``,
+        `hook 要先讀過內文才知道有沒有 emoji 或署名行，讀不到就不讓它送出（ADR-0038）：${body.problem}。`,
+        `先用 Write 把內文寫成檔，再以 \`${BODY_FILE[tool].long} <絕對路徑>\` 單獨送出（寫檔、清檔放在別次 Bash 呼叫）。`
+      );
+    }
+    const signature = lineOf(body.text, SIGNATURE);
+    if (signature) {
+      return new Deny(
+        'publish-signature',
+        `PR／MR 內文檔 \`${spec}\` 含自動簽名行（第 ${signature} 行）`,
+        'lingling 規範禁止署名字樣（共同作者、Generated with Claude Code、Claude-Session 或 session 連結）進 PR／MR 與 issue 內文，不分位置，說明規則時也一樣。',
+        '從檔裡移除該行後重打。'
+      );
+    }
+    const emoji = lineOf(body.text, EMOJI);
+    if (emoji) {
+      return new Deny('publish-emoji', `PR／MR 內文檔 \`${spec}\` 含 emoji（第 ${emoji} 行）`, '全域禁 emoji。', '從檔裡移除 emoji 後重打。');
     }
     return null;
   }

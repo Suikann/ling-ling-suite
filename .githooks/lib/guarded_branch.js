@@ -13,11 +13,14 @@
 //   3. 再沒有 → 寫死清單 main／master／develop（fallback）。
 //   標記存在但壞掉 → 寫死清單 ∪ `origin/HEAD`（broken）。
 //
+// 讀不到不等於沒有（ADR-0038）：repo 根沒有 CLAUDE.md 是「沒有標記」（列明的例外），CLAUDE.md
+// 在卻讀不到就丟例外；git 以非零退出回答是答案，git 跑不起來或逾時丟例外。例外由 git 機關擋下。
+//
 // git 一律以參數陣列呼叫、不經 shell；分支名一律字串相等比對、不拼進 regex。
 //
 // 介面：
 //   resolveGuarded(git?) → { root, guarded: Set, trunk, source }
-//     git(args) → stdout（去頭尾空白）或 null（非零退出、git 不在）；預設在 process.cwd() 跑。
+//     git(args) → stdout（去頭尾空白）或 null（git 以非零退出回答）；預設在 process.cwd() 跑。
 //     root：工作樹的根，bare repo 等拿不到時為 null（此時視同沒有 CLAUDE.md）。
 //     source：'marker' | 'origin-head' | 'fallback' | 'broken'；trunk 解析不出時為 null。
 //   readMarker(text) → { state: 'legal', trunk, guarded } | { state: 'legacy' | 'none' | 'broken' }
@@ -47,7 +50,10 @@ function readMarker(text) {
   return { state: 'broken' };
 }
 
-/** 跑一次 git；任何失敗（非零退出、git 不在、cwd 不存在）回 null。 */
+/**
+ * 跑一次 git。git 以非零退出回答（ref 不存在、origin/HEAD 未設、bare repo 沒有工作樹）回 null；
+ * 沒有退出碼的失敗（git 不在、cwd 不在、逾時）是讀不到、不是答案，丟出去。
+ */
 function runGit(args, cwd = process.cwd()) {
   try {
     return execFileSync('git', args, {
@@ -56,8 +62,9 @@ function runGit(args, cwd = process.cwd()) {
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 2000,
     }).trim();
-  } catch {
-    return null;
+  } catch (err) {
+    if (typeof err.status === 'number') return null;
+    throw err;
   }
 }
 
@@ -68,8 +75,8 @@ function resolveGuarded(git = (args) => runGit(args)) {
   if (root) {
     try {
       text = fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8');
-    } catch {
-      // 沒有 CLAUDE.md＝沒有標記
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err; // 沒有 CLAUDE.md＝沒有標記；在卻讀不到就交給機關擋
     }
   }
   const marker = readMarker(text);

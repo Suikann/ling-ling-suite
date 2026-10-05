@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# hooks/pre-commit — branch-name 規範 + E 條中文三檢 + F.2 / F.4 lint
-# 規範來源：lingling-claude-template docs/notes/handoff-thin-layer-design.md D / E / F 條（vendored 進消費端時、此 spec 仍在 template repo）
-# E 條範圍：全 repo scan、異體字硬卡 + glossary allowlist
-# F.4 billing-discipline：全文字檔（md/sh/py/json/yaml）、含 H 條訂閱邊界
-# F.2 hook-script-xref：hooks/ 內 script 引用必存在
+# hooks/pre-commit — branch-name 規範 + 治理三檢（chinese_quality、hook_script_xref、billing_discipline）
+# 規範依據：lingling 的 docs/adr/0039-governance-check-rules-and-subscription-boundary.md
+# chinese_quality：全 repo scan、異體字硬卡 + 放行名單
+# billing_discipline：所有非二進位的已追蹤檔，守訂閱邊界
+# hook_script_xref：hooks/ 內 script 引用必存在
 # 排除：archive 目錄、hook data 自身、二進位副檔名
 # 擴充點：同層 pre-commit.local（消費端專案自己的閘門）、治理三檢通過後才跑（見 ADR-0035）
 # 開關：LINGLING_SKIP_LOCAL=1 時不跑 .local（CI 的 governance job 用：它只為治理三檢負責、見 ADR-0036）
@@ -29,9 +29,16 @@ if ! command -v node >/dev/null 2>&1; then
     exit 1
 fi
 
-# === branch-name 規範（D 條）===
-BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-if [[ -n "$BRANCH" && "$BRANCH" != "HEAD" ]]; then
+# === branch-name 規範 ===
+# symbolic-ref 認得還沒有提交的分支（rev-parse --abbrev-ref 認不得，第一個提交會漏查）。
+# 退 1 是 detached HEAD（rebase 途中等），沒有分支名可查、跳過；其他退出碼是讀不到，擋（ADR-0038）。
+BRANCH_RC=0
+BRANCH=$(git symbolic-ref -q --short HEAD) || BRANCH_RC=$?
+if [[ $BRANCH_RC -gt 1 ]]; then
+    echo "ERROR: pre-commit hook 讀不到目前的分支（git symbolic-ref 退 $BRANCH_RC）" >&2
+    exit 1
+fi
+if [[ -n "$BRANCH" ]]; then
     case "$BRANCH" in
         main|master) ;;
         *)
@@ -40,51 +47,61 @@ if [[ -n "$BRANCH" && "$BRANCH" != "HEAD" ]]; then
                 echo "ERROR: pre-commit hook 阻擋：" >&2
                 echo "  - branch 名 '$BRANCH' 含編號（完全無編號原則）" >&2
                 echo "" >&2
-                echo "規範詳本：lingling-claude-template 的 docs/notes/handoff-thin-layer-design.md（D 條）" >&2
+                echo "規範依據：lingling 的 docs/adr/0039-governance-check-rules-and-subscription-boundary.md" >&2
                 exit 1
             fi
             ;;
     esac
 fi
 
-# === 治理三檢全 repo scan（E 條中文三檢、F.4、F.2）===
+# === 治理三檢全 repo scan ===
 cd "$REPO_ROOT"
 
-mapfile -t FILES < <(
-    git ls-files \
-    | grep -vE '^(lib-v1-archive|skills-v1-archive)/' \
-    | grep -vE '^(hooks|\.githooks)/lib/data/' \
-    | grep -vE '\.(png|jpg|jpeg|gif|ico|bmp|tiff|avif|heic|webp|svg|pdf|zip|tar|gz|bz2|xz|zst|7z|jar|apk|woff|woff2|ttf|ttc|otf|mp3|mp4|flac|wav|ogg|opus|m4a|aac|aiff|mkv|webm|mov|avi|so|dylib|dll|exe|o|a|bin|dex|wasm|class|pyc|sqlite|db)$'
-)
-
-if [[ ${#FILES[@]} -eq 0 ]]; then
-    exit 0
+# git ls-files 單獨跑：放進下面的 process substitution，它失敗沒人看，清單變空就等於全部放行。
+if ! TRACKED=$(git ls-files); then
+    echo "ERROR: pre-commit hook 讀不到已追蹤的檔案清單（git ls-files 失敗）" >&2
+    exit 1
+fi
+FILES=()
+if [[ -n "$TRACKED" ]]; then
+    mapfile -t FILES < <(
+        printf '%s\n' "$TRACKED" \
+        | grep -vE '^(lib-v1-archive|skills-v1-archive)/' \
+        | grep -vE '^(hooks|\.githooks)/lib/data/' \
+        | grep -vE '\.(png|jpg|jpeg|gif|ico|bmp|tiff|avif|heic|webp|svg|pdf|zip|tar|gz|bz2|xz|zst|7z|jar|apk|woff|woff2|ttf|ttc|otf|mp3|mp4|flac|wav|ogg|opus|m4a|aac|aiff|mkv|webm|mov|avi|so|dylib|dll|exe|o|a|bin|dex|wasm|class|pyc|sqlite|db)$'
+    )
 fi
 
 # 各 lint 契約：exit 0 = 乾淨、1 = 有問題（明細在 stdout）、其他 = 工具本身壞了。
-# 只有 0/1 才是有效結果；>1 一律 fail-closed。
+# 只有 0 與帶明細的 1 才是有效結果；>1、或退 1 卻沒有明細（node 當掉也退 1）一律 fail-closed。
 # 注意：本函式必須直接呼叫（不可包在 $( ) 內）——否則其中的 exit 只會結束 subshell。
 LINT_OUT=""
 run_lint() {
     local rc=0
     LINT_OUT=$("$@" 2>&1) || rc=$?
-    if [[ $rc -gt 1 ]]; then
+    if [[ $rc -gt 1 || ( $rc -eq 1 && -z "$LINT_OUT" ) ]]; then
         echo "ERROR: pre-commit hook lint 執行失敗（exit $rc）：$*" >&2
         printf '%s\n' "$LINT_OUT" >&2
         exit 1
     fi
 }
 
-run_lint node "$LINGLING_HOOK_LIB/chinese_quality.js" "${FILES[@]}"
-CQ_OUTPUT="$LINT_OUT"
-run_lint node "$LINGLING_HOOK_LIB/billing_discipline.js" "${FILES[@]}"
-BD_OUTPUT="$LINT_OUT"
+# 中文三檢與 billing_discipline 吃檔案清單，清單是空的（只有二進位檔等）就不跑這兩支；
+# hook_script_xref 與 .local 照跑。
+CQ_OUTPUT=""
+BD_OUTPUT=""
+if [[ ${#FILES[@]} -gt 0 ]]; then
+    run_lint node "$LINGLING_HOOK_LIB/chinese_quality.js" "${FILES[@]}"
+    CQ_OUTPUT="$LINT_OUT"
+    run_lint node "$LINGLING_HOOK_LIB/billing_discipline.js" "${FILES[@]}"
+    BD_OUTPUT="$LINT_OUT"
+fi
 run_lint node "$LINGLING_HOOK_LIB/hook_script_xref.js"
 XR_OUTPUT="$LINT_OUT"
 
 HAS_ERROR=0
 if [[ -n "$CQ_OUTPUT" ]]; then
-    echo "ERROR: pre-commit hook 阻擋（E 條 chinese_quality 中文三檢）：" >&2
+    echo "ERROR: pre-commit hook 阻擋（chinese_quality 中文三檢）：" >&2
     printf '%s\n' "$CQ_OUTPUT" >&2
     echo "規則：" >&2
     echo "  simplified — 簡體字（衍生自 OpenCC STCharacters 去合併字）" >&2
@@ -95,7 +112,7 @@ if [[ -n "$CQ_OUTPUT" ]]; then
     HAS_ERROR=1
 fi
 if [[ -n "$BD_OUTPUT" ]]; then
-    echo "ERROR: pre-commit hook 阻擋（F.4 billing-discipline）：" >&2
+    echo "ERROR: pre-commit hook 阻擋（billing_discipline 訂閱邊界）：" >&2
     printf '%s\n' "$BD_OUTPUT" >&2
     echo "規則：訂閱 only stance / 禁 claude -p / 禁 ANTHROPIC_API_KEY / 禁 Agent SDK import / 禁 Bedrock / Vertex / Foundry" >&2
     echo "敘述性 doc 例外：docs/adr/ + docs/notes/ + CHANGELOG / RETROSPECTIVE" >&2
@@ -103,7 +120,7 @@ if [[ -n "$BD_OUTPUT" ]]; then
     HAS_ERROR=1
 fi
 if [[ -n "$XR_OUTPUT" ]]; then
-    echo "ERROR: pre-commit hook 阻擋（F.2 hook-script-xref）：" >&2
+    echo "ERROR: pre-commit hook 阻擋（hook_script_xref）：" >&2
     printf '%s\n' "$XR_OUTPUT" >&2
     echo "規則：hooks/ 內 script 引用 hooks/lib/ 與 hooks/ 下的檔案必須存在" >&2
     echo "" >&2
@@ -111,7 +128,7 @@ if [[ -n "$XR_OUTPUT" ]]; then
 fi
 
 if [[ $HAS_ERROR -eq 1 ]]; then
-    echo "規範詳本：lingling-claude-template 的 docs/notes/handoff-thin-layer-design.md（D / E / F 條）" >&2
+    echo "規範依據：lingling 的 docs/adr/0039-governance-check-rules-and-subscription-boundary.md" >&2
     exit 1
 fi
 

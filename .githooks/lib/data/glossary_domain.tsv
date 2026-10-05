@@ -25,7 +25,7 @@ Reference skill	參照 skill	不直接喚起、供其他 skill 引用的內核
 followup	掛帳	解釋型 review 抓到、但不值得為它擋下這張 PR 的欠項；開票與否由人決定
 User-invoked	僅限使用者呼叫的	形容詞。frontmatter 有 disable-model-invocation: true、只有人打 /name 才會跑的 skill；README 分組標題維持英文。「僅限」點出與 Model-invoked 的對比（後者人也能打）
 Model-invoked	模型可呼叫的	形容詞。無該旗標、人可打、模型判斷任務吻合亦會自行呼叫的 skill；README 分組標題維持英文
-Spec	案卷	決定已做完、寫成文件長期留存的那一份（上游 to-spec 產物）；工單可拋、案卷留著。不作「規格」——那是技術規格書，此處是決策紀錄
+Spec	案卷	一件跨 session 工作的決定紀錄（上游 to-spec 產物）；結案即歸檔，不再當依據。不作「規格」——那是技術規格書，此處是決策紀錄
 Issue	工單	案卷拆出、可 demo 的一件工作，做完結單。上游 skill 原文的 ticket 同義（GLOSSARY.md：read ticket as Issue）。派生：案卷底下的工單（子票）、這張工單的案卷（母票）、卡住它的工單（blocker）
 ticket	工單	上游 skill 原文的用字，即 Issue；譯名與派生同 Issue 條
 Understanding gate	會意關卡	合併前由人把的那道關：能用自己的話說出這張 PR 改了什麼、為什麼、怎麼驗證才放行（ADR-0037：demo ＋ 用自己的話講回，兩級）。不作「理解閘」——閘是水閘、理解是直搬；關卡才是中文說法
