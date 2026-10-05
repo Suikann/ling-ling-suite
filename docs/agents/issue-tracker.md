@@ -5,7 +5,7 @@
 ## 慣例
 
 - **建 issue**：`gh issue create --title "..." --body "..."`（多行 body 用 heredoc）
-- **讀 issue**：`gh issue view <number> --comments`，必要時用 `jq` 過濾留言，並一併取 labels
+- **讀 issue**：`gh issue view <number> --json title,body,labels,updatedAt,comments`，本文與留言一次取齊（`--comments` 在非互動模式只印留言、看不到本文）。本文與留言（例如 triage brief）說法衝突時，以時間較新者為準
 - **列 issue**：`gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'`，搭配 `--label`／`--state` 過濾
 - **留言**：`gh issue comment <number> --body "..."`
 - **加／移除 label**：`gh issue edit <number> --add-label "..."`／`--remove-label "..."`
@@ -19,7 +19,7 @@ repo 由 `git remote -v` 推得；`gh` 在 clone 內執行會自動判定。
 
 設為 `yes` 時，PR 走與 issue 相同的 label 與狀態，用 `gh pr` 對應指令：
 
-- **讀 PR**：`gh pr view <number> --comments`，diff 用 `gh pr diff <number>`
+- **讀 PR**：`gh pr view <number> --json title,body,labels,updatedAt,comments`（理由同讀 issue），diff 用 `gh pr diff <number>`
 - **列待 triage 的外部 PR**：`gh pr list --state open --json number,title,body,labels,author,authorAssociation,comments`，只留 `authorAssociation` 為 `CONTRIBUTOR`、`FIRST_TIME_CONTRIBUTOR`、`NONE` 的（去掉 `OWNER`／`MEMBER`／`COLLABORATOR`）
 - **留言／label／關閉**：`gh pr comment`、`gh pr edit --add-label`／`--remove-label`、`gh pr close`
 
@@ -31,7 +31,7 @@ GitHub 的 issue 與 PR 共用同一組編號，光看 `#42` 分不出是哪種�
 
 ## 當 skill 說「fetch the relevant ticket」
 
-跑 `gh issue view <number> --comments`。
+照上方「讀 issue」取本文與留言。
 
 ## Wayfinding operations
 

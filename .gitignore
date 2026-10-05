@@ -210,5 +210,5 @@ __marimo__/
 client_secret.json
 google_token.json
 
-# lingling-claude-template 的 vendored git hooks（lib/ 被上方打包規則排除，需反向納入）
+# lingling 的 vendored git hooks（lib/ 被上方打包規則排除，需反向納入）
 !.githooks/lib/

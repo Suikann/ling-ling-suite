@@ -14,6 +14,18 @@
 #   它其實是「兩個半截碼合成一個字」，故取「雙碼合字」。同理 byte-identical 不作「逐位元組
 #   相同」而作「分毫不差」。**先想清楚那東西是什麼，再取名；不要照著英文字面搬。**
 #
+# ── 提案方式 ────────────────────────────────────────────────
+#
+#   先寫下原文詞性，候選一律同詞性：名詞給名詞，形容詞給能直接修飾名詞的形式（四字格
+#   可當形容詞用）。譯名要能直接嵌進句子替換原文，詞性不對就不「達」。
+#
+#   每個詞提三個候選，標明風格（民國風或戰鎚 40K 風，如 runner＝伺服顱骨），各附一句
+#   「它是什麼」與信達雅短評。
+#
+#   提案前先查本表、glossary_domain.tsv 與 glossary_rejected.tsv：避開撞名與語意重疊，
+#   已否決的字面直譯不再提；同族概念沿用既有譜系（vendor＝抄錄 → 抄本）。既有譯名優先
+#   沿用，缺項才新造。
+#
 # ── 收錄原則 ────────────────────────────────────────────────
 #
 #   **與使用者互動一律中文，故技術名詞一律收錄**——包含 hook / commit / branch / PR /
@@ -66,9 +78,13 @@ fast-forward	跟上	動詞；名詞作「一次跟上」：落後的分支自分
 PR	合併請求	GitHub 的 pull request；GitLab 稱 MR，同義
 MR	合併請求	GitLab 的 merge request；GitHub 稱 PR，同義
 push	推送	把本地的提交送上遠端
+stash	寄存	動詞：把還沒提交的改動暫時收起來、之後取回（git stash）。與「已暫存」（staged，已 add、待提交）不同
+permalink	錨定連結	名詞：釘在某一筆固定提交上、內容不再變的網址。那筆提交被刪仍會失效，故不作「永久連結」
 diff	差異
+review	審查	名詞亦作動詞：審看一批改動、指出問題。本 repo 的兩軸審查技能另見領域詞 Diff review
 repo	典藏	程式碼與其全部歷史的權威收存
 session	會期	與 agent 的一次對話，從開始到結束
+memory	記事簿	名詞：Claude Code 每個會期自動載入的記憶檔（auto-memory），一則一則記下的事
 skill	技能
 plugin	外掛
 agent	執事	受託自主辦事的程式；泛稱。本 repo 的 Worker（承辦）即一種執事
@@ -148,4 +164,7 @@ subagent	機僕	名詞：主執事派出去辦一件事、辦完回報的下屬�
 retrospective	行動後檢討	名詞：事後回顧一場 session，找出該改的環境（導覽、自動檢查、規範、工具）而不是程式碼；skill 名 /retro 照抄。取軍中 after-action review 之義
 glossary	釋名	名詞：一個專案自訂的領域用詞表（GLOSSARY.md），每個概念只選一個名字，其餘列為避用。取東漢劉熙《釋名》解釋名物之義。本 repo 的 glossary.tsv 是譯名表，不叫釋名
 drift	走樣	名詞：抄本與上游之間沒有登記成異文的差異。照著範本卻走了樣。context drift 另有譯名「文實脫節」
+fleet	叢刊	名詞：/sync-upstream 一體盤點的那一套 skill，即 engineering、productivity 兩個 bucket 底下全部的 SKILL.md，抄本與自撰的都算，也正是 plugin 刊行出去的那一套。取《四部叢刊》之義：一起刊行的一套書。艦隊義不在此條
+substitution	諱改	名詞：provenance 異文的一種錨型，一條規則把某個詞在全檔統一換成另一個詞，如 /code-review 換成 /lingling:diff-review、拿掉 emoji。取古籍避諱改字之義：凡遇某字，通篇改作他字。一般的字串替換不在此條
+pin	錨定	動詞，可作定語（錨定版）：把參照固定在某一筆確切的提交上，不隨上游最新版走，要跟上再有意識地挪過去；名詞指那筆提交，如 provenance 的 pin-commit，「自錨定版 3cca18b 到 d81f3a1」「重新錨定到上游 HEAD」。與 permalink「錨定連結」同義相承。異文的錨（定位用的錨點）不在此條，一般的「把某值固定住」也不在此條
 blast radius	殃及範圍	名詞：一次改動合併後可能波及的範圍，如版面跑位、消費端壞掉；pr 範本的欄位名。取「殃及池魚」之義

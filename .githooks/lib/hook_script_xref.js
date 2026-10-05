@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-// hooks/lib/hook_script_xref.js — F.2 hook-script-xref lint
+// hooks/lib/hook_script_xref.js — hook_script_xref lint（ADR-0039）
 // 來源：由 hook_script_xref.py 移植（ADR-0029：hook 不相依 python3）。行為契約不變、
 // 惟參照樣式加入 .js（hook lint 工具本身已改 node 實作、否則新引用會失去 xref 覆蓋）。
 // 規則：hooks/ 下的 hook 引用 hooks/lib/* / hooks/* 必須真實存在
 // 介面：hook_script_xref.js
 // 輸出：<file>:<line>:missing-ref:<path>
-// exit code：1 if any missing ref, 0 if clean
+// exit code：1 if any missing ref, 0 if clean, 2 if it cannot judge（hooks/ 或其中的檔讀不到）
+// 讀不到一律 exit 2（ADR-0038），唯一的例外：repo 根沒有 hooks/ 目錄時 exit 0——沒有 hook 就沒有
+// 引用要查（vendor 模式下本檔在消費端的 .githooks/lib/，REPO_ROOT 是消費端 repo，多半沒有 hooks/）。
 'use strict';
 
 const fs = require('node:fs');
@@ -29,32 +31,30 @@ function findRefs(text) {
 }
 
 function main() {
-  let entries;
-  try {
-    if (!fs.statSync(HOOKS_DIR).isDirectory()) return 0;
-    entries = fs.readdirSync(HOOKS_DIR).sort();
-  } catch {
-    return 0;
-  }
-
   const violations = [];
-  for (const name of entries) {
-    const hookPath = path.join(HOOKS_DIR, name);
-    let text;
+  try {
+    let names;
     try {
-      if (!fs.statSync(hookPath).isFile()) continue;
-      text = fs.readFileSync(hookPath, 'utf8');
-    } catch {
-      continue;
+      names = fs.readdirSync(HOOKS_DIR).sort();
+    } catch (err) {
+      if (err.code === 'ENOENT') return 0;
+      throw err;
     }
-    const lines = text.split(/\r\n|\r|\n/);
-    lines.forEach((line, i) => {
-      for (const ref of findRefs(line)) {
-        if (!fs.existsSync(path.join(REPO_ROOT, ref))) {
-          violations.push([`hooks/${name}`, i + 1, ref]);
+    for (const name of names) {
+      const hookPath = path.join(HOOKS_DIR, name);
+      if (!fs.statSync(hookPath).isFile()) continue;
+      const lines = fs.readFileSync(hookPath, 'utf8').split(/\r\n|\r|\n/);
+      lines.forEach((line, i) => {
+        for (const ref of findRefs(line)) {
+          if (!fs.existsSync(path.join(REPO_ROOT, ref))) {
+            violations.push([`hooks/${name}`, i + 1, ref]);
+          }
         }
-      }
-    });
+      });
+    }
+  } catch (err) {
+    process.stderr.write(`hook_script_xref: 無法判定：${err.message}\n`);
+    return 2;
   }
 
   for (const [file, lineNo, ref] of violations) {

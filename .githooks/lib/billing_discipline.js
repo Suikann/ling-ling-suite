@@ -1,13 +1,18 @@
 #!/usr/bin/env node
-// hooks/lib/billing_discipline.js — F.4 billing-discipline lint（含 H 條訂閱邊界）
+// hooks/lib/billing_discipline.js — billing_discipline lint：守訂閱邊界（ADR-0039）
 // 來源：由 billing_discipline.py 移植（ADR-0029：hook 不相依 python3）。行為契約不變。
 // 對齊 stance：訂閱 only / 不設 API key env / 不 import Agent SDK / 不走 headless / Bedrock / Vertex / Foundry
 // 介面：billing_discipline.js <file> [<file>..]
 // 輸出：<file>:<line>:<rule>:<excerpt>
-// exit code：1 if any violation, 0 if clean
+// exit code：1 if any violation, 0 if clean, 2 if it cannot judge（用法錯、檔案讀不到）
+// 讀不到一律 exit 2（ADR-0038），唯一的例外：工作樹裡已不存在的檔跳過——pre-commit 的清單取自
+// `git ls-files`（索引），檔案在工作樹裡刪了就沒有內容可讀。不是一般檔案的（submodule 等）不查。
 'use strict';
 
 const fs = require('node:fs');
+
+// 路徑上沒有這個檔：ENOENT，或路徑中段已不是目錄（ENOTDIR）。
+const MISSING = new Set(['ENOENT', 'ENOTDIR']);
 
 // 規則：[ruleName, regex]
 const RULES = [
@@ -72,8 +77,10 @@ function main(argv) {
     try {
       if (!fs.statSync(arg).isFile()) continue;
       text = fs.readFileSync(arg, 'utf8');
-    } catch {
-      continue;
+    } catch (err) {
+      if (MISSING.has(err.code)) continue;
+      process.stderr.write(`billing_discipline: 無法判定：${err.message}\n`);
+      return 2;
     }
     for (const [lineNo, rule, excerpt] of checkFile(arg, text)) {
       process.stdout.write(`${arg}:${lineNo}:${rule}:${excerpt}\n`);

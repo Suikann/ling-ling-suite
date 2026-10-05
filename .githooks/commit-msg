@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # hooks/commit-msg — commit 訊息格式檢查
-# 規範來源：lingling-claude-template docs/notes/handoff-thin-layer-design.md D 條（vendored 進消費端時、此 spec 仍在 template repo）
+# 規範來源：本檔與 hooks/lib/data/commit_types.txt；人讀說明在 lingling 的 git-commit skill，依據見 ADR-0039
 # 規則：
 #   1. subject 行 `<type>：<主旨>`（全形冒號 U+FF1A）
 #   2. type 白名單：lib/data/commit_types.txt（唯一來源；bin/lingling-merge 去合併主旨前綴也讀它）
@@ -9,8 +9,8 @@
 #   5. 含「修改內容：」區塊
 #   6. fix 類型加「問題簡述：」區塊
 #   7. 禁 emoji
-#   8. 禁 Co-Authored-By
-#   9. 簡繁混用 / 冷僻編碼 / 異體字（E 條 chinese_quality 中文三檢）
+#   8. 禁署名字樣（共同作者、Generated with Claude Code、Claude-Session、session 連結；不分位置）
+#   9. 簡繁混用 / 冷僻編碼 / 異體字（chinese_quality 中文三檢，ADR-0039）
 #   merge commit（MERGE_HEAD 存在，或 LINGLING_MERGE_COMMIT=1）：跳過結構規則 1-6、只跑衛生 7-9（ADR-0008）
 
 set -euo pipefail
@@ -20,7 +20,13 @@ set -euo pipefail
 
 COMMIT_MSG_FILE="${1:?commit-msg hook 需 commit 訊息檔路徑}"
 MSG=$(cat "$COMMIT_MSG_FILE")
-CLEAN_MSG=$(printf '%s\n' "$MSG" | grep -v '^#' || true)
+# grep -v 退 1 是每行都是註解（訊息是空的，下面的規則會報）；退 2 以上是 grep 壞了，擋（ADR-0038）。
+CLEAN_RC=0
+CLEAN_MSG=$(printf '%s\n' "$MSG" | grep -v '^#') || CLEAN_RC=$?
+if [[ $CLEAN_RC -gt 1 ]]; then
+    echo "ERROR: commit-msg hook 濾不掉註解行（grep 退 $CLEAN_RC）" >&2
+    exit 1
+fi
 REPO_ROOT=$(git rev-parse --show-toplevel)
 # lib 目錄解析（三模式相容、見 ADR-0005）：
 #   1. shim：installer 注入 LINGLING_HOOK_LIB env（指向 plugin/template hooks/lib）→ 直接用
@@ -67,7 +73,7 @@ else
         VALID_TYPES=$(grep -v -E '^[[:space:]]*(#|$)' "$TYPES_FILE" 2>/dev/null | xargs || true)
         if [[ -z "$VALID_TYPES" ]]; then
             echo "ERROR: commit-msg hook 讀不到 type 白名單：$TYPES_FILE" >&2
-            echo "  重跑 /lingling-claude-template:setup-lingling 同步 .githooks/lib/；請勿以 --no-verify 繞過。" >&2
+            echo "  重跑 /lingling:setup-lingling 同步 .githooks/lib/；請勿以 --no-verify 繞過。" >&2
             exit 1
         fi
         FOUND=0
@@ -102,21 +108,40 @@ fi
 fi  # /IS_MERGE：結構規則 1-6 僅一般 commit
 
 # 規則 7：禁 emoji（unicode range 定義在 text_util.js、單一來源）
-# exit 0 = 有 emoji、1 = 沒有；node 已於檔首確保存在，故 127 之類的假陰性不會發生。
-if printf '%s' "$CLEAN_MSG" | node "$LINGLING_HOOK_LIB/text_util.js" has-emoji; then
+# exit 0 = 有 emoji、1 = 沒有、其他 = 工具壞了。node 當掉也退 1：先拿一個已知的 emoji 驗它會退 0，
+# 才信它的 1（同 setup-lingling 的 lingling-governance.yml）；否則當掉會被讀成「沒有 emoji」而放行。
+if ! printf '\xf0\x9f\x98\x80' | node "$LINGLING_HOOK_LIB/text_util.js" has-emoji; then
+    echo "ERROR: commit-msg hook 的 has-emoji 認不出已知的 emoji，工具壞了" >&2
+    echo "  重跑 /lingling:setup-lingling 同步 .githooks/lib/；請勿以 --no-verify 繞過。" >&2
+    exit 1
+fi
+EMOJI_RC=0
+printf '%s' "$CLEAN_MSG" | node "$LINGLING_HOOK_LIB/text_util.js" has-emoji || EMOJI_RC=$?
+if [[ $EMOJI_RC -eq 0 ]]; then
     ERRORS+=("commit 訊息含 emoji")
+elif [[ $EMOJI_RC -gt 1 ]]; then
+    echo "ERROR: commit-msg hook 的 has-emoji 執行失敗（exit $EMOJI_RC）" >&2
+    exit 1
 fi
 
-# 規則 8：禁 Co-Authored-By
-if grep -qi '^Co-Authored-By:' <<< "$CLEAN_MSG"; then
-    ERRORS+=("commit 訊息含 Co-Authored-By（stance 禁）")
+# 規則 8：禁署名字樣（字樣定義在 text_util.js、與 deny-dangerous-bash 共用；不分位置，說明規則時也一樣）
+# find-signature 只有 exit 0 才是答案：印出第一個署名字樣，沒有就不印；其他退出碼（含 node 當掉的 1）擋。
+SIG_RC=0
+SIG_FOUND=$(printf '%s' "$CLEAN_MSG" | node "$LINGLING_HOOK_LIB/text_util.js" find-signature) || SIG_RC=$?
+if [[ $SIG_RC -ne 0 ]]; then
+    echo "ERROR: commit-msg hook 的 find-signature 執行失敗（exit $SIG_RC）" >&2
+    exit 1
+fi
+if [[ -n "$SIG_FOUND" ]]; then
+    ERRORS+=("commit 訊息含自動簽名行（$SIG_FOUND）")
 fi
 
 # 規則 9：chinese_quality 中文三檢（簡繁 / 編碼 / 異體字）
-# exit 0 = 乾淨、1 = 有問題、其他 = 工具壞了（fail-closed，不再用 `|| true` 靜默吞掉）。
+# exit 0 = 乾淨、1 = 有問題（明細在 stdout）、其他 = 工具壞了（fail-closed，不再用 `|| true` 靜默吞掉）。
+# 退 1 卻沒有明細也是壞了：node 當掉退 1，訊息在 stderr、不在這裡接的 stdout。
 CQ_RC=0
 CQ_OUTPUT=$(printf '%s' "$CLEAN_MSG" | node "$LINGLING_HOOK_LIB/chinese_quality.js" --stdin) || CQ_RC=$?
-if [[ $CQ_RC -gt 1 ]]; then
+if [[ $CQ_RC -gt 1 || ( $CQ_RC -eq 1 && -z "$CQ_OUTPUT" ) ]]; then
     echo "ERROR: commit-msg hook 的 chinese_quality 執行失敗（exit $CQ_RC）" >&2
     printf '%s\n' "$CQ_OUTPUT" >&2
     exit 1
@@ -133,7 +158,7 @@ if [[ ${#ERRORS[@]} -gt 0 ]]; then
         echo "  - $e" >&2
     done
     echo "" >&2
-    echo "規範詳本：lingling-claude-template 的 docs/notes/handoff-thin-layer-design.md（D 條）" >&2
+    echo "格式說明：lingling 的 git-commit skill（skills/engineering/git-commit/SKILL.md）" >&2
     exit 1
 fi
 

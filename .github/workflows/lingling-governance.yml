@@ -1,5 +1,5 @@
 # lingling 治理三檢在 CI 再跑一次（ADR-0036）：本機 hook 沒啟用或被 --no-verify 繞過時的第二雙眼睛。
-# 本檔由 /lingling-claude-template:setup-lingling 寫入、整檔屬 lingling，重跑 setup-lingling 會整檔覆蓋：
+# 本檔由 /lingling:setup-lingling 寫入、整檔屬 lingling，重跑 setup-lingling 會整檔覆蓋：
 # 不要手改；repo 自己的 CI 寫在別的工序檔。換 runner 設 repo variable LINGLING_RUNNER，不改本檔。
 name: lingling governance
 

@@ -14,6 +14,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const LIB = __dirname;
@@ -27,6 +29,27 @@ function runCli(script, args, input) {
     input: input ?? '',
     encoding: 'utf8',
   });
+}
+
+function tmp() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'lingling-lib-'));
+}
+
+// 讀不到、但不是「不存在」的檔：自己指向自己的 symlink（ELOOP），root 也讀不到。
+function loopFile(dir, name = 'loop.md') {
+  const p = path.join(dir, name);
+  fs.symlinkSync(name, p);
+  return p;
+}
+
+// stdin 讀不到：把目錄當 stdin 交給子行程，讀它會 EISDIR。
+function runCliStdinDir(script, args) {
+  const fd = fs.openSync(tmp(), 'r');
+  try {
+    return spawnSync(process.execPath, [path.join(LIB, script), ...args], { stdio: [fd, 'pipe', 'pipe'], encoding: 'utf8' });
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 // ── chinese_quality ────────────────────────────────────────────
@@ -83,6 +106,42 @@ test('chinese_quality: 無參數時 exit 2（usage）', () => {
   assert.strictEqual(runCli('chinese_quality.js', [], '').status, 2);
 });
 
+// ADR-0038：工作樹裡已不存在的檔是列明的例外（跳過）；其餘讀不到一律 exit 2。
+test('chinese_quality: 工作樹裡已不存在的檔跳過、其餘照查', () => {
+  const dir = tmp();
+  const clean = path.join(dir, 'clean.md');
+  fs.writeFileSync(clean, '乾淨的繁體中文\n');
+  const r = runCli('chinese_quality.js', [path.join(dir, 'gone.md'), path.join(clean, 'under-a-file.md'), clean]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const dirty = path.join(dir, 'dirty.md');
+  fs.writeFileSync(dirty, `x${SIMPLIFIED_ZHE}\n`);
+  assert.strictEqual(runCli('chinese_quality.js', [path.join(dir, 'gone.md'), dirty]).status, 1);
+});
+
+test('chinese_quality: 檔案讀不到（不是不存在）exit 2', () => {
+  const r = runCli('chinese_quality.js', [loopFile(tmp())]);
+  assert.strictEqual(r.status, 2);
+  assert.match(r.stderr, /ELOOP/);
+});
+
+test('chinese_quality: --stdin 讀不到 exit 2', () => {
+  const r = runCliStdinDir('chinese_quality.js', ['--stdin']);
+  assert.strictEqual(r.status, 2);
+  assert.match(r.stderr, /EISDIR/);
+});
+
+test('chinese_quality: 字表讀不到 exit 2（不當成空表放行）', () => {
+  for (const missing of ['simplified_only_chars.txt', 'variant_to_standard.txt', 'variant_allowlist.txt']) {
+    const lib = tmp();
+    fs.copyFileSync(path.join(LIB, 'chinese_quality.js'), path.join(lib, 'chinese_quality.js'));
+    fs.cpSync(path.join(LIB, 'data'), path.join(lib, 'data'), { recursive: true });
+    fs.rmSync(path.join(lib, 'data', missing));
+    const r = spawnSync(process.execPath, [path.join(lib, 'chinese_quality.js'), '--stdin'], { input: '乾淨\n', encoding: 'utf8' });
+    assert.strictEqual(r.status, 2, missing);
+    assert.match(r.stderr, new RegExp(missing.replace('.', '\\.')));
+  }
+});
+
 // ── billing_discipline ─────────────────────────────────────────
 test('billing_discipline: 抓 API key env 引用', () => {
   const v = bd.checkFile('src/a.ts', 'const k = process.env.ANTHROPIC_API_KEY;');
@@ -122,6 +181,16 @@ test('billing_discipline: 乾淨檔案無違規、行號正確', () => {
   assert.strictEqual(v[0][0], 3);
 });
 
+test('billing_discipline: 工作樹裡已不存在的檔跳過、讀不到的檔 exit 2', () => {
+  const dir = tmp();
+  const clean = path.join(dir, 'clean.ts');
+  fs.writeFileSync(clean, 'const a = 1;\n');
+  assert.strictEqual(runCli('billing_discipline.js', [path.join(dir, 'gone.ts'), clean]).status, 0);
+  const r = runCli('billing_discipline.js', [clean, loopFile(dir, 'loop.ts')]);
+  assert.strictEqual(r.status, 2);
+  assert.match(r.stderr, /ELOOP/);
+});
+
 // ── hook_script_xref ───────────────────────────────────────────
 test('hook_script_xref: 抓得到 hooks/ 路徑引用（含 .js）', () => {
   const refs = xr.findRefs('run node "hooks/lib/chinese_quality.js" and hooks/pre-commit.sh');
@@ -133,6 +202,27 @@ test('hook_script_xref: 對本 repo 現況執行為乾淨（exit 0）', () => {
     encoding: 'utf8',
   });
   assert.strictEqual(r.status, 0, `xref 回報缺檔引用：\n${r.stdout}`);
+});
+
+// 複製一份到 <root>/hooks/lib/ 底下跑：REPO_ROOT 就是 <root>。
+function runXrefIn(root, { hooksDir = true } = {}) {
+  const lib = hooksDir ? path.join(root, 'hooks', 'lib') : path.join(root, 'vendor', 'lib');
+  fs.mkdirSync(lib, { recursive: true });
+  fs.copyFileSync(path.join(LIB, 'hook_script_xref.js'), path.join(lib, 'hook_script_xref.js'));
+  return spawnSync(process.execPath, [path.join(lib, 'hook_script_xref.js')], { encoding: 'utf8' });
+}
+
+test('hook_script_xref: repo 沒有 hooks/ 目錄時 exit 0（沒有引用要查）', () => {
+  assert.strictEqual(runXrefIn(tmp(), { hooksDir: false }).status, 0);
+});
+
+test('hook_script_xref: hooks/ 裡的檔讀不到 exit 2', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, 'hooks'));
+  loopFile(path.join(root, 'hooks'), 'pre-commit');
+  const r = runXrefIn(root);
+  assert.strictEqual(r.status, 2);
+  assert.match(r.stderr, /ELOOP/);
 });
 
 // ── glossary（逐詞查詢、不整表載入）───────────────────────────
@@ -262,6 +352,39 @@ test('text_util: hasEmoji 判定', () => {
 test('text_util: CLI has-emoji 的 exit code（0 = 有、1 = 無）', () => {
   assert.strictEqual(runCli('text_util.js', ['has-emoji'], 'done 🎉').status, 0);
   assert.strictEqual(runCli('text_util.js', ['has-emoji'], 'done').status, 1);
+});
+
+test('text_util: SIGNATURE 認得各種署名字樣，不分位置與大小寫', () => {
+  for (const s of [
+    'Co-Authored-By: someone <a@b>',
+    '> co-authored-by: someone',
+    'Generated with [Claude Code](https://claude.com/claude-code)',
+    '*Generated with Claude Code*',
+    'Claude-Session: https://claude.ai/code/session_01ABC',
+    '交接見 https://claude.ai/code/session_01ABC',
+  ]) {
+    assert.ok(tu.SIGNATURE.test(s), s);
+  }
+  for (const s of ['共同作者署名行', 'Claude Code 是工具', 'https://claude.com/claude-code']) {
+    assert.ok(!tu.SIGNATURE.test(s), s);
+  }
+});
+
+test('text_util: CLI find-signature 印出第一個署名字樣、沒有就不印，都 exit 0', () => {
+  const hit = runCli('text_util.js', ['find-signature'], 'ok\n> Co-Authored-By: someone\n');
+  assert.strictEqual(hit.status, 0);
+  assert.strictEqual(hit.stdout, 'Co-Authored-By');
+  const clean = runCli('text_util.js', ['find-signature'], '乾淨的訊息\n');
+  assert.strictEqual(clean.status, 0);
+  assert.strictEqual(clean.stdout, '');
+});
+
+test('text_util: stdin 讀不到 exit 2（不當成空字串）', () => {
+  for (const cmd of ['has-emoji', 'charlen', 'find-signature']) {
+    const r = runCliStdinDir('text_util.js', [cmd]);
+    assert.strictEqual(r.status, 2, cmd);
+    assert.match(r.stderr, /EISDIR/);
+  }
 });
 
 test('text_util: CLI charlen 輸出字元數', () => {
