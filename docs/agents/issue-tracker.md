@@ -4,12 +4,18 @@
 
 ## 慣例
 
-- **建 issue**：`gh issue create --title "..." --body "..."`（多行 body 用 heredoc）
+<!-- lingling:issue-tracker -->
+
+- **內文**：issue／PR 的本文與留言一律先用 Write 寫成 repo 外的暫存檔，再單獨一次 Bash 呼叫以 `--body-file <檔的絕對路徑>` 送出。`deny-dangerous-bash` hook 會讀這個檔：含 emoji 或署名行的字樣就擋，說明規則時也一樣，改用文字描述、不寫出那兩個字串；hook 讀不到這個檔也擋。
+- **建 issue**：`gh issue create --title "..." --body-file <檔>`
 - **讀 issue**：`gh issue view <number> --json title,body,labels,updatedAt,comments`，本文與留言一次取齊（`--comments` 在非互動模式只印留言、看不到本文）。本文與留言（例如 triage brief）說法衝突時，以時間較新者為準
 - **列 issue**：`gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'`，搭配 `--label`／`--state` 過濾
-- **留言**：`gh issue comment <number> --body "..."`
-- **加／移除 label**：`gh issue edit <number> --add-label "..."`／`--remove-label "..."`
-- **關閉**：`gh issue close <number> --comment "..."`
+- **留言**：`gh issue comment <number> --body-file <檔>`
+- **加／移除 label**：`gh issue edit <number> --add-label "..."` ／ `--remove-label "..."`
+- **關閉**：要附說明時先 `gh issue comment <number> --body-file <檔>`，再 `gh issue close <number>`
+- **建工單（拆自案卷）**：`gh issue create --parent <spec> --title "..." --body-file <檔>`，票就掛成 spec 的原生 sub-issue，GitHub 會在 spec 上顯示 completed／total 進度。發完票對一次有沒有漏掛（上游 `to-tickets` 已知常漏，mattpocock/skills#554）；補掛用 `gh issue edit <spec> --add-sub-issue <n>,<n>` 或 `gh issue edit <n> --parent <spec>`
+
+<!-- /lingling:issue-tracker -->
 
 repo 由 `git remote -v` 推得；`gh` 在 clone 內執行會自動判定。
 
@@ -42,4 +48,4 @@ GitHub 的 issue 與 PR 共用同一組編號，光看 `#42` 分不出是哪種�
 - **擋住（blocking）**：用 GitHub **原生 issue dependencies**（UI 看得到的正式表示）。加一條邊：`gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`，`<blocker-db-id>` 是 blocker 的數字 **database id**（`gh api repos/<owner>/<repo>/issues/<n> --jq .id`，**不是** `#number` 也不是 `node_id`）。GitHub 會回 `issue_dependencies_summary.blocked_by`（只算還 open 的 blocker，就是即時的閘）。沒有 dependencies 功能時，退回在子 issue body 第一行寫 `Blocked by: #<n>, #<n>`。所有 blocker 都關了，ticket 才算解鎖
 - **前沿查詢（frontier）**：列出地圖底下 open 的子 issue（`gh issue list --state open`，限定在地圖的 sub-issues／task list），剔除還有 open blocker 的（`issue_dependencies_summary.blocked_by > 0`，或 `Blocked by` 行裡有 open issue）和已有 assignee 的；依地圖順序取第一張
 - **認領**：`gh issue edit <n> --add-assignee @me`，這是該 session 的第一個寫入動作
-- **解決**：`gh issue comment <n> --body "<answer>"`，接著 `gh issue close <n>`，再把脈絡指標（gist 加連結）補到地圖的 Decisions so far
+- **解決**：答案照上方「內文」寫成檔，`gh issue comment <n> --body-file <檔>`，接著 `gh issue close <n>`，再把脈絡指標（gist 加連結）補到地圖的 Decisions so far
