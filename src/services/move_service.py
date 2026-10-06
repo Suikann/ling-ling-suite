@@ -11,7 +11,7 @@
 
 使用範例：
     mover = MoveService(file_service, journal_path)
-    created_dirs = mover.execute([(src, dst), ...], operation="rename", record_id=record.id)
+    created_dirs = mover.execute([(src, dst), ...], context=BatchContext(OperationKind.RENAME, record.id))
 """
 import json
 import os
@@ -19,7 +19,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from core.constants import MOVE_JOURNAL_FILE, RENAME_STAGING_SUFFIX, RenameProblem
+from core.constants import MOVE_JOURNAL_FILE, RENAME_STAGING_SUFFIX, OperationKind, RenameProblem
 from core.locale import t
 from core.models import UndoMapping
 from core.paths import is_inside, path_key, same_path
@@ -44,6 +44,20 @@ class MoveStep:
 
 
 @dataclass
+class BatchContext:
+    """這批搬移的來歷：記進進行中紀錄，中斷還原時交回搬移歷程據以處理（引擎只負責保存）
+
+    Attributes:
+        operation: 執行這批搬移的操作種類；舊版紀錄沒有記（或記了不認得的值）時為重新命名
+        record_id: 所屬復原紀錄的 id；舊版紀錄沒有，為空字串
+        record: 所屬復原紀錄在這批搬移開始時的內容（引擎不解讀）；舊版紀錄沒有，為 None
+    """
+    operation: OperationKind = OperationKind.RENAME
+    record_id: str = ""
+    record: Optional[Dict[str, Any]] = None
+
+
+@dataclass
 class MoveJournal:
     """批次搬移的進行中紀錄
 
@@ -56,17 +70,13 @@ class MoveJournal:
         pending: 正向搬移中尚未確認完成的下一步
         complete: 整批是否已搬完
         created_directories: 本次執行新建的目錄
-        operation: 執行這批搬移的操作種類；舊版紀錄沒有，為空字串
-        record_id: 這批搬移所屬的復原紀錄 id；舊版紀錄沒有，為空字串
-        record: 所屬復原紀錄在這批搬移開始時的內容（搬移歷程寫入，引擎不解讀）；舊版紀錄沒有，為 None
+        context: 這批搬移的來歷
     """
     steps: List[MoveStep] = field(default_factory=list)
     pending: Optional[MoveStep] = None
     complete: bool = False
     created_directories: List[str] = field(default_factory=list)
-    operation: str = ""
-    record_id: str = ""
-    record: Optional[Dict[str, Any]] = None
+    context: BatchContext = field(default_factory=BatchContext)
 
     def moved_indices(self) -> List[int]:
         """已被搬動過的項目索引（依首次搬動順序）"""
@@ -116,9 +126,9 @@ class _JournalFile:
             "pending": self._step_to_json(journal.pending) if journal.pending else None,
             "complete": journal.complete,
             "created_directories": journal.created_directories,
-            "operation": journal.operation,
-            "record_id": journal.record_id,
-            "record": journal.record,
+            "operation": journal.context.operation.value,
+            "record_id": journal.context.record_id,
+            "record": journal.context.record,
         })
 
     def exists(self) -> bool:
@@ -141,9 +151,11 @@ class _JournalFile:
                 pending=self._step_from_json(data["pending"]) if data.get("pending") else None,
                 complete=bool(data.get("complete", False)),
                 created_directories=data.get("created_directories", []),
-                operation=data.get("operation") or "",
-                record_id=data.get("record_id") or "",
-                record=data.get("record"),
+                context=BatchContext(
+                    operation=self._operation(data.get("operation")),
+                    record_id=data.get("record_id") or "",
+                    record=data.get("record"),
+                ),
             )
         except (KeyError, TypeError) as e:
             raise ValueError(str(e)) from e
@@ -154,6 +166,14 @@ class _JournalFile:
             os.remove(self.path)
         except FileNotFoundError:
             pass
+
+    @staticmethod
+    def _operation(value: Any) -> OperationKind:
+        """紀錄裡的操作種類；舊版紀錄沒有記（或記了不認得的值）時視為重新命名"""
+        try:
+            return OperationKind(value)
+        except ValueError:
+            return OperationKind.RENAME
 
     @staticmethod
     def _step_to_json(step: MoveStep) -> dict:
@@ -303,8 +323,7 @@ class MoveService:
     def execute(
         self, moves: List[Move], on_complete: Optional[Callable[[List[str]], None]] = None,
         on_rollback: Optional[Callable[[List[UndoMapping]], None]] = None,
-        operation: str = "", record_id: str = "", record: Optional[Dict[str, Any]] = None,
-        bounds: Optional[List[str]] = None,
+        context: Optional[BatchContext] = None, bounds: Optional[List[str]] = None,
     ) -> List[str]:
         """驗證後以兩階段搬移執行整批
 
@@ -322,9 +341,7 @@ class MoveService:
             on_rollback: 回滾結束後、刪除進行中紀錄前要做的事（替搬不回去的檔案寫紀錄、寫回 meta），
                 參數為搬不回去的項目（同 RenameRollbackError.residual，可能為空）；
                 它拋出的例外原樣傳出，進行中紀錄保留（其中只剩搬不回去的步驟）
-            operation: 記進進行中紀錄的操作種類
-            record_id: 記進進行中紀錄的所屬復原紀錄 id
-            record: 記進進行中紀錄的所屬復原紀錄內容（中斷後據以整理堆疊、寫回工作區 meta）
+            context: 記進進行中紀錄的這批搬移的來歷（中斷後據以整理堆疊、寫回工作區 meta）；省略時視為重新命名
             bounds: 各項目標必須在其中的資料夾（與 moves 一一對應）；None 表示不限制
 
         Returns:
@@ -340,8 +357,7 @@ class MoveService:
         self.validate(moves, bounds)
         steps = self._build_steps(moves)
         journal = MoveJournal(
-            pending=steps[0] if steps else None, complete=not steps,
-            operation=operation, record_id=record_id, record=record,
+            pending=steps[0] if steps else None, complete=not steps, context=context or BatchContext(),
         )
         try:
             self._journal.save(journal)

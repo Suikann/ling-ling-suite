@@ -36,7 +36,7 @@ from core.naming import UnsafeFolderNameError
 from core.paths import path_key
 from services.file_service import FileService
 from services.move_service import (
-    Move, MoveJournal, MoveRecoveryResult, MoveService, RenameRollbackError,
+    BatchContext, Move, MoveJournal, MoveRecoveryResult, MoveService, RenameRollbackError,
 )
 from services.rename_service import RenamePlan, apply_auto_suffix, generate_rename_plan
 from services.workspace_service import WorkspaceService
@@ -132,12 +132,15 @@ class _Interrupted:
 
     Attributes:
         journal: 進行中紀錄
-        kind: 被中斷的操作種類（舊版紀錄視為 RENAME）
         record: 所屬復原紀錄在這批搬移開始時的內容；舊版紀錄沒有，為 None
     """
     journal: MoveJournal
-    kind: OperationKind
     record: Optional[UndoRecord]
+
+    @property
+    def kind(self) -> OperationKind:
+        """被中斷的操作種類（舊版紀錄視為 RENAME）"""
+        return self.journal.context.operation
 
 
 def _by_source(order: List[str], found: Dict[RenameProblem, List[str]]) -> Dict[str, List[RenameProblem]]:
@@ -584,7 +587,7 @@ class MoveHistory:
         try:
             self._engine.execute(
                 moves, on_complete=complete, on_rollback=rolled_back,
-                operation=kind.value, record_id=record.id, record=record.to_data(), bounds=bounds,
+                context=BatchContext(kind, record.id, record.to_data()), bounds=bounds,
             )
         except RenameRollbackError as e:
             result.error = e
@@ -663,8 +666,9 @@ class MoveHistory:
         journal = self._engine.load_pending()
         if journal is None:
             return None
-        record = UndoRecord.from_data(journal.record, journal.record_id) if journal.record else None
-        return _Interrupted(journal, self._operation_of(journal), record)
+        context = journal.context
+        record = UndoRecord.from_data(context.record, context.record_id) if context.record else None
+        return _Interrupted(journal, record)
 
     def _finish_kept(self, interrupted: _Interrupted) -> None:
         """保留結果：補做被中斷的那批搬移整批搬完後該寫的紀錄（已寫過的不重寫）"""
@@ -686,7 +690,7 @@ class MoveHistory:
 
         先放回再移除，任何時點中斷都不會兩邊都沒有。
         """
-        record_id = interrupted.journal.record_id
+        record_id = interrupted.journal.context.record_id
         source, target = self._stacks_of(interrupted.kind)
         if source is not None and interrupted.record is not None and not source.contains(record_id):
             source.push(interrupted.record)
@@ -709,14 +713,6 @@ class MoveHistory:
     def _bounds(plan: List[RenameEntry]) -> List[str]:
         """重新命名計畫各項目標必須在其中的資料夾：該項的輸出位置"""
         return [e.output_location() for e in plan]
-
-    @staticmethod
-    def _operation_of(journal: MoveJournal) -> OperationKind:
-        """進行中紀錄所屬的操作種類；舊版紀錄沒有記（或記了不認得的值）時視為重新命名"""
-        try:
-            return OperationKind(journal.operation)
-        except ValueError:
-            return OperationKind.RENAME
 
     @staticmethod
     def _new_record(kind: OperationKind, description: str, **fields) -> UndoRecord:
