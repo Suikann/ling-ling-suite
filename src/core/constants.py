@@ -66,6 +66,8 @@ class WorkspaceStatus(str, Enum):
 
 
 PROJECT_EXTENSION = ".llproj"
+# 檔案進入群組時，檔名（不含副檔名、不分大小寫）含這些字樣的第一個檔案自動設為總譜
+SCORE_KEYWORDS = ("score", "full score", "conductor", "總譜", "指揮譜", "full")
 DEFAULT_MASTER_TEMPLATE = "{序號}-{曲名}-{樂器}.pdf"
 DEFAULT_MASTER_TEMPLATE_EN = "{Number}-{PieceName}-{Instrument}.pdf"
 DEFAULT_SUBFOLDER_TEMPLATE = "{曲名} - 第{樂章編號}樂章"

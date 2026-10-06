@@ -80,6 +80,10 @@ class TestReplacePaths(unittest.TestCase):
                 self.assertEqual(project.groups[0].score_file.display_name, "00. Score.pdf")
 
 
+def _infos(*names):
+    return [_info(_path(n)) for n in names]
+
+
 def _rich_group(name: str, parts: list) -> Group:
     """每個會存進專案檔的欄位都有非空值的群組"""
     return Group(
@@ -197,6 +201,227 @@ class TestOpenedProjectIsSaved(unittest.TestCase):
     def test_round_trip_keeps_every_saved_field(self):
         project = _rich_project()
         self.assertEqual(Project.from_data(project.to_data(), score_label="").to_data(), project.to_data())
+
+
+class TestChangedNotification(unittest.TestCase):
+    """專案只有一個「已變更」通知；訂閱者收到時看得到最新的未存檔狀態"""
+
+    def test_subscribers_hear_edits_and_saving(self):
+        project = Project()
+        original = project.master_template
+        heard = []
+        project.subscribe(lambda: heard.append(project.is_modified()))
+        project.set_master_template("{樂器}.pdf")
+        project.set_master_template(original)
+        project.set_master_template("{曲名}.pdf")
+        project.mark_saved()
+        self.assertEqual(heard, [True, False, True, False])
+
+
+class TestAutoDetectWhenFilesEnterGroup(unittest.TestCase):
+    """總譜與曲名只在檔案進入群組時猜一次；群組已有總譜或曲名時不覆蓋，開啟專案時不猜"""
+
+    PARTS = ("Brahms Symphony - Flute.pdf", "Brahms Symphony - Oboe.pdf")
+
+    def _files(self):
+        return _infos("Full Score.pdf", *self.PARTS)
+
+    def assert_detected(self, group: Group):
+        self.assertEqual(group.score_file.display_name, "Full Score.pdf")
+        self.assertEqual([f.display_name for f in group.files], list(self.PARTS))
+        self.assertEqual(group.piece_name, "Brahms Symphony")
+
+    def test_importing_a_folder_as_groups(self):
+        project = Project()
+        project.add_groups([Group(name="Brahms", files=self._files())], score_label="總譜")
+        self.assert_detected(project.groups[0])
+
+    def test_creating_a_group_from_selected_ungrouped_files(self):
+        files = self._files()
+        project = Project(ungrouped_files=list(files))
+        group = project.add_group("g", score_label="總譜", files=files)
+        self.assert_detected(group)
+        self.assertEqual(project.ungrouped_files, [])
+
+    def test_moving_files_into_a_group(self):
+        files = self._files()
+        project = Project(ungrouped_files=list(files))
+        group = project.add_group("g", score_label="總譜")
+        project.move_to_group(files, group)
+        self.assert_detected(group)
+        self.assertEqual(project.ungrouped_files, [])
+
+    def test_adding_files_to_a_group(self):
+        project = Project()
+        group = project.add_group("g", score_label="總譜")
+        project.add_files(self._files(), group)
+        self.assert_detected(group)
+
+    def test_split_result_entering_a_group(self):
+        project = Project()
+        group = project.add_split_result(
+            self._files(), ["Score", "Flute", "Oboe"], _path("合併譜.pdf"), score_label="總譜",
+        )
+        self.assert_detected(group)
+
+    def test_existing_score_and_piece_name_are_kept(self):
+        score = _info(_path("Conductor.pdf"))
+        project = Project(groups=[Group(name="g", score_file=score, piece_name="自訂曲名")])
+        project.add_files(self._files(), project.groups[0])
+        group = project.groups[0]
+        self.assertIs(group.score_file, score)
+        self.assertEqual(group.piece_name, "自訂曲名")
+        self.assertEqual(len(group.files), 3)
+
+    def test_opening_a_project_does_not_guess(self):
+        data = Project(groups=[Group(name="g", files=self._files())]).to_data()
+        group = Project.from_data(data, score_label="總譜").groups[0]
+        self.assertIsNone(group.score_file)
+        self.assertEqual(group.piece_name, "")
+
+    def test_no_common_name_leaves_the_piece_name_empty_rather_than_the_group_name(self):
+        project = Project()
+        project.add_groups([Group(name="Brahms", files=_infos("Flute.pdf", "Oboe.pdf"))], score_label="總譜")
+        self.assertEqual(project.groups[0].piece_name, "")
+
+    def test_files_added_to_ungrouped_are_left_alone(self):
+        project = Project()
+        project.add_files(self._files())
+        self.assertEqual(len(project.ungrouped_files), 3)
+
+    def test_guessing_the_piece_name_on_request_replaces_it(self):
+        project = Project(groups=[Group(name="g", piece_name="暫名", files=_infos(*self.PARTS))])
+        self.assertEqual(project.guess_piece_name(project.groups[0]), "Brahms Symphony")
+        self.assertEqual(project.groups[0].piece_name, "Brahms Symphony")
+
+    def test_guessing_without_a_common_name_keeps_the_piece_name(self):
+        project = Project(groups=[Group(name="g", piece_name="暫名", files=_infos("123.pdf", "456.pdf"))])
+        self.assertEqual(project.guess_piece_name(project.groups[0]), "")
+        self.assertEqual(project.groups[0].piece_name, "暫名")
+
+
+class TestGroupEdits(unittest.TestCase):
+    """群組與檔案的編輯操作：每次都發出「已變更」通知，並讓專案判為未存檔"""
+
+    def setUp(self):
+        self.parts = _infos("Flute.pdf", "Oboe.pdf", "Horn.pdf")
+        self.score = _info(_path("Score.pdf"))
+        self.group = Group(name="g", files=list(self.parts), score_file=self.score, score_label="總譜")
+        self.project = Project(groups=[self.group], ungrouped_files=_infos("Loose.pdf"))
+        self.heard = []
+        self.project.subscribe(lambda: self.heard.append(self.project.is_modified()))
+
+    def assert_changed(self):
+        self.assertEqual(self.heard, [True])
+
+    def names(self, files):
+        return [f.display_name for f in files]
+
+    def test_updating_group_fields(self):
+        self.project.update_group(self.group, piece_name="命運", use_small_template=True)
+        self.assertEqual((self.group.piece_name, self.group.use_small_template), ("命運", True))
+        self.assert_changed()
+
+    def test_updating_an_unknown_group_field_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.project.update_group(self.group, files=[])
+
+    def test_deleting_a_group_moves_its_score_and_parts_to_ungrouped(self):
+        self.project.delete_group(self.group)
+        self.assertEqual(self.project.groups, [])
+        self.assertEqual(
+            self.names(self.project.ungrouped_files), ["Loose.pdf", "Score.pdf", "Flute.pdf", "Oboe.pdf", "Horn.pdf"],
+        )
+        self.assert_changed()
+
+    def test_moving_parts_back_to_ungrouped(self):
+        self.project.move_to_ungrouped([self.parts[0], self.parts[2]])
+        self.assertEqual(self.names(self.group.files), ["Oboe.pdf"])
+        self.assertEqual(self.names(self.project.ungrouped_files), ["Loose.pdf", "Flute.pdf", "Horn.pdf"])
+        self.assert_changed()
+
+    def test_setting_the_score_puts_the_previous_score_back_among_parts(self):
+        self.project.set_score(self.group, self.parts[1])
+        self.assertIs(self.group.score_file, self.parts[1])
+        self.assertEqual(self.names(self.group.files), ["Flute.pdf", "Horn.pdf", "Score.pdf"])
+        self.assert_changed()
+
+    def test_clearing_the_score_puts_it_first_among_parts(self):
+        self.project.clear_score(self.group)
+        self.assertIsNone(self.group.score_file)
+        self.assertEqual(self.names(self.group.files), ["Score.pdf", "Flute.pdf", "Oboe.pdf", "Horn.pdf"])
+        self.assert_changed()
+
+    def test_reordering_parts(self):
+        self.project.reorder_files(self.group, [self.parts[2], self.parts[0], self.parts[1]])
+        self.assertEqual(self.names(self.group.files), ["Horn.pdf", "Flute.pdf", "Oboe.pdf"])
+        self.assert_changed()
+
+    def test_reordering_with_different_files_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.project.reorder_files(self.group, self.parts[:2])
+
+    def test_setting_instruments_keeps_the_old_all_selected_mirror(self):
+        self.project.set_instruments(self.group, ["Flute", "Oboe"])
+        self.assertEqual((self.group.instruments, self.group.selected_instruments), (["Flute", "Oboe"], [0, 1]))
+        self.assert_changed()
+
+    def test_linking_groups_as_movements(self):
+        second = Group(name="Adagio", movement_name="")
+        third = Group(name="Finale", movement_name="Allegro")
+        self.project.groups.extend([second, third])
+        self.project.link_movements([second, third], "命運")
+        self.assertEqual(
+            [(g.piece_name, g.movement_number, g.movement_name) for g in (second, third)],
+            [("命運", "1", "Adagio"), ("命運", "2", "Allegro")],
+        )
+        self.assert_changed()
+
+
+class TestProjectSettingEdits(unittest.TestCase):
+    """命名格式、輸出設定、編制設定與套用搬移結果：每次都發出「已變更」通知"""
+
+    def setUp(self):
+        self.project = Project(groups=[Group(name="g", files=_infos("Flute.pdf"), small_template="{樂器}.pdf")])
+        self.heard = []
+        self.project.subscribe(lambda: self.heard.append(self.project.is_modified()))
+
+    def test_output_settings_keep_the_old_parts_subfolder_flag_in_step(self):
+        self.project.set_output_settings(parts_output_mode="parts", output_directory=_path("out"))
+        self.assertTrue(self.project.use_parts_subfolder)
+        self.project.set_output_settings(parts_output_mode="section")
+        self.assertFalse(self.project.use_parts_subfolder)
+        self.assertEqual(self.project.output_directory, _path("out"))
+        self.assertEqual(self.heard, [True, True])
+
+    def test_unknown_output_setting_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.project.set_output_settings(master_template="x")
+
+    def test_ensemble_settings_are_merged_per_voice(self):
+        self.project.update_ensemble(headcounts={"Flute": 2}, sections={"Flute": "木管"})
+        self.project.update_ensemble(sections={"Horn": "銅管"})
+        self.assertEqual(self.project.instrument_headcounts, {"Flute": 2})
+        self.assertEqual(self.project.instrument_sections, {"Flute": "木管", "Horn": "銅管"})
+        self.assertEqual(self.heard, [True, True])
+
+    def test_converting_template_language_rewrites_every_template(self):
+        self.project.set_output_settings(subfolder_template="{曲名}")
+        self.project.set_master_template("{序號}-{樂器}.pdf")
+        self.heard.clear()
+        self.project.convert_template_language("en")
+        self.assertEqual(
+            (self.project.master_template, self.project.subfolder_template, self.project.groups[0].small_template),
+            ("{Number}-{Instrument}.pdf", "{PieceName}", "{Instrument}.pdf"),
+        )
+        self.assertEqual(self.heard, [True])
+
+    def test_applying_moves_and_removals_notifies(self):
+        path = self.project.groups[0].files[0].original_path
+        self.project.replace_paths([UndoMapping(path, _path("out", "01-Flute.pdf"))])
+        self.project.remove_paths([_path("out", "01-Flute.pdf")])
+        self.assertEqual(self.project.all_file_paths(), [])
+        self.assertEqual(self.heard, [True, True])
 
 
 if __name__ == '__main__':

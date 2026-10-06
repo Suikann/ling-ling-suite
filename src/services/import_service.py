@@ -7,7 +7,6 @@
 import os
 from typing import List, Tuple
 from core.models import FileInfo, Group
-from core.template_engine import detect_piece_name
 from services.file_service import FileService
 
 
@@ -43,6 +42,7 @@ class ImportService:
         - 無：根目錄所有 PDF 歸為一個群組
 
         僅掃描一層子資料夾，不遞迴深入。僅處理 .pdf 檔案。
+        群組只帶名稱與檔案；總譜、曲名的自動偵測與總譜標籤由 Project.add_groups 處理。
 
         Args:
             folder: 資料夾路徑
@@ -57,28 +57,12 @@ class ImportService:
             pdfs = self.file_service.list_pdf_files(subdir)
             if not pdfs:
                 continue
-            files = self.import_files(pdfs)
-            dir_name = os.path.basename(subdir)
-            filenames = [f.display_name for f in files]
-            detected_name = detect_piece_name(filenames)
-            sub_groups.append(Group(
-                name=dir_name,
-                files=files,
-                piece_name=detected_name,
-            ))
+            sub_groups.append(Group(name=os.path.basename(subdir), files=self.import_files(pdfs)))
         root_pdfs = self.file_service.list_pdf_files(folder)
         if sub_groups:
             groups.extend(sub_groups)
             if root_pdfs:
                 ungrouped.extend(self.import_files(root_pdfs))
         elif root_pdfs:
-            files = self.import_files(root_pdfs)
-            dir_name = os.path.basename(folder)
-            filenames = [f.display_name for f in files]
-            detected_name = detect_piece_name(filenames)
-            groups.append(Group(
-                name=dir_name,
-                files=files,
-                piece_name=detected_name,
-            ))
+            groups.append(Group(name=os.path.basename(folder), files=self.import_files(root_pdfs)))
         return groups, ungrouped

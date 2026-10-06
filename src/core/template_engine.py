@@ -6,9 +6,11 @@
 """
 import os
 import re
-from typing import Dict, List
-from core.constants import ALL_VARIABLE_NAMES, TEMPLATE_VARIABLES
-from core.models import Group
+from typing import TYPE_CHECKING, Dict, List, Optional
+from core.constants import ALL_VARIABLE_NAMES, SCORE_KEYWORDS, TEMPLATE_VARIABLES
+
+if TYPE_CHECKING:
+    from core.models import Group
 
 
 def substitute_template(template: str, variables: Dict[str, str]) -> str:
@@ -29,7 +31,7 @@ def substitute_template(template: str, variables: Dict[str, str]) -> str:
 
 def build_variables_for_file(
     file_index: int,
-    group: Group,
+    group: "Group",
     instruments: List[str] = None,
 ) -> Dict[str, str]:
     """為單一檔案組合所有模板變數（同時產生中英文鍵名）
@@ -102,6 +104,22 @@ def detect_piece_name(filenames: List[str]) -> str:
     if result:
         return result
     return _detect_by_common_tokens(basenames)
+
+
+def detect_score_index(filenames: List[str]) -> Optional[int]:
+    """從檔名清單找出總譜
+
+    Args:
+        filenames: 檔案名稱清單（不含路徑）
+
+    Returns:
+        第一個檔名（不含副檔名、不分大小寫）含總譜關鍵字的索引，找不到時為 None
+    """
+    for i, name in enumerate(filenames):
+        stem = os.path.splitext(name)[0].lower()
+        if any(keyword in stem for keyword in SCORE_KEYWORDS):
+            return i
+    return None
 
 
 def _detect_by_common_prefix(basenames: List[str]) -> str:
