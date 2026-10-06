@@ -19,7 +19,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Set
 
 from core.constants import WORKSPACE_DIR, WORKSPACE_META_FILE, WorkspaceStatus
 from core.models import Project, WorkspaceEntry, WorkspaceScan
-from core.paths import path_key, same_path
+from core.paths import is_inside, path_key, same_path
 from services.file_service import FileService
 
 
@@ -38,12 +38,8 @@ class WorkspaceService:
     # --- 路徑 ---
 
     def is_in_workspace(self, path: str) -> bool:
-        """檢查路徑是否位於工作區內"""
-        root = path_key(self.workspace_dir)
-        try:
-            return os.path.commonpath([path_key(path), root]) == root
-        except ValueError:
-            return False
+        """檢查路徑是否位於工作區內（不含工作區目錄本身）"""
+        return is_inside(path, self.workspace_dir)
 
     def folder_of(self, path: str) -> Optional[str]:
         """取得工作區內檔案所屬的子資料夾；不在工作區內則回傳 None"""

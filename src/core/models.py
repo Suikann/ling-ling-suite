@@ -95,6 +95,11 @@ class Group:
             small_template=data.get("small_template", ""),
         )
 
+    def assign_instruments(self, instruments: Iterable[str]) -> None:
+        """換成新的樂器表（聲部清單），舊欄位 selected_instruments 跟著維持全選；不發通知，由專案的操作呼叫"""
+        self.instruments = list(instruments)
+        self.selected_instruments = list(range(len(self.instruments)))
+
 
 @dataclass
 class UndoMapping:
@@ -484,12 +489,11 @@ class Project:
         """舊格式群組的遷移：補上總譜標籤、承接專案層級的樂器表、把勾選的子集收成群組自己的樂器表"""
         if not group.score_label:
             group.score_label = score_label
-        if not group.instruments and self.instruments:
-            group.instruments = list(self.instruments)
+        instruments = group.instruments or list(self.instruments)
         selected = group.selected_instruments
-        if group.instruments and selected and selected != list(range(len(group.instruments))):
-            group.instruments = [group.instruments[i] for i in selected if i < len(group.instruments)]
-        group.selected_instruments = list(range(len(group.instruments)))
+        if selected:
+            instruments = [instruments[i] for i in selected if i < len(instruments)]
+        group.assign_instruments(instruments)
 
     def is_modified(self) -> bool:
         """目前內容是否與上次存檔或開啟時的快照不同"""
@@ -611,9 +615,8 @@ class Project:
         group = self._group_referencing(result.replaced) or self._group_referencing([result.source_path])
         self._detach_paths(result.replaced)
         source_position = self._position_of(result.source_path)
-        source = path_key(result.source_path)
-        for ref in self.file_refs():
-            if ref.group is not None and path_key(ref.file.original_path) == source:
+        for ref in self._refs_to([result.source_path]):
+            if ref.group is not None:
                 self._detach(ref)
         created = group is None
         if created:
@@ -622,8 +625,7 @@ class Project:
             self.groups.append(group)
         instruments, piece_name = list(group.instruments), group.piece_name
         group.files.extend(result.parts)
-        group.instruments = list(result.voices)
-        group.selected_instruments = list(range(len(group.instruments)))
+        group.assign_instruments(result.voices)
         self._detect_on_entry(group)
         self._changed()
         return SplitPlacement(
@@ -652,11 +654,10 @@ class Project:
                 self._remove_group(group)
             elif group is not None:
                 if placement.instruments is not None:
-                    group.instruments = list(placement.instruments)
-                    group.selected_instruments = list(range(len(group.instruments)))
+                    group.assign_instruments(placement.instruments)
                 if placement.piece_name is not None:
                     group.piece_name = placement.piece_name
-            if placement.source is not None and not self._references(record.source_path):
+            if placement.source is not None and not self.references_any([record.source_path]):
                 self._put_back(FileInfo(record.source_path, os.path.basename(record.source_path)), placement.source)
         self._changed()
 
@@ -721,8 +722,7 @@ class Project:
 
     def set_instruments(self, group: Group, instruments: Iterable[str]) -> None:
         """設定群組的樂器表（聲部清單）；舊欄位 selected_instruments 跟著維持全選"""
-        group.instruments = list(instruments)
-        group.selected_instruments = list(range(len(group.instruments)))
+        group.assign_instruments(instruments)
         self._changed()
 
     def link_movements(self, groups: Iterable[Group], piece_name: str) -> None:
@@ -834,23 +834,12 @@ class Project:
 
     def _detach_paths(self, paths: Iterable[str]) -> None:
         """拿掉指向指定路徑的檔案引用（不發通知）"""
-        doomed = {path_key(p) for p in paths}
-        for ref in self.file_refs():
-            if path_key(ref.file.original_path) in doomed:
-                self._detach(ref)
+        for ref in self._refs_to(paths):
+            self._detach(ref)
 
     def _group_referencing(self, paths: Iterable[str]) -> Optional[Group]:
         """第一個（依 file_refs 順序）引用到其中任一路徑的群組；沒有時為 None"""
-        keys = {path_key(p) for p in paths}
-        for ref in self.file_refs():
-            if ref.group is not None and path_key(ref.file.original_path) in keys:
-                return ref.group
-        return None
-
-    def _references(self, path: str) -> bool:
-        """專案是否引用指定路徑（分譜、總譜或未分組）"""
-        key = path_key(path)
-        return any(path_key(ref.file.original_path) == key for ref in self.file_refs())
+        return next((ref.group for ref in self._refs_to(paths) if ref.group is not None), None)
 
     def _group_by_id(self, group_id: str) -> Optional[Group]:
         """指定 id 的群組；已不在專案裡時為 None"""
@@ -858,8 +847,7 @@ class Project:
 
     def _position_of(self, path: str) -> Optional[FilePosition]:
         """第一個（依 file_refs 順序）指向指定路徑的引用所在的位置；專案沒有引用它時為 None"""
-        key = path_key(path)
-        ref = next((r for r in self.file_refs() if path_key(r.file.original_path) == key), None)
+        ref = next(iter(self._refs_to([path])), None)
         if ref is None:
             return None
         if ref.group is None:
