@@ -38,19 +38,8 @@ jobs:
           python -c "from services.project_service import ProjectService"
           python -c "from services.move_history import MoveHistory, MoveResult, RenameVerdict"
 
-      - name: "[DEBUG-wsh] GIL probe"
-        run: python tests/wsh_gil_probe.py
-        timeout-minutes: 4
-        continue-on-error: true
-
-      - name: "[DEBUG-wsh] split dialog tests alone"
-        run: python -m pytest tests/test_split_dialog.py -v -s -x --tb=long -p no:cacheprovider -o faulthandler_timeout=60
-        timeout-minutes: 4
-        continue-on-error: true
-
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short -o faulthandler_timeout=120 --cov=src --cov-report=term-missing
-        timeout-minutes: 8
 
       - name: Syntax check all Python files
         run: python -m py_compile src/main.py

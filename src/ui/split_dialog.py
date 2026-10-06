@@ -222,19 +222,13 @@ class SplitPdfDialog(QDialog):
             QMessageBox.critical(self, t("dialog.error"), str(e))
 
     def _render_bg(self, path):
-        import sys as _dbg_sys, time as _dbg_time
-        print(f"[DEBUG-wsh] render start t={_dbg_time.monotonic():.3f} dialog={id(self):x} path={path}", file=_dbg_sys.stderr, flush=True)
         try:
             pil_images = render_page_thumbnails(path, max_width=_THUMB_WIDTH)
-            print(f"[DEBUG-wsh] render done t={_dbg_time.monotonic():.3f} dialog={id(self):x} pages={len(pil_images)}", file=_dbg_sys.stderr, flush=True)
             self._signals.ready.emit(pil_images)
         except Exception as e:
-            print(f"[DEBUG-wsh] render error t={_dbg_time.monotonic():.3f} dialog={id(self):x} {e!r}", file=_dbg_sys.stderr, flush=True)
             self._signals.error.emit(str(e))
 
     def _on_thumbnails_ready(self, pil_images):
-        import sys as _dbg_sys, time as _dbg_time
-        print(f"[DEBUG-wsh] ready slot t={_dbg_time.monotonic():.3f} dialog={id(self):x}", file=_dbg_sys.stderr, flush=True)
         self._pil_thumbs = pil_images
         self._pixmaps = []
         for img in pil_images:
@@ -248,8 +242,6 @@ class SplitPdfDialog(QDialog):
         self._exec_btn.setEnabled(True)
 
     def _on_thumbnails_error(self, msg):
-        import sys as _dbg_sys, time as _dbg_time
-        print(f"[DEBUG-wsh] error slot t={_dbg_time.monotonic():.3f} dialog={id(self):x} {msg}", file=_dbg_sys.stderr, flush=True)
         QMessageBox.critical(self, t("dialog.error"), msg)
 
     # --- Thumbnail grid ---
