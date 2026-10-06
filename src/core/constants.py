@@ -64,6 +64,8 @@ DEFAULT_PREFERENCES = {
 # 檔名不得含有的字元（Windows 最嚴），一律換成底線；Windows 保留名（CON、NUL 等）與尾端點空白不處理，這類名字不應出現
 FILENAME_ILLEGAL_CHARS = '<>:"/\\|?*'
 PDF_EXTENSION = ".pdf"
+# 不能當資料夾名稱的名字：指向目前或上一層目錄，命名結果是這些時拒絕，檔案才不會落到輸出位置外
+RELATIVE_DIR_NAMES = (".", "..")
 # 分割輸出：區段名清理後為空時的檔名
 SPLIT_FALLBACK_NAME = "Part"
 
@@ -84,26 +86,55 @@ DEFAULT_MASTER_TEMPLATE = "{序號}-{曲名}-{樂器}.pdf"
 DEFAULT_MASTER_TEMPLATE_EN = "{Number}-{PieceName}-{Instrument}.pdf"
 DEFAULT_SUBFOLDER_TEMPLATE = "{曲名} - 第{樂章編號}樂章"
 DEFAULT_SUBFOLDER_TEMPLATE_EN = "{PieceName} - Movement {MovementNum}"
+DEFAULT_PARTS_SUBFOLDER_NAME = "Parts"
+
+
+class PartsOutputMode(str, Enum):
+    """分譜存放模式（專案檔存的是值）"""
+    ROOT = "root"
+    PARTS = "parts"
+    SECTION = "section"
+
+
+class VariableLevel(str, Enum):
+    """模板變數的層級"""
+    GROUP = "group"
+    FILE = "file"
 
 
 @dataclass(frozen=True)
 class TemplateVariable:
-    """模板變數定義"""
+    """模板變數定義
+
+    Attributes:
+        name: 中文名稱
+        name_en: 英文名稱
+        level: 群組層級（同一群組的每個檔案都相同）或逐檔不同
+        source: 值的來源；群組層級為 Group 的欄位名稱，逐檔為 TEMPLATE_SLOT_SOURCES 之一
+        description: 說明
+    """
     name: str
     name_en: str
-    level: str
+    level: VariableLevel
+    source: str
     description: str
 
 
+# 逐檔變數的值來源（依序為命名模組傳入的值）：這一格的序號、這一格的聲部（總譜為總譜標籤）
+TEMPLATE_SLOT_SOURCES = ("number", "voice")
+
 TEMPLATE_VARIABLES: List[TemplateVariable] = [
-    TemplateVariable("序號", "Number", "逐檔不同", "樂器在樂器表中的位置，自動產生，零填充"),
-    TemplateVariable("樂器", "Instrument", "逐檔不同", "樂器表，依排序對應"),
-    TemplateVariable("曲名", "PieceName", "群組層級", "從檔名共同部分自動偵測，使用者可覆寫"),
-    TemplateVariable("樂章編號", "MovementNum", "群組層級", "使用者輸入"),
-    TemplateVariable("樂章名稱", "MovementName", "群組層級", "使用者輸入"),
-    TemplateVariable("作曲家", "Composer", "群組層級", "使用者輸入"),
-    TemplateVariable("曲種", "Genre", "群組層級", "使用者輸入，例如交響曲、協奏曲"),
+    TemplateVariable("序號", "Number", VariableLevel.FILE, "number", "聲部在樂器表中的位置，至少兩位數；總譜為 00"),
+    TemplateVariable("樂器", "Instrument", VariableLevel.FILE, "voice", "樂器表，依排序對應；總譜為總譜標籤"),
+    TemplateVariable("曲名", "PieceName", VariableLevel.GROUP, "piece_name", "從檔名共同部分自動偵測，使用者可覆寫"),
+    TemplateVariable("樂章編號", "MovementNum", VariableLevel.GROUP, "movement_number", "使用者輸入"),
+    TemplateVariable("樂章名稱", "MovementName", VariableLevel.GROUP, "movement_name", "使用者輸入"),
+    TemplateVariable("作曲家", "Composer", VariableLevel.GROUP, "composer", "使用者輸入"),
+    TemplateVariable("曲種", "Genre", VariableLevel.GROUP, "genre", "使用者輸入，例如交響曲、協奏曲"),
 ]
+# 序號的最少位數（分譜為 01、02…，超過 99 個聲部才用三位）與總譜的序號
+MIN_NUMBER_WIDTH = 2
+SCORE_NUMBER = "00"
 
 VARIABLE_NAMES: List[str] = [v.name for v in TEMPLATE_VARIABLES]
 VARIABLE_NAMES_EN: List[str] = [v.name_en for v in TEMPLATE_VARIABLES]
