@@ -250,15 +250,16 @@ src/
     move_journal.py              - 批次搬移進行中紀錄的讀寫（pending_move.json）
     instance_lock.py             - 單一實例鎖（作業系統檔案鎖，程式結束或當機時自動解除）
     pdf_service.py               - PDF 分割計畫組裝、頁面擷取、旋轉、縮圖產生
-    project_service.py           - 專案檔儲存/載入（內容由 Project.to_data／from_data 決定）、與磁碟上的專案檔比對（matches_file）
+    project_service.py           - 專案檔的序列化讀寫（內容由 Project.to_data／from_data 決定）、與磁碟上的專案檔比對（matches_file）
+    project_access.py            - 專案存取：開啟與存檔（專案檔、最近專案清單、工作區 meta 所屬專案）、已知專案清單、清理工作區的掃描；主視窗開啟、存檔、關閉前比對都只經過它
     undo_service.py              - 復原／重做操作管理
-    preferences_service.py       - 使用者偏好（語言、外觀）持久化
+    preferences_service.py       - 使用者偏好（語言、外觀、最近專案清單、譜庫設定）的存放；檔案位置建構時注入，預設值在 constants
     workspace_service.py         - 工作區（分割輸出的暫存地）管理：子資料夾、meta.json、掃描、清理
     google_auth_service.py       - Google API OAuth 認證
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、undo、workspace、pdf_service、locale、instance_lock；main_window、split_dialog、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法
+tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、project_access、undo、workspace、pdf_service、locale、instance_lock；main_window、split_dialog、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
 GLOSSARY.md                      - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
@@ -334,9 +335,22 @@ services/ 層
 - 舊欄位鏡像（全選的 `selected_instruments`、`use_parts_subfolder`）由上述操作與載入流程維持，呼叫端不碰
 - **未存檔＝快照比對**：`is_modified()` 比對目前內容（`to_data()`，即專案檔會存的內容，不含版本號）與上次存檔或開啟時的快照；改回原值就回到已存檔。舊格式的遷移（總譜標籤留空補上依目前介面語言的預設值、承接專案層級樂器表、勾選子集收成群組樂器表、舊分譜子資料夾旗標）在 `from_data` 內、拍快照之前完成，所以開啟舊專案不標記未存檔。開啟專案、切換分頁不改內容，不標記；切換介面語言改寫了命名格式就標記
 - 每個編輯操作與存檔、開啟後都發出同一個「已變更」通知（`subscribe`，純 callback）；主視窗只訂閱它來更新標題的 `*`。存檔與預覽前沒有把畫面收回模型的步驟
-- 關閉程式前，再用 `ProjectService.matches_file` 把目前內容和磁碟上的專案檔（照開啟方式還原、含遷移）比對一次；不同、讀不到或檔案已不在都照常詢問是否儲存。專案還沒存過檔時沒有檔案可比，照快照判定（新專案沒動過就直接關閉）
+- 關閉程式前，再用 `ProjectAccess.matches_file` 把目前內容和磁碟上的專案檔（照開啟方式還原、含遷移）比對一次；不同、讀不到或檔案已不在都照常詢問是否儲存。專案還沒存過檔時沒有檔案可比，照快照判定（新專案沒動過就直接關閉）
 - **自動偵測只在檔案進入群組時做一次**：匯入資料夾建立群組、從勾選建立群組、把檔案搬進群組、加入檔案、分割結果加入群組。沒有總譜才依 `SCORE_KEYWORDS` 猜總譜，沒有曲名才由分譜檔名猜曲名，已有的不覆蓋；建立分頁與開啟專案時不偵測，使用者清掉的總譜或曲名不會被設回。想重猜曲名時按「自動偵測」（`guess_piece_name`）
 - **總譜標籤在群組建立時寫入**：依當時的介面語言寫入預設值，之後切換介面語言不影響
+
+---
+
+## Project Access
+
+開啟與存檔一律經過專案存取（`services/project_access.py` 的 `ProjectAccess`），主視窗只呼叫它並依結果顯示訊息。它擁有專案檔讀寫、最近專案清單、工作區 meta 的所屬專案與已知專案清單。
+
+- **專案檔本身讀寫成功就算成功**：`open`／`save` 回傳 `AccessResult`，`error` 只反映專案檔本身。最近清單寫不進去（`recent_failed`）或 meta 寫不進去（`owner_failed`）只在狀態列提示，不跳錯誤框，也不擋下關閉、開新專案或開啟其他專案（推翻 #16 原本「最近清單寫不進去也算存檔失敗」的決定）
+- 兩個附帶動作各自進行，一個失敗不影響另一個：開啟時最近清單寫不進去，meta 的所屬專案照常更新
+- 存檔：專案檔寫成後，專案的快照就是寫出的內容（`ProjectService.save_project` 寫完才 `mark_saved`）；寫不成時顯示「儲存失敗」、不做任何附帶動作，專案仍判為未存檔
+- 開啟：讀不到或格式不對時顯示「無法開啟專案」，不換掉目前的專案；專案檔已不存在時另外從最近清單移除（讀不到的留在清單上）。從最近清單開啟時先以 `forget_if_missing` 檢查，不存在就提示「找不到檔案」並移除，不先問是否儲存。開啟結果帶出專案引用、但找不到的檔案（`missing_files`），主視窗據此提醒
+- 最近清單：開啟或存檔的專案放到頂端，同一個檔案（任何寫法）只留一筆，最多 `MAX_RECENT_PROJECTS` 筆；存在偏好設定裡（`PreferencesService` 只負責存放，檔案位置 `PREFERENCES_FILE` 由建構時注入，預設值 `DEFAULT_PREFERENCES`）
+- 已知專案（`known_projects`）＝最近清單＋各工作區子資料夾 `meta.project_path` 指向的專案檔，是「清理工作區」載入以判定引用關係的候選（`scan_workspace`）；掃描順手把最近清單中已不存在的專案檔移除
 
 ---
 
@@ -400,11 +414,11 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 
 - 每個來源合併譜對應一個子資料夾，名稱為來源路徑比對鍵（`path_key`：絕對路徑、不分大小寫）SHA-1 的前 8 碼；資料夾內 `meta.json` 記錄 `source_path`、`source_name`、`project_path`、`created_at`（路徑皆為絕對路徑，`project_path` 未存檔時為空字串）
 - 子資料夾以來源合併譜為鍵、跨專案共用：另一專案重新分割同一份合併譜會取代前者尚未重新命名的分譜，確認訊息點名所屬專案（`WorkspaceService.other_owner`），專案檔已不存在時加註「（找不到）」；`prepare_folder` 一律把所屬專案改成目前專案，未存檔時記為空（取代過一次後再分割就是自己的嘗試，不再點名別人）
-- 專案開啟與存檔時都更新引用到的子資料夾的 `meta.project_path`（`update_project_path` 回傳寫入失敗的子資料夾，UI 只在狀態列提示、不阻止開啟或存檔）
+- 專案開啟與存檔時都由專案存取更新引用到的子資料夾的 `meta.project_path`（`update_project_path` 回傳寫入失敗的子資料夾，UI 只在狀態列提示、不阻止開啟或存檔；見 Project Access）
 - 搬空的子資料夾保留 `meta.json`（復原重新命名時分譜會搬回來，需要它辨識來源）；「清理工作區」掃描時才移除既未被目前專案、也未被任何已知專案引用的空資料夾（`meta.json` 是程式自產的中繼資料，直接刪除不走資源回收桶；連同原子寫入殘留 `meta.json.tmp` 一起清，由 `FileService.remove_atomic_residue` 認得暫名）
 - 復原紀錄寫入時對來源位於工作區的項目快照其子資料夾的 meta（`UndoRecord.workspace_meta`，因此 `UndoService` 注入 `WorkspaceService`）；復原後子資料夾若已沒有可讀的 meta 就用快照寫回（`restore_meta`；回滾失敗卡在工作區的檔案也寫回），寫回失敗不影響檔案復原；重做前先以子資料夾目前的 meta 更新快照；舊紀錄沒有此欄照常載入
 - 「工具 → 開啟工作區資料夾」以系統檔案總管開啟 `WORKSPACE_DIR`
-- 「工具 → 清理工作區」列出各子資料夾的引用狀態（使用中／屬於其他專案／屬於無法讀取的專案／未被引用／來源不明），只有「未被引用」預設勾選，刪除走資源回收桶。「已知專案」= 最近專案清單 + 各 `meta.project_path` 指向的專案檔；開啟對話框時會順手把最近清單中已不存在的專案檔移除
+- 「工具 → 清理工作區」列出各子資料夾的引用狀態（使用中／屬於其他專案／屬於無法讀取的專案／未被引用／來源不明），只有「未被引用」預設勾選，刪除走資源回收桶。「已知專案」= 最近專案清單 + 各 `meta.project_path` 指向的專案檔（`ProjectAccess.known_projects`）；開啟對話框時會順手把最近清單中已不存在的專案檔移除
 - 引用關係涵蓋群組內分譜、總譜與未分組檔案（`Project.file_refs()`）
 - 分割輸出路徑等於來源合併譜時拒絕執行（`pdf_service.extract_pages` 與分割對話框各擋一層）；重新分割同一來源時，所有指向舊輸出的群組／未分組項目一併移除
 - `rename_file` 跨磁碟時複製到 `.part` 再就位，失敗不留半成品
@@ -416,7 +430,7 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 | 項目 | 位置 |
 |------|------|
 | 使用者資料目錄 | Windows：`%APPDATA%/LingLingSuite/`；Linux／macOS：`$XDG_CONFIG_HOME/LingLingSuite/`（預設 `~/.config/LingLingSuite/`），由 `core/constants.py` 的 `APPDATA_DIR` 決定 |
-| 偏好設定 | `<使用者資料目錄>/preferences.json` |
+| 偏好設定 | `<使用者資料目錄>/preferences.json`（`PREFERENCES_FILE`；語言、外觀、最近專案清單、譜庫設定，預設值 `DEFAULT_PREFERENCES`） |
 | 復原／重做紀錄 | `<使用者資料目錄>/undo/`、`redo/`（每次操作一個 JSON 檔） |
 | 批次搬移進行中紀錄 | `<使用者資料目錄>/pending_move.json`（只在重新命名／復原／重做進行中存在；啟動時仍在即為上次中斷） |
 | 單一實例鎖 | `<使用者資料目錄>/instance.lock`（`INSTANCE_LOCK_FILE`；執行期間由作業系統鎖住，結束或當機時自動解除，檔案留著不刪。啟動時先取得，取不到就提示「已在執行中」後結束，不開主視窗、不檢查進行中紀錄） |
