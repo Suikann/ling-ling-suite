@@ -249,7 +249,16 @@ def _folder_name(name: str) -> str:
 
 
 def _variables(group: Group, number: str, voice: str) -> Dict[str, str]:
-    """一格的變數表（中英文名稱都有），由模板變數常數推得：逐檔變數取這一格的值，群組層級變數取群組欄位"""
+    """一格的變數表（中英文名稱都有），由模板變數常數推得：逐檔變數取這一格的值，群組層級變數取群組欄位
+
+    Args:
+        group: 群組
+        number: 這一格的序號（總譜為 SCORE_NUMBER）
+        voice: 這一格的聲部（總譜為總譜標籤）
+
+    Returns:
+        變數名稱（中文與英文）到值
+    """
     slot_values = dict(zip(TEMPLATE_SLOT_SOURCES, (number, voice)))
     table = {}
     for var in TEMPLATE_VARIABLES:

@@ -276,6 +276,13 @@ class SplitService:
 
         移除已就位的新分譜，把挪開的檔案放回原處，刪掉放新分譜的暫用子資料夾（裡面只有寫好或寫到一半的
         新分譜）；放挪開檔案的暫用子資料夾與這次新建的目錄只在已空時移除。
+
+        Args:
+            placed: 已放到定位的新分譜
+            moved_aside: 已挪開的被取代檔案：（原本的路徑，暫用子資料夾裡的路徑）
+            staging: 放新分譜的暫用子資料夾
+            set_aside: 放挪開檔案的暫用子資料夾
+            created: 這次新建的目錄
         """
         for path in reversed(placed):
             try:

@@ -644,7 +644,13 @@ class MoveHistory:
             self.file_service.remove_empty_directory(directory)
 
     def _finish_redo(self, record: UndoRecord, present: List[UndoMapping], created_dirs: List[str]) -> None:
-        """重做整批搬完：記下重做新建的目錄，紀錄轉回復原堆疊"""
+        """重做整批搬完：記下重做新建的目錄，紀錄轉回復原堆疊
+
+        Args:
+            record: 重做的紀錄
+            present: 實際搬回新位置的對照（只有它們轉回復原堆疊）
+            created_dirs: 這次重做新建的目錄（復原時移除）
+        """
         record.created_directories = created_dirs
         self._transfer(record, present, self._redo, self._undo)
 
@@ -655,6 +661,12 @@ class MoveHistory:
         """紀錄從一個堆疊轉到另一個，只帶實際搬動的對照；一個都沒有時只從原堆疊移除
 
         已在目標堆疊（上次轉到一半被中斷）就不再放一次；先放入目標再從原堆疊移除。
+
+        Args:
+            record: 要轉移的紀錄
+            mappings: 實際搬動的對照
+            source: 紀錄原本所在的堆疊
+            target: 要轉入的堆疊
         """
         if mappings and not target.contains(record.id):
             moved = replace(
