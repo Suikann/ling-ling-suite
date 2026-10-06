@@ -308,7 +308,8 @@ class WorkspaceMetaTestCase(MoveHistoryTestCase):
         source = self.path("合併譜.pdf")
         if not os.path.exists(source):
             self.create("合併譜.pdf")
-        folder = self.workspace.prepare_folder(source, self._project_file("a"))
+        folder = os.path.join(self.workspace.workspace_dir, "a1b2c3d4")
+        self.workspace.write_meta(folder, source, self._project_file("a"))
         part = os.path.join(folder, name)
         with open(part, "w") as f:
             f.write("part")
@@ -336,7 +337,7 @@ class TestWorkspaceMeta(WorkspaceMetaTestCase):
     def test_undo_keeps_meta_written_in_the_meantime(self):
         folder, part = self._part_in_workspace()
         self.history.rename(self._to_scores((part, self.path("01-高笙.pdf"))))
-        self.workspace.prepare_folder(self.path("合併譜.pdf"), self._project_file("other"))
+        self.workspace.write_meta(folder, self.path("合併譜.pdf"), self._project_file("other"))
         self.history.undo()
         self.assertEqual(self.workspace.read_meta(folder)["project_path"], self._project_file("other"))
 
@@ -375,7 +376,7 @@ class TestWorkspaceMeta(WorkspaceMetaTestCase):
         self.history.rename(self._to_scores((part, self.path("01-高笙.pdf"))))
         self.history.undo()
         # 復原與重做之間專案另存到新位置
-        self.workspace.prepare_folder(self.path("合併譜.pdf"), self._project_file("moved"))
+        self.workspace.write_meta(folder, self.path("合併譜.pdf"), self._project_file("moved"))
         self.history.redo()
         self.workspace.purge_empty_folders()
         self.history.undo()

@@ -3,23 +3,22 @@
 工作區服務
 
 管理程式產生、尚待重新命名的檔案（目前只有分割輸出）。每個來源合併譜對應
-工作區內一個以路徑雜湊命名的子資料夾，資料夾內的 meta.json 記錄來源與所屬專案。
+工作區內一個子資料夾，資料夾內的 meta.json 記錄來源與所屬專案；子資料夾的命名、
+建立與取代上次的分譜是分割模組（services/split_service.py）的事，這裡負責 meta、
+專案開啟與存檔時的所屬專案更新、清理掃描，以及復原時判斷檔案屬於哪個子資料夾。
 
 使用範例：
     from services.workspace_service import WorkspaceService
     workspace = WorkspaceService(file_service)
-    folder = workspace.prepare_folder(source_pdf, project_path)
+    failed = workspace.update_project_path(project, project_path)
 """
-import hashlib
 import json
 import os
 import time
 from typing import Callable, Dict, Iterable, List, Optional, Set
 
-from core.constants import (
-    WORKSPACE_DIR, WORKSPACE_FOLDER_HASH_LENGTH, WORKSPACE_META_FILE, WorkspaceStatus,
-)
-from core.models import Project, WorkspaceEntry, WorkspaceOwner, WorkspaceScan
+from core.constants import WORKSPACE_DIR, WORKSPACE_META_FILE, WorkspaceStatus
+from core.models import Project, WorkspaceEntry, WorkspaceScan
 from core.paths import path_key, same_path
 from services.file_service import FileService
 
@@ -37,18 +36,6 @@ class WorkspaceService:
         self.workspace_dir = workspace_dir
 
     # --- 路徑 ---
-
-    def folder_for_source(self, source_path: str) -> str:
-        """取得來源檔案對應的工作區子資料夾路徑（不建立）
-
-        Args:
-            source_path: 來源合併譜路徑
-
-        Returns:
-            子資料夾的絕對路徑，名稱為來源路徑比對鍵（core.paths）雜湊的前幾碼
-        """
-        digest = hashlib.sha1(path_key(source_path).encode("utf-8")).hexdigest()
-        return os.path.join(self.workspace_dir, digest[:WORKSPACE_FOLDER_HASH_LENGTH])
 
     def is_in_workspace(self, path: str) -> bool:
         """檢查路徑是否位於工作區內"""
@@ -69,48 +56,18 @@ class WorkspaceService:
 
     # --- 子資料夾生命週期 ---
 
-    def prepare_folder(self, source_path: str, project_path: str = "") -> str:
-        """建立（或沿用）來源對應的子資料夾並寫入 meta.json
-
-        所屬專案一律改成目前專案：輸出被這次分割取代後就不再屬於先前的專案，
-        尚未存檔時記為未知（空字串），存檔時再由 update_project_path 補上。
-
-        Args:
-            source_path: 來源合併譜路徑
-            project_path: 目前專案檔路徑，尚未存檔時為空字串
-
-        Returns:
-            子資料夾路徑
-        """
-        folder = self.folder_for_source(source_path)
-        self.file_service.create_directory(folder)
-        meta = self.read_meta(folder) or {}
-        meta.update({
-            "source_path": os.path.abspath(source_path),
-            "source_name": os.path.basename(source_path),
-            "project_path": _stored_project_path(project_path),
-            "created_at": meta.get("created_at") or time.time(),
-        })
-        self._write_meta(folder, meta)
-        return folder
-
-    def list_outputs(self, folder: str) -> List[str]:
+    def _list_outputs(self, folder: str) -> List[str]:
         """列出子資料夾內的分割輸出（PDF）"""
         if not os.path.isdir(folder):
             return []
         return self.file_service.list_pdf_files(folder)
-
-    def clear_outputs(self, folder: str) -> None:
-        """將子資料夾內上一次的分割輸出移至資源回收桶，保留 meta.json"""
-        for path in self.list_outputs(folder):
-            self.file_service.delete_file(path)
 
     def remove_folder(self, folder: str) -> None:
         """移除只剩 meta.json 的空子資料夾；仍有輸出檔時不動
 
         連同 meta.json 原子寫入的殘留一起清掉，否則資料夾清不空、下次掃描會變成來源不明。
         """
-        if not os.path.isdir(folder) or self.list_outputs(folder):
+        if not os.path.isdir(folder) or self._list_outputs(folder):
             return
         meta_path = os.path.join(folder, WORKSPACE_META_FILE)
         if os.path.isfile(meta_path):
@@ -133,7 +90,7 @@ class WorkspaceService:
         keep = {path_key(p) for p in in_use or ()}
         count = 0
         for folder in self._list_folders():
-            if path_key(folder) in keep or self.list_outputs(folder):
+            if path_key(folder) in keep or self._list_outputs(folder):
                 continue
             self.remove_folder(folder)
             count += 1
@@ -226,26 +183,6 @@ class WorkspaceService:
             except OSError:
                 failed.append(folder)
         return failed
-
-    def other_owner(self, folder: str, current_project_path: str) -> Optional[WorkspaceOwner]:
-        """子資料夾的所屬專案若不是目前專案，回傳該專案
-
-        子資料夾以來源為鍵、跨專案共用，重新分割會取代另一個專案尚未重新命名的分譜，
-        提示時要點名。尚未存檔的專案（路徑為空）視為「不是」任何已記錄的所屬專案。
-
-        Args:
-            folder: 子資料夾路徑
-            current_project_path: 目前專案檔路徑，尚未存檔時為空字串
-
-        Returns:
-            所屬專案與其檔案是否仍存在；所屬專案為空或就是目前專案時回傳 None
-        """
-        owner_path = self._owner_path(self.read_meta(folder))
-        if not owner_path:
-            return None
-        if current_project_path and same_path(owner_path, current_project_path):
-            return None
-        return WorkspaceOwner(project_path=owner_path, exists=self.file_service.file_exists(owner_path))
 
     # --- 清理 ---
 
@@ -354,7 +291,7 @@ class WorkspaceService:
         Returns:
             供清理對話框顯示的摘要
         """
-        outputs = self.list_outputs(folder)
+        outputs = self._list_outputs(folder)
         total = sum(os.path.getsize(p) for p in outputs)
         modified = max((os.path.getmtime(p) for p in outputs), default=os.path.getmtime(folder))
         meta = meta or {}

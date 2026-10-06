@@ -46,9 +46,15 @@ class ProjectAccessTestCase(unittest.TestCase):
             f.write("dummy")
         return path
 
+    def _workspace_folder(self, source: str, owner: str = "") -> str:
+        """建立來源合併譜與它在工作區的子資料夾（以來源檔名命名），回傳子資料夾；owner 為 meta 記錄的所屬專案"""
+        folder = os.path.join(self.workspace.workspace_dir, os.path.splitext(source)[0])
+        self.workspace.write_meta(folder, self._create(source), owner)
+        return folder
+
     def _workspace_part(self, owner: str = "", source: str = "合併譜.pdf") -> tuple:
         """在工作區建一份分譜，回傳（子資料夾，分譜路徑）；owner 為 meta 記錄的所屬專案"""
-        folder = self.workspace.prepare_folder(self._create(source), owner)
+        folder = self._workspace_folder(source, owner)
         return folder, self._create("高笙.pdf", folder)
 
     def _project_file(self, name: str, *paths: str) -> str:
@@ -231,7 +237,7 @@ class TestWorkspaceCleanupScan(ProjectAccessTestCase):
         by_owner, part = self._workspace_part(owner=owner, source="b.pdf")
         self._project_file("owner.llproj", part)
         os.remove(part)
-        unreferenced = self.workspace.prepare_folder(self._create("c.pdf"))
+        unreferenced = self._workspace_folder("c.pdf")
         self.access.scan_workspace(None)
         self.assertTrue(os.path.isdir(by_recent))
         self.assertTrue(os.path.isdir(by_owner))
