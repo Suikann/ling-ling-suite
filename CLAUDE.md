@@ -234,18 +234,19 @@ src/
     workspace_dialog.py          - 工作區清理對話框
     widgets.py                   - 共用增強元件與 UI 輔助函式（如找不到檔案的提示）
   core/                          - 模板引擎、資料模型、常數定義
-    constants.py                 - 模板變數定義、預設值、應用程式路徑等常數
+    constants.py                 - 模板變數定義（含層級欄位）、分譜存放模式、預設值、應用程式路徑等常數
     filename.py                  - 檔名清理（非法字元換底線、空名回退），重新命名與分割共用
+    naming.py                    - 命名格式套用：群組中的一格（總譜或第 N 份分譜）＋命名設定 → 檔名＋相對資料夾；純函式，本機重新命名、預覽與 Drive 重新命名共用
     paths.py                     - 路徑同一性（path_key、same_path：絕對路徑、不分大小寫），全程式比對路徑只用它
     catalog_constants.py         - 譜庫相關常數
-    template_engine.py           - 模板解析與變數替換邏輯、模板變數雙語轉換
+    template_engine.py           - 曲名／總譜／樂器偵測、模板變數雙語轉換
     models.py                    - 資料模型（Project、Group、Template、FileInfo）；Project 是專案編輯模組：意圖層級的編輯操作、「已變更」通知、未存檔快照、專案檔內容（to_data／from_data，含舊格式遷移）；Project.file_refs() 是「總譜＋分譜＋未分組」的唯一走訪，依路徑取代／移除引用也在這裡
     catalog_models.py            - 譜庫資料模型
     locale.py                    - 國際化系統（zh_TW／en 介面字串）
   services/                      - 檔案操作、PDF 處理、雲端整合
     file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾、JSON 原子寫入）
     import_service.py            - 檔案/資料夾匯入與自動分組
-    rename_service.py            - 批次重新命名邏輯編排（計畫生成、空檔名檢查）
+    rename_service.py            - 批次重新命名邏輯編排（計畫生成：命名結果接在輸出位置之下、聲部組第一次用到時寫進專案；空檔名檢查）
     move_service.py              - 兩階段批次搬移引擎（驗證、對調／連鎖、回滾、進行中紀錄與中斷後還原）；重新命名、復原、重做共用
     move_journal.py              - 批次搬移進行中紀錄的讀寫（pending_move.json）
     instance_lock.py             - 單一實例鎖（作業系統檔案鎖，程式結束或當機時自動解除）
@@ -259,7 +260,7 @@ src/
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、project_access、undo、workspace、pdf_service、locale、instance_lock；main_window、split_dialog、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
+tests/                           - pytest 測試（template_engine、naming、filename、rename、rename_plan、move、import、project、project_access、undo、workspace、pdf_service、locale、instance_lock；main_window、split_dialog、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
 GLOSSARY.md                      - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
@@ -308,22 +309,32 @@ services/ 層
 ### 群組（Group）
 
 一個群組代表「一首曲目的一個樂章」：
-- 從樂器表中勾選該群組用到的樂器子集
-- 群組內的檔案數量必須等於勾選的樂器數量
-- 使用者排列檔案順序，位置與勾選的樂器一一對應
+- 每個群組有自己的樂器表（聲部清單）；專案層級的舊樂器表只在載入舊專案時遷移進群組，不傳入命名
+- 使用者排列檔案順序，第 N 份分譜對應第 N 個聲部；多於聲部數的分譜不改名
 - 各群組獨立設定 `{曲名}`、`{樂章編號}`、`{樂章名稱}`
 
 ### 模板變數
 
 | 變數 | 層級 | 來源 | 範例 |
 |------|------|------|------|
-| `{序號}` | 逐檔不同 | 樂器在樂器表中的位置，自動產生，零填充 | `01`, `02` |
-| `{樂器}` | 逐檔不同 | 樂器表，依排序對應 | `Flute`, `Violin I` |
+| `{序號}` | 逐檔不同 | 聲部在樂器表中的位置，至少兩位數（超過 99 個聲部才用三位）；總譜固定 `00` | `01`, `02`；`001`…`100` |
+| `{樂器}` | 逐檔不同 | 樂器表，依排序對應；總譜代入總譜標籤 | `Flute`, `Violin I` |
 | `{曲名}` | 群組層級 | 檔案進入群組時從分譜檔名共同部分自動偵測一次，使用者可覆寫或按「自動偵測」重猜 | `Beethoven Sym.5` |
 | `{樂章編號}` | 群組層級 | 使用者輸入 | `1`, `2`, `3` |
 | `{樂章名稱}` | 群組層級 | 使用者輸入 | `Allegro`, `Adagio` |
 | `{作曲家}` | 群組層級 | 使用者輸入 | `Beethoven`, `Mozart` |
 | `{曲種}` | 群組層級 | 使用者輸入 | `交響曲`, `協奏曲` |
+
+變數清單、中英文名稱與層級都定義在 `core/constants.py` 的 `TEMPLATE_VARIABLES`（`level` 為 `VariableLevel.GROUP`／`FILE`）；新增群組層級變數只改常數（`source` 指向 `Group` 的欄位）。
+
+### 命名格式套用（`core/naming.py`）
+
+總譜與分譜、本機與 Drive 都經過同一個純函式模組，不碰磁碟、不讀介面語言：
+- `name_slot(group, slot, settings, voices=None)`：一格（`SCORE_SLOT`＝0 為總譜，N 為第 N 份分譜）→ `SlotName(file_name, folders)`；`name_group` 列出整個群組（總譜在前），多於聲部數的分譜放在 `extra_files`、不改名。明確傳入的樂器表（`voices`）優先於群組的樂器表，空的視同未傳入
+- `settings_for(project, group)` 組出命名設定：有小模板用小模板；子資料夾模板只在開啟子資料夾輸出時套用；分譜存放模式（`PartsOutputMode`：根目錄／分譜資料夾／聲部組資料夾）只影響分譜，總譜留在子資料夾那一層
+- 命名格式只掃描一次，代入的值不再被替換（曲名是 `{Instrument}` 時原樣保留）；不是模板變數的 `{…}` 從檔名與資料夾名拿掉（`unknown_variables` 列出它們）
+- 每個產出都清理非法字元，檔名補 `.pdf`；任何一層資料夾清理後是 `.` 或 `..` 時拋出 `UnsafeFolderNameError`，預覽顯示阻擋警告並停用執行
+- 檔名用語跟專案、不跟介面：總譜標籤在群組建立時寫入；聲部組資料夾模式下，還沒有聲部組的聲部在第一次產生計畫時依當時的介面語言寫進編制設定（`update_ensemble`），之後切換介面語言不影響
 
 ---
 
