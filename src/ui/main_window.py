@@ -211,7 +211,7 @@ class MainWindow(QMainWindow):
 
     def _add_group_tab(self, group: Group):
         from ui.group_panel import GroupTab
-        tab = GroupTab(group, self.project)
+        tab = GroupTab(group, self.project, self.file_service, self.import_service)
         tab.groups_changed.connect(self._rebuild_tabs)
         self._tab_widget.addTab(tab, group.name or group.id[:8])
 

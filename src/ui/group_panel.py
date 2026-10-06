@@ -16,6 +16,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from core.locale import t
 from core.models import FileInfo, Group, Project
+from services.file_service import FileService
+from services.import_service import ImportService
 
 
 class UngroupedTab(QWidget):
@@ -109,10 +111,22 @@ class GroupTab(QWidget):
 
     groups_changed = Signal()
 
-    def __init__(self, group: Group, project: Project, parent=None):
+    def __init__(
+        self, group: Group, project: Project, file_service: FileService, import_service: ImportService, parent=None,
+    ):
+        """
+        Args:
+            group: 這個分頁的群組
+            project: 群組所屬的專案（修改一律透過它的編輯操作）
+            file_service: 檔案服務（從磁碟刪除分譜）
+            import_service: 匯入服務（加入檔案）
+            parent: 父元件
+        """
         super().__init__(parent)
         self.group = group
         self.project = project
+        self._file_service = file_service
+        self._import_service = import_service
         self._build_ui()
 
     def _build_ui(self):
@@ -289,9 +303,7 @@ class GroupTab(QWidget):
         )
         if not paths:
             return
-        from services.import_service import ImportService
-        from services.file_service import FileService
-        self.project.add_files(ImportService(FileService()).import_files(paths), self.group)
+        self.project.add_files(self._import_service.import_files(paths), self.group)
         self._piece_name_entry.setText(self.group.piece_name)
         self.refresh()
 
@@ -312,11 +324,9 @@ class GroupTab(QWidget):
         )
         if result != QMessageBox.Yes:
             return
-        from services.file_service import FileService
-        fs = FileService()
         for f in files:
             try:
-                fs.delete_file(f.original_path)
+                self._file_service.delete_file(f.original_path)
             except Exception:
                 pass
         self.project.remove_paths([f.original_path for f in files])
