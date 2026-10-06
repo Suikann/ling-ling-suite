@@ -9,6 +9,7 @@ import dataclasses
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -29,6 +30,16 @@ def _path(*parts):
 
 def _info(path):
     return FileInfo(path, os.path.basename(path))
+
+
+class TestProjectModelIsPurePython(unittest.TestCase):
+    """專案模型不依賴 Qt：只匯入 core.models 的程式不會載入 PySide6"""
+
+    def test_importing_the_model_does_not_load_qt(self):
+        src = os.path.join(os.path.dirname(__file__), '..', 'src')
+        code = f"import sys; sys.path.insert(0, {src!r}); import core.models; print('PySide6' in sys.modules)"
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.strip(), "False")
 
 
 class TestFileRefs(unittest.TestCase):

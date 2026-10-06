@@ -17,7 +17,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.constants import WORKSPACE_META_FILE
-from core.locale import t
+from core.locale import set_locale, t
 from core.models import FileInfo, Group, Project
 from services.file_service import FileService
 from main import launch
@@ -40,15 +40,16 @@ from tests.other_instance import OtherInstance
 
 
 @contextmanager
-def answering_prompts(*answers: str):
+def answering_prompts(*answers):
     """模擬使用者在提示框的選擇
 
     替換 QMessageBox.exec：每跳出一個提示框，依序按下文字等於下一個答案的按鈕。
+    「是／否」類的詢問框（QMessageBox.question）依序以下一個答案作為按下的標準按鈕（QMessageBox.Yes、No）。
     提示框比答案多、或找不到該按鈕時不按任何按鈕，離開區塊時才判定失敗（Qt 事件裡拋出的例外會被吞掉）。
     QMessageBox.critical、warning、information 也一併替換，只記錄標題與訊息，不會卡住測試。
 
     Args:
-        answers: 依序要按下的按鈕文字
+        answers: 依序要按下的按鈕文字，或「是／否」詢問框要按的標準按鈕
 
     Yields:
         跳出過的提示框（標題，訊息）清單
@@ -67,11 +68,20 @@ def answering_prompts(*answers: str):
         button.click()
         return box.result()
 
+    def fake_question(parent, title, text, *args, **kwargs):
+        shown.append((title, text))
+        answer = remaining.pop(0) if remaining else None
+        if not isinstance(answer, QMessageBox.StandardButton):
+            unexpected.append((text, answer))
+            return QMessageBox.Cancel
+        return answer
+
     def fake_static(parent, title, text, *args, **kwargs):
         shown.append((title, text))
         return QMessageBox.Ok
 
     with mock.patch.object(QMessageBox, "exec", fake_exec), \
+            mock.patch.object(QMessageBox, "question", fake_question), \
             mock.patch.object(QMessageBox, "critical", fake_static), \
             mock.patch.object(QMessageBox, "warning", fake_static), \
             mock.patch.object(QMessageBox, "information", fake_static):
@@ -120,13 +130,20 @@ def previewing(operate: Callable[[QDialog], None]):
         raise AssertionError("預覽對話框沒有開啟")
 
 
+def _settle():
+    """處理延後刪除的元件，如同事件迴圈跑過一輪：重建分頁後被換掉的舊分頁不會再被找到"""
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+
 def button_in(parent: QWidget, button_type, text: str):
     """parent 中文字相符的按鈕（勾選框、選項按鈕等）"""
+    _settle()
     return next(b for b in parent.findChildren(button_type) if b.text() == text)
 
 
 def field_in(parent: QWidget, text: str) -> QLineEdit:
     """parent 中目前顯示指定文字的欄位"""
+    _settle()
     return next(e for e in parent.findChildren(QLineEdit) if e.text() == text)
 
 
@@ -140,7 +157,8 @@ class MainWindowTestCase(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.temp_dir, True)
-        self.window = MainWindow(PreferencesService())
+        self.preferences = PreferencesService()
+        self.window = MainWindow(self.preferences)
 
     def tearDown(self):
         with answering_prompts(t("dialog.discard_btn")):
@@ -166,6 +184,22 @@ class MainWindowTestCase(unittest.TestCase):
         with answering_prompts(), opening(path):
             self.trigger_menu(t("menu.file.open"))
         return path
+
+    def save_from_menu(self, path: str) -> Project:
+        """從選單儲存（尚未存過檔時存到 path），讀回存出的專案檔"""
+        with answering_prompts(), saving_as(path):
+            self.trigger_menu(t("menu.file.save"))
+        return ProjectService().load_project(path)
+
+    def create_files(self, *names: str) -> List[FileInfo]:
+        """在暫存目錄建立檔案，回傳對應的檔案資訊"""
+        files = []
+        for name in names:
+            path = os.path.join(self.temp_dir, name)
+            with open(path, "w") as f:
+                f.write("dummy")
+            files.append(FileInfo(path, name))
+        return files
 
 
 class TestMainWindowWorkspaceOwner(MainWindowTestCase):
@@ -293,7 +327,12 @@ class TestMainWindowUnsavedPrompt(MainWindowTestCase):
 
 
 class TestMainWindowMarksUserEdits(MainWindowTestCase):
-    """使用者對專案內容的編輯立刻標記未存檔；程式填入的值不算修改"""
+    """標題的未存檔標記跟著專案內容：與上次存檔或開啟時不同才標記，改回原樣就消失"""
+
+    def _switch_language_back(self):
+        set_locale("zh_TW")
+        self.preferences.set("language", "zh_TW")
+        self.preferences.save()
 
     def _open_project_with_group(self) -> Group:
         """從選單開啟一份含一個群組、大模板與預設值不同的專案，回傳存進專案檔的群組"""
@@ -322,12 +361,55 @@ class TestMainWindowMarksUserEdits(MainWindowTestCase):
         self.assertFalse(self.is_marked_unsaved())
 
     def test_opening_a_project_with_an_unassigned_score_does_not_mark_unsaved(self):
-        """群組裡有像總譜的檔案但沒指定總譜（例如存檔前清掉了），開啟時程式自動偵測總譜不算修改"""
-        score = os.path.join(self.temp_dir, "Full Score.pdf")
-        with open(score, "w") as f:
-            f.write("dummy")
-        self.open_from_menu(Project(groups=[Group(name="g", files=[FileInfo(score, "Full Score.pdf")])]))
+        """群組裡有像總譜的檔案但沒指定總譜（例如存檔前清掉了），開啟時不猜總譜"""
+        self.open_from_menu(Project(groups=[Group(name="g", files=self.create_files("Full Score.pdf"))]))
         self.assertFalse(self.is_marked_unsaved())
+
+    def test_opening_an_old_project_with_blank_score_labels_then_closing_does_not_ask_to_save(self):
+        self.open_from_menu(Project(groups=[Group(name="g", score_label="", files=self.create_files("Flute.pdf"))]))
+        self.assertFalse(self.is_marked_unsaved())
+        with answering_prompts() as shown:
+            closed = self.window.close()
+        self.assertTrue(closed)
+        self.assertEqual(shown, [])
+
+    def test_typing_in_master_template_then_deleting_it_clears_the_mark(self):
+        entry = field_in(self.window, self.window.project.master_template)
+        QTest.keyClicks(entry, "x")
+        QTest.keyClick(entry, Qt.Key_Backspace)
+        self.assertFalse(self.is_marked_unsaved())
+
+    def test_switching_language_that_rewrites_the_master_template_marks_unsaved(self):
+        self.addCleanup(self._switch_language_back)
+        self.trigger_menu(t("menu.view.language.en"))
+        self.assertTrue(self.is_marked_unsaved())
+
+    def test_switching_tabs_does_not_mark_unsaved(self):
+        self.open_from_menu(Project(groups=[
+            Group(name="a", instruments=["Flute"], score_label="總譜"), Group(name="b", score_label="總譜"),
+        ]))
+        tabs = self.window.findChild(QTabWidget)
+        for index in (0, 2, 1):
+            tabs.setCurrentIndex(index)
+        self.assertFalse(self.is_marked_unsaved())
+
+    def test_deleting_a_group_moves_its_files_to_ungrouped_and_marks_unsaved(self):
+        path = self.open_from_menu(Project(groups=[
+            Group(name="g", files=self.create_files("Flute.pdf", "Oboe.pdf"), score_label="總譜"),
+        ]))
+        with answering_prompts(QMessageBox.Yes):
+            self.click_button(t("group.delete"))
+        self.assertTrue(self.is_marked_unsaved())
+        saved = self.save_from_menu(path)
+        self.assertEqual(saved.groups, [])
+        self.assertEqual([f.display_name for f in saved.ungrouped_files], ["Flute.pdf", "Oboe.pdf"])
+
+    def test_new_group_keeps_the_score_label_of_the_language_it_was_created_in(self):
+        self.addCleanup(self._switch_language_back)
+        self.click_button(t("group.add"))
+        self.trigger_menu(t("menu.view.language.en"))
+        path = os.path.join(self.temp_dir, "saved.llproj")
+        self.assertEqual(self.save_from_menu(path).groups[0].score_label, "總譜")
 
     def test_changing_output_settings_in_preview_marks_unsaved(self):
         def toggle_subfolders(dialog):
@@ -345,6 +427,60 @@ class TestMainWindowMarksUserEdits(MainWindowTestCase):
         with previewing(touch_without_changing):
             self.click_button(t("panel.preview_rename"))
         self.assertFalse(self.is_marked_unsaved())
+
+
+class TestMainWindowCloseComparesWithProjectFile(MainWindowTestCase):
+    """關閉前再把目前內容和磁碟上的專案檔比對一次，不同就照常詢問是否儲存"""
+
+    def test_close_asks_to_save_when_the_project_file_was_changed_elsewhere(self):
+        path = self.open_from_menu(Project(groups=[Group(name="g", score_label="總譜")]))
+        ProjectService().save_project(Project(groups=[Group(name="elsewhere", score_label="總譜")]), path)
+        with answering_prompts(t("dialog.discard_btn")) as shown:
+            closed = self.window.close()
+        self.assertTrue(closed)
+        self.assertEqual(shown, [(t("dialog.close"), t("dialog.close.message"))])
+
+    def test_close_asks_to_save_when_the_project_file_is_gone(self):
+        path = self.open_from_menu(Project(groups=[Group(name="g", score_label="總譜")]))
+        os.remove(path)
+        with answering_prompts(t("dialog.discard_btn")) as shown:
+            self.window.close()
+        self.assertEqual(shown, [(t("dialog.close"), t("dialog.close.message"))])
+
+
+class TestMainWindowGuessesOnlyWhenFilesEnterGroup(MainWindowTestCase):
+    """總譜與曲名只在檔案進入群組時自動偵測；使用者清掉的不會在重建分頁時被設回"""
+
+    def test_cleared_score_is_not_set_back_when_a_group_is_added(self):
+        score, part = self.create_files("Full Score.pdf", "Flute.pdf")
+        path = self.open_from_menu(Project(groups=[Group(name="g", files=[part], score_file=score, score_label="總譜")]))
+        self.click_button(t("group.score_file.clear"))
+        self.click_button(t("group.add"))
+        saved = self.save_from_menu(path).groups[0]
+        self.assertIsNone(saved.score_file)
+        self.assertEqual([f.display_name for f in saved.files], ["Full Score.pdf", "Flute.pdf"])
+
+    def test_cleared_piece_name_is_not_set_back_when_a_group_is_added(self):
+        files = self.create_files("Brahms Symphony - Flute.pdf", "Brahms Symphony - Oboe.pdf")
+        path = self.open_from_menu(Project(groups=[
+            Group(name="g", files=files, piece_name="Brahms Symphony", score_label="總譜"),
+        ]))
+        entry = field_in(self.window, "Brahms Symphony")
+        entry.selectAll()
+        QTest.keyClick(entry, Qt.Key_Backspace)
+        self.click_button(t("group.add"))
+        self.assertEqual(self.save_from_menu(path).groups[0].piece_name, "")
+
+    def test_moving_ungrouped_files_into_a_new_group_guesses_score_and_piece_name(self):
+        files = self.create_files("Full Score.pdf", "Brahms Symphony - Flute.pdf", "Brahms Symphony - Oboe.pdf")
+        path = self.open_from_menu(Project(ungrouped_files=files))
+        self.window.findChild(QTabWidget).setCurrentIndex(0)
+        button_in(self.window, QCheckBox, t("ungrouped.select_all")).click()
+        self.click_button(t("ungrouped.new_group_from_selected"))
+        saved = self.save_from_menu(path).groups[0]
+        self.assertEqual(saved.score_file.display_name, "Full Score.pdf")
+        self.assertEqual(saved.piece_name, "Brahms Symphony")
+        self.assertEqual(saved.score_label, "總譜")
 
 
 class TestMainWindowKeepsTypedInput(MainWindowTestCase):

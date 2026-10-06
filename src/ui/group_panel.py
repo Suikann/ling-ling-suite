@@ -2,33 +2,31 @@
 """
 群組管理面板（PySide6）
 
-提供群組標籤管理與檔案清單。
+提供群組標籤管理與檔案清單。分頁只表達使用者的意圖，修改一律透過專案的編輯操作立即寫入；
+影響其他分頁的修改（群組新增或刪除、檔案在群組與未分組之間搬動）以 groups_changed 通知主視窗重建分頁。
 """
-import os
-from typing import List, TYPE_CHECKING
+from typing import List, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QCheckBox, QListWidget, QListWidgetItem,
     QMessageBox, QMenu, QFileDialog, QAbstractItemView,
 )
 from ui.widgets import DragListWidget
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from core.locale import t
-from core.models import Group, Project, FileInfo
-from core.template_engine import detect_piece_name
-
-if TYPE_CHECKING:
-    from ui.main_window import MainWindow
+from core.models import FileInfo, Group, Project
 
 
 class UngroupedTab(QWidget):
     """未分組標籤"""
 
-    def __init__(self, project: Project, main_window: "MainWindow", parent=None):
+    groups_changed = Signal()
+    group: Optional[Group] = None
+
+    def __init__(self, project: Project, parent=None):
         super().__init__(parent)
         self.project = project
-        self.main_window = main_window
         self._build_ui()
 
     def _build_ui(self):
@@ -50,9 +48,10 @@ class UngroupedTab(QWidget):
         self._list.setSelectionMode(QAbstractItemView.MultiSelection)
         QShortcut(QKeySequence("Ctrl+A"), self._list, self._select_all_items)
         layout.addWidget(self._list)
-        self._refresh()
+        self.refresh()
 
-    def _refresh(self):
+    def refresh(self):
+        """依專案重新列出未分組檔案"""
         self._list.clear()
         self._select_all.setChecked(False)
         if not self.project.ungrouped_files:
@@ -71,14 +70,16 @@ class UngroupedTab(QWidget):
         for i in range(self._list.count()):
             self._list.item(i).setSelected(checked)
 
-    def _get_selected_indices(self) -> List[int]:
-        return [i for i in range(self._list.count()) if self._list.item(i).isSelected()]
+    def _selected_files(self) -> List[FileInfo]:
+        """清單中選取的未分組檔案"""
+        files = self.project.ungrouped_files
+        return [files[i] for i in range(min(self._list.count(), len(files))) if self._list.item(i).isSelected()]
 
     def _move_selected(self):
-        selected = self._get_selected_indices()
-        if not selected or not self.project.groups:
-            if not self.project.groups:
-                QMessageBox.information(self, t("dialog.info"), t("dialog.info.create_group_first"))
+        if not self.project.groups:
+            QMessageBox.information(self, t("dialog.info"), t("dialog.info.create_group_first"))
+            return
+        if not self._selected_files():
             return
         menu = QMenu(self)
         for group in self.project.groups:
@@ -89,43 +90,30 @@ class UngroupedTab(QWidget):
         menu.exec(self.sender().mapToGlobal(self.sender().rect().bottomLeft()))
 
     def _do_batch_move(self, group: Group):
-        selected = self._get_selected_indices()
-        files_to_move = [self.project.ungrouped_files[i] for i in selected]
-        for i in sorted(selected, reverse=True):
-            self.project.ungrouped_files.pop(i)
-        group.files.extend(files_to_move)
-        self.main_window._mark_modified()
-        self.main_window._rebuild_tabs()
+        self.project.move_to_group(self._selected_files(), group)
+        self.groups_changed.emit()
 
     def _new_group_from_selected(self):
-        selected = self._get_selected_indices()
-        if not selected:
+        files = self._selected_files()
+        if not files:
             return
-        files_to_move = [self.project.ungrouped_files[i] for i in selected]
-        for i in sorted(selected, reverse=True):
-            self.project.ungrouped_files.pop(i)
-        new_group = Group(
-            name=t("group.new_name", number=len(self.project.groups) + 1),
-            files=files_to_move,
+        self.project.add_group(
+            t("group.new_name", number=len(self.project.groups) + 1),
+            score_label=t("group.score_label"), files=files,
         )
-        self.project.groups.append(new_group)
-        self.main_window._mark_modified()
-        self.main_window._rebuild_tabs()
+        self.groups_changed.emit()
 
 
 class GroupTab(QWidget):
     """群組標籤"""
 
-    _SCORE_KEYWORDS = ("score", "full score", "conductor", "總譜", "指揮譜", "full")
+    groups_changed = Signal()
 
-    def __init__(self, group: Group, project: Project, main_window: "MainWindow", parent=None):
+    def __init__(self, group: Group, project: Project, parent=None):
         super().__init__(parent)
-        self._group = group
+        self.group = group
         self.project = project
-        self.main_window = main_window
         self._build_ui()
-        self._auto_detect_score()
-        self._auto_detect_piece_name()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -133,7 +121,7 @@ class GroupTab(QWidget):
         layout.setSpacing(4)
         top_row = QHBoxLayout()
         top_row.addWidget(QLabel(t("group.name_label")))
-        self._name_entry = QLineEdit(self._group.name)
+        self._name_entry = QLineEdit()
         top_row.addWidget(self._name_entry, stretch=1)
         del_btn = QPushButton(t("group.delete"))
         del_btn.setStyleSheet("background-color: #c0392b; color: white;")
@@ -142,25 +130,25 @@ class GroupTab(QWidget):
         layout.addLayout(top_row)
         vars_row = QHBoxLayout()
         vars_row.addWidget(QLabel(t("group.piece_name_label")))
-        self._piece_name_entry = QLineEdit(self._group.piece_name)
+        self._piece_name_entry = QLineEdit()
         vars_row.addWidget(self._piece_name_entry)
         detect_btn = QPushButton(t("group.auto_detect"))
         detect_btn.clicked.connect(self._detect_piece_name)
         vars_row.addWidget(detect_btn)
         vars_row.addWidget(QLabel(t("group.movement_num_label")))
-        self._movement_num_entry = QLineEdit(self._group.movement_number)
+        self._movement_num_entry = QLineEdit()
         self._movement_num_entry.setFixedWidth(60)
         vars_row.addWidget(self._movement_num_entry)
         vars_row.addWidget(QLabel(t("group.movement_name_label")))
-        self._movement_name_entry = QLineEdit(self._group.movement_name)
+        self._movement_name_entry = QLineEdit()
         vars_row.addWidget(self._movement_name_entry)
         layout.addLayout(vars_row)
         vars_row2 = QHBoxLayout()
         vars_row2.addWidget(QLabel(t("group.composer_label")))
-        self._composer_entry = QLineEdit(self._group.composer)
+        self._composer_entry = QLineEdit()
         vars_row2.addWidget(self._composer_entry)
         vars_row2.addWidget(QLabel(t("group.genre_label")))
-        self._genre_entry = QLineEdit(self._group.genre)
+        self._genre_entry = QLineEdit()
         vars_row2.addWidget(self._genre_entry)
         vars_row2.addStretch()
         layout.addLayout(vars_row2)
@@ -178,9 +166,8 @@ class GroupTab(QWidget):
         layout.addLayout(score_row)
         score_label_row = QHBoxLayout()
         score_label_row.addWidget(QLabel(t("group.score_file.label")))
-        self._score_label_entry = QLineEdit(
-            self._group.score_label or t("group.score_label"),
-        )
+        self._score_label_entry = QLineEdit()
+        self._score_label_entry.setPlaceholderText(t("group.score_label"))
         self._score_label_entry.setFixedWidth(120)
         score_label_row.addWidget(self._score_label_entry)
         score_label_row.addStretch()
@@ -200,7 +187,7 @@ class GroupTab(QWidget):
         add_btn = QPushButton(t("group.add_files"))
         add_btn.clicked.connect(self._add_files)
         file_btn_row.addWidget(add_btn)
-        remove_btn = QPushButton("\u2190 " + t("group.ungrouped"))
+        remove_btn = QPushButton("← " + t("group.ungrouped"))
         remove_btn.clicked.connect(self._remove_selected_files)
         file_btn_row.addWidget(remove_btn)
         delete_btn = QPushButton(t("file.delete_from_disk"))
@@ -211,17 +198,14 @@ class GroupTab(QWidget):
         layout.addLayout(file_btn_row)
         bottom_row = QHBoxLayout()
         self._small_template_cb = QCheckBox(t("group.use_small_template"))
-        self._small_template_cb.setChecked(self._group.use_small_template)
         bottom_row.addWidget(self._small_template_cb)
-        self._small_template_entry = QLineEdit(self._group.small_template)
-        self._small_template_entry.setEnabled(self._group.use_small_template)
+        self._small_template_entry = QLineEdit()
         self._small_template_cb.toggled.connect(self._small_template_entry.setEnabled)
         bottom_row.addWidget(self._small_template_entry, stretch=1)
         layout.addLayout(bottom_row)
-        self._write_back_user_edits()
-        self._refresh_file_list()
-        self._update_score_display()
-        self._check_mismatch()
+        self._show_fields()
+        self._write_user_edits()
+        self.refresh()
 
     def _text_fields(self):
         """文字欄位與它對應的群組屬性"""
@@ -235,28 +219,36 @@ class GroupTab(QWidget):
             (self._score_label_entry, "score_label"),
         )
 
-    def _write_back_user_edits(self):
-        """使用者編輯欄位或切換小模板時立即寫回群組並標記未存檔
-
-        重建分頁會丟掉元件，元件上的值不能等存檔時才收回模型；只接使用者操作的訊號，程式填值不算修改。
-        """
+    def _show_fields(self):
+        """把群組的文字與小模板欄位顯示在畫面上（程式填值，不經過使用者編輯的訊號）"""
         for entry, attr in self._text_fields():
-            entry.textEdited.connect(lambda text, a=attr: self._apply_user_edit(a, text.strip()))
+            entry.setText(getattr(self.group, attr))
+        self._small_template_cb.setChecked(self.group.use_small_template)
+        self._small_template_entry.setText(self.group.small_template)
+        self._small_template_entry.setEnabled(self.group.use_small_template)
+
+    def _write_user_edits(self):
+        """使用者編輯欄位或切換小模板時立即寫入專案；只接使用者操作的訊號，程式填值不寫入"""
+        for entry, attr in self._text_fields():
+            entry.textEdited.connect(
+                lambda text, a=attr: self.project.update_group(self.group, **{a: text.strip()}),
+            )
         self._small_template_entry.textEdited.connect(
-            lambda text: self._apply_user_edit("small_template", text),
+            lambda text: self.project.update_group(self.group, small_template=text),
         )
         self._small_template_cb.clicked.connect(
-            lambda checked: self._apply_user_edit("use_small_template", checked),
+            lambda checked: self.project.update_group(self.group, use_small_template=checked),
         )
 
-    def _apply_user_edit(self, attr: str, value):
-        """把使用者的編輯寫進群組並標記未存檔"""
-        setattr(self._group, attr, value)
-        self.main_window._mark_modified()
+    def refresh(self):
+        """依群組重新顯示分譜清單、總譜與檔案數是否符合樂器表"""
+        self._refresh_file_list()
+        self._update_score_display()
+        self._check_mismatch()
 
     def _check_mismatch(self):
-        n_inst = len(self._group.instruments)
-        n_files = len(self._group.files)
+        n_inst = len(self.group.instruments)
+        n_files = len(self.group.files)
         if n_files == 0 and n_inst == 0:
             self._mismatch_label.setText("")
         elif n_files != n_inst:
@@ -269,27 +261,26 @@ class GroupTab(QWidget):
             self._mismatch_label.setStyleSheet("color: #2ecc71; font-size: 12px;")
 
     def _refresh_file_list(self):
+        """列出分譜；每列記住它在群組中的位置，拖拉排序後依此還原新順序"""
         self._file_list.clear()
-        instruments = self._group.instruments
-        for i, f in enumerate(self._group.files):
-            inst = ""
-            if i < len(instruments):
-                inst = f"{instruments[i]}  |  "
-            self._file_list.addItem(f"{inst}{f.display_name}")
+        instruments = self.group.instruments
+        for i, f in enumerate(self.group.files):
+            inst = f"{instruments[i]}  |  " if i < len(instruments) else ""
+            item = QListWidgetItem(f"{inst}{f.display_name}")
+            item.setData(Qt.UserRole, i)
+            self._file_list.addItem(item)
+
+    def _selected_files(self) -> List[FileInfo]:
+        """清單中選取的分譜（依群組順序）"""
+        rows = sorted(self._file_list.row(item) for item in self._file_list.selectedItems())
+        return [self.group.files[i] for i in rows if 0 <= i < len(self.group.files)]
 
     def _on_files_reordered(self):
-        new_order = []
-        for i in range(self._file_list.count()):
-            text = self._file_list.item(i).text()
-            name = text.split("|")[-1].strip() if "|" in text else text.strip()
-            for f in self._group.files:
-                if f.display_name == name and f not in new_order:
-                    new_order.append(f)
-                    break
-        if len(new_order) == len(self._group.files):
-            self._group.files = new_order
-            self._refresh_file_list()
-            self.main_window._mark_modified()
+        order = [self._file_list.item(i).data(Qt.UserRole) for i in range(self._file_list.count())]
+        if sorted(i for i in order if i is not None) != list(range(len(self.group.files))):
+            return
+        self.project.reorder_files(self.group, [self.group.files[i] for i in order])
+        self.refresh()
 
     def _add_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -300,151 +291,78 @@ class GroupTab(QWidget):
             return
         from services.import_service import ImportService
         from services.file_service import FileService
-        files = ImportService(FileService()).import_files(paths)
-        self._group.files.extend(files)
-        self._refresh_file_list()
-        self._check_mismatch()
-        self.main_window._mark_modified()
+        self.project.add_files(ImportService(FileService()).import_files(paths), self.group)
+        self._piece_name_entry.setText(self.group.piece_name)
+        self.refresh()
 
     def _remove_selected_files(self):
-        indices = sorted(
-            [self._file_list.row(item) for item in self._file_list.selectedItems()],
-            reverse=True,
-        )
-        for i in indices:
-            if 0 <= i < len(self._group.files):
-                removed = self._group.files.pop(i)
-                self.project.ungrouped_files.append(removed)
-        self._refresh_file_list()
-        self._check_mismatch()
-        self.main_window._mark_modified()
-        self.main_window._rebuild_tabs()
+        files = self._selected_files()
+        if not files:
+            return
+        self.project.move_to_ungrouped(files)
+        self.groups_changed.emit()
 
     def _delete_selected_files(self):
-        indices = sorted(
-            [self._file_list.row(item) for item in self._file_list.selectedItems()],
-            reverse=True,
-        )
-        if not indices:
+        files = self._selected_files()
+        if not files:
             return
-        names = [self._group.files[i].display_name for i in indices if i < len(self._group.files)]
         result = QMessageBox.question(
             self, t("file.delete_from_disk"),
-            t("file.confirm_delete", name="\n".join(names)),
+            t("file.confirm_delete", name="\n".join(f.display_name for f in files)),
         )
         if result != QMessageBox.Yes:
             return
         from services.file_service import FileService
         fs = FileService()
-        for i in indices:
-            if 0 <= i < len(self._group.files):
-                try:
-                    fs.delete_file(self._group.files[i].original_path)
-                except Exception:
-                    pass
-                self._group.files.pop(i)
-        self._refresh_file_list()
-        self._check_mismatch()
-        self.main_window._mark_modified()
+        for f in files:
+            try:
+                fs.delete_file(f.original_path)
+            except Exception:
+                pass
+        self.project.remove_paths([f.original_path for f in files])
+        self.refresh()
 
     def _update_score_display(self):
-        if self._group.score_file:
-            self._score_label.setText(self._group.score_file.display_name)
+        if self.group.score_file:
+            self._score_label.setText(self.group.score_file.display_name)
             self._score_label.setStyleSheet("")
         else:
             self._score_label.setText(t("group.score_file.none"))
             self._score_label.setStyleSheet("color: gray;")
 
     def _set_score_file(self):
-        if not self._group.files:
+        if not self.group.files:
             return
         menu = QMenu(self)
-        for i, f in enumerate(self._group.files):
+        for f in self.group.files:
             action = menu.addAction(f.display_name)
             action.triggered.connect(
-                lambda checked=False, idx=i: self._do_set_score(idx),
+                lambda checked=False, file=f: self._do_set_score(file),
             )
         menu.exec(self.sender().mapToGlobal(self.sender().rect().bottomLeft()))
 
-    def _do_set_score(self, index: int):
-        """使用者指定總譜，標記未存檔"""
-        self._assign_score(index)
-        self.main_window._mark_modified()
-
-    def _assign_score(self, index: int):
-        """把群組第 index 個檔案設為總譜並更新畫面；原本的總譜放回檔案清單，不標記未存檔"""
-        if self._group.score_file:
-            self._group.files.append(self._group.score_file)
-        if 0 <= index < len(self._group.files):
-            self._group.score_file = self._group.files.pop(index)
-        self._update_score_display()
-        self._refresh_file_list()
-        self._check_mismatch()
+    def _do_set_score(self, file: FileInfo):
+        self.project.set_score(self.group, file)
+        self.refresh()
 
     def _clear_score_file(self):
-        if self._group.score_file:
-            self._group.files.insert(0, self._group.score_file)
-            self._group.score_file = None
-            self._update_score_display()
-            self._refresh_file_list()
-            self._check_mismatch()
-            self.main_window._mark_modified()
-
-    def _auto_detect_score(self):
-        """建立分頁時依檔名偵測總譜；程式自動偵測，與自動偵測曲名一樣不算使用者的修改"""
-        if self._group.score_file:
-            return
-        for i, f in enumerate(self._group.files):
-            name_lower = os.path.splitext(f.display_name)[0].lower()
-            for kw in self._SCORE_KEYWORDS:
-                if kw in name_lower:
-                    self._assign_score(i)
-                    return
-
-    def _auto_detect_piece_name(self):
-        if self._piece_name_entry.text().strip():
-            return
-        if not self._group.files:
-            return
-        detected = detect_piece_name([f.display_name for f in self._group.files])
-        if detected:
-            self._piece_name_entry.setText(detected)
-            self._group.piece_name = detected
+        self.project.clear_score(self.group)
+        self.refresh()
 
     def _detect_piece_name(self):
-        filenames = [f.display_name for f in self._group.files]
-        detected = detect_piece_name(filenames)
+        """使用者按「自動偵測」重猜曲名"""
+        detected = self.project.guess_piece_name(self.group)
         if detected:
             self._piece_name_entry.setText(detected)
-            self._apply_user_edit("piece_name", detected)
         else:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.cannot_detect"))
 
     def _delete_group(self):
         result = QMessageBox.question(
             self, t("dialog.delete_group"),
-            t("dialog.delete_group.message", name=self._group.name),
+            t("dialog.delete_group.message", name=self.group.name),
         )
         if result != QMessageBox.Yes:
             return
-        self.project.ungrouped_files.extend(self._group.files)
-        if self._group in self.project.groups:
-            self.project.groups.remove(self._group)
-        self.main_window._mark_modified()
-        self.main_window._rebuild_tabs()
-
-    def on_instruments_changed(self, instruments):
-        """左側樂器表變更時同步至群組"""
-        self._group.instruments = list(instruments)
-        self._group.selected_instruments = list(range(len(instruments)))
-        self._refresh_file_list()
-        self._check_mismatch()
-
-    def sync_to_group(self):
-        """將 UI 狀態寫回群組模型"""
-        for entry, attr in self._text_fields():
-            setattr(self._group, attr, entry.text().strip())
-        self._group.use_small_template = self._small_template_cb.isChecked()
-        if self._group.use_small_template:
-            self._group.small_template = self._small_template_entry.text()
-        self._group.selected_instruments = list(range(len(self._group.instruments)))
+        self.project.delete_group(self.group)
+        self.groups_changed.emit()

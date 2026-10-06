@@ -43,6 +43,22 @@ class ProjectService:
             data = json.load(f)
         return Project.from_data(data, score_label=t("group.score_label"))
 
+    def matches_file(self, project: Project, file_path: str) -> bool:
+        """專案目前的內容是否與專案檔的內容相同（專案檔照開啟時的方式還原、含舊格式遷移）
+
+        Args:
+            project: 專案資料
+            file_path: 專案檔路徑
+
+        Returns:
+            相同時為 True；專案檔不存在、讀不到或格式不對時一律視為不同
+        """
+        try:
+            on_disk = self.load_project(file_path)
+        except Exception:
+            return False
+        return on_disk.to_data() == project.to_data()
+
     @staticmethod
     def find_missing_files(project: Project) -> List[str]:
         """列出專案內指向不存在檔案的路徑

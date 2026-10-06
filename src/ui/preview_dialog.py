@@ -2,10 +2,9 @@
 """
 預覽對話框（PySide6）
 
-提供輸出設定（輸出位置、子資料夾）與重新命名預覽。
+提供輸出設定（輸出位置、子資料夾）與重新命名預覽。設定一經修改即透過專案的編輯操作寫入。
 """
 from typing import Callable, Optional, Set
-from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QCheckBox, QLineEdit, QScrollArea, QWidget, QFileDialog,
@@ -20,7 +19,7 @@ from services.move_service import staging_path
 class PreviewDialog(QDialog):
     """預覽重新命名對話框"""
 
-    settings_changed = Signal()
+    _PARTS_MODES = ("root", "parts", "section")
 
     def __init__(
         self, project: Project, rename_service,
@@ -41,7 +40,6 @@ class PreviewDialog(QDialog):
         self._staging_taken_sources = []
         self._empty_names = []
         self._missing = []
-        self._last_settings = self._output_settings()
         self._build_ui()
         self._refresh_plan()
 
@@ -67,11 +65,16 @@ class PreviewDialog(QDialog):
         subfolder_row = QHBoxLayout()
         self._subfolder_cb = QCheckBox(t("panel.subfolder"))
         self._subfolder_cb.setChecked(self._project.use_subfolders)
-        self._subfolder_cb.toggled.connect(self._on_settings_changed)
+        self._subfolder_cb.toggled.connect(
+            lambda checked: self._write_settings(use_subfolders=checked),
+        )
         subfolder_row.addWidget(self._subfolder_cb)
         subfolder_row.addWidget(QLabel(t("panel.subfolder_template")))
         self._subfolder_entry = QLineEdit(self._project.subfolder_template)
-        self._subfolder_entry.editingFinished.connect(self._on_settings_changed)
+        self._subfolder_entry.textEdited.connect(
+            lambda text: self._project.set_output_settings(subfolder_template=text),
+        )
+        self._subfolder_entry.editingFinished.connect(self._refresh_plan)
         subfolder_row.addWidget(self._subfolder_entry, stretch=1)
         layout.addLayout(subfolder_row)
         parts_row = QHBoxLayout()
@@ -80,23 +83,23 @@ class PreviewDialog(QDialog):
         self._radio_root = QRadioButton(t("panel.parts_mode_root"))
         self._radio_parts = QRadioButton(t("panel.parts_mode_parts"))
         self._radio_section = QRadioButton(t("panel.parts_mode_section"))
-        self._parts_group.addButton(self._radio_root, 0)
-        self._parts_group.addButton(self._radio_parts, 1)
-        self._parts_group.addButton(self._radio_section, 2)
+        for mode_id, radio in enumerate((self._radio_root, self._radio_parts, self._radio_section)):
+            self._parts_group.addButton(radio, mode_id)
         mode = self._project.parts_output_mode
-        if mode == "parts":
-            self._radio_parts.setChecked(True)
-        elif mode == "section":
-            self._radio_section.setChecked(True)
-        else:
-            self._radio_root.setChecked(True)
-        self._parts_group.buttonClicked.connect(self._on_settings_changed)
+        mode_id = self._PARTS_MODES.index(mode) if mode in self._PARTS_MODES else 0
+        self._parts_group.button(mode_id).setChecked(True)
+        self._parts_group.idClicked.connect(
+            lambda clicked_id: self._write_settings(parts_output_mode=self._PARTS_MODES[clicked_id]),
+        )
         parts_row.addWidget(self._radio_root)
         parts_row.addWidget(self._radio_parts)
         parts_row.addWidget(self._radio_section)
         self._parts_entry = QLineEdit(self._project.parts_subfolder_name)
         self._parts_entry.setFixedWidth(120)
-        self._parts_entry.editingFinished.connect(self._on_settings_changed)
+        self._parts_entry.textEdited.connect(
+            lambda text: self._project.set_output_settings(parts_subfolder_name=text),
+        )
+        self._parts_entry.editingFinished.connect(self._refresh_plan)
         parts_row.addWidget(self._parts_entry)
         layout.addLayout(parts_row)
         self._warn_label = QLabel("")
@@ -132,47 +135,18 @@ class PreviewDialog(QDialog):
     def _browse_output(self):
         folder = QFileDialog.getExistingDirectory(self, t("panel.output_dir"))
         if folder:
-            self._project.output_directory = folder
             self._output_label.setText(folder)
             self._output_label.setStyleSheet("")
-            self._after_settings_written()
+            self._write_settings(output_directory=folder)
 
     def _clear_output(self):
-        self._project.output_directory = ""
         self._output_label.setText(t("panel.output_dir_hint"))
         self._output_label.setStyleSheet("color: gray;")
-        self._after_settings_written()
+        self._write_settings(output_directory="")
 
-    def _on_settings_changed(self, *_args):
-        self._project.use_subfolders = self._subfolder_cb.isChecked()
-        self._project.subfolder_template = self._subfolder_entry.text()
-        checked_id = self._parts_group.checkedId()
-        if checked_id == 1:
-            self._project.parts_output_mode = "parts"
-            self._project.use_parts_subfolder = True
-        elif checked_id == 2:
-            self._project.parts_output_mode = "section"
-            self._project.use_parts_subfolder = False
-        else:
-            self._project.parts_output_mode = "root"
-            self._project.use_parts_subfolder = False
-        self._project.parts_subfolder_name = self._parts_entry.text()
-        self._after_settings_written()
-
-    def _output_settings(self) -> tuple:
-        """專案中由本對話框編輯的輸出設定"""
-        p = self._project
-        return (
-            p.output_directory, p.use_subfolders, p.subfolder_template,
-            p.parts_output_mode, p.use_parts_subfolder, p.parts_subfolder_name,
-        )
-
-    def _after_settings_written(self):
-        """設定寫回專案後重新產生預覽；值實際改變時才發出 settings_changed，讓主視窗標記未存檔"""
-        settings = self._output_settings()
-        if settings != self._last_settings:
-            self._last_settings = settings
-            self.settings_changed.emit()
+    def _write_settings(self, **settings):
+        """把輸出設定寫入專案並重新產生預覽"""
+        self._project.set_output_settings(**settings)
         self._refresh_plan()
 
     def _refresh_plan(self):

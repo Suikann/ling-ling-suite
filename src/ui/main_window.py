@@ -19,8 +19,7 @@ from core.constants import (
     TEMPLATE_VARIABLES,
 )
 from core.locale import t, get_locale, set_locale
-from core.models import Project, Group, FileInfo, UndoMapping, UndoRecord
-from core.paths import same_path
+from core.models import Project, Group, UndoMapping, UndoRecord
 from services.file_service import FileService
 from services.import_service import ImportService
 from services.move_service import RenameRollbackError
@@ -35,14 +34,14 @@ class MainWindow(QMainWindow):
 
     def __init__(self, preferences: PreferencesService, parent=None):
         super().__init__(parent)
-        self.project = Project()
+        self.project = self._blank_project()
+        self.project.subscribe(self._update_title)
         self._preferences = preferences
         self.file_service = FileService()
         self.import_service = ImportService(self.file_service)
         self.workspace_service = WorkspaceService(self.file_service)
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
-        self._modified = False
         self._project_service = None
         self._rename_service = None
         self._undo_service = None
@@ -107,7 +106,6 @@ class MainWindow(QMainWindow):
         self._instrument_editor = InstrumentListEditor(project=self.project)
         self._instrument_editor.setFixedWidth(260)
         self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
-        self._instrument_editor.ensemble_settings_changed.connect(self._mark_modified)
         splitter.addWidget(self._instrument_editor)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
@@ -139,7 +137,7 @@ class MainWindow(QMainWindow):
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel(t("panel.master_template")))
         self._master_template_entry = QLineEdit(self.project.master_template)
-        self._master_template_entry.textEdited.connect(self._mark_modified)
+        self._master_template_entry.textEdited.connect(lambda text: self.project.set_master_template(text))
         template_row.addWidget(self._master_template_entry, stretch=1)
         vars_btn = QPushButton(t("panel.insert_variable"))
         vars_btn.clicked.connect(self._show_variable_menu)
@@ -158,7 +156,11 @@ class MainWindow(QMainWindow):
     # --- 分頁管理 ---
 
     def _rebuild_tabs(self):
+        """依專案重建所有分頁；舊分頁延後刪除（重建可能由舊分頁自己的按鈕觸發）"""
+        old_tabs = [self._tab_widget.widget(i) for i in range(self._tab_widget.count())]
         self._tab_widget.clear()
+        for widget in old_tabs:
+            widget.deleteLater()
         self._tab_widget.addTab(
             self._create_ungrouped_tab(), t("group.ungrouped"),
         )
@@ -167,18 +169,25 @@ class MainWindow(QMainWindow):
 
     def _create_ungrouped_tab(self):
         from ui.group_panel import UngroupedTab
-        tab = UngroupedTab(self.project, self)
+        tab = UngroupedTab(self.project)
+        tab.groups_changed.connect(self._rebuild_tabs)
         return tab
 
     def _add_group_tab(self, group: Group):
         from ui.group_panel import GroupTab
-        tab = GroupTab(group, self.project, self)
+        tab = GroupTab(group, self.project)
+        tab.groups_changed.connect(self._rebuild_tabs)
         self._tab_widget.addTab(tab, group.name or group.id[:8])
 
+    def _current_group(self) -> Optional[Group]:
+        """目前分頁的群組；未分組分頁為 None"""
+        return getattr(self._tab_widget.currentWidget(), "group", None)
+
     def _add_group(self):
-        group = Group(name=t("group.new_name", number=len(self.project.groups) + 1))
-        self.project.groups.append(group)
-        self._mark_modified()
+        self.project.add_group(
+            t("group.new_name", number=len(self.project.groups) + 1),
+            score_label=t("group.score_label"),
+        )
         self._rebuild_tabs()
         self._tab_widget.setCurrentIndex(self._tab_widget.count() - 1)
 
@@ -191,40 +200,19 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _on_link_confirmed(self, selected_groups, piece_name):
-        for i, group in enumerate(selected_groups):
-            group.piece_name = piece_name
-            group.movement_number = str(i + 1)
-            if not group.movement_name:
-                group.movement_name = group.name
-        self._mark_modified()
+        self.project.link_movements(selected_groups, piece_name)
         self._rebuild_tabs()
 
     def _on_tab_changed(self, index: int):
-        widget = self._tab_widget.widget(index)
-        self._sync_instrument_editor_to_group(getattr(widget, '_group', None))
-
-    def _sync_instrument_editor_to_group(self, group):
-        """樂器表跟著目前分頁的群組；目前分頁不是群組時清空並停用，輸入的樂器才不會沒有地方寫入"""
-        self._instrument_editor._group = group
-        self._instrument_editor.setEnabled(group is not None)
-        self._fill_instrument_editor(group.instruments if group else [])
-
-    def _fill_instrument_editor(self, instruments):
-        """由程式填入樂器表；不經過樂器表變更的回呼，所以不算使用者的修改"""
-        self._instrument_editor.instruments_changed.disconnect(self._on_instruments_changed)
-        self._instrument_editor.set_instruments(instruments)
-        self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
+        self._instrument_editor.show_group(self._current_group())
 
     # --- 樂器表回呼 ---
 
     def _on_instruments_changed(self, instruments):
-        self._mark_modified()
+        """樂器表已寫入目前群組，重新顯示目前分頁的分譜與樂器對應"""
         widget = self._tab_widget.currentWidget()
-        if widget and hasattr(widget, '_group'):
-            widget._group.instruments = instruments
-            widget._group.selected_instruments = list(range(len(instruments)))
-            if hasattr(widget, 'on_instruments_changed'):
-                widget.on_instruments_changed(instruments)
+        if widget is not None:
+            widget.refresh()
 
     # --- 檔案操作 ---
 
@@ -236,8 +224,7 @@ class MainWindow(QMainWindow):
         if not paths:
             return
         files = self.import_service.import_files(paths)
-        self.project.ungrouped_files.extend(files)
-        self._mark_modified()
+        self.project.add_files(files)
         self._rebuild_tabs()
         self._set_status(t("status.imported_files", count=len(files)))
 
@@ -246,10 +233,8 @@ class MainWindow(QMainWindow):
         if not folder:
             return
         groups, ungrouped = self.import_service.import_folder(folder)
-        self.project.ungrouped_files.extend(ungrouped)
-        for g in groups:
-            self.project.groups.append(g)
-        self._mark_modified()
+        self.project.add_files(ungrouped)
+        self.project.add_groups(groups, score_label=t("group.score_label"))
         self._rebuild_tabs()
         if not self._project_path and not self._suggested_name:
             self._suggested_name = os.path.basename(folder)
@@ -260,21 +245,27 @@ class MainWindow(QMainWindow):
 
     # --- 專案管理 ---
 
+    @staticmethod
+    def _blank_project() -> Project:
+        """依目前介面語言的預設模板建立新專案"""
+        english = get_locale() == "en"
+        return Project(
+            master_template=DEFAULT_MASTER_TEMPLATE_EN if english else DEFAULT_MASTER_TEMPLATE,
+            subfolder_template=DEFAULT_SUBFOLDER_TEMPLATE_EN if english else DEFAULT_SUBFOLDER_TEMPLATE,
+        )
+
+    def _set_project(self, project: Project, path: Optional[str]):
+        """換成另一個專案（新增或開啟）：訂閱它的「已變更」通知並重建畫面"""
+        self.project = project
+        self.project.subscribe(self._update_title)
+        self._project_path = path
+        self._suggested_name = ""
+        self._sync_ui_from_project()
+
     def _new_project(self):
         if not self._confirm_unsaved():
             return
-        locale = get_locale()
-        self.project = Project()
-        self.project.master_template = (
-            DEFAULT_MASTER_TEMPLATE_EN if locale == "en" else DEFAULT_MASTER_TEMPLATE
-        )
-        self.project.subfolder_template = (
-            DEFAULT_SUBFOLDER_TEMPLATE_EN if locale == "en" else DEFAULT_SUBFOLDER_TEMPLATE
-        )
-        self._project_path = None
-        self._suggested_name = ""
-        self._modified = False
-        self._sync_ui_from_project()
+        self._set_project(self._blank_project(), None)
 
     def _open_project(self):
         if not self._confirm_unsaved():
@@ -289,11 +280,7 @@ class MainWindow(QMainWindow):
 
     def _do_open_project(self, path: str):
         try:
-            self.project = self._get_project_service().load_project(path)
-            self._project_path = path
-            self._suggested_name = ""
-            self._modified = False
-            self._sync_ui_from_project()
+            self._set_project(self._get_project_service().load_project(path), path)
             self._set_status(t("status.opened", path=path))
             self._add_recent_project(path)
         except Exception as e:
@@ -349,11 +336,9 @@ class MainWindow(QMainWindow):
         """
         written = False
         try:
-            self._sync_project_from_ui()
             self._get_project_service().save_project(self.project, path)
             written = True
             self._project_path = path
-            self._modified = False
             self._update_title()
             self._set_status(t("status.saved", path=path))
             self._add_recent_project(path)
@@ -366,26 +351,19 @@ class MainWindow(QMainWindow):
         return True
 
     def _sync_ui_from_project(self):
-        self._instrument_editor._project = self.project
+        """畫面改為顯示目前的專案"""
+        self._instrument_editor.set_project(self.project)
         self._master_template_entry.setText(self.project.master_template)
         self._rebuild_tabs()
         if self.project.groups:
             self._tab_widget.setCurrentIndex(1)
         self._update_title()
 
-    def _sync_project_from_ui(self):
-        self.project.master_template = self._master_template_entry.text()
-        for i in range(self._tab_widget.count()):
-            widget = self._tab_widget.widget(i)
-            if hasattr(widget, 'sync_to_group'):
-                widget.sync_to_group()
-
     # --- 工具 ---
 
     def _preview_and_rename(self):
         if not self.prompt_pending_recovery():
             return
-        self._sync_project_from_ui()
         if not self.project.master_template.strip():
             QMessageBox.warning(self, t("dialog.warning"), t("dialog.warning.empty_template"))
             return
@@ -402,7 +380,6 @@ class MainWindow(QMainWindow):
             self.project, self._rename_service,
             self._execute_rename, selected_ids, self,
         )
-        dialog.settings_changed.connect(self._mark_modified)
         dialog.exec()
 
     def _execute_rename(self, plan):
@@ -411,7 +388,6 @@ class MainWindow(QMainWindow):
                 plan, self.project, self._get_undo_service().save_undo_record,
             )
             self.project.replace_paths(record.mappings)
-            self._mark_modified()
             self._rebuild_tabs()
             self._set_status(t("status.renamed", count=len(record.mappings)))
             QMessageBox.information(
@@ -434,7 +410,6 @@ class MainWindow(QMainWindow):
         )
         self._get_undo_service().save_undo_record(record)
         self.project.replace_paths(residual)
-        self._mark_modified()
         self._rebuild_tabs()
 
     # --- 中斷後還原 ---
@@ -546,7 +521,6 @@ class MainWindow(QMainWindow):
                 self.project.replace_paths(
                     [UndoMapping(original=m.renamed, renamed=m.original) for m in record.mappings],
                 )
-                self._mark_modified()
                 self._rebuild_tabs()
             self._set_status(t("status.undone"))
         except RenameRollbackError as e:
@@ -574,7 +548,6 @@ class MainWindow(QMainWindow):
         try:
             self._get_undo_service().execute_redo(record)
             self.project.replace_paths(record.mappings)
-            self._mark_modified()
             self._rebuild_tabs()
             self._set_status(t("status.redone"))
         except RenameRollbackError as e:
@@ -585,12 +558,8 @@ class MainWindow(QMainWindow):
 
     def _open_split_pdf(self):
         from ui.split_dialog import SplitPdfDialog
-        current_group = None
-        widget = self._tab_widget.currentWidget()
-        if widget and hasattr(widget, '_group'):
-            current_group = widget._group
         dialog = SplitPdfDialog(
-            self.project, self._on_split_complete, current_group, self,
+            self.project, self._on_split_complete, self._current_group(), self,
             workspace_service=self.workspace_service,
             project_path=self._project_path or "",
         )
@@ -624,40 +593,23 @@ class MainWindow(QMainWindow):
 
     def _on_split_complete(self, files, instruments, source_group, source_path,
                            created_directories=None, replaced_paths=None):
-        selected = list(range(len(files)))
         if replaced_paths:
             self.project.remove_paths(replaced_paths)
-        if source_group:
-            source_group.files = [
-                f for f in source_group.files if not same_path(f.original_path, source_path)
-            ]
-            source_group.files.extend(files)
-            source_group.instruments = instruments
-            source_group.selected_instruments = selected
-        else:
-            source_name = os.path.splitext(os.path.basename(source_path))[0]
-            new_group = Group(
-                name=source_name, files=files,
-                instruments=instruments, selected_instruments=selected,
-            )
-            self.project.groups.append(new_group)
+        self.project.add_split_result(
+            files, instruments, source_path, source_group, score_label=t("group.score_label"),
+        )
         self._save_operation_undo(
             "split", t("undo.split_description", count=len(files)),
             created_files=[f.original_path for f in files],
             created_directories=created_directories or [],
         )
-        self._mark_modified()
         self._rebuild_tabs()
         self._set_status(t("split.files_added", count=len(files)))
 
     def _open_rotate_pdf(self):
         from ui.rotate_dialog import RotatePdfDialog
-        current_group = None
-        widget = self._tab_widget.currentWidget()
-        if widget and hasattr(widget, '_group'):
-            current_group = widget._group
         dialog = RotatePdfDialog(
-            self.project, self._on_rotate_complete, current_group, self,
+            self.project, self._on_rotate_complete, self._current_group(), self,
         )
         dialog.exec()
 
@@ -670,22 +622,10 @@ class MainWindow(QMainWindow):
     def _set_language(self, lang_code: str):
         if lang_code == get_locale():
             return
-        self._sync_project_from_ui()
         set_locale(lang_code)
         self._preferences.set("language", lang_code)
         self._preferences.save()
-        from core.template_engine import convert_template_language
-        self.project.master_template = convert_template_language(
-            self.project.master_template, lang_code,
-        )
-        self.project.subfolder_template = convert_template_language(
-            self.project.subfolder_template, lang_code,
-        )
-        for group in self.project.groups:
-            if group.small_template:
-                group.small_template = convert_template_language(
-                    group.small_template, lang_code,
-                )
+        self.project.convert_template_language(lang_code)
         self.menuBar().clear()
         self._create_menu()
         self._create_ui()
@@ -797,11 +737,6 @@ class MainWindow(QMainWindow):
     def _insert_variable(self, var_name: str):
         self._master_template_entry.insert(f"{{{var_name}}}")
 
-    def _mark_modified(self):
-        if not self._modified:
-            self._modified = True
-            self._update_title()
-
     def _update_title(self):
         title = t("app.title")
         if self._project_path:
@@ -810,26 +745,38 @@ class MainWindow(QMainWindow):
             title += f" - {self._suggested_name}"
         else:
             title += f" - {t('app.unsaved_project')}"
-        if self._modified:
+        if self.project.is_modified():
             title += " *"
         self.setWindowTitle(title)
 
     def _set_status(self, text: str):
         self._status_label.setText(text)
 
-    def _confirm_unsaved(self, title: Optional[str] = None, message: Optional[str] = None) -> bool:
-        """有未存檔的修改時詢問是否儲存，開新專案、開啟專案、開啟最近專案、關閉程式共用
+    def _confirm_unsaved(self) -> bool:
+        """有未存檔的修改時詢問是否儲存（開新專案、開啟專案、開啟最近專案）
+
+        Returns:
+            可以繼續原本的操作時為 True；選「取消」或選「儲存」但沒存成時為 False
+        """
+        return not self.project.is_modified() or self._ask_to_save()
+
+    def _differs_from_project_file(self) -> bool:
+        """目前內容是否與磁碟上的專案檔不同；還沒存過檔時沒有可比對的檔案，交給未存檔判定"""
+        if not self._project_path:
+            return False
+        return not self._get_project_service().matches_file(self.project, self._project_path)
+
+    def _ask_to_save(self, title: Optional[str] = None, message: Optional[str] = None) -> bool:
+        """詢問是否儲存目前的專案
 
         Args:
             title: 提示框標題，省略時用「未儲存的變更」
             message: 提示框訊息，省略時用「是否儲存目前的專案？」
 
         Returns:
-            可以繼續原本的操作時為 True（沒有未存檔的修改、選「不儲存」、或選「儲存」且存成）；
+            可以繼續原本的操作時為 True（選「不儲存」，或選「儲存」且存成）；
             選「取消」或選「儲存」但沒存成時為 False
         """
-        if not self._modified:
-            return True
         msg = QMessageBox(self)
         msg.setWindowTitle(title or t("dialog.unsaved"))
         msg.setText(message or t("dialog.unsaved.message"))
@@ -870,7 +817,9 @@ class MainWindow(QMainWindow):
         self._refresh_recent_menu()
 
     def closeEvent(self, event):
-        if not self._confirm_unsaved(t("dialog.close"), t("dialog.close.message")):
+        """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次；任一不同就詢問是否儲存"""
+        unsaved = self.project.is_modified() or self._differs_from_project_file()
+        if unsaved and not self._ask_to_save(t("dialog.close"), t("dialog.close.message")):
             event.ignore()
             return
         event.accept()
