@@ -704,6 +704,53 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
         self.assertEqual(shown[-1], (t("dialog.pending_move.title"), t("dialog.pending_move.done", count=1)))
         self.assertEqual(sorted(n for n in os.listdir(self.temp_dir) if n.endswith(".pdf")), ["a.pdf", "b.pdf"])
 
+    def _crash_writing_into(self, run, directory: str):
+        """執行 run，第一次往 directory 寫入 JSON 時當機，之後寫入恢復正常"""
+        real_write = FileService.write_json_atomic
+
+        def write(path, data):
+            if os.path.dirname(path) == directory:
+                raise _Crash()
+            real_write(self.history_files, path, data)
+
+        self.history_files.write_json_atomic = write
+        with self.assertRaises(_Crash):
+            run()
+        del self.history_files.write_json_atomic
+
+    def test_prompt_after_an_interrupted_undo_says_undo_did_not_finish(self):
+        a, b = self.create_files("a.pdf", "b.pdf")
+        new_a, new_b = self._path("01-Flute.pdf"), self._path("02-Oboe.pdf")
+        self.history.rename([RenameEntry(a.original_path, new_a), RenameEntry(b.original_path, new_b)])
+        real_rename = FileService.rename_file
+
+        def crash_on_second_move(old_path, new_path):
+            if old_path == new_b:
+                raise _Crash()
+            real_rename(self.history_files, old_path, new_path)
+
+        self.history_files.rename_file = crash_on_second_move
+        with self.assertRaises(_Crash):
+            self.history.undo()
+        del self.history_files.rename_file
+        with answering_prompts(t("dialog.pending_move.later")) as shown:
+            self.assertFalse(self.window.prompt_pending_recovery())
+        self.assertEqual(shown, [(t("dialog.pending_move.undo.title"), t("dialog.pending_move.undo.message", count=1))])
+
+    def test_keeping_a_finished_undo_updates_project_paths_and_marks_unsaved(self):
+        a, = self.create_files("a.pdf")
+        renamed = self._path("01-Flute.pdf")
+        self.history.rename([RenameEntry(a.original_path, renamed)])
+        self._open_group_of(renamed)
+        self._crash_writing_into(self.history.undo, os.path.join(self.temp_dir, "redo"))
+        with answering_prompts(t("dialog.pending_move.keep")) as shown:
+            self.assertTrue(self.window.prompt_pending_recovery())
+        self.assertEqual(shown, [
+            (t("dialog.pending_move.undo.title"), t("dialog.pending_move.undo.finished_message", count=1)),
+        ])
+        self.assertTrue(self.is_marked_unsaved())
+        self.assertEqual(self._shown_file_names(), ["a.pdf"])
+
 
 class TestSingleInstanceLaunch(unittest.TestCase):
     """啟動：第一個程式執行中時，第二個只提示已在執行中，不開主視窗、不檢查進行中紀錄"""

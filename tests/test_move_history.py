@@ -138,6 +138,23 @@ class MoveHistoryTestCase(unittest.TestCase):
             run()
         self.stop_failing()
 
+    def crash_writing_into(self, run, directory: str, after: bool = False):
+        """執行 run，第一次往 directory 寫入 JSON 時當機（after 為 True 時寫完才當機），之後寫入恢復正常"""
+        real_write = FileService.write_json_atomic
+
+        def write(path, data):
+            into = os.path.dirname(path) == directory
+            if into and not after:
+                raise _Crash()
+            real_write(self.file_service, path, data)
+            if into:
+                raise _Crash()
+
+        self.file_service.write_json_atomic = write
+        with self.assertRaises(_Crash):
+            run()
+        del self.file_service.write_json_atomic
+
 
 class TestRename(MoveHistoryTestCase):
     """重新命名：兩階段搬移讓對調與連鎖可以執行，不能安全執行的整批取消"""
@@ -280,8 +297,8 @@ class TestUndoRedo(MoveHistoryTestCase):
         self.assertIsNone(self.history.redo())
 
 
-class TestWorkspaceMeta(MoveHistoryTestCase):
-    """來源在工作區的分譜重新命名後，子資料夾的 meta 被清理掉也能在復原時寫回"""
+class WorkspaceMetaTestCase(MoveHistoryTestCase):
+    """工作區 meta 測試的共用骨架：合併譜放在 scores/，分譜放在它的工作區子資料夾"""
 
     def _project_file(self, name: str) -> str:
         return os.path.join(self.temp_dir, name + ".llproj")
@@ -296,6 +313,10 @@ class TestWorkspaceMeta(MoveHistoryTestCase):
         with open(part, "w") as f:
             f.write("part")
         return folder, part
+
+
+class TestWorkspaceMeta(WorkspaceMetaTestCase):
+    """來源在工作區的分譜重新命名後，子資料夾的 meta 被清理掉也能在復原時寫回"""
 
     def test_undo_writes_meta_back_after_cleanup_removed_the_folder(self):
         folder, part = self._part_in_workspace()
@@ -712,6 +733,22 @@ class TestInterruptedBatch(MoveHistoryTestCase):
         self.assertEqual([(m.original, m.renamed) for m in residual.mappings], [(a, a + ".moving")])
         self.assertIsNone(self.history.pending())
 
+    def test_recovery_keeps_the_journal_when_the_residual_record_cannot_be_written(self):
+        a, b, swap = self._swap()
+        self.interrupt(swap, n3=_Crash())
+        blocked = os.path.join(self.data_dir, "not-a-directory")
+        with open(blocked, "w") as f:
+            f.write("")
+        history = self.new_history(undo_dir=blocked)
+        self.raise_on_move(n2=OSError("simulated"))
+        result = history.recover()
+        self.stop_failing()
+        self.assertIsNotNone(result.record_error)
+        self.assertEqual(history.pending().moved, 1)
+        history.recover()
+        self.assertEqual(self.files(), ["a.pdf", "b.pdf"])
+        self.assertIsNone(history.pending())
+
     def test_recovery_removes_directories_created_by_the_interrupted_batch(self):
         a, b = self.create("a.pdf"), self.create("b.pdf")
         sub = os.path.join(self.scores, "Sub")
@@ -730,18 +767,13 @@ class TestInterruptedBatch(MoveHistoryTestCase):
         self.history.recover()
         self.assertEqual(self.files(), ["a.pdf", "b.pdf"])
 
-    def test_interrupted_undo_is_reported_as_undo(self):
-        a, b = self.create("a.pdf"), self.create("b.pdf")
-        self.history.rename([RenameEntry(a, self.path("A1.pdf")), RenameEntry(b, self.path("B1.pdf"))])
-        self.interrupt(self.history.undo, n2=_Crash())
-        self.assertEqual(self.history.pending().operation, "undo")
-
     def test_new_batch_is_refused_while_an_interrupted_one_is_pending(self):
         a, b, swap = self._swap()
         self.interrupt(swap, n2=_Crash())
         c = self.create("c.pdf")
         result = self.history.rename([RenameEntry(c, self.path("d.pdf"))])
-        self.assertIsNotNone(result.error)
+        self.assertIn("中斷提示", str(result.error))
+        self.assertNotIn("重新啟動", str(result.error))
         self.assertEqual(result.changes, [])
         self.assertEqual(self.files(), ["a.pdf.moving", "b.pdf", "c.pdf"])
         self.assertEqual(self.history.pending().moved, 1)
@@ -791,6 +823,191 @@ class TestInterruptedBatch(MoveHistoryTestCase):
         result = self.history.recover()
         self.assertEqual((result.changes, result.skipped, result.residual), ([], [], []))
         self.assertIsNone(self.history.pending())
+
+
+class TestRecoveryByKind(MoveHistoryTestCase):
+    """中斷還原依被中斷的操作種類處理：「還原」與「保留結果」後，復原與重做堆疊都和檔案的實際位置一致"""
+
+    def _rename_two(self):
+        """把 a、b 改名成 A1、B1，回傳（原路徑、新路徑、復原紀錄 id）"""
+        a, b = self.create("a.pdf"), self.create("b.pdf")
+        new_a, new_b = self.path("A1.pdf"), self.path("B1.pdf")
+        self.history.rename([RenameEntry(a, new_a), RenameEntry(b, new_b)])
+        return (a, b), (new_a, new_b), self.history.latest_undo().id
+
+    def test_restoring_an_interrupted_undo_keeps_its_record_on_the_undo_stack(self):
+        _, _, record_id = self._rename_two()
+        self.interrupt(self.history.undo, n2=_Crash())
+        self.assertEqual(self.history.pending().operation, "undo")
+        result = self.history.recover()
+        self.assertEqual(result.operation, "undo")
+        self.assertEqual(self.files(), ["A1.pdf", "B1.pdf"])
+        self.assertEqual(self.history.latest_undo().id, record_id)
+        self.assertIsNone(self.history.latest_redo())
+        self.assertIsNone(self.history.undo().error)
+        self.assertEqual(self.files(), ["a.pdf", "b.pdf"])
+
+    def test_restoring_an_undo_interrupted_after_its_record_reached_the_redo_stack(self):
+        _, _, record_id = self._rename_two()
+        self.crash_writing_into(self.history.undo, os.path.join(self.data_dir, "redo"), after=True)
+        self.assertTrue(self.history.pending().complete)
+        self.history.recover()
+        self.assertEqual(self.files(), ["A1.pdf", "B1.pdf"])
+        self.assertEqual(self.history.latest_undo().id, record_id)
+        self.assertIsNone(self.history.latest_redo())
+        self.history.undo()
+        self.assertEqual(self.files(), ["a.pdf", "b.pdf"])
+
+    def test_restoring_an_interrupted_redo_keeps_its_record_on_the_redo_stack(self):
+        _, _, record_id = self._rename_two()
+        self.history.undo()
+        self.interrupt(self.history.redo, n2=_Crash())
+        self.assertEqual(self.history.pending().operation, "redo")
+        self.history.recover()
+        self.assertEqual(self.files(), ["a.pdf", "b.pdf"])
+        self.assertEqual(self.history.latest_redo().id, record_id)
+        self.assertIsNone(self.history.latest_undo())
+        self.history.redo()
+        self.assertEqual(self.files(), ["A1.pdf", "B1.pdf"])
+
+    def test_restoring_a_redo_interrupted_after_its_record_reached_the_undo_stack(self):
+        _, _, record_id = self._rename_two()
+        self.history.undo()
+        self.crash_writing_into(self.history.redo, os.path.join(self.data_dir, "undo"), after=True)
+        self.history.recover()
+        self.assertEqual(self.files(), ["a.pdf", "b.pdf"])
+        self.assertEqual(self.history.latest_redo().id, record_id)
+        self.assertIsNone(self.history.latest_undo())
+
+    def test_restoring_a_rename_interrupted_after_its_record_was_written_leaves_no_record(self):
+        a, b = self.create("a.pdf"), self.create("b.pdf")
+        plan = [RenameEntry(a, self.path("A1.pdf")), RenameEntry(b, self.path("B1.pdf"))]
+        self.crash_writing_into(lambda: self.history.rename(plan), os.path.join(self.data_dir, "undo"), after=True)
+        self.history.recover()
+        self.assertEqual(self.files(), ["a.pdf", "b.pdf"])
+        self.assertIsNone(self.history.latest_undo())
+
+    def test_restoring_a_finished_undo_interrupted_midway_is_no_longer_reported_as_finished(self):
+        _, _, record_id = self._rename_two()
+        self.crash_writing_into(self.history.undo, os.path.join(self.data_dir, "redo"))
+        self.interrupt(self.history.recover, n2=_Crash())
+        pending = self.history.pending()
+        self.assertEqual((pending.moved, pending.complete), (1, False))
+        self.history.recover()
+        self.assertEqual(self.files(), ["A1.pdf", "B1.pdf"])
+        self.assertEqual(self.history.latest_undo().id, record_id)
+
+    def test_keeping_a_finished_undo_moves_its_record_to_the_redo_stack(self):
+        (a, b), (new_a, new_b), record_id = self._rename_two()
+        self.crash_writing_into(self.history.undo, os.path.join(self.data_dir, "redo"))
+        pending = self.history.pending()
+        self.assertEqual((pending.operation, pending.moved, pending.complete), ("undo", 2, True))
+        result = self.history.keep_result()
+        self.assertEqual(result.operation, "undo")
+        self.assertEqual([(m.original, m.renamed) for m in result.changes], [(new_a, a), (new_b, b)])
+        self.assertIsNone(self.history.pending())
+        self.assertEqual(self.history.latest_redo().id, record_id)
+        self.assertIsNone(self.history.latest_undo())
+        self.history.redo()
+        self.assertEqual(self.files(), ["A1.pdf", "B1.pdf"])
+
+    def test_keeping_an_undo_interrupted_after_its_record_reached_the_redo_stack(self):
+        _, _, record_id = self._rename_two()
+        self.crash_writing_into(self.history.undo, os.path.join(self.data_dir, "redo"), after=True)
+        self.history.keep_result()
+        self.assertIsNone(self.history.latest_undo())
+        self.assertEqual(self.history.latest_redo().id, record_id)
+        self.history.redo()
+        self.assertIsNone(self.history.latest_redo())
+        self.assertEqual(self.files(), ["A1.pdf", "B1.pdf"])
+
+    def test_keeping_a_finished_redo_moves_its_record_back_to_the_undo_stack(self):
+        (a, b), (new_a, new_b), record_id = self._rename_two()
+        self.history.undo()
+        self.crash_writing_into(self.history.redo, os.path.join(self.data_dir, "undo"))
+        result = self.history.keep_result()
+        self.assertEqual([(m.original, m.renamed) for m in result.changes], [(a, new_a), (b, new_b)])
+        self.assertEqual(self.history.latest_undo().id, record_id)
+        self.assertIsNone(self.history.latest_redo())
+        self.history.undo()
+        self.assertEqual(self.files(), ["a.pdf", "b.pdf"])
+
+    def test_keeping_a_finished_rename_reports_path_changes_and_starts_a_new_history(self):
+        r = self.create("r.pdf")
+        self.history.rename([RenameEntry(r, self.path("R1.pdf"))])
+        self.history.undo()
+        a = self.create("a.pdf")
+        new_a = self.path("A1.pdf")
+        plan = [RenameEntry(a, new_a)]
+        self.crash_writing_into(lambda: self.history.rename(plan), os.path.join(self.data_dir, "undo"))
+        result = self.history.keep_result()
+        self.assertEqual(result.operation, "rename")
+        self.assertEqual([(m.original, m.renamed) for m in result.changes], [(a, new_a)])
+        self.assertIsNone(self.history.pending())
+        self.assertIsNone(self.history.latest_undo())
+        self.assertIsNone(self.history.latest_redo())
+
+
+class TestRecoveryWorkspaceMeta(WorkspaceMetaTestCase):
+    """中斷還原同樣寫回工作區 meta；meta 寫回都在刪除進行中紀錄之前完成"""
+
+    def _scanned_sources(self):
+        """清理工作區掃描到的（子資料夾、來源檔名）"""
+        scan = self.workspace.scan(None, [], ProjectService().load_project)
+        return [(e.folder, e.source_name) for e in scan.entries]
+
+    def test_keeping_a_finished_undo_writes_meta_back(self):
+        folder, part = self._part_in_workspace()
+        self.history.rename([RenameEntry(part, self.path("01-高笙.pdf"))])
+        self.workspace.purge_empty_folders()
+        self.crash_writing_into(self.history.undo, os.path.join(self.data_dir, "redo"))
+        self.history.keep_result()
+        self.assertTrue(os.path.isfile(part))
+        self.assertEqual(self._scanned_sources(), [(folder, "合併譜.pdf")])
+
+    def test_restoring_an_interrupted_rename_writes_meta_back(self):
+        folder, first = self._part_in_workspace("高笙.pdf")
+        _, second = self._part_in_workspace("揚琴.pdf")
+        plan = [RenameEntry(first, self.path("01-高笙.pdf")), RenameEntry(second, self.path("02-揚琴.pdf"))]
+        self.interrupt(lambda: self.history.rename(plan), n2=_Crash())
+        # 中斷後子資料夾的 meta 不見了
+        os.remove(os.path.join(folder, "meta.json"))
+        self.history.recover()
+        self.assertTrue(os.path.isfile(first))
+        self.assertEqual(self._scanned_sources(), [(folder, "合併譜.pdf")])
+
+    def test_crash_while_undo_writes_meta_back_leaves_the_journal(self):
+        folder, part = self._part_in_workspace()
+        self.history.rename([RenameEntry(part, self.path("01-高笙.pdf"))])
+        self.workspace.purge_empty_folders()
+        self.crash_writing_into(self.history.undo, folder)
+        self.assertTrue(self.history.pending().complete)
+        self.history.keep_result()
+        self.assertEqual(self._scanned_sources(), [(folder, "合併譜.pdf")])
+
+    def test_crash_while_recovery_writes_meta_back_leaves_the_journal(self):
+        folder, first = self._part_in_workspace("高笙.pdf")
+        _, second = self._part_in_workspace("揚琴.pdf")
+        plan = [RenameEntry(first, self.path("01-高笙.pdf")), RenameEntry(second, self.path("02-揚琴.pdf"))]
+        self.interrupt(lambda: self.history.rename(plan), n2=_Crash())
+        os.remove(os.path.join(folder, "meta.json"))
+        self.crash_writing_into(self.history.recover, folder)
+        self.assertIsNotNone(self.history.pending())
+        self.history.recover()
+        self.assertIsNone(self.history.pending())
+        self.assertEqual(self._scanned_sources(), [(folder, "合併譜.pdf")])
+
+    def test_crash_while_a_failed_undo_writes_meta_back_leaves_the_journal(self):
+        folder, first = self._part_in_workspace("高笙.pdf")
+        _, second = self._part_in_workspace("揚琴.pdf")
+        outs = [self.path("01-高笙.pdf"), self.path("02-揚琴.pdf")]
+        self.history.rename([RenameEntry(first, outs[0]), RenameEntry(second, outs[1])])
+        self.workspace.purge_empty_folders()
+        # 第二個檔案搬不回工作區觸發回滾；第一個檔案又搬不回輸出位置，卡在工作區
+        self.fail_moves_when(lambda old, new: new == second or (old, new) == (first, outs[0]))
+        self.crash_writing_into(self.history.undo, folder)
+        self.stop_failing()
+        self.assertIsNotNone(self.history.pending())
 
 
 if __name__ == '__main__':

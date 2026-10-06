@@ -5,7 +5,7 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
-from typing import Callable, Optional
+from typing import Callable, NamedTuple, Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog,
@@ -16,17 +16,40 @@ from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
-    TEMPLATE_VARIABLES,
+    TEMPLATE_VARIABLES, OperationKind,
 )
 from core.locale import t, get_locale, set_locale
 from core.models import Project, Group
 from services.file_service import FileService
 from services.import_service import ImportService
-from services.move_history import MoveHistory, MoveResult
+from services.move_history import MoveHistory, MoveResult, PendingMove
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from services.project_access import AccessResult, ProjectAccess
 from ui.instrument_list import InstrumentListEditor
+
+
+class _PendingMoveTexts(NamedTuple):
+    """中斷提示的字串鍵：標題、未搬完時的訊息、已搬完時的訊息"""
+    title: str
+    message: str
+    finished_message: str
+
+
+# 中斷提示依被中斷的操作種類說明
+_PENDING_MOVE_TEXTS = {
+    OperationKind.RENAME: _PendingMoveTexts(
+        "dialog.pending_move.title", "dialog.pending_move.message", "dialog.pending_move.finished_message",
+    ),
+    OperationKind.UNDO: _PendingMoveTexts(
+        "dialog.pending_move.undo.title", "dialog.pending_move.undo.message",
+        "dialog.pending_move.undo.finished_message",
+    ),
+    OperationKind.REDO: _PendingMoveTexts(
+        "dialog.pending_move.redo.title", "dialog.pending_move.redo.message",
+        "dialog.pending_move.redo.finished_message",
+    ),
+}
 
 
 class MainWindow(QMainWindow):
@@ -419,9 +442,10 @@ class MainWindow(QMainWindow):
     # --- 中斷後還原 ---
 
     def prompt_pending_recovery(self) -> bool:
-        """若上次重新命名中途被中斷，詢問是否把已搬動的檔案還原到原位
+        """若上次的重新命名、復原或重做中途被中斷，詢問要把已搬動的檔案還原到原位還是保留結果
 
         啟動時呼叫；重新命名、復原、重做前也會再問一次，因為搬移歷程在紀錄仍在時拒絕執行。
+        結果（含「保留結果」的路徑變動）交給專案套用。
 
         Returns:
             是否已沒有待處理的進行中紀錄（可以繼續執行搬移）
@@ -434,49 +458,39 @@ class MainWindow(QMainWindow):
             return True
         if not pending:
             return True
-        if pending.complete and pending.moved:
-            choice = self._confirm_finished_batch(pending.moved)
-            if choice is None:
-                return False
-            if choice == "keep":
-                self._history.discard_pending()
-                return True
-        elif pending.moved and not self._confirm_pending_recovery(pending.moved):
+        texts = _PENDING_MOVE_TEXTS[pending.operation]
+        choice = self._ask_pending_move(pending, texts) if pending.moved else "restore"
+        if choice is None:
             return False
+        if choice == "keep":
+            return self._apply_move_result(self._history.keep_result(), str)
         result = self._history.recover()
-        self._apply_move_result(result, lambda e: t("dialog.pending_move.failed", error=e))
-        if result.error is not None:
-            return False
-        if pending.moved:
-            self._show_recovery(result)
-        return True
+        settled = self._apply_move_result(result, lambda e: t("dialog.pending_move.failed", error=e))
+        if pending.moved and settled:
+            self._show_recovery(result, t(texts.title))
+        return settled
 
-    def _show_recovery(self, result: MoveResult):
+    def _show_recovery(self, result: MoveResult, title: str):
         """中斷還原完成：還原了幾個檔，略過與搬不回去的各列在後"""
         lines = [t("dialog.pending_move.done", count=len(result.changes))]
         if result.skipped:
             lines.append(t("history.skipped", files="\n".join(result.skipped)))
         if result.residual:
             lines.append(t("dialog.pending_move.residual", files="\n".join(m.renamed for m in result.residual)))
-        QMessageBox.information(self, t("dialog.pending_move.title"), "\n\n".join(lines))
+        QMessageBox.information(self, title, "\n\n".join(lines))
 
-    def _confirm_pending_recovery(self, moved: int) -> bool:
-        """詢問是否還原上次中斷的重新命名；選「稍後」回傳 False"""
-        return self._ask_pending_move(t("dialog.pending_move.message", count=moved)) == "restore"
+    def _ask_pending_move(self, pending: PendingMove, texts: _PendingMoveTexts) -> Optional[str]:
+        """中斷提示：「還原」／「稍後」，已整批搬完時多一個「保留結果」
 
-    def _confirm_finished_batch(self, moved: int) -> Optional[str]:
-        """上次重新命名已搬完但復原紀錄未確認寫入：回傳 "keep"、"restore"，選「稍後」回傳 None"""
-        return self._ask_pending_move(
-            t("dialog.pending_move.finished_message", count=moved), keep=True,
-        )
-
-    def _ask_pending_move(self, text: str, keep: bool = False) -> Optional[str]:
-        """進行中紀錄的共用問法：「還原」／「稍後」，keep 為 True 時多一個「保留結果」"""
+        Returns:
+            "restore" 或 "keep"；選「稍後」回傳 None
+        """
+        finished = pending.complete
         msg = QMessageBox(self)
-        msg.setWindowTitle(t("dialog.pending_move.title"))
-        msg.setText(text)
+        msg.setWindowTitle(t(texts.title))
+        msg.setText(t(texts.finished_message if finished else texts.message, count=pending.moved))
         msg.setIcon(QMessageBox.Question)
-        keep_btn = msg.addButton(t("dialog.pending_move.keep"), QMessageBox.AcceptRole) if keep else None
+        keep_btn = msg.addButton(t("dialog.pending_move.keep"), QMessageBox.AcceptRole) if finished else None
         restore_btn = msg.addButton(t("dialog.pending_move.restore"), QMessageBox.AcceptRole)
         msg.addButton(t("dialog.pending_move.later"), QMessageBox.RejectRole)
         msg.setDefaultButton(keep_btn or restore_btn)

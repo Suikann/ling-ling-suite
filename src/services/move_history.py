@@ -7,6 +7,7 @@
 分割與旋轉的復原紀錄也在這裡組裝。
 
 四個動作回傳同一種結果（MoveResult）：路徑變動、略過的檔、搬不回去的殘留、操作種類。
+中斷還原依進行中紀錄記下的操作種類與所屬紀錄處理，可選「還原」（recover）或「保留結果」（keep_result）。
 呼叫端只負責詢問與顯示，並把路徑變動交給 Project.replace_paths 套用。
 
 使用範例：
@@ -29,7 +30,9 @@ from core.locale import t
 from core.models import RenameEntry, UndoMapping, UndoRecord
 from core.paths import path_key
 from services.file_service import FileService
-from services.move_service import Move, MoveService, RenameRollbackError
+from services.move_service import (
+    Move, MoveJournal, MoveRecoveryResult, MoveService, RenameRollbackError,
+)
 from services.workspace_service import WorkspaceService
 
 
@@ -50,12 +53,13 @@ class MoveResult:
 
     Attributes:
         operation: 操作種類：重新命名為 RENAME；復原、重做為該筆紀錄的種類；
-            中斷還原為被中斷的那批搬移的種類（舊版進行中紀錄視為 RENAME）
+            中斷還原（還原或保留結果）為被中斷的那批搬移的種類（舊版進行中紀錄視為 RENAME）
         changes: 照計畫搬好的檔案
         skipped: 已不在預期位置而略過的檔案（預期的位置）
         residual: 中途失敗、搬不回原位的檔案；已另寫一筆殘留紀錄放上復原堆疊
         error: 動作失敗的原因；為 None 表示照計畫完成
-        record_error: 檔案已搬好（或殘留已確定）、但復原或重做紀錄寫不進去的原因
+        record_error: 檔案已搬好（或殘留已確定）、但復原或重做紀錄寫不進去的原因；
+            中斷還原時發生則進行中紀錄保留，下次再處理
     """
     operation: OperationKind
     changes: List[UndoMapping] = field(default_factory=list)
@@ -77,6 +81,20 @@ class PendingMove:
     operation: OperationKind
     moved: int
     complete: bool
+
+
+@dataclass
+class _Interrupted:
+    """讀回的進行中紀錄與據以處理它所需的資訊
+
+    Attributes:
+        journal: 進行中紀錄
+        kind: 被中斷的操作種類（舊版紀錄視為 RENAME）
+        record: 所屬復原紀錄在這批搬移開始時的內容；舊版紀錄沒有，為 None
+    """
+    journal: MoveJournal
+    kind: OperationKind
+    record: Optional[UndoRecord]
 
 
 class _RecordStack:
@@ -110,6 +128,10 @@ class _RecordStack:
             if kinds is None or record.operation_type in kinds:
                 return record
         return None
+
+    def contains(self, record_id: str) -> bool:
+        """堆疊裡是否有指定 id 的紀錄"""
+        return any(entry_id == record_id for _, entry_id, _ in self._entries())
 
     def remove(self, record_id: str) -> None:
         """移除指定 id 的紀錄；不在這個堆疊裡時不做事"""
@@ -193,13 +215,14 @@ class MoveHistory:
             OperationKind.RENAME, t("rename.undo_description", count=len(plan)),
             mappings=[UndoMapping(e.original_path, e.new_path) for e in plan],
         )
+        self._snapshot_workspace_meta(record)
 
         def finish(created_dirs: List[str]) -> None:
             record.created_directories = created_dirs
             self._push_new(record)
 
         moves = [(m.original, m.renamed) for m in record.mappings]
-        return self._execute(OperationKind.RENAME, record.id, moves, finish)
+        return self._execute(OperationKind.RENAME, record, moves, finish)
 
     def undo(self) -> Optional[MoveResult]:
         """復原最上面的紀錄；沒有可復原的紀錄時回傳 None
@@ -226,11 +249,10 @@ class MoveHistory:
         self._refresh_workspace_meta(record)
 
         def finish(created_dirs: List[str]) -> None:
-            record.created_directories = created_dirs
-            self._transfer(record, present, self._redo, self._undo)
+            self._finish_redo(record, present, created_dirs)
 
         moves = [(m.original, m.renamed) for m in present]
-        result = self._execute(OperationKind.REDO, record.id, moves, finish)
+        result = self._execute(OperationKind.REDO, record, moves, finish)
         result.operation = record.operation_type
         result.skipped = [m.original for m in skipped]
         return result
@@ -242,39 +264,86 @@ class MoveHistory:
             ValueError: 進行中紀錄損毀（呼叫端可用 discard_pending 捨棄）
             OSError: 進行中紀錄讀不到
         """
-        journal = self._engine.load_pending()
-        if journal is None:
+        interrupted = self._load_pending()
+        if interrupted is None:
             return None
-        return PendingMove(self._operation_of(journal), len(journal.moved_indices()), journal.complete)
+        journal = interrupted.journal
+        return PendingMove(interrupted.kind, len(journal.moved_indices()), journal.complete)
 
     def discard_pending(self) -> None:
-        """捨棄進行中紀錄（無法讀取，或已搬完的批次決定保留結果）"""
+        """捨棄無法讀取的進行中紀錄"""
         self._engine.discard_pending()
 
     def recover(self) -> MoveResult:
         """中斷還原：把上次中途中斷的批次已搬動的檔案依反序搬回原位，並清除進行中紀錄
 
         已不在紀錄位置的檔略過；搬不回去的留在原地，替它們寫一筆殘留紀錄。
+        堆疊回到這批搬移開始前的樣子：被中斷的復原，其紀錄留在（或回到）復原堆疊；
+        被中斷的重做，其紀錄留在（或回到）重做堆疊；被中斷的重新命名，其紀錄不留。
+        整理完堆疊才刪除進行中紀錄；途中寫不進去時進行中紀錄保留，下次再處理。
 
         Returns:
             結果；changes 為搬回原位的檔（紀錄位置 → 原位），沒有未完成的批次時各項皆空
         """
         try:
-            journal = self._engine.load_pending()
-            if journal is None:
-                return MoveResult(OperationKind.RENAME)
-            outcome = self._engine.recover(journal)
+            interrupted = self._load_pending()
         except (OSError, ValueError) as e:
             return MoveResult(OperationKind.RENAME, error=e)
-        kind = self._operation_of(journal)
+        if interrupted is None:
+            return MoveResult(OperationKind.RENAME)
+        result = MoveResult(interrupted.kind)
+        settled = []
+
+        def settle(outcome: MoveRecoveryResult) -> None:
+            settled.append(True)
+            result.changes = [UndoMapping(m.renamed, m.original) for m in outcome.restored]
+            result.skipped = [m.renamed for m in outcome.skipped]
+            result.residual = outcome.residual
+            if interrupted.record is not None:
+                self._restore_workspace_meta(interrupted.record)
+            self._put_back(interrupted)
+            if outcome.residual:
+                error = self._save_residual(interrupted.kind, outcome.residual)
+                if error is not None:
+                    raise error
+
+        try:
+            self._engine.recover(interrupted.journal, settle)
+        except OSError as e:
+            if settled:
+                result.record_error = e
+            else:
+                result.error = e
+        return result
+
+    def keep_result(self) -> MoveResult:
+        """保留結果：上次已整批搬完、只差紀錄沒確認寫入的批次，補完紀錄後清除進行中紀錄
+
+        只在 pending() 回報已整批搬完（complete）時使用。
+        被中斷的復原，其紀錄轉入重做堆疊；被中斷的重做，其紀錄轉回復原堆疊；
+        被中斷的重新命名不補寫復原紀錄（之後無法復原），重做堆疊照新操作清空。
+        補完紀錄才刪除進行中紀錄；途中寫不進去時進行中紀錄保留，下次再處理。
+
+        Returns:
+            結果；changes 為搬好的檔（原位置 → 目前位置），呼叫端據以更新專案路徑
+        """
+        try:
+            interrupted = self._load_pending()
+        except (OSError, ValueError) as e:
+            return MoveResult(OperationKind.RENAME, error=e)
+        if interrupted is None:
+            return MoveResult(OperationKind.RENAME)
+        journal = interrupted.journal
+        origins, locations = journal.origins(), journal.locations()
         result = MoveResult(
-            kind,
-            changes=[UndoMapping(m.renamed, m.original) for m in outcome.restored],
-            skipped=[m.renamed for m in outcome.skipped],
-            residual=outcome.residual,
+            interrupted.kind,
+            changes=[UndoMapping(origins[i], locations[i]) for i in journal.moved_indices()],
         )
-        if outcome.residual:
-            result.record_error = self._save_residual(kind, outcome.residual)
+        try:
+            self._finish_kept(interrupted)
+            self._engine.discard_pending()
+        except OSError as e:
+            result.record_error = e
         return result
 
     # --- 其他操作的紀錄 ---
@@ -333,14 +402,13 @@ class MoveHistory:
         present, skipped = self._partition(record.mappings, lambda m: m.renamed)
 
         def finish(_created_dirs: List[str]) -> None:
-            self._transfer(record, present, self._undo, self._redo)
+            self._finish_undo(record, present)
 
         moves = [(m.renamed, m.original) for m in present]
-        result = self._execute(OperationKind.UNDO, record.id, moves, finish)
-        self._restore_workspace_meta(record)
-        if result.error is None:
-            for directory in sorted(record.created_directories, reverse=True):
-                self.file_service.remove_empty_directory(directory)
+        result = self._execute(
+            OperationKind.UNDO, record, moves, finish,
+            on_rollback=lambda: self._restore_workspace_meta(record),
+        )
         result.operation = record.operation_type
         result.skipped = [m.renamed for m in skipped]
         return result
@@ -365,16 +433,19 @@ class MoveHistory:
     # --- 內部：執行與紀錄 ---
 
     def _execute(
-        self, kind: OperationKind, record_id: str, moves: List[Move],
-        finish: Callable[[List[str]], None],
+        self, kind: OperationKind, record: UndoRecord, moves: List[Move],
+        finish: Callable[[List[str]], None], on_rollback: Optional[Callable[[], None]] = None,
     ) -> MoveResult:
         """交給引擎整批搬移，整批搬完後（刪除進行中紀錄前）呼叫 finish 寫紀錄
 
+        中途失敗回滾時，先呼叫 on_rollback，再把搬不回去的檔案寫成殘留紀錄，都在刪除進行中紀錄之前。
+
         Args:
             kind: 執行這批搬移的操作種類（記進進行中紀錄；失敗留下的殘留紀錄也標示它）
-            record_id: 所屬復原紀錄的 id
+            record: 所屬復原紀錄（以搬移前的內容記進進行中紀錄，中斷還原時據以整理堆疊）
             moves: 搬移項目
             finish: 整批搬完後寫紀錄的函式，參數為本次新建的目錄
+            on_rollback: 回滾結束、刪除進行中紀錄前另外要做的事（不得拋出 OSError）
 
         Returns:
             結果；operation 為 kind，呼叫端視需要改寫
@@ -386,12 +457,20 @@ class MoveHistory:
             finished.append(True)
             finish(created_dirs)
 
+        def rolled_back(residual: List[UndoMapping]) -> None:
+            if on_rollback:
+                on_rollback()
+            if residual:
+                result.residual = residual
+                result.record_error = self._save_residual(kind, residual)
+
         try:
-            self._engine.execute(moves, on_complete=complete, operation=kind.value, record_id=record_id)
+            self._engine.execute(
+                moves, on_complete=complete, on_rollback=rolled_back,
+                operation=kind.value, record_id=record.id, record=record.to_data(),
+            )
         except RenameRollbackError as e:
             result.error = e
-            result.residual = e.residual
-            result.record_error = self._save_residual(kind, e.residual)
             return result
         except (OSError, ValueError) as e:
             if finished:
@@ -416,17 +495,30 @@ class MoveHistory:
 
     def _push_new(self, record: UndoRecord) -> None:
         """新的操作：紀錄放上復原堆疊、清空重做堆疊"""
-        if record.operation_type in MOVE_OPERATIONS:
-            self._snapshot_workspace_meta(record)
         self._undo.push(record)
         self._redo.clear()
+
+    def _finish_undo(self, record: UndoRecord, present: List[UndoMapping]) -> None:
+        """復原整批搬完：寫回工作區 meta、紀錄轉入重做堆疊、移除重新命名新建且已空的目錄"""
+        self._restore_workspace_meta(record)
+        self._transfer(record, present, self._undo, self._redo)
+        for directory in sorted(record.created_directories, reverse=True):
+            self.file_service.remove_empty_directory(directory)
+
+    def _finish_redo(self, record: UndoRecord, present: List[UndoMapping], created_dirs: List[str]) -> None:
+        """重做整批搬完：記下重做新建的目錄，紀錄轉回復原堆疊"""
+        record.created_directories = created_dirs
+        self._transfer(record, present, self._redo, self._undo)
 
     def _transfer(
         self, record: UndoRecord, mappings: List[UndoMapping],
         source: _RecordStack, target: _RecordStack,
     ) -> None:
-        """紀錄從一個堆疊轉到另一個，只帶實際搬動的對照；一個都沒有時只從原堆疊移除"""
-        if mappings:
+        """紀錄從一個堆疊轉到另一個，只帶實際搬動的對照；一個都沒有時只從原堆疊移除
+
+        已在目標堆疊（上次轉到一半被中斷）就不再放一次；先放入目標再從原堆疊移除。
+        """
+        if mappings and not target.contains(record.id):
             moved = replace(
                 record, mappings=list(mappings),
                 description=self._describe(record, len(mappings)),
@@ -442,8 +534,57 @@ class MoveHistory:
         missing = [m for m in mappings if not self.file_service.file_exists(location(m))]
         return present, missing
 
+    # --- 內部：中斷還原 ---
+
+    def _load_pending(self) -> Optional[_Interrupted]:
+        """讀取上次中途中斷的批次；沒有時為 None
+
+        Raises:
+            ValueError: 進行中紀錄或其中的復原紀錄損毀
+            OSError: 進行中紀錄讀不到
+        """
+        journal = self._engine.load_pending()
+        if journal is None:
+            return None
+        record = UndoRecord.from_data(journal.record, journal.record_id) if journal.record else None
+        return _Interrupted(journal, self._operation_of(journal), record)
+
+    def _finish_kept(self, interrupted: _Interrupted) -> None:
+        """保留結果：補做被中斷的那批搬移整批搬完後該寫的紀錄（已寫過的不重寫）"""
+        record, journal = interrupted.record, interrupted.journal
+        if interrupted.kind == OperationKind.RENAME:
+            self._redo.clear()
+            return
+        if record is None:
+            return
+        moved = {path_key(path) for path in journal.origins().values()}
+        if interrupted.kind == OperationKind.UNDO:
+            self._finish_undo(record, [m for m in record.mappings if path_key(m.renamed) in moved])
+        else:
+            present = [m for m in record.mappings if path_key(m.original) in moved]
+            self._finish_redo(record, present, sorted(journal.created_directories))
+
+    def _put_back(self, interrupted: _Interrupted) -> None:
+        """還原後讓堆疊回到這批搬移開始前的樣子：所屬紀錄回到原本的堆疊、不在另一個堆疊
+
+        先放回再移除，任何時點中斷都不會兩邊都沒有。
+        """
+        record_id = interrupted.journal.record_id
+        source, target = self._stacks_of(interrupted.kind)
+        if source is not None and interrupted.record is not None and not source.contains(record_id):
+            source.push(interrupted.record)
+        target.remove(record_id)
+
+    def _stacks_of(self, kind: OperationKind) -> Tuple[Optional[_RecordStack], _RecordStack]:
+        """操作種類的紀錄從哪個堆疊轉到哪個堆疊；重新命名的紀錄是新的，沒有來源堆疊"""
+        if kind == OperationKind.UNDO:
+            return self._undo, self._redo
+        if kind == OperationKind.REDO:
+            return self._redo, self._undo
+        return None, self._undo
+
     @staticmethod
-    def _operation_of(journal) -> OperationKind:
+    def _operation_of(journal: MoveJournal) -> OperationKind:
         """進行中紀錄所屬的操作種類；舊版紀錄沒有記（或記了不認得的值）時視為重新命名"""
         try:
             return OperationKind(journal.operation)

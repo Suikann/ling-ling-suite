@@ -17,7 +17,7 @@ import json
 import os
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from core.constants import MOVE_JOURNAL_FILE, RENAME_STAGING_SUFFIX
 from core.locale import t
@@ -58,6 +58,7 @@ class MoveJournal:
         created_directories: 本次執行新建的目錄
         operation: 執行這批搬移的操作種類；舊版紀錄沒有，為空字串
         record_id: 這批搬移所屬的復原紀錄 id；舊版紀錄沒有，為空字串
+        record: 所屬復原紀錄在這批搬移開始時的內容（搬移歷程寫入，引擎不解讀）；舊版紀錄沒有，為 None
     """
     steps: List[MoveStep] = field(default_factory=list)
     pending: Optional[MoveStep] = None
@@ -65,6 +66,7 @@ class MoveJournal:
     created_directories: List[str] = field(default_factory=list)
     operation: str = ""
     record_id: str = ""
+    record: Optional[Dict[str, Any]] = None
 
     def moved_indices(self) -> List[int]:
         """已被搬動過的項目索引（依首次搬動順序）"""
@@ -116,6 +118,7 @@ class _JournalFile:
             "created_directories": journal.created_directories,
             "operation": journal.operation,
             "record_id": journal.record_id,
+            "record": journal.record,
         })
 
     def exists(self) -> bool:
@@ -140,6 +143,7 @@ class _JournalFile:
                 created_directories=data.get("created_directories", []),
                 operation=data.get("operation") or "",
                 record_id=data.get("record_id") or "",
+                record=data.get("record"),
             )
         except (KeyError, TypeError) as e:
             raise ValueError(str(e)) from e
@@ -306,7 +310,8 @@ class MoveService:
 
     def execute(
         self, moves: List[Move], on_complete: Optional[Callable[[List[str]], None]] = None,
-        operation: str = "", record_id: str = "",
+        on_rollback: Optional[Callable[[List[UndoMapping]], None]] = None,
+        operation: str = "", record_id: str = "", record: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         """驗證後以兩階段搬移執行整批
 
@@ -314,14 +319,19 @@ class MoveService:
         第二階段所有檔案一併就位；目標的父目錄不存在時建立。
         搬第一個檔案前先寫入進行中紀錄，每完成一步更新（下一步先記為 pending）；
         整批搬完先標記 complete、呼叫 on_complete 寫正式紀錄，寫完才刪除進行中紀錄，
-        所以任何時點被關掉都留得下紀錄。回滾結束也刪除。上次的紀錄尚未處理時拒絕執行。
+        所以任何時點被關掉都留得下紀錄。回滾結束先呼叫 on_rollback，之後也刪除。
+        上次的紀錄尚未處理時拒絕執行。
 
         Args:
             moves: 搬移項目清單
             on_complete: 整批搬完後、刪除進行中紀錄前要做的事（通常是寫正式復原紀錄），
                 參數為本次新建的目錄；它拋出的例外原樣傳出、不回滾，進行中紀錄保留
+            on_rollback: 回滾結束後、刪除進行中紀錄前要做的事（替搬不回去的檔案寫紀錄、寫回 meta），
+                參數為搬不回去的項目（同 RenameRollbackError.residual，可能為空）；
+                它拋出的例外原樣傳出，進行中紀錄保留（其中只剩搬不回去的步驟）
             operation: 記進進行中紀錄的操作種類
             record_id: 記進進行中紀錄的所屬復原紀錄 id
+            record: 記進進行中紀錄的所屬復原紀錄內容（中斷後據以整理堆疊、寫回工作區 meta）
 
         Returns:
             本次新建的目錄（排序後）
@@ -337,7 +347,7 @@ class MoveService:
         steps = self._build_steps(moves)
         journal = MoveJournal(
             pending=steps[0] if steps else None, complete=not steps,
-            operation=operation, record_id=record_id,
+            operation=operation, record_id=record_id, record=record,
         )
         try:
             self._journal.save(journal)
@@ -355,6 +365,9 @@ class MoveService:
         except Exception as e:
             journal.pending = None
             residual = self._rollback(moves, journal)
+            if on_rollback:
+                on_rollback(residual)
+            self._journal.clear()
             if residual:
                 raise RenameRollbackError(e, residual) from e
             raise
@@ -387,7 +400,10 @@ class MoveService:
         """捨棄進行中紀錄（無法讀取，或已搬完的批次決定保留結果、不再需要它）"""
         self._journal.clear()
 
-    def recover(self, journal: MoveJournal) -> MoveRecoveryResult:
+    def recover(
+        self, journal: MoveJournal,
+        on_restored: Optional[Callable[[MoveRecoveryResult], None]] = None,
+    ) -> MoveRecoveryResult:
         """把中途中斷的批次已搬動的檔案依反序搬回原位，並清除進行中紀錄
 
         走訪與回滾共用，每逆轉一步就更新紀錄，還原途中再被中斷也能接續。
@@ -396,6 +412,8 @@ class MoveService:
 
         Args:
             journal: load_pending() 讀回的進行中紀錄
+            on_restored: 檔案搬回後、刪除進行中紀錄前要做的事（整理堆疊、寫回 meta），參數為還原結果；
+                它拋出的例外原樣傳出，進行中紀錄保留（其中只剩搬不回去的步驟）
 
         Returns:
             還原結果
@@ -414,6 +432,9 @@ class MoveService:
                 result.restored.append(UndoMapping(origins[i], locations[i]))
             else:
                 result.skipped.append(UndoMapping(origins[i], locations[i]))
+        if on_restored:
+            on_restored(result)
+        self._journal.clear()
         return result
 
     @staticmethod
@@ -447,9 +468,10 @@ class MoveService:
         ]
 
     def _reverse_all(self, journal: MoveJournal) -> Dict[int, str]:
-        """依反序逆轉紀錄中仍生效的搬移，結束後移除新建且仍為空的目錄並刪除紀錄
+        """依反序逆轉紀錄中仍生效的搬移，結束後移除新建且仍為空的目錄
 
-        每逆轉一步就從紀錄移除並存檔，紀錄隨時反映實際位置。
+        每逆轉一步就從紀錄移除並存檔，紀錄隨時反映實際位置；紀錄由呼叫端在寫完其他紀錄後刪除。
+        開始逆轉就不再算整批搬完（complete），中途被打斷時不會被當成可以保留的結果。
         檔案已不在該步目標的步驟略過（檔案不見了，或上次逆轉完來不及記）；
         某個項目一旦搬不回去，該項目更早的搬移也不再逆轉（檔案已不在那裡）。
 
@@ -459,6 +481,7 @@ class MoveService:
         Returns:
             搬不回去的項目索引到目前停留位置的對應
         """
+        journal.complete = False
         self._journal.save(journal)
         stuck: Dict[int, str] = {}
         for k in range(len(journal.steps) - 1, -1, -1):
@@ -474,5 +497,4 @@ class MoveService:
             self._journal.save(journal)
         for directory in sorted(journal.created_directories, key=len, reverse=True):
             self.file_service.remove_empty_directory(directory)
-        self._journal.clear()
         return stuck
