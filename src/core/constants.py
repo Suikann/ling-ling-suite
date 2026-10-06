@@ -7,7 +7,7 @@
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 APP_NAME = "LingLingSuite"
 APP_DISPLAY_NAME = "泠靈小工具"
@@ -111,10 +111,60 @@ class RenameProblem(str, Enum):
     STAGING_TAKEN = "staging_taken"
 
 
-# 預檢不阻擋的問題：來源已不在的從計畫丟掉、重複的目標加後綴、多於聲部數的分譜不改名；其餘一律阻擋
-NON_BLOCKING_RENAME_PROBLEMS = frozenset({
-    RenameProblem.MISSING_SOURCE, RenameProblem.SUFFIXED, RenameProblem.EXTRA_FILE,
-})
+class ProblemPath(str, Enum):
+    """執行前驗證拒絕時，訊息列出該項的哪一條路徑"""
+    SOURCE = "source"
+    TARGET = "target"
+    STAGING = "staging"
+
+
+@dataclass(frozen=True)
+class RenameProblemRule:
+    """一種重新命名問題在預檢、預覽與執行前驗證的處理方式
+
+    Attributes:
+        blocking: 預檢是否阻擋執行
+        highlight: 預覽是否把這一項標成紅色（阻擋的，以及加了後綴的）
+        preview_key: 預覽顯示的訊息鍵（可用 count 與 files）：阻擋的列為警告，不阻擋的列為提醒
+        refusal_key: 執行前驗證拒絕時的錯誤訊息鍵（可用 files）；空字串表示只有預檢判定，執行前驗證不檢查
+        refusal_lists: 拒絕訊息列出該項的哪一條路徑
+        refusal_error: 執行前驗證拒絕時拋出的例外類別
+    """
+    blocking: bool
+    highlight: bool
+    preview_key: str
+    refusal_key: str = ""
+    refusal_lists: ProblemPath = ProblemPath.SOURCE
+    refusal_error: type = FileExistsError
+
+
+# 每種重新命名問題的處理方式，依執行前驗證的檢查順序（第一種有問題的種類決定拒絕的訊息）。
+# 不阻擋的：來源已不在的從計畫丟掉、重複的目標加後綴、多於聲部數的分譜不改名；其餘一律阻擋
+RENAME_PROBLEM_RULES: Dict[RenameProblem, RenameProblemRule] = {
+    RenameProblem.OUTSIDE_OUTPUT: RenameProblemRule(
+        True, True, "preview.outside_output_warning", "rename.error.outside_output", ProblemPath.TARGET, ValueError,
+    ),
+    RenameProblem.EMPTY_NAME: RenameProblemRule(
+        True, True, "preview.empty_name_warning", "rename.error.empty_name", ProblemPath.SOURCE, ValueError,
+    ),
+    RenameProblem.MISSING_SOURCE: RenameProblemRule(
+        False, False, "preview.missing_warning", "rename.error.source_missing", ProblemPath.SOURCE, FileNotFoundError,
+    ),
+    RenameProblem.DUPLICATE_SOURCE: RenameProblemRule(
+        True, True, "preview.duplicate_source_warning", "rename.error.duplicate_source", ProblemPath.SOURCE,
+    ),
+    RenameProblem.DUPLICATE_TARGET: RenameProblemRule(
+        True, True, "preview.duplicate_target_warning", "rename.error.duplicate_target", ProblemPath.TARGET,
+    ),
+    RenameProblem.TARGET_OCCUPIED: RenameProblemRule(
+        True, True, "preview.occupied_warning", "rename.error.target_exists", ProblemPath.TARGET,
+    ),
+    RenameProblem.STAGING_TAKEN: RenameProblemRule(
+        True, True, "preview.staging_warning", "rename.error.staging_exists", ProblemPath.STAGING,
+    ),
+    RenameProblem.SUFFIXED: RenameProblemRule(False, True, "preview.conflict_warning"),
+    RenameProblem.EXTRA_FILE: RenameProblemRule(False, False, "preview.extra_files_warning"),
+}
 
 
 class WorkspaceStatus(str, Enum):

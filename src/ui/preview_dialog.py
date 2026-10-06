@@ -11,20 +11,10 @@ from PySide6.QtWidgets import (
     QCheckBox, QLineEdit, QScrollArea, QWidget, QFileDialog,
     QRadioButton, QButtonGroup,
 )
-from core.constants import NON_BLOCKING_RENAME_PROBLEMS, PartsOutputMode, RenameProblem
+from core.constants import RENAME_PROBLEM_RULES, PartsOutputMode, RenameProblem, RenameProblemRule
 from core.locale import t
 from core.models import Project
 from services.move_history import RenameVerdict
-
-# 阻擋的問題種類 → 預覽的警告訊息（訊息可用 count 與 files）
-_BLOCKING_WARNINGS = {
-    RenameProblem.OUTSIDE_OUTPUT: "preview.outside_output_warning",
-    RenameProblem.EMPTY_NAME: "preview.empty_name_warning",
-    RenameProblem.DUPLICATE_SOURCE: "preview.duplicate_source_warning",
-    RenameProblem.DUPLICATE_TARGET: "preview.duplicate_target_warning",
-    RenameProblem.TARGET_OCCUPIED: "preview.occupied_warning",
-    RenameProblem.STAGING_TAKEN: "preview.staging_warning",
-}
 
 
 def _variable_list(names: List[str]) -> str:
@@ -177,25 +167,31 @@ class PreviewDialog(QDialog):
             warnings.append(t("preview.unsafe_folder_warning", name=verdict.unsafe_folder))
         if verdict.folder_variables:
             warnings.append(t("preview.folder_variable_warning", names=_variable_list(verdict.folder_variables)))
-        for kind, key in _BLOCKING_WARNINGS.items():
-            sources = verdict.sources(kind)
-            if sources:
-                warnings.append(t(key, count=len(sources), files="\n".join(sources)))
-        return warnings
+        return warnings + self._problem_messages(lambda rule: rule.blocking)
 
     def _notes(self) -> List[str]:
-        """判定中不阻擋、但要讓使用者知道的事"""
+        """判定中不阻擋、但要讓使用者知道的事（加後綴另在警告列說明）"""
         verdict = self._verdict
-        missing = verdict.sources(RenameProblem.MISSING_SOURCE)
-        extra = verdict.sources(RenameProblem.EXTRA_FILE)
-        notes = []
-        if missing:
-            notes.append(t("preview.missing_warning", count=len(missing), files="\n".join(missing)))
-        if extra:
-            notes.append(t("preview.extra_files_warning", files="\n".join(extra)))
+        notes = self._problem_messages(lambda rule: not rule.blocking and not rule.highlight)
         if verdict.unknown_variables:
             notes.append(t("preview.unknown_variables_warning", names=_variable_list(verdict.unknown_variables)))
         return notes
+
+    def _problem_messages(self, wanted: Callable[[RenameProblemRule], bool]) -> List[str]:
+        """判定中符合條件的問題種類，依 RENAME_PROBLEM_RULES 的順序各一則預覽訊息
+
+        Args:
+            wanted: 依問題的處理方式判斷要不要列出
+
+        Returns:
+            有來源出現這種問題的訊息
+        """
+        messages = []
+        for kind, rule in RENAME_PROBLEM_RULES.items():
+            sources = self._verdict.sources(kind)
+            if wanted(rule) and sources:
+                messages.append(t(rule.preview_key, count=len(sources), files="\n".join(sources)))
+        return messages
 
     def _render_list(self):
         while self._scroll_layout.count():
@@ -211,7 +207,7 @@ class PreviewDialog(QDialog):
         if blocking:
             self._warn_label.setText("\n\n".join(blocking))
         elif suffixed:
-            self._warn_label.setText(t("preview.conflict_warning", count=len(suffixed)))
+            self._warn_label.setText(t(RENAME_PROBLEM_RULES[RenameProblem.SUFFIXED].preview_key, count=len(suffixed)))
         self._warn_label.setVisible(bool(blocking or suffixed))
         self._exec_btn.setText(t("preview.execute_with_suffix" if suffixed and not blocking else "preview.execute"))
         self._exec_btn.setEnabled(verdict.runnable)
@@ -228,11 +224,8 @@ class PreviewDialog(QDialog):
         self._scroll_layout.addStretch()
 
     def _needs_attention(self, source: str) -> bool:
-        """這一項的目標加了後綴，或有阻擋的問題"""
-        return any(
-            kind == RenameProblem.SUFFIXED or kind not in NON_BLOCKING_RENAME_PROBLEMS
-            for kind in self._verdict.problems.get(source, ())
-        )
+        """這一項有要標紅的問題（阻擋的，或目標加了後綴）"""
+        return any(RENAME_PROBLEM_RULES[kind].highlight for kind in self._verdict.problems.get(source, ()))
 
     def _execute(self):
         self._on_execute(self._verdict)

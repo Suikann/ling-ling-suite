@@ -19,7 +19,9 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from core.constants import MOVE_JOURNAL_FILE, RENAME_STAGING_SUFFIX, OperationKind, RenameProblem
+from core.constants import (
+    MOVE_JOURNAL_FILE, RENAME_PROBLEM_RULES, RENAME_STAGING_SUFFIX, OperationKind, ProblemPath, RenameProblem,
+)
 from core.locale import t
 from core.models import UndoMapping
 from core.paths import is_inside, path_key, same_path
@@ -227,16 +229,12 @@ def staging_path(path: str) -> str:
     return path + RENAME_STAGING_SUFFIX
 
 
-# 執行前驗證依序檢查：第一種有問題的種類決定拒絕的例外與訊息，訊息列出該項的來源、目標或暫名
-_REFUSALS: Tuple[Tuple[RenameProblem, type, str, Callable[[Move], str]], ...] = (
-    (RenameProblem.OUTSIDE_OUTPUT, ValueError, "rename.error.outside_output", lambda m: m[1]),
-    (RenameProblem.EMPTY_NAME, ValueError, "rename.error.empty_name", lambda m: m[0]),
-    (RenameProblem.MISSING_SOURCE, FileNotFoundError, "rename.error.source_missing", lambda m: m[0]),
-    (RenameProblem.DUPLICATE_SOURCE, FileExistsError, "rename.error.duplicate_source", lambda m: m[0]),
-    (RenameProblem.DUPLICATE_TARGET, FileExistsError, "rename.error.duplicate_target", lambda m: m[1]),
-    (RenameProblem.TARGET_OCCUPIED, FileExistsError, "rename.error.target_exists", lambda m: m[1]),
-    (RenameProblem.STAGING_TAKEN, FileExistsError, "rename.error.staging_exists", lambda m: staging_path(m[0])),
-)
+# 拒絕訊息列出的路徑：該項的來源、目標或暫名
+_LISTED_PATH: Dict[ProblemPath, Callable[[Move], str]] = {
+    ProblemPath.SOURCE: lambda m: m[0],
+    ProblemPath.TARGET: lambda m: m[1],
+    ProblemPath.STAGING: lambda m: staging_path(m[0]),
+}
 
 
 class MoveService:
@@ -281,13 +279,15 @@ class MoveService:
         }
         problems: Dict[str, List[RenameProblem]] = {}
         for i, (src, _) in enumerate(moves):
-            for kind, indices in hits.items():
-                if i in indices and kind not in problems.setdefault(src, []):
+            for kind in RenameProblem:
+                if i in hits.get(kind, ()) and kind not in problems.setdefault(src, []):
                     problems[src].append(kind)
         return {src: kinds for src, kinds in problems.items() if kinds}
 
     def validate(self, moves: List[Move], bounds: Optional[List[str]] = None) -> None:
         """執行前檢查批次是否可安全執行（規則見 find_problems）；任一項不符即拋出例外，不會搬動任何檔案
+
+        依 RENAME_PROBLEM_RULES 的順序，第一種有問題的種類決定拋出的例外與訊息。
 
         Args:
             moves: 搬移項目清單
@@ -299,10 +299,13 @@ class MoveService:
             FileExistsError: 目標或暫名已有檔案，或同一來源、同一目標被多個項目引用
         """
         problems = self.find_problems(moves, bounds)
-        for kind, error, key, listed in _REFUSALS:
+        for kind, rule in RENAME_PROBLEM_RULES.items():
+            if not rule.refusal_key:
+                continue
+            listed = _LISTED_PATH[rule.refusal_lists]
             paths = [listed(move) for move in moves if kind in problems.get(move[0], ())]
             if paths:
-                raise error(t(key, files="\n".join(dict.fromkeys(paths))))
+                raise rule.refusal_error(t(rule.refusal_key, files="\n".join(dict.fromkeys(paths))))
 
     def _occupied_targets(self, moves: List[Move]) -> Set[int]:
         """目標被批次外檔案佔用的項目索引"""

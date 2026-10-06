@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import Callable, Collection, Dict, Iterable, List, Optional, Tuple
 
 from core.constants import (
-    BACKUP_DIR, MOVE_JOURNAL_FILE, MOVE_OPERATIONS, NON_BLOCKING_RENAME_PROBLEMS, REDO_DIR, UNDO_DIR,
+    BACKUP_DIR, MOVE_JOURNAL_FILE, MOVE_OPERATIONS, REDO_DIR, RENAME_PROBLEM_RULES, UNDO_DIR,
     OperationKind, RenameProblem,
 )
 from core.locale import t
@@ -101,9 +101,9 @@ class RenameVerdict:
 
     @property
     def blocked(self) -> bool:
-        """有阻擋的問題：資料夾名稱不安全、子資料夾模板用了逐檔變數，或有 NON_BLOCKING_RENAME_PROBLEMS 以外的種類"""
+        """有阻擋的問題：資料夾名稱不安全、子資料夾模板用了逐檔變數，或有 RENAME_PROBLEM_RULES 判為阻擋的種類"""
         return bool(self.unsafe_folder or self.folder_variables) or any(
-            kind not in NON_BLOCKING_RENAME_PROBLEMS for kinds in self.problems.values() for kind in kinds
+            RENAME_PROBLEM_RULES[kind].blocking for kinds in self.problems.values() for kind in kinds
         )
 
     @property

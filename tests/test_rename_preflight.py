@@ -12,7 +12,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from core.constants import PartsOutputMode, RenameProblem
+from core.constants import RENAME_PROBLEM_RULES, PartsOutputMode, RenameProblem
 from core.models import FileInfo, Group, Project, RenameEntry
 from services.move_history import RenameVerdict
 from services.rename_service import RenamePlan, assign_default_sections
@@ -32,6 +32,17 @@ class PreflightTestCase(MoveHistoryTestCase):
         return [
             (os.path.basename(e.original_path), os.path.relpath(e.new_path, self.scores)) for e in verdict.plan
         ]
+
+
+class TestProblemRules(unittest.TestCase):
+    """每種問題都有處理方式；不阻擋的只有遺失來源、加後綴與多出的檔"""
+
+    def test_every_kind_has_a_rule_and_only_three_do_not_block(self):
+        self.assertEqual(set(RENAME_PROBLEM_RULES), set(RenameProblem))
+        self.assertEqual(
+            {kind for kind, rule in RENAME_PROBLEM_RULES.items() if not rule.blocking},
+            {RenameProblem.MISSING_SOURCE, RenameProblem.SUFFIXED, RenameProblem.EXTRA_FILE},
+        )
 
 
 class TestVerdictIsWhatRuns(PreflightTestCase):
