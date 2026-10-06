@@ -14,8 +14,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from core.constants import TEMPLATE_VARIABLES, PartsOutputMode, VariableLevel
 from core.models import FileInfo, Group, Project
 from core.naming import (
-    SCORE_SLOT, NamingSettings, UnsafeFolderNameError, name_group, name_slot, named_voices, settings_for,
-    unknown_variables, variable_level, variables_in,
+    SCORE_SLOT, NamingSettings, UnsafeFolderNameError, default_sections, name_group, name_slot, named_voices,
+    section_for, settings_for, unknown_variables, variable_level, variables_in,
 )
 
 
@@ -269,6 +269,23 @@ class TestVariableLevel(unittest.TestCase):
         template = "{PieceName} {序號} {樂器}"
         per_file = [name for name in variables_in(template) if variable_level(name) == VariableLevel.FILE]
         self.assertEqual(per_file, ["序號", "樂器"])
+
+
+class TestSections(unittest.TestCase):
+    """聲部組：專案設定了（不是空白）就用設定的，否則依指定的語言偵測預設值"""
+
+    def test_section_set_in_the_project_wins(self):
+        self.assertEqual(section_for("Flute", {"Flute": "Wind"}, english=True), "Wind")
+
+    def test_missing_or_blank_section_falls_back_to_the_default_in_the_given_language(self):
+        for sections in ({}, {"Flute": "  "}):
+            with self.subTest(sections=sections):
+                self.assertEqual(section_for("Flute", sections, english=True), "Woodwinds")
+                self.assertEqual(section_for("Flute", sections, english=False), "木管")
+
+    def test_defaults_are_listed_only_for_named_voices_without_a_section(self):
+        group = _group(["Flute", "Horn", "Tuba"], files=_files("fl.pdf", "hn.pdf"))
+        self.assertEqual(default_sections([group], {"Flute": "Wind"}, english=True), {"Horn": "Brass"})
 
 
 class TestSettingsFor(unittest.TestCase):

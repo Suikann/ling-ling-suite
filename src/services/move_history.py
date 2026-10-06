@@ -262,14 +262,17 @@ class MoveHistory:
     # --- 重新命名預檢 ---
 
     def check_rename(self, project: Project, group_ids: Optional[Collection[str]] = None) -> RenameVerdict:
-        """重新命名預檢：依專案的命名設定產生計畫並判定
+        """重新命名預檢：依專案的命名設定產生計畫並判定（不改專案）
 
         Args:
-            project: 專案
+            project: 專案；分譜依聲部組分放時，先以 rename_service.assign_default_sections 補上聲部組
             group_ids: 只檢查這些群組；None 表示全部群組
 
         Returns:
             判定；rename 執行的就是它的計畫
+
+        Raises:
+            KeyError: 分譜依聲部組分放時，有要命名的聲部沒有聲部組
         """
         try:
             planned = generate_rename_plan(project, group_ids)

@@ -4,9 +4,11 @@
 
 依專案的命名設定產生重新命名計畫（還沒對照磁碟），以及重複目標的自動加後綴。
 對照磁碟的預檢與執行都在搬移歷程（services/move_history.py）。
+產生計畫不改專案；分譜依聲部組分放時，先以 assign_default_sections 把還沒有聲部組的聲部寫進專案。
 
 使用範例：
-    from services.rename_service import generate_rename_plan
+    from services.rename_service import assign_default_sections, generate_rename_plan
+    assign_default_sections(project, english=False)
     planned = generate_rename_plan(project)
     for entry in planned.entries:
         print(entry.original_path, entry.new_path)
@@ -15,10 +17,9 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from typing import Collection, Iterable, List, Optional
-from core.constants import PartsOutputMode, VariableLevel, detect_instrument_section
-from core.locale import get_locale
+from core.constants import PartsOutputMode, VariableLevel
 from core.models import Group, Project, RenameEntry
-from core.naming import name_group, named_voices, settings_for, unknown_variables, variable_level, variables_in
+from core.naming import default_sections, name_group, settings_for, unknown_variables, variable_level, variables_in
 from core.paths import path_key
 
 
@@ -38,14 +39,33 @@ class RenamePlan:
     unknown_variables: List[str] = field(default_factory=list)
 
 
-def generate_rename_plan(project: Project, group_ids: Optional[Collection[str]] = None) -> RenamePlan:
-    """根據專案設定產生重新命名計畫
+def assign_default_sections(
+    project: Project, english: bool, group_ids: Optional[Collection[str]] = None,
+) -> None:
+    """分譜依聲部組分放時，把這些群組會被命名、還沒有聲部組（或留空）的聲部寫進專案的編制設定
 
-    檔名與相對資料夾由命名模組決定，接在輸出位置之下；沒指定輸出位置時接在來源檔所在的資料夾。
-    分譜依聲部組分放時，還沒有聲部組的聲部先依目前介面語言寫進專案（第一次用到時定下，之後不隨介面語言改變）。
+    預設值依指定語言偵測；寫進專案後就定下，之後切換介面語言不會改變。其他分譜存放模式不寫。
+    產生重新命名計畫（重新命名預檢）前呼叫。
 
     Args:
         project: 專案資料
+        english: 預設值用英文名稱（通常依目前介面語言）
+        group_ids: 只處理這些群組；None 表示全部群組
+    """
+    if project.parts_output_mode != PartsOutputMode.SECTION:
+        return
+    missing = default_sections(_chosen_groups(project, group_ids), project.instrument_sections, english)
+    if missing:
+        project.update_ensemble(sections=missing)
+
+
+def generate_rename_plan(project: Project, group_ids: Optional[Collection[str]] = None) -> RenamePlan:
+    """根據專案設定產生重新命名計畫（不改專案）
+
+    檔名與相對資料夾由命名模組決定，接在輸出位置之下；沒指定輸出位置時接在來源檔所在的資料夾。
+
+    Args:
+        project: 專案資料；分譜依聲部組分放時，要命名的聲部都必須已有聲部組（見 assign_default_sections）
         group_ids: 只為這些群組產生計畫；None 表示全部群組
 
     Returns:
@@ -53,12 +73,10 @@ def generate_rename_plan(project: Project, group_ids: Optional[Collection[str]] 
 
     Raises:
         UnsafeFolderNameError: 某一層資料夾名稱清理後是 . 或 ..
+        KeyError: 分譜依聲部組分放時，有要命名的聲部沒有聲部組
     """
-    groups = [g for g in project.groups if group_ids is None or g.id in group_ids]
-    if project.parts_output_mode == PartsOutputMode.SECTION:
-        _assign_default_sections(project, groups)
     plan = RenamePlan()
-    for group in groups:
+    for group in _chosen_groups(project, group_ids):
         settings = settings_for(project, group)
         naming = name_group(group, settings)
         for named in naming.files:
@@ -96,20 +114,13 @@ def apply_auto_suffix(entries: List[RenameEntry]) -> List[RenameEntry]:
     return result
 
 
+def _chosen_groups(project: Project, group_ids: Optional[Collection[str]]) -> List[Group]:
+    """指定的群組（依專案中的順序）；group_ids 為 None 表示全部群組"""
+    return [g for g in project.groups if group_ids is None or g.id in group_ids]
+
+
 def _add_new(names: List[str], found: Iterable[str]) -> None:
     """把 found 中還不在 names 裡的名稱依序加到後面"""
     for name in found:
         if name not in names:
             names.append(name)
-
-
-def _assign_default_sections(project: Project, groups: List[Group]) -> None:
-    """這些群組會被命名的聲部中，還沒有聲部組（或留空）的，依目前介面語言寫入偵測到的聲部組"""
-    english = get_locale() == "en"
-    missing = {}
-    for group in groups:
-        for voice in named_voices(group):
-            if not project.instrument_sections.get(voice, "").strip():
-                missing[voice] = detect_instrument_section(voice, english)
-    if missing:
-        project.update_ensemble(sections=missing)

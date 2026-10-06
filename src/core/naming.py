@@ -14,10 +14,10 @@
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 from core.constants import (
     MIN_NUMBER_WIDTH, RELATIVE_DIR_NAMES, SCORE_NUMBER, TEMPLATE_SLOT_SOURCES, TEMPLATE_VARIABLES, PartsOutputMode,
-    TemplateVariable, VariableLevel,
+    TemplateVariable, VariableLevel, detect_instrument_section,
 )
 from core.filename import ensure_pdf_extension, sanitize_filename
 from core.models import FileInfo, Group, Project
@@ -181,6 +181,38 @@ def name_group(group: Group, settings: NamingSettings, voices: Optional[Sequence
 def named_voices(group: Group, voices: Optional[Sequence[str]] = None) -> List[str]:
     """有分譜對應、會被命名的聲部（依序）；參數同 name_group"""
     return _effective_voices(group, voices)[:len(group.files)]
+
+
+def section_for(voice: str, sections: Mapping[str, str], english: bool) -> str:
+    """聲部的聲部組：專案已設定（不是空白）就用設定的，否則是依指定語言偵測的預設值
+
+    Args:
+        voice: 聲部名稱
+        sections: 專案的聲部名稱到聲部組名稱
+        english: 預設值用英文名稱
+
+    Returns:
+        聲部組名稱
+    """
+    stored = sections.get(voice, "")
+    return stored if stored.strip() else detect_instrument_section(voice, english)
+
+
+def default_sections(groups: Iterable[Group], sections: Mapping[str, str], english: bool) -> Dict[str, str]:
+    """這些群組會被命名的聲部中，還沒有聲部組（或留空）的聲部到它的預設聲部組
+
+    Args:
+        groups: 群組
+        sections: 專案的聲部名稱到聲部組名稱
+        english: 預設值用英文名稱
+
+    Returns:
+        聲部名稱到依指定語言偵測的聲部組；都已設定時為空
+    """
+    return {
+        voice: section_for(voice, sections, english)
+        for group in groups for voice in named_voices(group) if not sections.get(voice, "").strip()
+    }
 
 
 def _effective_voices(group: Group, voices: Optional[Sequence[str]]) -> List[str]:

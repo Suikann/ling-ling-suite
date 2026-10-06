@@ -7,7 +7,7 @@
 import os
 import re
 from typing import List, Optional
-from core.constants import SCORE_KEYWORDS, TEMPLATE_VARIABLES
+from core.constants import LOCALE_EN, SCORE_KEYWORDS, TEMPLATE_VARIABLES
 
 
 def detect_piece_name(filenames: List[str]) -> str:
@@ -99,12 +99,12 @@ def convert_template_language(template: str, to_locale: str) -> str:
 
     Args:
         template: 模板字串
-        to_locale: 目標語言代碼，"zh_TW" 或 "en"
+        to_locale: 目標語言代碼（LOCALE_ZH_TW 或 LOCALE_EN）
 
     Returns:
         轉換後的模板字串
     """
-    if to_locale == "en":
+    if to_locale == LOCALE_EN:
         for tv in TEMPLATE_VARIABLES:
             template = template.replace(f"{{{tv.name}}}", f"{{{tv.name_en}}}")
     else:

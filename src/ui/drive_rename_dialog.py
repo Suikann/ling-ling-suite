@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from core.locale import t, get_locale
+from core.locale import localized, t
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     TEMPLATE_VARIABLES, INSTRUMENT_PRESETS,
@@ -47,11 +47,7 @@ class DriveRenameDialog(QDialog):
         layout = QVBoxLayout(self)
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel(t("catalog.rename.template_label")))
-        default_tmpl = (
-            DEFAULT_MASTER_TEMPLATE_EN if get_locale() == "en"
-            else DEFAULT_MASTER_TEMPLATE
-        )
-        self._template_entry = QLineEdit(default_tmpl)
+        self._template_entry = QLineEdit(localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN))
         self._template_entry.textChanged.connect(self._update_preview)
         template_row.addWidget(self._template_entry, stretch=1)
         layout.addLayout(template_row)
@@ -77,8 +73,7 @@ class DriveRenameDialog(QDialog):
         self._preset_combo = QComboBox()
         self._preset_combo.addItem("")
         for preset in INSTRUMENT_PRESETS:
-            name = preset.name if get_locale() != "en" else preset.name_en
-            self._preset_combo.addItem(name)
+            self._preset_combo.addItem(localized(preset.name, preset.name_en))
         self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
         preset_row.addWidget(self._preset_combo, stretch=1)
         inst_layout.addLayout(preset_row)

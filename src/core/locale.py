@@ -4,18 +4,24 @@
 
 提供 zh_TW / en 雙語字典與 t(key, **kwargs) 存取函數。
 
+依介面語言挑選中英文版本（預設模板、預設編制名稱、聲部組預設值等）一律經過 is_english 或 localized。
+
 使用範例：
-    from core.locale import t, set_locale, get_locale
+    from core.locale import t, set_locale, get_locale, localized
     set_locale("en")
     label_text = t("menu.file")
     status = t("status.imported_files", count=5)
+    template = localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN)
 """
-from typing import Dict, FrozenSet, Optional
+from typing import Dict, FrozenSet, Optional, TypeVar
+from core.constants import LOCALE_EN, LOCALE_ZH_TW
 
-_current_locale = "zh_TW"
+_T = TypeVar("_T")
+
+_current_locale = LOCALE_ZH_TW
 
 _STRINGS: Dict[str, Dict[str, str]] = {
-    "zh_TW": {
+    LOCALE_ZH_TW: {
         # 應用程式
         "app.title": "泠靈小工具",
         "app.unsaved_project": "未命名",
@@ -499,7 +505,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.loading": "載入中...",
         "catalog.no_connection": "尚未登入 Google 帳號或未設定試算表 ID，請至「譜庫 > 譜庫設定」完成設定。",
     },
-    "en": {
+    LOCALE_EN: {
         # 應用程式
         "app.title": "Ling Ling Suite",
         "app.unsaved_project": "Untitled",
@@ -991,6 +997,24 @@ def get_locale() -> str:
     return _current_locale
 
 
+def is_english() -> bool:
+    """目前介面語言是否為英文"""
+    return _current_locale == LOCALE_EN
+
+
+def localized(zh: _T, en: _T) -> _T:
+    """依目前介面語言挑選中文或英文版本
+
+    Args:
+        zh: 中文版本
+        en: 英文版本
+
+    Returns:
+        介面語言為英文時為 en，否則為 zh
+    """
+    return en if is_english() else zh
+
+
 def set_locale(locale_code: str):
     """設定目前語言
 
@@ -1029,10 +1053,10 @@ def t(key: str, **kwargs) -> str:
     Returns:
         翻譯後的字串，找不到時回傳鍵名本身
     """
-    strings = _STRINGS.get(_current_locale, _STRINGS["zh_TW"])
+    strings = _STRINGS.get(_current_locale, _STRINGS[LOCALE_ZH_TW])
     text = strings.get(key)
     if text is None:
-        fallback = _STRINGS["zh_TW"]
+        fallback = _STRINGS[LOCALE_ZH_TW]
         text = fallback.get(key, key)
     if kwargs:
         try:

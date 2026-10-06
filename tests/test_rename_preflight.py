@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from core.constants import PartsOutputMode, RenameProblem
 from core.models import FileInfo, Group, Project, RenameEntry
 from services.move_history import RenameVerdict
-from services.rename_service import RenamePlan
+from services.rename_service import RenamePlan, assign_default_sections
 from test_move_history import MoveHistoryTestCase
 
 
@@ -209,6 +209,7 @@ class TestOutputBoundary(PreflightTestCase):
                             use_subfolders=use_subfolders, subfolder_template="{曲名} - {樂章編號}",
                             parts_output_mode=mode, parts_subfolder_name="Parts", groups=[group],
                         )
+                        assign_default_sections(project, english=True)
                         verdict = self.history.check_rename(project)
                         self.assertEqual(len(verdict.plan), 3)
                         self.assertEqual(verdict.problems, {})

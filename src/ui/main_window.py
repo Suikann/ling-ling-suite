@@ -16,9 +16,9 @@ from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
-    TEMPLATE_VARIABLES, OperationKind,
+    LOCALE_EN, LOCALE_ZH_TW, TEMPLATE_VARIABLES, OperationKind,
 )
-from core.locale import t, get_locale, set_locale
+from core.locale import t, get_locale, is_english, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
 from services.file_service import FileService
@@ -27,6 +27,7 @@ from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVe
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from services.project_access import AccessResult, ProjectAccess
+from services.rename_service import assign_default_sections
 from services.split_service import SplitService
 from ui.instrument_list import InstrumentListEditor
 
@@ -116,7 +117,7 @@ class MainWindow(QMainWindow):
         self._add_action(tools_menu, t("menu.tools.cleanup_workspace"), self._open_workspace_cleanup)
         view_menu = mb.addMenu(t("menu.view"))
         lang_menu = view_menu.addMenu(t("menu.view.language"))
-        for code, label_key in [("zh_TW", "menu.view.language.zh_TW"), ("en", "menu.view.language.en")]:
+        for code, label_key in [(LOCALE_ZH_TW, "menu.view.language.zh_TW"), (LOCALE_EN, "menu.view.language.en")]:
             action = QAction(t(label_key), self)
             action.triggered.connect(lambda checked=False, c=code: self._set_language(c))
             lang_menu.addAction(action)
@@ -291,10 +292,9 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _blank_project() -> Project:
         """依目前介面語言的預設模板建立新專案"""
-        english = get_locale() == "en"
         return Project(
-            master_template=DEFAULT_MASTER_TEMPLATE_EN if english else DEFAULT_MASTER_TEMPLATE,
-            subfolder_template=DEFAULT_SUBFOLDER_TEMPLATE_EN if english else DEFAULT_SUBFOLDER_TEMPLATE,
+            master_template=localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN),
+            subfolder_template=localized(DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN),
         )
 
     def _set_project(self, project: Project, path: Optional[str]):
@@ -413,10 +413,10 @@ class MainWindow(QMainWindow):
             if selected_ids is None:
                 return
         from ui.preview_dialog import PreviewDialog
-        dialog = PreviewDialog(
-            self.project, lambda: self._history.check_rename(self.project, selected_ids),
-            self._execute_rename, self,
-        )
+        def check() -> RenameVerdict:
+            assign_default_sections(self.project, is_english(), selected_ids)
+            return self._history.check_rename(self.project, selected_ids)
+        dialog = PreviewDialog(self.project, check, self._execute_rename, self)
         dialog.exec()
 
     def _execute_rename(self, verdict: RenameVerdict):
@@ -728,15 +728,9 @@ class MainWindow(QMainWindow):
 
     def _show_variable_menu(self):
         menu = QMenu(self)
-        locale = get_locale()
         for var in TEMPLATE_VARIABLES:
-            if locale == "en":
-                label = f"{{{var.name_en}}} - {var.description}"
-                var_name = var.name_en
-            else:
-                label = f"{{{var.name}}} - {var.description}"
-                var_name = var.name
-            action = menu.addAction(label)
+            var_name = localized(var.name, var.name_en)
+            action = menu.addAction(f"{{{var_name}}} - {var.description}")
             action.triggered.connect(
                 lambda checked=False, v=var_name: self._insert_variable(v),
             )

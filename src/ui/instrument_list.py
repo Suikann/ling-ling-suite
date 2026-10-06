@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
 from ui.widgets import DragListWidget
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
-from core.locale import t
+from core.constants import DEFAULT_HEADCOUNT, INSTRUMENT_PRESETS, SECTION_NAMES_EN
+from core.locale import is_english, localized, t
+from core.naming import section_for
 
 if TYPE_CHECKING:
     from core.models import Group, Project
@@ -86,18 +88,11 @@ class InstrumentListEditor(QWidget):
         layout.addLayout(extra_row)
 
     def _build_preset_options(self) -> List[str]:
-        from core.constants import INSTRUMENT_PRESETS
-        from core.locale import get_locale
-        locale = get_locale()
-        return [
-            preset.name_en if locale == "en" else preset.name
-            for preset in INSTRUMENT_PRESETS
-        ]
+        return [localized(preset.name, preset.name_en) for preset in INSTRUMENT_PRESETS]
 
     def _on_preset_selected(self, index: int):
         if index <= 0:
             return
-        from core.constants import INSTRUMENT_PRESETS
         preset_idx = index - 1
         if preset_idx < len(INSTRUMENT_PRESETS):
             self._fill(INSTRUMENT_PRESETS[preset_idx].instruments)
@@ -188,9 +183,6 @@ class InstrumentListEditor(QWidget):
         instruments = self.get_instruments()
         if not instruments:
             return
-        from core.constants import detect_instrument_section
-        from core.locale import get_locale
-        english = get_locale() == "en"
         headcounts = {}
         sections = {}
         if self._project:
@@ -216,14 +208,13 @@ class InstrumentListEditor(QWidget):
             name_item = QTableWidgetItem(inst)
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             table.setItem(row, 0, name_item)
-            section = sections.get(inst) or detect_instrument_section(inst, english)
-            section_item = QTableWidgetItem(section)
+            section_item = QTableWidgetItem(section_for(inst, sections, is_english()))
             table.setItem(row, 1, section_item)
             section_items.append(section_item)
             spin = QSpinBox()
             spin.setMinimum(0)
             spin.setMaximum(99)
-            spin.setValue(headcounts.get(inst, 1))
+            spin.setValue(headcounts.get(inst, DEFAULT_HEADCOUNT))
             table.setCellWidget(row, 2, spin)
             spinboxes.append(spin)
         lay.addWidget(table)
@@ -255,8 +246,6 @@ class InstrumentListEditor(QWidget):
         )
         if not path:
             return
-        from core.constants import detect_instrument_section, SECTION_NAMES_EN
-        from core.locale import get_locale
         headcounts = {}
         sections_map = {}
         if self._project:
@@ -264,12 +253,12 @@ class InstrumentListEditor(QWidget):
             sections_map = self._project.instrument_sections
         grouped: Dict[str, List[tuple]] = OrderedDict()
         for inst in instruments:
-            section = sections_map.get(inst, detect_instrument_section(inst))
-            if get_locale() == "en":
+            section = section_for(inst, sections_map, is_english())
+            if is_english():
                 section = SECTION_NAMES_EN.get(section, section)
             if section not in grouped:
                 grouped[section] = []
-            count = headcounts.get(inst, 1)
+            count = headcounts.get(inst, DEFAULT_HEADCOUNT)
             grouped[section].append((inst, count))
         lines = [t("instrument.title"), "=" * 40, ""]
         total_parts = 0

@@ -3,7 +3,7 @@
 重新命名計畫測試
 
 計畫的檔名與相對資料夾由命名模組決定（見 test_naming）；這裡只測重新命名服務的接線：
-命名結果接在輸出位置（沒指定時為來源檔所在的資料夾）之下，以及聲部組第一次被用到時寫進專案。
+命名結果接在輸出位置（沒指定時為來源檔所在的資料夾）之下，以及聲部組在預檢前第一次被用到時寫進專案。
 """
 import os
 import sys
@@ -12,10 +12,9 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from core.constants import PartsOutputMode
-from core.locale import get_locale, set_locale
 from core.models import FileInfo, Group, Project
 from core.naming import UnsafeFolderNameError
-from services.rename_service import generate_rename_plan
+from services.rename_service import assign_default_sections, generate_rename_plan
 
 IN_DIR = os.path.abspath("in")
 OUT_DIR = os.path.abspath("out")
@@ -102,10 +101,7 @@ class TestRenamePlan(unittest.TestCase):
 
 
 class TestSectionsWrittenOnFirstUse(unittest.TestCase):
-    """聲部組資料夾模式下，還沒有聲部組的聲部依當時的介面語言寫進專案的編制設定"""
-
-    def setUp(self):
-        self.addCleanup(set_locale, get_locale())
+    """聲部組資料夾模式下，還沒有聲部組的聲部在預檢前依指定語言寫進專案的編制設定；產生計畫本身不改專案"""
 
     def _project(self, **fields):
         project = Project(
@@ -115,9 +111,9 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
         project.mark_saved()
         return project
 
-    def test_missing_sections_are_written_in_the_current_language(self):
-        set_locale("en")
+    def test_missing_sections_are_written_in_the_given_language(self):
         project = self._project(instrument_sections={"Horn": "Corni"})
+        assign_default_sections(project, english=True)
         new_paths = [e.new_path for e in generate_rename_plan(project).entries]
         self.assertEqual(project.instrument_sections, {"Flute": "Woodwinds", "Horn": "Corni"})
         self.assertEqual(new_paths[1:], [
@@ -125,39 +121,34 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
         ])
         self.assertTrue(project.is_modified())
 
-    def test_written_sections_stay_after_switching_language(self):
-        set_locale("en")
+    def test_written_sections_stay_when_assigned_again_in_another_language(self):
         project = self._project()
-        generate_rename_plan(project)
-        set_locale("zh_TW")
+        assign_default_sections(project, english=True)
+        assign_default_sections(project, english=False)
         new_paths = [e.new_path for e in generate_rename_plan(project).entries]
         self.assertEqual(new_paths[1], os.path.join(OUT_DIR, "Woodwinds", "Flute.pdf"))
 
-    def test_chinese_interface_writes_chinese_sections(self):
-        set_locale("zh_TW")
+    def test_chinese_sections(self):
         project = self._project()
-        generate_rename_plan(project)
+        assign_default_sections(project, english=False)
         self.assertEqual(project.instrument_sections, {"Flute": "木管", "Horn": "銅管"})
 
     def test_voice_without_a_known_family_goes_to_the_other_section(self):
-        set_locale("en")
         project = self._project()
         project.set_instruments(project.groups[0], ["Flute", "Theremin"])
-        generate_rename_plan(project)
+        assign_default_sections(project, english=True)
         self.assertEqual(project.instrument_sections["Theremin"], "Other")
 
     def test_blank_section_is_replaced_by_the_default(self):
-        set_locale("zh_TW")
         project = self._project(instrument_sections={"Flute": "  ", "Horn": "銅管"})
-        generate_rename_plan(project)
+        assign_default_sections(project, english=False)
         self.assertEqual(project.instrument_sections, {"Flute": "木管", "Horn": "銅管"})
 
     def test_only_voices_of_selected_groups_are_written(self):
-        set_locale("en")
         project = self._project()
         other = Group(name="other", files=[_info("x.pdf")], instruments=["Oboe"])
         project.add_groups([other], score_label="Score")
-        generate_rename_plan(project, group_ids={project.groups[0].id})
+        assign_default_sections(project, english=True, group_ids={project.groups[0].id})
         self.assertNotIn("Oboe", project.instrument_sections)
 
     def test_other_modes_do_not_touch_the_project(self):
@@ -166,9 +157,16 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
                 project = self._project()
                 project.set_output_settings(parts_output_mode=mode)
                 project.mark_saved()
+                assign_default_sections(project, english=True)
                 generate_rename_plan(project)
                 self.assertEqual(project.instrument_sections, {})
                 self.assertFalse(project.is_modified())
+
+    def test_planning_never_writes_sections(self):
+        project = self._project(instrument_sections={"Flute": "Woodwinds"})
+        with self.assertRaises(KeyError):
+            generate_rename_plan(project)
+        self.assertFalse(project.is_modified())
 
 
 if __name__ == '__main__':
