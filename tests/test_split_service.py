@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from PyPDF2 import PdfReader, PdfWriter
 
 from core.constants import WORKSPACE_FOLDER_HASH_LENGTH
-from core.models import FileInfo, Group, Project, SplitRecord, WorkspaceOwner
+from core.models import FileInfo, Group, Project, WorkspaceOwner
 from services.file_service import FileService
 from services.move_history import MoveHistory
 from services.pdf_service import extract_pages
@@ -231,14 +231,22 @@ class TestResplitInWorkspace(SplitServiceTestCase):
         self.assertEqual((_page_numbers(flute), _page_numbers(horn)), ([0], [1, 2, 3]))
         self.assertEqual(sorted(os.listdir(self.folder)), ["Flute.pdf", "Horn.pdf", "meta.json"])
 
-    def test_record_lists_the_new_parts_and_the_replaced_files(self):
+    def test_previous_part_no_new_part_takes_the_place_of_is_trashed_from_where_it_was(self):
+        self.resplit()
+        self.assertIn(os.path.join(self.folder, "Oboe.pdf"), self.file_service.trashed)
+
+    def test_record_lists_the_new_parts_and_where_the_replaced_files_were_trashed_from(self):
         result = self.resplit()
-        self.assertEqual(result.record(), SplitRecord(
-            source_path=self.source,
-            created_files=[os.path.join(self.folder, "Flute.pdf"), os.path.join(self.folder, "Horn.pdf")],
-            created_directories=[],
-            replaced_files=self.previous,
-        ))
+        record = result.record()
+        flute, horn = os.path.join(self.folder, "Flute.pdf"), os.path.join(self.folder, "Horn.pdf")
+        self.assertEqual(
+            (record.source_path, record.created_files, record.created_directories), (self.source, [flute, horn], []),
+        )
+        self.assertEqual(sorted(record.replaced_files), sorted(self.file_service.trashed))
+        flute_was, oboe_was = record.replaced_files
+        self.assertEqual(oboe_was, os.path.join(self.folder, "Oboe.pdf"))
+        self.assertEqual(os.path.basename(flute_was), "Flute.pdf")
+        self.assertNotEqual(flute_was, flute)
 
     def test_failure_writing_the_second_part_rolls_the_whole_split_back(self):
         before = _snapshot(self.folder)
@@ -471,7 +479,8 @@ class TestUndoSplit(SplitServiceTestCase):
         old_parts = self.split(project, (0, 1, "Flute"), (2, 3, "Oboe"))
         new_parts = self.split(project, (0, 0, "Flute"), (1, 3, "Horn"))
         undone = self.undo(project)
-        self.assertEqual(undone.split.replaced_files, old_parts)
+        self.assertEqual(undone.split.replaced_files, self.file_service.trashed[:2])
+        self.assertEqual(undone.split.replaced_files[1], old_parts[1])
         self.assertFalse(any(os.path.exists(p) for p in old_parts + new_parts))
         self.assertEqual(
             sorted(os.path.basename(p) for p in self.file_service.trashed),

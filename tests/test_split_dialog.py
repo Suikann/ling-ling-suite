@@ -214,16 +214,18 @@ class TestSplitFromMainWindow(MainWindowTestCase):
         self.assertEqual(self.tab_names(), [t("group.ungrouped"), "g"])
         self.assertEqual(self.shown_parts(), ["merged.pdf"])
 
-    def test_undoing_a_resplit_says_the_replaced_parts_are_in_the_recycle_bin(self):
-        self.recycle_by_removing()
+    def test_undoing_a_resplit_says_where_the_replaced_parts_were_moved_to_the_recycle_bin_from(self):
+        trashed = self.recycle_by_removing()
         self.open_from_menu(Project(ungrouped_files=[FileInfo(self.merged, "merged.pdf")]))
         self.split_merged(3)
         replaced = [f.original_path for f in self.window.project.groups[0].files]
         self.window.findChild(QTabWidget).setCurrentIndex(0)
         self.split_merged(2, QMessageBox.Yes)
+        replaced_from = list(trashed)
+        self.assertEqual(sorted(map(os.path.basename, replaced_from)), sorted(map(os.path.basename, replaced)))
         with answering_prompts(QMessageBox.Yes) as shown:
             self.trigger_menu(t("menu.edit.undo"))
-        self.assertIn((t("dialog.info"), t("history.split_replaced", files="\n".join(replaced))), shown)
+        self.assertIn((t("dialog.info"), t("history.split_replaced", files="\n".join(replaced_from))), shown)
         self.assertTrue(all(not os.path.exists(p) for p in replaced))
 
     def test_segments_with_the_same_name_are_named_in_the_error_and_nothing_is_written(self):

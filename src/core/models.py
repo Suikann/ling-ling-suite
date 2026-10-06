@@ -120,7 +120,7 @@ class UndoRecord:
         original_path: 旋轉的來源檔；分割的合併譜
         workspace_meta: 來源位於工作區的項目，其子資料夾到 meta.json 內容的快照；
             復原時子資料夾已被清理掃描刪掉的話，用它把 meta 寫回
-        replaced_files: 分割時被取代、已移到資源回收桶的檔案（復原不找回）
+        replaced_files: 分割時被取代的檔案移到資源回收桶時所在的位置（復原不找回）
         placement: 專案怎麼安置分割的結果（復原時退回分割前的專案）；舊版紀錄沒有時為 None
     """
     id: str = ""
@@ -318,7 +318,7 @@ class SplitRecord:
         source_path: 合併譜；舊版紀錄沒有時為空字串
         created_files: 產生的分譜
         created_directories: 這次新建的目錄
-        replaced_files: 被取代、已移到資源回收桶的檔案（上次的分譜，或指定資料夾內的同名檔案）；復原不找回
+        replaced_files: 被取代的檔案（上次的分譜，或指定資料夾內的同名檔案）移到資源回收桶時所在的位置；復原不找回
         placement: 專案怎麼安置這次分割的結果；舊版紀錄沒有時為 None
     """
     source_path: str
@@ -336,13 +336,16 @@ class SplitResult:
         source_path: 合併譜
         parts: 產生的分譜，依分段順序
         voices: 各分譜的聲部名稱（使用者輸入的分段名稱）
-        replaced: 被取代的檔案；專案裡指向它們的引用要移除
+        replaced: 被取代的檔案（原本的路徑）；專案裡指向它們的引用要移除
+        trashed: 被取代的檔案移到資源回收桶時所在的位置（依 replaced 的順序，移不進去的不列）；
+            位置會被新分譜佔用的檔案先挪到暫用子資料夾才移，其餘從原處移
         created_directories: 這次新建的目錄
     """
     source_path: str
     parts: List[FileInfo]
     voices: List[str]
     replaced: List[str]
+    trashed: List[str] = field(default_factory=list)
     created_directories: List[str] = field(default_factory=list)
 
     def record(self, placement: Optional[SplitPlacement] = None) -> SplitRecord:
@@ -358,7 +361,7 @@ class SplitResult:
             source_path=self.source_path,
             created_files=[p.original_path for p in self.parts],
             created_directories=list(self.created_directories),
-            replaced_files=list(self.replaced),
+            replaced_files=list(self.trashed),
             placement=placement,
         )
 

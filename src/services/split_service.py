@@ -176,15 +176,16 @@ class SplitService:
     def execute(self, check: SplitCheck) -> SplitResult:
         """依使用者確認過的檢查結果執行分割
 
-        新分譜先全部寫進暫用子資料夾；寫好後才挪開被取代的檔案、把新分譜放到定位、
-        改寫工作區子資料夾的所屬專案，最後把被取代的檔移到資源回收桶。
-        任何一步失敗都撤回已做的步驟後拋出：被取代的檔案留在原處、內容不變，不留下新分譜。
+        新分譜先全部寫進暫用子資料夾；寫好後才挪開位置會被新分譜佔用的被取代檔案、把新分譜放到定位、
+        改寫工作區子資料夾的所屬專案，最後把被取代的檔移到資源回收桶（沒被挪開的從原處移，
+        從資源回收桶還原時回到原處）。任何一步失敗都撤回已做的步驟後拋出：
+        被取代的檔案留在原處、內容不變，不留下新分譜。
 
         Args:
             check: check 的結果
 
         Returns:
-            新分譜、被取代的路徑與新建的目錄
+            新分譜、被取代的路徑、它們移到資源回收桶時所在的位置與新建的目錄
 
         Raises:
             ValueError: 檢查結果有擋下的問題
@@ -197,6 +198,7 @@ class SplitService:
         staging = os.path.join(check.folder, token + SPLIT_STAGING_DIR_SUFFIX)
         set_aside = os.path.join(check.folder, token + SPLIT_REPLACED_DIR_SUFFIX)
         created = [] if self.file_service.directory_exists(check.folder) else [check.folder]
+        taken = {path_key(e.output_path) for e in check.plan}
         moved_aside: List[Tuple[str, str]] = []
         placed: List[str] = []
         try:
@@ -204,7 +206,7 @@ class SplitService:
             staged = [os.path.join(staging, os.path.basename(e.output_path)) for e in check.plan]
             for entry, temp in zip(check.plan, staged):
                 self._extract(request.source_path, entry.pages, temp)
-            for path in check.replaced:
+            for path in (p for p in check.replaced if path_key(p) in taken):
                 self.file_service.create_directory(set_aside)
                 kept = os.path.join(set_aside, os.path.basename(path))
                 self.file_service.rename_file(path, kept)
@@ -217,12 +219,13 @@ class SplitService:
         except Exception:
             self._roll_back(placed, moved_aside, staging, set_aside, created)
             raise
-        self._discard(moved_aside, [staging, set_aside])
+        trashed = self._discard(check.replaced, dict(moved_aside), [staging, set_aside])
         return SplitResult(
             source_path=request.source_path,
             parts=[FileInfo(e.output_path, os.path.basename(e.output_path)) for e in check.plan],
             voices=[e.display_name for e in check.plan],
-            replaced=[original for original, _ in moved_aside],
+            replaced=list(check.replaced),
+            trashed=trashed,
             created_directories=created,
         )
 
@@ -287,18 +290,31 @@ class SplitService:
         for directory in reversed(created):
             self.file_service.remove_empty_directory(directory)
 
-    def _discard(self, moved_aside: List[Tuple[str, str]], scratch: List[str]) -> None:
-        """分割完成後把挪開的檔案（保留原檔名）移到資源回收桶並移除暫用子資料夾
+    def _discard(self, replaced: List[str], kept_at: Dict[str, str], scratch: List[str]) -> List[str]:
+        """分割完成後把被取代的檔案移到資源回收桶並移除暫用子資料夾
 
-        移不進資源回收桶的檔案留在暫用子資料夾裡，不影響已完成的分割。
+        被挪開的檔案從暫用子資料夾裡移（保留原檔名），其餘從原處移。
+        移不進資源回收桶的檔案留在當時的位置，不影響已完成的分割。
+
+        Args:
+            replaced: 被取代的檔案（原本的路徑）
+            kept_at: 被挪開的檔案：原本的路徑到暫用子資料夾裡的路徑
+            scratch: 暫用子資料夾，已空時移除
+
+        Returns:
+            移到資源回收桶的檔案當時所在的位置（依 replaced 的順序）
         """
-        for _, kept in moved_aside:
+        trashed = []
+        for path in replaced:
+            location = kept_at.get(path, path)
             try:
-                self.file_service.delete_file(kept)
+                self.file_service.delete_file(location)
             except OSError:
                 continue
+            trashed.append(location)
         for directory in scratch:
             self.file_service.remove_empty_directory(directory)
+        return trashed
 
 def _remove_quietly(path: str) -> None:
     """移除檔案；不存在或移除失敗都不拋出"""
