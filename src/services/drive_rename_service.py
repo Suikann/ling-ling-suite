@@ -2,19 +2,41 @@
 """
 Drive 重新命名服務
 
-將譜庫元資料與 Drive 檔案結構橋接至現有模板引擎，
-透過 Drive API 直接在雲端重新命名檔案。
+把譜庫元資料與 Drive 資料夾結構轉成群組，計畫與撞名偵測經過命名模組（與本機重新命名同一套檔名），
+再透過 Drive 服務（adapter）在雲端重新命名。計畫與撞名偵測不需要 Google 用戶端程式庫。
+
+使用範例：
+    from services.drive_rename_service import generate_drive_rename_plan
+    plan = generate_drive_rename_plan(groups, "{序號}. {樂器}.pdf", ["Flute", "Oboe"])
+    if not plan.conflicts:
+        execute_drive_rename(drive, plan.entries)
 """
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
 from core.models import DriveRenameEntry, FileInfo, Group
 from core.catalog_models import Composer, PieceDetail
 from core.naming import NamingSettings, name_group
-from services.drive_service import DriveService
+from core.paths import name_key
+
+if TYPE_CHECKING:
+    from services.drive_service import DriveService
+
+
+@dataclass(frozen=True)
+class DriveRenamePlan:
+    """Drive 重新命名計畫
+
+    Attributes:
+        entries: 要重新命名的檔案（各群組依序：總譜在前，接著依序的分譜；多於聲部數的分譜不在其中）
+        conflicts: 撞名的檔案，每組是重新命名後在同一群組（同一個 Drive 資料夾）內同名的檔案 ID；有撞名時不能執行
+    """
+    entries: List[DriveRenameEntry] = field(default_factory=list)
+    conflicts: List[List[str]] = field(default_factory=list)
 
 
 def build_groups_from_drive(
-    drive: DriveService,
+    drive: "DriveService",
     folder_id: str,
     detail: PieceDetail,
     composer: Composer = None,
@@ -90,67 +112,76 @@ def build_groups_from_drive(
 def generate_drive_rename_plan(
     groups: List[Group],
     template: str,
-    instruments: List[str] = None,
-) -> List[DriveRenameEntry]:
-    """根據 Group 清單與模板產生 Drive 重新命名計畫
+    voices: Optional[Sequence[str]] = None,
+) -> DriveRenamePlan:
+    """根據 Group 清單與命名格式產生 Drive 重新命名計畫；檔名由命名模組決定，不改寫群組
 
     Args:
         groups: Group 清單
-        template: 命名模板
-        instruments: 全域樂器表（未提供時使用各 Group 的樂器表）
+        template: 命名格式
+        voices: 明確輸入的樂器表，優先於各群組的樂器表；未提供或為空時用各群組的樂器表
 
     Returns:
-        DriveRenameEntry 清單
+        重新命名計畫
     """
-    plan = []
+    settings = NamingSettings(template)
+    entries = []
+    conflicts = []
     for group in groups:
-        effective_instruments = instruments or group.instruments or []
-        if effective_instruments:
-            group.instruments = list(effective_instruments)
-        for named in name_group(group, NamingSettings(template), instruments).files:
-            plan.append(DriveRenameEntry(
+        naming = name_group(group, settings, voices)
+        group_entries = [
+            DriveRenameEntry(
                 file_id=named.file.original_path,
                 original_name=named.file.display_name,
                 new_name=named.name.file_name,
                 group_name=group.name,
-            ))
-    return plan
+            )
+            for named in naming.files
+        ]
+        entries += group_entries
+        conflicts += _conflicts_in_folder(group_entries, naming.extra_files)
+    return DriveRenamePlan(entries=entries, conflicts=conflicts)
 
 
-def detect_conflicts(plan: List[DriveRenameEntry]) -> Dict[str, List[str]]:
-    """偵測重新命名計畫中的檔名衝突
+def _conflicts_in_folder(entries: List[DriveRenameEntry], unchanged: List[FileInfo]) -> List[List[str]]:
+    """一個群組（同一個 Drive 資料夾）重新命名後同名的檔案
+
+    計畫內的檔案用新檔名，不改名的檔案維持原名，名稱以 name_key 比對（不分大小寫，與本機一致）；
+    只有不改名的檔案彼此同名時不算（Drive 上本來就這樣，不是這次造成的）。
 
     Args:
-        plan: 重新命名計畫
+        entries: 這個群組要重新命名的檔案
+        unchanged: 這個群組不改名的檔案（多於聲部數的分譜）
 
     Returns:
-        衝突的新檔名（小寫）到原始檔名清單的對應
+        每組同名的檔案 ID（計畫內的在前），每組至少兩個
     """
-    name_map = defaultdict(list)
-    for entry in plan:
-        key = (entry.group_name, entry.new_name.lower())
-        name_map[key].append(entry.original_name)
-    return {
-        f"{k[0]}/{k[1]}": v for k, v in name_map.items() if len(v) > 1
-    }
+    by_name = defaultdict(list)
+    for entry in entries:
+        by_name[name_key(entry.new_name)].append(entry.file_id)
+    for file in unchanged:
+        ids = by_name.get(name_key(file.display_name))
+        if ids is not None:
+            ids.append(file.original_path)
+    return [ids for ids in by_name.values() if len(ids) > 1]
 
 
 def execute_drive_rename(
-    drive: DriveService,
-    plan: List[DriveRenameEntry],
+    drive: "DriveService",
+    entries: List[DriveRenameEntry],
 ) -> Tuple[int, List[str]]:
     """執行 Drive 重新命名
 
     Args:
         drive: Drive 服務
-        plan: 重新命名計畫
+        entries: 重新命名計畫中要重新命名的檔案
 
     Returns:
         (成功數, 失敗的檔名清單)
     """
     success = 0
     errors = []
-    for entry in plan:
+    for entry in entries:
         if entry.original_name == entry.new_name:
             success += 1
             continue

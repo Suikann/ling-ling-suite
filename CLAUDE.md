@@ -237,7 +237,7 @@ src/
     constants.py                 - 模板變數定義（含層級欄位）、分譜存放模式、預設值、應用程式路徑等常數
     filename.py                  - 檔名清理（非法字元換底線、空名回退），重新命名與分割共用
     naming.py                    - 命名格式套用：群組中的一格（總譜或第 N 份分譜）＋命名設定 → 檔名＋相對資料夾；純函式，本機重新命名、預覽與 Drive 重新命名共用
-    paths.py                     - 路徑同一性（path_key、same_path：絕對路徑、不分大小寫），全程式比對路徑只用它
+    paths.py                     - 路徑同一性（path_key、same_path：絕對路徑、不分大小寫），全程式比對路徑只用它；name_key 以同一規則比對沒有本機路徑的名稱（Drive 檔名）
     catalog_constants.py         - 譜庫相關常數
     template_engine.py           - 曲名／總譜／樂器偵測、模板變數雙語轉換
     models.py                    - 資料模型（Project、Group、Template、FileInfo）；Project 是專案編輯模組：意圖層級的編輯操作、「已變更」通知、未存檔快照、專案檔內容（to_data／from_data，含舊格式遷移）；Project.file_refs() 是「總譜＋分譜＋未分組」的唯一走訪，依路徑取代／移除引用也在這裡
@@ -260,7 +260,7 @@ src/
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、naming、filename、rename、rename_plan、move、import、project、project_access、undo、workspace、pdf_service、locale、instance_lock；main_window、split_dialog、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
+tests/                           - pytest 測試（template_engine、naming、filename、rename、rename_plan、move、import、project、project_access、undo、workspace、pdf_service、locale、instance_lock、drive_rename；main_window、split_dialog、Drive 重新命名對話框、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
 GLOSSARY.md                      - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
@@ -335,6 +335,7 @@ services/ 層
 - 命名格式只掃描一次，代入的值不再被替換（曲名是 `{Instrument}` 時原樣保留）；不是模板變數的 `{…}` 從檔名與資料夾名拿掉（`unknown_variables` 列出它們；`variables_in` 列出命名格式裡的全部名稱，配合 `variable_level` 可找出子資料夾模板用了哪些逐檔變數）
 - 每個產出都清理非法字元，檔名補 `.pdf`；任何一層資料夾清理後是 `.` 或 `..` 時拋出 `UnsafeFolderNameError`，預覽顯示阻擋警告並停用執行
 - 檔名用語跟專案、不跟介面：總譜標籤在群組建立時寫入；聲部組資料夾模式下，還沒有聲部組的聲部在第一次產生計畫時依當時的介面語言寫進編制設定（`update_ensemble`），之後切換介面語言不影響
+- Drive 重新命名（`services/drive_rename_service.py`）：`generate_drive_rename_plan(groups, template, voices)` 經 `name_group` 產生計畫與撞名（`DriveRenamePlan.entries`／`conflicts`），只改檔名、不放資料夾，不改寫群組（對話框清空樂器框就用群組自己的樂器表）。撞名＝重新命名後同一群組（同一個 Drive 資料夾）內同名，以 `name_key` 比對、不分大小寫，不改名的多出分譜也算；有撞名時對話框停用執行。Google 用戶端程式庫只在 Drive 的 adapter（`drive_service.py`）載入，計畫與撞名偵測不需要它
 
 ---
 
