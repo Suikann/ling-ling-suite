@@ -15,7 +15,7 @@ from core.constants import TEMPLATE_VARIABLES, PartsOutputMode, VariableLevel
 from core.models import FileInfo, Group, Project
 from core.naming import (
     SCORE_SLOT, NamingSettings, UnsafeFolderNameError, name_group, name_slot, named_voices, settings_for,
-    unknown_variables, variable_level,
+    unknown_variables, variable_level, variables_in,
 )
 
 
@@ -262,6 +262,14 @@ class TestVariableLevel(unittest.TestCase):
 
     def test_unknown_name_has_no_level(self):
         self.assertIsNone(variable_level("foo"))
+
+    def test_variables_in_lists_each_braced_name_once_in_order(self):
+        self.assertEqual(variables_in("{曲名} - {Number}{foo}{曲名}.pdf"), ["曲名", "Number", "foo"])
+
+    def test_per_file_variables_in_a_subfolder_template_are_found_by_level(self):
+        template = "{PieceName} {序號} {樂器}"
+        per_file = [name for name in variables_in(template) if variable_level(name) == VariableLevel.FILE]
+        self.assertEqual(per_file, ["序號", "樂器"])
 
 
 

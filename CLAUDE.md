@@ -332,7 +332,7 @@ services/ 層
 總譜與分譜、本機與 Drive 都經過同一個純函式模組，不碰磁碟、不讀介面語言：
 - `name_slot(group, slot, settings, voices=None)`：一格（`SCORE_SLOT`＝0 為總譜，N 為第 N 份分譜）→ `SlotName(file_name, folders)`；`name_group` 列出整個群組（總譜在前），多於聲部數的分譜放在 `extra_files`、不改名。明確傳入的樂器表（`voices`）優先於群組的樂器表，空的視同未傳入
 - `settings_for(project, group)` 組出命名設定：有小模板用小模板；子資料夾模板只在開啟子資料夾輸出時套用；分譜存放模式（`PartsOutputMode`：根目錄／分譜資料夾／聲部組資料夾）只影響分譜，總譜留在子資料夾那一層
-- 命名格式只掃描一次，代入的值不再被替換（曲名是 `{Instrument}` 時原樣保留）；不是模板變數的 `{…}` 從檔名與資料夾名拿掉（`unknown_variables` 列出它們）
+- 命名格式只掃描一次，代入的值不再被替換（曲名是 `{Instrument}` 時原樣保留）；不是模板變數的 `{…}` 從檔名與資料夾名拿掉（`unknown_variables` 列出它們；`variables_in` 列出命名格式裡的全部名稱，配合 `variable_level` 可找出子資料夾模板用了哪些逐檔變數）
 - 每個產出都清理非法字元，檔名補 `.pdf`；任何一層資料夾清理後是 `.` 或 `..` 時拋出 `UnsafeFolderNameError`，預覽顯示阻擋警告並停用執行
 - 檔名用語跟專案、不跟介面：總譜標籤在群組建立時寫入；聲部組資料夾模式下，還沒有聲部組的聲部在第一次產生計畫時依當時的介面語言寫進編制設定（`update_ensemble`），之後切換介面語言不影響
 

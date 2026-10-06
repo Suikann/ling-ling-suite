@@ -286,7 +286,7 @@ def detect_instrument_section(instrument_name: str, english: bool = False) -> st
         english: 為 True 時回傳英文名稱
 
     Returns:
-        聲部組名稱，偵測不到時回傳「其他」
+        聲部組名稱，偵測不到時回傳「其他」（英文為 Other）
     """
     name_lower = instrument_name.lower()
     for section_zh, section_en, keywords in SECTION_KEYWORDS:

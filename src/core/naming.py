@@ -194,13 +194,14 @@ def variable_level(name: str) -> Optional[VariableLevel]:
     return var.level if var else None
 
 
+def variables_in(template: str) -> List[str]:
+    """命名格式裡 {…} 的名稱（不重複，依出現順序），含不是模板變數的"""
+    return list(dict.fromkeys(_VARIABLE_PATTERN.findall(template)))
+
+
 def unknown_variables(template: str) -> List[str]:
     """命名格式裡不是模板變數的 {…}（不重複，依出現順序）；產出時會被拿掉"""
-    unknown = []
-    for name in _VARIABLE_PATTERN.findall(template):
-        if name not in _VARIABLES_BY_NAME and name not in unknown:
-            unknown.append(name)
-    return unknown
+    return [name for name in variables_in(template) if name not in _VARIABLES_BY_NAME]
 
 
 def _folder_name(name: str) -> str:
