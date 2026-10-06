@@ -793,6 +793,15 @@ class Project:
         """專案引用到的所有檔案路徑，順序同 file_refs()"""
         return [ref.file.original_path for ref in self.file_refs() if ref.file.original_path]
 
+    def references_any(self, paths: Iterable[str]) -> bool:
+        """專案是否引用其中任一路徑（分譜、總譜或未分組），路徑以 core.paths 判定同一性"""
+        return bool(self._refs_to(paths))
+
+    def _refs_to(self, paths: Iterable[str]) -> List[FileRef]:
+        """指向其中任一路徑的檔案引用，順序同 file_refs()"""
+        keys = {path_key(p) for p in paths}
+        return [ref for ref in self.file_refs() if path_key(ref.file.original_path) in keys]
+
     def replace_paths(self, mappings: Iterable[UndoMapping]) -> None:
         """依搬移結果（原路徑 → 新路徑）更新檔案引用的路徑與顯示名稱，路徑以 core.paths 判定同一性
 

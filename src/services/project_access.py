@@ -14,9 +14,9 @@
 """
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Iterable, List, Optional
 from core.constants import MAX_RECENT_PROJECTS, RECENT_PROJECTS_KEY
-from core.models import Project, WorkspaceScan
+from core.models import Project, UndoMapping, WorkspaceScan
 from core.paths import path_key, same_path
 from services.file_service import FileService
 from services.preferences_service import PreferencesService
@@ -50,14 +50,15 @@ class ProjectAccess:
         self._preferences = preferences
         self._workspace = workspace
 
-    def open(self, path: str) -> AccessResult:
+    def open(self, path: str, moved: Iterable[UndoMapping] = ()) -> AccessResult:
         """讀取專案檔；讀到後更新工作區 meta 的所屬專案並把它放到最近清單頂端
 
         Args:
             path: 專案檔路徑
+            moved: 讀到後先套用的路徑變動（中斷提示選「保留結果」時，這批搬移的結果）；套用後判為未存檔
 
         Returns:
-            開啟結果；error 為 None 時 project 是讀到的專案（已判為已存檔），missing_files 是它引用、
+            開啟結果；error 為 None 時 project 是讀到的專案（沒有 moved 時判為已存檔），missing_files 是它引用、
             但磁碟上找不到的檔案（依群組順序）。專案檔已不存在時 error 為 FileNotFoundError，並已從最近清單移除
         """
         try:
@@ -67,6 +68,9 @@ class ProjectAccess:
             return AccessResult(error=e)
         except Exception as e:
             return AccessResult(error=e)
+        moved = list(moved)
+        if moved:
+            project.replace_paths(moved)
         missing = [p for p in project.all_file_paths() if not self._file_service.file_exists(p)]
         return self._record_location(AccessResult(project=project, missing_files=missing), path)
 

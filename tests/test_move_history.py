@@ -972,6 +972,38 @@ class TestRecoveryByKind(MoveHistoryTestCase):
         self.assertIsNone(self.history.latest_redo())
 
 
+class TestPendingProject(MoveHistoryTestCase):
+    """進行中紀錄記下這批搬移所屬的專案，保留結果時才知道要更新哪個專案的路徑"""
+
+    def setUp(self):
+        super().setUp()
+        self.project_path = os.path.join(self.temp_dir, "concert.llproj")
+
+    def test_interrupted_rename_names_its_project(self):
+        a = self.create("a.pdf")
+        verdict = RenameVerdict([RenameEntry(a, self.path("A1.pdf"))])
+        self.crash_writing_into(
+            lambda: self.history.rename(verdict, project_path=self.project_path), os.path.join(self.data_dir, "undo"),
+        )
+        self.assertEqual(self.history.pending().project_path, self.project_path)
+
+    def test_interrupted_undo_and_redo_name_their_project(self):
+        a = self.create("a.pdf")
+        self.history.rename(RenameVerdict([RenameEntry(a, self.path("A1.pdf"))]))
+        self.interrupt(lambda: self.history.undo(project_path=self.project_path), n1=_Crash())
+        self.assertEqual(self.history.pending().project_path, self.project_path)
+        self.history.recover()
+        self.history.undo()
+        self.interrupt(lambda: self.history.redo(project_path=""), n1=_Crash())
+        self.assertEqual(self.history.pending().project_path, "")
+
+    def test_journal_written_without_a_project_names_none(self):
+        os.makedirs(self.data_dir)
+        with open(os.path.join(self.data_dir, "pending_move.json"), "w", encoding="utf-8") as f:
+            json.dump({"steps": [], "pending": None, "complete": True, "created_directories": []}, f)
+        self.assertIsNone(self.history.pending().project_path)
+
+
 class TestRecoveryWorkspaceMeta(WorkspaceMetaTestCase):
     """中斷還原同樣寫回工作區 meta；meta 寫回都在刪除進行中紀錄之前完成"""
 

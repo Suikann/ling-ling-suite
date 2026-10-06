@@ -51,10 +51,12 @@ class BatchContext:
         operation: 執行這批搬移的操作種類；舊版紀錄沒有記（或記了不認得的值）時為重新命名
         record_id: 所屬復原紀錄的 id；舊版紀錄沒有，為空字串
         record: 所屬復原紀錄在這批搬移開始時的內容（引擎不解讀）；舊版紀錄沒有，為 None
+        project_path: 這批搬移所屬的專案檔；專案當時尚未存檔為空字串，沒有記（舊版紀錄）為 None
     """
     operation: OperationKind = OperationKind.RENAME
     record_id: str = ""
     record: Optional[Dict[str, Any]] = None
+    project_path: Optional[str] = None
 
 
 @dataclass
@@ -129,6 +131,7 @@ class _JournalFile:
             "operation": journal.context.operation.value,
             "record_id": journal.context.record_id,
             "record": journal.context.record,
+            "project_path": journal.context.project_path,
         })
 
     def exists(self) -> bool:
@@ -155,6 +158,7 @@ class _JournalFile:
                     operation=self._operation(data.get("operation")),
                     record_id=data.get("record_id") or "",
                     record=data.get("record"),
+                    project_path=data.get("project_path"),
                 ),
             )
         except (KeyError, TypeError) as e:

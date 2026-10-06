@@ -693,8 +693,8 @@ class _Crash(BaseException):
     """模擬程式被強制結束：不是 Exception，所以搬移歷程不會攔下來回滾"""
 
 
-class TestMainWindowMoveHistory(MainWindowTestCase):
-    """復原、重做與中斷還原：結果交給專案套用，訊息列出略過與殘留"""
+class MoveHistoryWindowTestCase(MainWindowTestCase):
+    """主視窗與搬移歷程接線測試的共用骨架"""
 
     def _path(self, name: str) -> str:
         return os.path.join(self.temp_dir, name)
@@ -720,6 +720,24 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
             real_rename(self.history_files, old_path, new_path)
 
         self.history_files.rename_file = flaky_rename
+
+    def _crash_writing_into(self, run, directory: str):
+        """執行 run，第一次往 directory 寫入 JSON 時當機，之後寫入恢復正常"""
+        real_write = FileService.write_json_atomic
+
+        def write(path, data):
+            if os.path.dirname(path) == directory:
+                raise _Crash()
+            real_write(self.history_files, path, data)
+
+        self.history_files.write_json_atomic = write
+        with self.assertRaises(_Crash):
+            run()
+        del self.history_files.write_json_atomic
+
+
+class TestMainWindowMoveHistory(MoveHistoryWindowTestCase):
+    """復原、重做與中斷還原：結果交給專案套用，訊息列出略過與殘留"""
 
     def test_undo_marks_unsaved_and_shows_the_original_name(self):
         a, = self.create_files("a.pdf")
@@ -790,20 +808,6 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
         self.assertEqual(shown[-1], (t("dialog.pending_move.title"), t("dialog.pending_move.done", count=1)))
         self.assertEqual(sorted(n for n in os.listdir(self.temp_dir) if n.endswith(".pdf")), ["a.pdf", "b.pdf"])
 
-    def _crash_writing_into(self, run, directory: str):
-        """執行 run，第一次往 directory 寫入 JSON 時當機，之後寫入恢復正常"""
-        real_write = FileService.write_json_atomic
-
-        def write(path, data):
-            if os.path.dirname(path) == directory:
-                raise _Crash()
-            real_write(self.history_files, path, data)
-
-        self.history_files.write_json_atomic = write
-        with self.assertRaises(_Crash):
-            run()
-        del self.history_files.write_json_atomic
-
     def test_prompt_after_an_interrupted_undo_says_undo_did_not_finish(self):
         a, b = self.create_files("a.pdf", "b.pdf")
         new_a, new_b = self._path("01-Flute.pdf"), self._path("02-Oboe.pdf")
@@ -836,6 +840,106 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
         ])
         self.assertTrue(self.is_marked_unsaved())
         self.assertEqual(self._shown_file_names(), ["a.pdf"])
+
+
+class TestMainWindowKeepsResultAtStartup(MoveHistoryWindowTestCase):
+    """啟動時（還沒開啟任何專案）在中斷提示選「保留結果」：這批搬移所屬的專案反映檔案的實際位置"""
+
+    def _restart(self) -> MainWindow:
+        """模擬重新啟動：同一份使用者資料的新主視窗，還沒開啟任何專案"""
+        window = MainWindow(self.preferences, history=self.history)
+
+        def close():
+            with answering_prompts(t("dialog.discard_btn")):
+                window.close()
+
+        self.addCleanup(close)
+        return window
+
+    def _fail_writes_into(self, directory: str):
+        """之後往 directory 寫入 JSON 一律失敗（OSError）"""
+        real_write = FileService.write_json_atomic
+
+        def write(path, data):
+            if os.path.dirname(path) == directory:
+                raise OSError("disk full")
+            real_write(self.history_files, path, data)
+
+        self.history_files.write_json_atomic = write
+
+    def _rename_then_crash(self, a: FileInfo, project_path: str) -> str:
+        """把 a 改名，寫復原紀錄時當機（已整批搬完），回傳新路徑"""
+        renamed = self._path("01-Flute.pdf")
+        verdict = RenameVerdict([RenameEntry(a.original_path, renamed)])
+        self._crash_writing_into(
+            lambda: self.history.rename(verdict, project_path=project_path), os.path.join(self.temp_dir, "undo"),
+        )
+        return renamed
+
+    def _group_file_paths(self, window: MainWindow) -> List[str]:
+        return [f.original_path for g in window.project.groups for f in g.files]
+
+    def test_rename_from_the_preview_kept_at_startup_opens_its_project_with_the_new_paths(self):
+        a, = self.create_files("a.pdf")
+        path = self.open_from_menu(Project(
+            master_template="{Number}-{Instrument}.pdf",
+            groups=[Group(name="g", files=[a], instruments=["Flute"], score_label="Score")],
+        ))
+        self._fail_writes_into(os.path.join(self.temp_dir, "undo"))
+        with executing_preview(), answering_prompts() as shown:
+            self.click_button(t("panel.preview_rename"))
+        del self.history_files.write_json_atomic
+        self.assertEqual(shown, [(t("dialog.warning"), t("history.record_not_saved", error="disk full"))])
+        window = self._restart()
+        with answering_prompts(t("dialog.pending_move.keep")) as shown:
+            self.assertTrue(window.prompt_pending_recovery())
+        self.assertEqual(shown, [(t("dialog.pending_move.title"), t("dialog.pending_move.finished_message", count=1))])
+        self.assertEqual(self._group_file_paths(window), [self._path("01-Flute.pdf")])
+        self.assertIn(os.path.basename(path), window.windowTitle())
+        self.assertTrue(window.windowTitle().endswith(" *"))
+        self.assertIsNone(self.history.pending())
+
+    def test_modified_project_is_offered_for_saving_before_the_batch_project_opens(self):
+        a, = self.create_files("a.pdf")
+        path = os.path.join(self.temp_dir, "batch.llproj")
+        ProjectService().save_project(Project(groups=[Group(name="g", files=[a], score_label="總譜")]), path)
+        renamed = self._rename_then_crash(a, path)
+        window = self._restart()
+        window.project.add_group("other", score_label="總譜")
+        with answering_prompts(t("dialog.pending_move.keep"), t("dialog.cancel_btn")) as shown:
+            self.assertFalse(window.prompt_pending_recovery())
+        self.assertEqual(shown[-1], (t("dialog.unsaved"), t("dialog.unsaved.message")))
+        self.assertEqual([g.name for g in window.project.groups], ["other"])
+        self.assertTrue(self.history.pending().complete)
+        with answering_prompts(t("dialog.pending_move.keep"), t("dialog.discard_btn")):
+            self.assertTrue(window.prompt_pending_recovery())
+        self.assertEqual(self._group_file_paths(window), [renamed])
+        self.assertIn("batch.llproj", window.windowTitle())
+
+    def test_swap_kept_later_in_the_same_session_is_not_applied_to_the_project_twice(self):
+        flute, oboe = self.create_files("Flute.pdf", "Oboe.pdf")
+        self.open_from_menu(Project(
+            master_template="{Instrument}.pdf",
+            groups=[Group(name="g", files=[flute, oboe], instruments=["Oboe", "Flute"], score_label="Score")],
+        ))
+        self._fail_writes_into(os.path.join(self.temp_dir, "undo"))
+        with executing_preview(), answering_prompts():
+            self.click_button(t("panel.preview_rename"))
+        del self.history_files.write_json_atomic
+        swapped = [self._path("Oboe.pdf"), self._path("Flute.pdf")]
+        self.assertEqual(self._group_file_paths(self.window), swapped)
+        with answering_prompts(t("dialog.pending_move.keep")):
+            self.assertTrue(self.window.prompt_pending_recovery())
+        self.assertEqual(self._group_file_paths(self.window), swapped)
+
+    def test_batch_of_a_project_never_saved_says_its_paths_were_not_updated(self):
+        a, = self.create_files("a.pdf")
+        self._rename_then_crash(a, "")
+        window = self._restart()
+        with answering_prompts(t("dialog.pending_move.keep")) as shown:
+            self.assertTrue(window.prompt_pending_recovery())
+        self.assertEqual(shown[-1], (t("dialog.info"), t("dialog.pending_move.project_unsaved")))
+        self.assertFalse(window.windowTitle().endswith(" *"))
 
 
 class TestSingleInstanceLaunch(unittest.TestCase):

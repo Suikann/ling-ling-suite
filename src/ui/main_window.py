@@ -5,7 +5,7 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
-from typing import Callable, NamedTuple, Optional
+from typing import Callable, Iterable, NamedTuple, Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog,
@@ -19,7 +19,8 @@ from core.constants import (
     TEMPLATE_VARIABLES, OperationKind,
 )
 from core.locale import t, get_locale, set_locale
-from core.models import Project, Group, SplitResult
+from core.models import Project, Group, SplitResult, UndoMapping
+from core.paths import same_path
 from services.file_service import FileService
 from services.import_service import ImportService
 from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVerdict
@@ -77,6 +78,8 @@ class MainWindow(QMainWindow):
         self._splitter = SplitService(self.file_service, self.workspace_service)
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
+        # 紀錄寫不進去而留下進行中紀錄的那批搬移，其路徑變動已套用到的專案（之後保留結果時不再套用一次）
+        self._pending_applied_to: Optional[Project] = None
         self._create_menu()
         self._create_ui()
         self._update_title()
@@ -318,9 +321,14 @@ class MainWindow(QMainWindow):
             return
         self._do_open_project(path)
 
-    def _do_open_project(self, path: str):
-        """開啟專案檔；讀不到才顯示「無法開啟專案」，最近清單或 meta 寫不進去只在狀態列提示"""
-        result = self._project_access.open(path)
+    def _do_open_project(self, path: str, moved: Iterable[UndoMapping] = ()):
+        """開啟專案檔；讀不到才顯示「無法開啟專案」，最近清單或 meta 寫不進去只在狀態列提示
+
+        Args:
+            path: 專案檔路徑
+            moved: 開啟後先套用的路徑變動（見 ProjectAccess.open）
+        """
+        result = self._project_access.open(path, moved)
         self._refresh_recent_menu()
         if result.error is not None:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.open_failed", error=result.error))
@@ -412,7 +420,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _execute_rename(self, verdict: RenameVerdict):
-        result = self._history.rename(verdict)
+        result = self._history.rename(verdict, project_path=self._project_path or "")
         if self._apply_move_result(result, str):
             count = len(result.changes)
             self._set_status(t("status.renamed", count=count))
@@ -437,6 +445,11 @@ class MainWindow(QMainWindow):
             current = self._tab_widget.currentIndex()
             self._rebuild_tabs()
             self._tab_widget.setCurrentIndex(current)
+        self._pending_applied_to = self.project if result.record_error is not None else None
+        return self._report_move_result(result, failure)
+
+    def _report_move_result(self, result: MoveResult, failure: Callable[[Exception], str]) -> bool:
+        """顯示搬移歷程動作的失敗；參數與回傳值同 _apply_move_result"""
         if result.error is not None:
             QMessageBox.critical(self, t("dialog.error"), failure(result.error))
         if result.record_error is not None:
@@ -478,12 +491,39 @@ class MainWindow(QMainWindow):
         if choice is None:
             return False
         if choice == "keep":
-            return self._apply_move_result(self._history.keep_result(), str)
+            return self._keep_pending(pending)
         result = self._history.recover()
         settled = self._apply_move_result(result, lambda e: t("dialog.pending_move.failed", error=e))
         if pending.moved and settled:
             self._show_recovery(result, t(texts.title))
         return settled
+
+    def _keep_pending(self, pending: PendingMove) -> bool:
+        """中斷提示選「保留結果」：路徑變動套用到這批搬移所屬的專案
+
+        所屬專案不是目前專案時照一般流程開啟它（目前專案有未存檔的修改時先詢問是否儲存）再套用，
+        開啟後判為未存檔；所屬專案當時尚未存檔、目前專案也沒有引用這批檔案時，告知路徑無法更新。
+        舊版進行中紀錄沒有記所屬專案，套用到目前專案。目前專案在本次執行中已套用過這批搬移
+        （紀錄寫不進去而留下進行中紀錄時）就不再套用，對調與連鎖套用兩次會錯。
+
+        Returns:
+            是否已沒有待處理的進行中紀錄；在「是否儲存」選取消時為 False，什麼都不做
+        """
+        owner = pending.project_path
+        applied = self._pending_applied_to is self.project
+        elsewhere = not applied and bool(owner) and not (self._project_path and same_path(owner, self._project_path))
+        if elsewhere and not self._confirm_unsaved():
+            return False
+        result = self._history.keep_result()
+        if elsewhere and result.error is None:
+            self._do_open_project(owner, moved=result.changes)
+        elif not applied:
+            if owner == "" and not self.project.references_any(
+                    path for m in result.changes for path in (m.original, m.renamed)):
+                QMessageBox.information(self, t("dialog.info"), t("dialog.pending_move.project_unsaved"))
+            return self._apply_move_result(result, str)
+        self._pending_applied_to = self.project if result.record_error is not None else None
+        return self._report_move_result(result, str)
 
     def _show_recovery(self, result: MoveResult, title: str):
         """中斷還原完成：還原了幾個檔，略過與搬不回去的各列在後"""
@@ -531,7 +571,7 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
-        result = self._history.undo()
+        result = self._history.undo(project_path=self._project_path or "")
         if self._apply_move_result(result, lambda e: t("dialog.error.undo_failed", error=e)):
             self._set_status(t("status.undone"))
             self._show_skipped(result)
@@ -550,7 +590,7 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
-        result = self._history.redo()
+        result = self._history.redo(project_path=self._project_path or "")
         if self._apply_move_result(result, str):
             self._set_status(t("status.redone"))
             self._show_skipped(result)

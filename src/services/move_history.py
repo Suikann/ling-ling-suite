@@ -120,10 +120,12 @@ class PendingMove:
         operation: 被中斷的那批搬移的操作種類（舊版進行中紀錄視為 RENAME）
         moved: 已搬動的檔案數
         complete: 是否已整批搬完、只差正式紀錄沒確認寫入
+        project_path: 這批搬移所屬的專案檔；專案當時尚未存檔為空字串，沒有記（舊版進行中紀錄）為 None
     """
     operation: OperationKind
     moved: int
     complete: bool
+    project_path: Optional[str] = None
 
 
 @dataclass
@@ -307,11 +309,12 @@ class MoveHistory:
 
     # --- 四個動作 ---
 
-    def rename(self, verdict: RenameVerdict) -> MoveResult:
+    def rename(self, verdict: RenameVerdict, project_path: Optional[str] = None) -> MoveResult:
         """依預檢的判定重新命名，整批搬完後寫入復原紀錄並清空重做堆疊
 
         Args:
             verdict: check_rename 的判定
+            project_path: 目前專案的專案檔（尚未存檔為空字串）；記進進行中紀錄，中斷後保留結果時據以更新該專案
 
         Returns:
             結果；changes 為計畫的每一項（原路徑 → 新路徑）；判定有阻擋時不搬動任何檔案、結果帶 error
@@ -330,25 +333,33 @@ class MoveHistory:
             self._push_new(record)
 
         moves = [(m.original, m.renamed) for m in record.mappings]
-        return self._execute(OperationKind.RENAME, record, moves, finish, bounds=self._bounds(plan))
+        return self._execute(
+            OperationKind.RENAME, record, moves, finish, bounds=self._bounds(plan), project_path=project_path,
+        )
 
-    def undo(self) -> Optional[MoveResult]:
+    def undo(self, project_path: Optional[str] = None) -> Optional[MoveResult]:
         """復原最上面的紀錄；沒有可復原的紀錄時回傳 None
 
         整批搬移類的紀錄把檔案搬回原位：已不在新位置的檔略過，只有實際搬回的對照轉入重做堆疊。
         分割與旋轉的紀錄撤銷其檔案效果後移除，不進重做堆疊（無法重做）。
+
+        Args:
+            project_path: 目前專案的專案檔（尚未存檔為空字串）；記進進行中紀錄，同 rename
         """
         record = self._undo.top()
         if record is None:
             return None
         if record.operation_type in MOVE_OPERATIONS:
-            return self._undo_moves(record)
+            return self._undo_moves(record, project_path)
         return self._undo_file_effects(record)
 
-    def redo(self) -> Optional[MoveResult]:
+    def redo(self, project_path: Optional[str] = None) -> Optional[MoveResult]:
         """重做最近一次被復原的紀錄；沒有可重做的紀錄時回傳 None
 
         已不在原位的檔略過，只有實際搬回新位置的對照轉回復原堆疊。
+
+        Args:
+            project_path: 目前專案的專案檔（尚未存檔為空字串）；記進進行中紀錄，同 rename
         """
         record = self.latest_redo()
         if record is None:
@@ -360,7 +371,7 @@ class MoveHistory:
             self._finish_redo(record, present, created_dirs)
 
         moves = [(m.original, m.renamed) for m in present]
-        result = self._execute(OperationKind.REDO, record, moves, finish)
+        result = self._execute(OperationKind.REDO, record, moves, finish, project_path=project_path)
         result.operation = record.operation_type
         result.skipped = [m.original for m in skipped]
         return result
@@ -376,7 +387,9 @@ class MoveHistory:
         if interrupted is None:
             return None
         journal = interrupted.journal
-        return PendingMove(interrupted.kind, len(journal.moved_indices()), journal.complete)
+        return PendingMove(
+            interrupted.kind, len(journal.moved_indices()), journal.complete, journal.context.project_path,
+        )
 
     def discard_pending(self) -> None:
         """捨棄無法讀取的進行中紀錄"""
@@ -506,8 +519,8 @@ class MoveHistory:
 
     # --- 內部：復原 ---
 
-    def _undo_moves(self, record: UndoRecord) -> MoveResult:
-        """把整批搬移類紀錄的檔案搬回原位"""
+    def _undo_moves(self, record: UndoRecord, project_path: Optional[str]) -> MoveResult:
+        """把整批搬移類紀錄的檔案搬回原位；project_path 同 undo"""
         present, skipped = self._partition(record.mappings, lambda m: m.renamed)
 
         def finish(_created_dirs: List[str]) -> None:
@@ -516,7 +529,7 @@ class MoveHistory:
         moves = [(m.renamed, m.original) for m in present]
         result = self._execute(
             OperationKind.UNDO, record, moves, finish,
-            on_rollback=lambda: self._restore_workspace_meta(record),
+            on_rollback=lambda: self._restore_workspace_meta(record), project_path=project_path,
         )
         result.operation = record.operation_type
         result.skipped = [m.renamed for m in skipped]
@@ -553,7 +566,7 @@ class MoveHistory:
     def _execute(
         self, kind: OperationKind, record: UndoRecord, moves: List[Move],
         finish: Callable[[List[str]], None], on_rollback: Optional[Callable[[], None]] = None,
-        bounds: Optional[List[str]] = None,
+        bounds: Optional[List[str]] = None, project_path: Optional[str] = None,
     ) -> MoveResult:
         """交給引擎整批搬移，整批搬完後（刪除進行中紀錄前）呼叫 finish 寫紀錄
 
@@ -566,6 +579,7 @@ class MoveHistory:
             finish: 整批搬完後寫紀錄的函式，參數為本次新建的目錄
             on_rollback: 回滾結束、刪除進行中紀錄前另外要做的事（不得拋出 OSError）
             bounds: 各項目標必須在其中的資料夾（與 moves 一一對應）；None 表示不限制
+            project_path: 這批搬移所屬的專案檔（記進進行中紀錄）；None 表示沒有提供
 
         Returns:
             結果；operation 為 kind，呼叫端視需要改寫
@@ -587,7 +601,7 @@ class MoveHistory:
         try:
             self._engine.execute(
                 moves, on_complete=complete, on_rollback=rolled_back,
-                context=BatchContext(kind, record.id, record.to_data()), bounds=bounds,
+                context=BatchContext(kind, record.id, record.to_data(), project_path), bounds=bounds,
             )
         except RenameRollbackError as e:
             result.error = e
