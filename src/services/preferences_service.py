@@ -15,6 +15,7 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 from core.constants import APPDATA_DIR
+from core.paths import path_key, same_path
 from services.file_service import FileService
 
 PREFERENCES_FILE = os.path.join(APPDATA_DIR, "preferences.json")
@@ -83,7 +84,7 @@ class PreferencesService:
         """
         recent = self._data.get("recent_projects", [])
         path = os.path.normpath(path)
-        recent = [p for p in recent if os.path.normpath(p) != path]
+        recent = [p for p in recent if not same_path(p, path)]
         recent.insert(0, path)
         self._data["recent_projects"] = recent[:MAX_RECENT]
 
@@ -93,6 +94,6 @@ class PreferencesService:
         Args:
             paths: 要移除的專案檔路徑
         """
-        targets = {os.path.normpath(p) for p in paths}
+        targets = {path_key(p) for p in paths}
         recent = self._data.get("recent_projects", [])
-        self._data["recent_projects"] = [p for p in recent if os.path.normpath(p) not in targets]
+        self._data["recent_projects"] = [p for p in recent if path_key(p) not in targets]

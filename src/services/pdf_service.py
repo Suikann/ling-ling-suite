@@ -12,6 +12,7 @@ from PyPDF2 import PdfReader, PdfWriter
 from core.constants import SPLIT_FALLBACK_NAME
 from core.filename import ensure_pdf_extension, sanitize_filename
 from core.models import SplitEntry
+from core.paths import same_path
 
 
 def get_page_count(pdf_path: str) -> int:
@@ -156,7 +157,7 @@ def extract_pages(
     Returns:
         輸出檔案路徑
     """
-    if os.path.normcase(os.path.abspath(output_path)) == os.path.normcase(os.path.abspath(pdf_path)):
+    if same_path(output_path, pdf_path):
         raise ValueError(f"輸出路徑與來源相同，拒絕覆蓋來源：{pdf_path}")
     reader = PdfReader(pdf_path)
     writer = PdfWriter()

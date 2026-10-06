@@ -9,14 +9,40 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.dirname(__file__))
 
 from services.file_service import FileService
 from services.move_journal import MoveJournalStore
 from services.move_service import MoveService, PendingMoveError
+from path_spellings import spellings
 
 
 class _Crash(BaseException):
     """模擬程式被強制結束：不是 Exception，所以 execute 不會攔下來回滾"""
+
+
+class TestBatchPathIdentity(unittest.TestCase):
+    """批次內同一條路徑的不同寫法判為同一條（只比對路徑，不碰磁碟）"""
+
+    def setUp(self):
+        self.mover = MoveService(FileService())
+        self.scores = os.path.join(os.getcwd(), "scores")
+
+    def test_one_source_in_two_spellings_is_a_duplicate_source(self):
+        source = os.path.join(self.scores, "Flute.pdf")
+        first, second = os.path.join(self.scores, "A.pdf"), os.path.join(self.scores, "B.pdf")
+        for label, spelled in spellings(source).items():
+            with self.subTest(label):
+                duplicates = self.mover.detect_duplicate_sources([(source, first), (spelled, second)])
+                self.assertEqual(list(duplicates.values()), [[first, second]])
+
+    def test_one_target_in_two_spellings_is_a_duplicate_target(self):
+        target = os.path.join(self.scores, "out", "01. Flute.pdf")
+        a, b = os.path.join(self.scores, "a.pdf"), os.path.join(self.scores, "b.pdf")
+        for label, spelled in spellings(target).items():
+            with self.subTest(label):
+                conflicts = self.mover.detect_duplicate_targets([(a, target), (b, spelled)])
+                self.assertEqual(list(conflicts.values()), [[a, b]])
 
 
 class TestMoveJournal(unittest.TestCase):

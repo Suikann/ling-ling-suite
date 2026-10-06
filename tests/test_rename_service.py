@@ -8,11 +8,13 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.dirname(__file__))
 
 from core.models import FileInfo, Group, Project, RenameEntry
 from services.file_service import FileService
 from services.move_service import RenameRollbackError
 from services.rename_service import RenameService
+from path_spellings import spellings
 
 
 class TestRenameService(unittest.TestCase):
@@ -270,6 +272,14 @@ class TestRenameService(unittest.TestCase):
         self.assertEqual(names[0], "Same.pdf")
         self.assertEqual(names[1], "Same (1).pdf")
         self.assertEqual(names[2], "Same (2).pdf")
+
+    def test_auto_suffix_separates_one_target_written_in_two_spellings(self):
+        target = os.path.join(os.getcwd(), "out", "Same.pdf")  # 只比對路徑，不碰磁碟
+        for label, spelled in spellings(target).items():
+            with self.subTest(label):
+                plan = [RenameEntry("a.pdf", target), RenameEntry("b.pdf", spelled)]
+                suffixed = self.rename_service.apply_auto_suffix(plan)
+                self.assertEqual(self.rename_service.detect_conflicts(suffixed), {})
 
     def test_execute_rename(self):
         p1 = self._create_file("old1.pdf")

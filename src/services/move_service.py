@@ -17,6 +17,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 from core.constants import RENAME_STAGING_SUFFIX
 from core.locale import t
 from core.models import MoveJournal, MoveRecoveryResult, MoveStep, UndoMapping
+from core.paths import path_key, same_path
 from services.file_service import FileService
 from services.move_journal import MoveJournalStore
 
@@ -47,13 +48,16 @@ class PendingMoveError(OSError):
 
 
 def _group_duplicates(
-    items: List[Move], key: Callable[[Move], str], value: Callable[[Move], str],
+    items: List[Move], path_of: Callable[[Move], str], value: Callable[[Move], str],
 ) -> Dict[str, List[str]]:
-    """依 key 分組，回傳出現多次的鍵及其對應值清單"""
+    """依路徑同一性分組，回傳出現多次的路徑（首次出現的寫法）及其對應值清單"""
+    spelled: Dict[str, str] = {}
     grouped = defaultdict(list)
     for item in items:
-        grouped[key(item)].append(value(item))
-    return {k: v for k, v in grouped.items() if len(v) > 1}
+        key = path_key(path_of(item))
+        spelled.setdefault(key, path_of(item))
+        grouped[key].append(value(item))
+    return {spelled[k]: v for k, v in grouped.items() if len(v) > 1}
 
 
 def staging_path(path: str) -> str:
@@ -73,12 +77,12 @@ class MoveService:
         return [src for src, _ in moves if not self.file_service.file_exists(src)]
 
     def detect_duplicate_sources(self, moves: List[Move]) -> Dict[str, List[str]]:
-        """偵測同一來源被多個項目引用：來源路徑（normcase）到目標清單的對應"""
-        return _group_duplicates(moves, lambda m: os.path.normcase(m[0]), lambda m: m[1])
+        """偵測同一來源被多個項目引用：來源路徑（首次出現的寫法）到目標清單的對應"""
+        return _group_duplicates(moves, lambda m: m[0], lambda m: m[1])
 
     def detect_duplicate_targets(self, moves: List[Move]) -> Dict[str, List[str]]:
-        """偵測多個項目要用同一目標（大小寫不敏感）：目標路徑（小寫）到來源清單的對應"""
-        return _group_duplicates(moves, lambda m: m[1].lower(), lambda m: m[0])
+        """偵測多個項目要用同一目標：目標路徑（首次出現的寫法）到來源清單的對應"""
+        return _group_duplicates(moves, lambda m: m[1], lambda m: m[0])
 
     def find_occupied_targets(self, moves: List[Move]) -> List[str]:
         """列出被批次外檔案佔用的目標路徑
@@ -92,10 +96,10 @@ class MoveService:
         Returns:
             被佔用的目標路徑清單（依批次順序）
         """
-        sources = {os.path.normcase(src) for src, _ in moves}
+        sources = {path_key(src) for src, _ in moves}
         return [
             dst for _, dst in moves
-            if os.path.normcase(dst) not in sources and self.file_service.file_exists(dst)
+            if path_key(dst) not in sources and self.file_service.file_exists(dst)
         ]
 
     def find_taken_staging_names(self, moves: List[Move]) -> List[str]:
@@ -109,11 +113,11 @@ class MoveService:
         Returns:
             被佔用的暫名清單（依批次順序）
         """
-        reserved = {os.path.normcase(p) for move in moves for p in move}
+        reserved = {path_key(p) for move in moves for p in move}
         taken = []
         for i in sorted(self._staged_indices(moves)):
             staging = staging_path(moves[i][0])
-            if (os.path.normcase(staging) in reserved
+            if (path_key(staging) in reserved
                     or self.file_service.file_exists(staging)
                     or self.file_service.directory_exists(staging)):
                 taken.append(staging)
@@ -257,11 +261,8 @@ class MoveService:
     @staticmethod
     def _staged_indices(moves: List[Move]) -> Set[int]:
         """找出來源同時是其他項目目標、需要先讓出位置的項目索引"""
-        targets = {
-            os.path.normcase(dst) for src, dst in moves
-            if os.path.normcase(dst) != os.path.normcase(src)
-        }
-        return {i for i, (src, _) in enumerate(moves) if os.path.normcase(src) in targets}
+        targets = {path_key(dst) for src, dst in moves if not same_path(dst, src)}
+        return {i for i, (src, _) in enumerate(moves) if path_key(src) in targets}
 
     def _build_steps(self, moves: List[Move]) -> List[MoveStep]:
         """展開兩階段搬移順序：先把需讓位的項目搬到暫名，再全部就位"""

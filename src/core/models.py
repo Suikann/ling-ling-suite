@@ -4,10 +4,12 @@
 
 定義專案、群組、檔案資訊等核心資料結構。
 """
+import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, NamedTuple, Optional
 from core.constants import DEFAULT_MASTER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE, WorkspaceStatus
+from core.paths import path_key
 
 
 @dataclass
@@ -183,6 +185,17 @@ class DriveRenameEntry:
     group_name: str = ""
 
 
+class FileRef(NamedTuple):
+    """專案引用到的一個檔案
+
+    Attributes:
+        group: 所屬群組；未分組檔案為 None
+        file: 檔案資訊
+    """
+    group: Optional[Group]
+    file: FileInfo
+
+
 @dataclass
 class Project:
     """專案資料"""
@@ -190,16 +203,6 @@ class Project:
     master_template: str = DEFAULT_MASTER_TEMPLATE
     groups: List[Group] = field(default_factory=list)
     ungrouped_files: List[FileInfo] = field(default_factory=list)
-
-    def all_file_paths(self) -> List[str]:
-        """專案引用到的所有檔案路徑：各群組的分譜與總譜，以及未分組檔案"""
-        paths = []
-        for group in self.groups:
-            paths.extend(f.original_path for f in group.files)
-            if group.score_file:
-                paths.append(group.score_file.original_path)
-        paths.extend(f.original_path for f in self.ungrouped_files)
-        return [p for p in paths if p]
     use_subfolders: bool = False
     subfolder_template: str = DEFAULT_SUBFOLDER_TEMPLATE
     use_parts_subfolder: bool = False
@@ -208,3 +211,54 @@ class Project:
     output_directory: str = ""
     instrument_headcounts: Dict[str, int] = field(default_factory=dict)
     instrument_sections: Dict[str, str] = field(default_factory=dict)
+
+    def file_refs(self) -> List[FileRef]:
+        """專案引用到的所有檔案（分譜、總譜、未分組的唯一走訪）
+
+        Returns:
+            依群組順序列出各群組的總譜與分譜（總譜在前），最後是未分組檔案
+        """
+        refs: List[FileRef] = []
+        for group in self.groups:
+            if group.score_file:
+                refs.append(FileRef(group, group.score_file))
+            refs.extend(FileRef(group, f) for f in group.files)
+        refs.extend(FileRef(None, f) for f in self.ungrouped_files)
+        return refs
+
+    def all_file_paths(self) -> List[str]:
+        """專案引用到的所有檔案路徑，順序同 file_refs()"""
+        return [ref.file.original_path for ref in self.file_refs() if ref.file.original_path]
+
+    def replace_paths(self, mappings: Iterable[UndoMapping]) -> None:
+        """依搬移結果（原路徑 → 新路徑）更新檔案引用的路徑與顯示名稱，路徑以 core.paths 判定同一性
+
+        Args:
+            mappings: 搬移對照
+        """
+        moved = {path_key(m.original): m.renamed for m in mappings}
+        for ref in self.file_refs():
+            new_path = moved.get(path_key(ref.file.original_path))
+            if new_path is not None:
+                ref.file.original_path = new_path
+                ref.file.display_name = os.path.basename(new_path)
+
+    def remove_paths(self, paths: Iterable[str]) -> None:
+        """移除指向指定路徑的檔案引用（分譜、總譜、未分組），路徑以 core.paths 判定同一性
+
+        Args:
+            paths: 要移除的檔案路徑
+        """
+        doomed = {path_key(p) for p in paths}
+        for ref in self.file_refs():
+            if path_key(ref.file.original_path) in doomed:
+                self._detach(ref)
+
+    def _detach(self, ref: FileRef) -> None:
+        """把一個檔案引用從所在的群組或未分組清單拿掉"""
+        if ref.group is None:
+            self.ungrouped_files = [f for f in self.ungrouped_files if f is not ref.file]
+        elif ref.group.score_file is ref.file:
+            ref.group.score_file = None
+        else:
+            ref.group.files = [f for f in ref.group.files if f is not ref.file]

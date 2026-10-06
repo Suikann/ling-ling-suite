@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt, Signal, QObject
 from core.locale import t
-from ui.widgets import ensure_file_exists
+from ui.widgets import ensure_file_exists, pdf_file_choices
 
 SECTION_COLORS = [
     "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
@@ -162,7 +162,7 @@ class RotatePdfDialog(QDialog):
     def _refresh_file_combo(self):
         self._file_combo.blockSignals(True)
         self._file_combo.clear()
-        files = self._collect_files()
+        files = pdf_file_choices(self._project, self._filter_group)
         if files:
             self._file_combo.addItem(t("split.no_file"), None)
             for label, path, group in files:
@@ -170,24 +170,6 @@ class RotatePdfDialog(QDialog):
         else:
             self._file_combo.addItem(t("split.no_project_files"), None)
         self._file_combo.blockSignals(False)
-
-    def _collect_files(self):
-        files = []
-        if not self._project:
-            return files
-        if self._filter_group is None:
-            for f in self._project.ungrouped_files:
-                if f.original_path.lower().endswith(".pdf"):
-                    files.append((f.display_name, f.original_path, None))
-        else:
-            if self._filter_group.score_file:
-                sf = self._filter_group.score_file
-                if sf.original_path.lower().endswith(".pdf"):
-                    files.append((sf.display_name, sf.original_path, self._filter_group))
-            for f in self._filter_group.files:
-                if f.original_path.lower().endswith(".pdf"):
-                    files.append((f.display_name, f.original_path, self._filter_group))
-        return files
 
     def _on_file_selected(self, index):
         data = self._file_combo.currentData()

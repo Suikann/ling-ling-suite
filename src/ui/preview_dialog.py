@@ -4,7 +4,6 @@
 
 提供輸出設定（輸出位置、子資料夾）與重新命名預覽。
 """
-import os
 from typing import Callable, Optional, Set
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -14,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 from core.locale import t
 from core.models import Project
+from core.paths import path_key
 from services.move_service import staging_path
 
 
@@ -181,8 +181,8 @@ class PreviewDialog(QDialog):
             self._plan = [e for e in self._plan if e.group_id in self._selected_ids]
         self._missing = self._rename_service.find_missing_sources(self._plan)
         if self._missing:
-            missing = set(self._missing)
-            self._plan = [e for e in self._plan if e.original_path not in missing]
+            missing = {path_key(p) for p in self._missing}
+            self._plan = [e for e in self._plan if path_key(e.original_path) not in missing]
         self._conflicts = self._rename_service.detect_conflicts(self._plan)
         self._duplicate_sources = self._rename_service.detect_duplicate_sources(self._plan)
         self._empty_names = self._rename_service.find_empty_names(self._plan)
@@ -198,11 +198,11 @@ class PreviewDialog(QDialog):
     def _check_disk_against_effective_plan(self):
         """以實際會執行的計畫判定目標被佔用、暫名被佔用，記下受影響項目的原始路徑"""
         plan = self._effective_plan()
-        occupied = set(self._rename_service.find_occupied_targets(plan))
-        self._occupied_sources = [e.original_path for e in plan if e.new_path in occupied]
-        taken = set(self._rename_service.find_taken_staging_names(plan))
+        occupied = {path_key(p) for p in self._rename_service.find_occupied_targets(plan)}
+        self._occupied_sources = [e.original_path for e in plan if path_key(e.new_path) in occupied]
+        taken = {path_key(p) for p in self._rename_service.find_taken_staging_names(plan)}
         self._staging_taken_sources = [
-            e.original_path for e in plan if staging_path(e.original_path) in taken
+            e.original_path for e in plan if path_key(staging_path(e.original_path)) in taken
         ]
 
     def _blocking_warnings(self):
@@ -234,11 +234,12 @@ class PreviewDialog(QDialog):
             return
         blocking = self._blocking_warnings()
         self._exec_btn.setEnabled(not blocking)
-        conflict_keys = {k.lower() for k in self._conflicts}
-        duplicate_keys = set(self._duplicate_sources)
-        blocked_sources = (
-            set(self._occupied_sources) | set(self._staging_taken_sources) | set(self._empty_names)
-        )
+        conflict_keys = {path_key(p) for p in self._conflicts}
+        duplicate_keys = {path_key(p) for p in self._duplicate_sources}
+        blocked_sources = {
+            path_key(p)
+            for p in self._occupied_sources + self._staging_taken_sources + self._empty_names
+        }
         if blocking:
             self._warn_label.setText("\n".join(blocking))
             self._warn_label.setVisible(True)
@@ -256,9 +257,9 @@ class PreviewDialog(QDialog):
         for entry in self._plan:
             row = QLabel(f"{entry.original_path}\n  \u2192 {entry.new_path}")
             row.setWordWrap(True)
-            if (entry.new_path.lower() in conflict_keys
-                    or os.path.normcase(entry.original_path) in duplicate_keys
-                    or entry.original_path in blocked_sources):
+            if (path_key(entry.new_path) in conflict_keys
+                    or path_key(entry.original_path) in duplicate_keys
+                    or path_key(entry.original_path) in blocked_sources):
                 row.setStyleSheet("color: #e74c3c;")
             self._scroll_layout.addWidget(row)
         self._scroll_layout.addStretch()

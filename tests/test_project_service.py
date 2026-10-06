@@ -97,7 +97,7 @@ class TestProjectService(unittest.TestCase):
         project.ungrouped_files = [FileInfo(gone_ungrouped, "gone_ungrouped.pdf")]
         self.assertEqual(
             ProjectService.find_missing_files(project),
-            [gone_part, gone_score, gone_ungrouped],
+            [gone_score, gone_part, gone_ungrouped],
         )
 
     def test_unicode_content(self):

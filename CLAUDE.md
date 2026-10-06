@@ -236,9 +236,10 @@ src/
   core/                          - 模板引擎、資料模型、常數定義
     constants.py                 - 模板變數定義、預設值、應用程式路徑等常數
     filename.py                  - 檔名清理（非法字元換底線、空名回退），重新命名與分割共用
+    paths.py                     - 路徑同一性（path_key、same_path：絕對路徑、不分大小寫），全程式比對路徑只用它
     catalog_constants.py         - 譜庫相關常數
     template_engine.py           - 模板解析與變數替換邏輯、模板變數雙語轉換
-    models.py                    - 資料模型（Project、Group、Template、FileInfo）
+    models.py                    - 資料模型（Project、Group、Template、FileInfo）；Project.file_refs() 是「總譜＋分譜＋未分組」的唯一走訪，依路徑取代／移除引用也在這裡
     catalog_models.py            - 譜庫資料模型
     locale.py                    - 國際化系統（zh_TW／en 介面字串）
   services/                      - 檔案操作、PDF 處理、雲端整合
@@ -257,7 +258,7 @@ src/
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、undo、workspace、pdf_service、locale、instance_lock；main_window、split_dialog 以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄
+tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、undo、workspace、pdf_service、locale、instance_lock；main_window、split_dialog、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法
 GLOSSARY.md                      - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
@@ -362,7 +363,7 @@ services/ 層
 
 ## Conflict Handling
 
-預覽階段檢查所有產生的新檔名：
+預覽階段檢查所有產生的新檔名（路徑是否相同一律以 `core/paths.py` 判定：絕對路徑、不分大小寫）：
 - 若有重複，標記警告並顯示衝突的檔案
 - 使用者可選擇取消修改，或繼續執行（自動加後綴區分）
 - 若同一來源檔案被多個群組引用，標記警告並停用執行（無法自動修正，需使用者調整群組）
@@ -383,14 +384,14 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 
 分割產生的分譜先進工作區（`WORKSPACE_DIR`），重新命名時才搬到輸出位置；使用者匯入的檔案永遠不進工作區（見 `docs/adr/0001`）。
 
-- 每個來源合併譜對應一個子資料夾，名稱為來源絕對路徑 SHA-1 的前 8 碼；資料夾內 `meta.json` 記錄 `source_path`、`source_name`、`project_path`、`created_at`（路徑皆為絕對路徑，`project_path` 未存檔時為空字串）
+- 每個來源合併譜對應一個子資料夾，名稱為來源路徑比對鍵（`path_key`：絕對路徑、不分大小寫）SHA-1 的前 8 碼；資料夾內 `meta.json` 記錄 `source_path`、`source_name`、`project_path`、`created_at`（路徑皆為絕對路徑，`project_path` 未存檔時為空字串）
 - 子資料夾以來源合併譜為鍵、跨專案共用：另一專案重新分割同一份合併譜會取代前者尚未重新命名的分譜，確認訊息點名所屬專案（`WorkspaceService.other_owner`），專案檔已不存在時加註「（找不到）」；`prepare_folder` 一律把所屬專案改成目前專案，未存檔時記為空（取代過一次後再分割就是自己的嘗試，不再點名別人）
 - 專案開啟與存檔時都更新引用到的子資料夾的 `meta.project_path`（`update_project_path` 回傳寫入失敗的子資料夾，UI 只在狀態列提示、不阻止開啟或存檔）
 - 搬空的子資料夾保留 `meta.json`（復原重新命名時分譜會搬回來，需要它辨識來源）；「清理工作區」掃描時才移除既未被目前專案、也未被任何已知專案引用的空資料夾（`meta.json` 是程式自產的中繼資料，直接刪除不走資源回收桶；連同原子寫入殘留 `meta.json.tmp` 一起清，由 `FileService.remove_atomic_residue` 認得暫名）
 - 復原紀錄寫入時對來源位於工作區的項目快照其子資料夾的 meta（`UndoRecord.workspace_meta`，因此 `UndoService` 注入 `WorkspaceService`）；復原後子資料夾若已沒有可讀的 meta 就用快照寫回（`restore_meta`；回滾失敗卡在工作區的檔案也寫回），寫回失敗不影響檔案復原；重做前先以子資料夾目前的 meta 更新快照；舊紀錄沒有此欄照常載入
 - 「工具 → 開啟工作區資料夾」以系統檔案總管開啟 `WORKSPACE_DIR`
 - 「工具 → 清理工作區」列出各子資料夾的引用狀態（使用中／屬於其他專案／屬於無法讀取的專案／未被引用／來源不明），只有「未被引用」預設勾選，刪除走資源回收桶。「已知專案」= 最近專案清單 + 各 `meta.project_path` 指向的專案檔；開啟對話框時會順手把最近清單中已不存在的專案檔移除
-- 引用關係涵蓋群組內分譜、總譜與未分組檔案（`Project.all_file_paths()`）
+- 引用關係涵蓋群組內分譜、總譜與未分組檔案（`Project.file_refs()`）
 - 分割輸出路徑等於來源合併譜時拒絕執行（`pdf_service.extract_pages` 與分割對話框各擋一層）；重新分割同一來源時，所有指向舊輸出的群組／未分組項目一併移除
 - `rename_file` 跨磁碟時複製到 `.part` 再就位，失敗不留半成品
 

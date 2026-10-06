@@ -20,12 +20,8 @@ from core.constants import (
     WORKSPACE_DIR, WORKSPACE_FOLDER_HASH_LENGTH, WORKSPACE_META_FILE, WorkspaceStatus,
 )
 from core.models import Project, WorkspaceEntry, WorkspaceOwner, WorkspaceScan
+from core.paths import path_key, same_path
 from services.file_service import FileService
-
-
-def _normalize(path: str) -> str:
-    """路徑正規化，供比對與雜湊使用"""
-    return os.path.normcase(os.path.abspath(path))
 
 
 def _stored_project_path(path: str) -> str:
@@ -49,15 +45,16 @@ class WorkspaceService:
             source_path: 來源合併譜路徑
 
         Returns:
-            子資料夾的絕對路徑，名稱為來源絕對路徑雜湊的前幾碼
+            子資料夾的絕對路徑，名稱為來源路徑比對鍵（core.paths）雜湊的前幾碼
         """
-        digest = hashlib.sha1(_normalize(source_path).encode("utf-8")).hexdigest()
+        digest = hashlib.sha1(path_key(source_path).encode("utf-8")).hexdigest()
         return os.path.join(self.workspace_dir, digest[:WORKSPACE_FOLDER_HASH_LENGTH])
 
     def is_in_workspace(self, path: str) -> bool:
         """檢查路徑是否位於工作區內"""
+        root = path_key(self.workspace_dir)
         try:
-            return os.path.commonpath([_normalize(path), _normalize(self.workspace_dir)]) == _normalize(self.workspace_dir)
+            return os.path.commonpath([path_key(path), root]) == root
         except ValueError:
             return False
 
@@ -66,7 +63,7 @@ class WorkspaceService:
         if not self.is_in_workspace(path):
             return None
         folder = os.path.dirname(os.path.abspath(path))
-        if _normalize(folder) == _normalize(self.workspace_dir):
+        if same_path(folder, self.workspace_dir):
             return None
         return folder
 
@@ -128,15 +125,15 @@ class WorkspaceService:
         所以搬空當下不刪，留到掃描時再一併清除。
 
         Args:
-            in_use: 目前專案引用的子資料夾（正規化路徑），這些不移除
+            in_use: 目前專案引用的子資料夾，這些不移除
 
         Returns:
             移除的資料夾數
         """
-        in_use = in_use or set()
+        keep = {path_key(p) for p in in_use or ()}
         count = 0
         for folder in self._list_folders():
-            if _normalize(folder) in in_use or self.list_outputs(folder):
+            if path_key(folder) in keep or self.list_outputs(folder):
                 continue
             self.remove_folder(folder)
             count += 1
@@ -190,7 +187,7 @@ class WorkspaceService:
             meta 寫入失敗的子資料夾清單
         """
         failed: List[str] = []
-        for folder in sorted(self._referenced_folders(project)):
+        for folder in sorted(self._referenced_folders(project).values()):
             meta = self.read_meta(folder)
             if meta is None:
                 continue
@@ -217,7 +214,7 @@ class WorkspaceService:
         owner_path = self._owner_path(self.read_meta(folder))
         if not owner_path:
             return None
-        if current_project_path and _normalize(owner_path) == _normalize(current_project_path):
+        if current_project_path and same_path(owner_path, current_project_path):
             return None
         return WorkspaceOwner(project_path=owner_path, exists=self.file_service.file_exists(owner_path))
 
@@ -240,7 +237,7 @@ class WorkspaceService:
             掃描結果，含各子資料夾摘要與無法處理的專案檔清單
         """
         scan = WorkspaceScan()
-        in_use = self._referenced_folders(current_project) if current_project else set()
+        in_use = set(self._referenced_folders(current_project)) if current_project else set()
         owned: Dict[str, str] = {}
         unreadable: Set[str] = set()
         for path in self._candidate_projects(recent_projects):
@@ -251,13 +248,13 @@ class WorkspaceService:
                 project = load_project(path)
             except Exception:
                 scan.unreadable_projects.append(path)
-                unreadable.add(_normalize(path))
+                unreadable.add(path_key(path))
                 continue
-            for folder in self._referenced_folders(project):
-                owned.setdefault(folder, path)
+            for key in self._referenced_folders(project):
+                owned.setdefault(key, path)
         self.purge_empty_folders(in_use | set(owned))
         for folder in self._list_folders():
-            key = _normalize(folder)
+            key = path_key(folder)
             meta = self.read_meta(folder)
             owner_path = self._owner_path(meta)
             if key in in_use:
@@ -266,12 +263,13 @@ class WorkspaceService:
                 status = WorkspaceStatus.OWNED_BY_OTHER
             elif meta is None:
                 status = WorkspaceStatus.UNKNOWN_SOURCE
-            elif owner_path and _normalize(owner_path) in unreadable:
+            elif owner_path and path_key(owner_path) in unreadable:
                 status = WorkspaceStatus.OWNER_UNREADABLE
             else:
                 status = WorkspaceStatus.ORPHAN
             scan.entries.append(self._build_entry(folder, meta, status, owned.get(key, "")))
-        scan.missing_projects = [p for p in scan.missing_projects if p in recent_projects]
+        recent = {path_key(p) for p in recent_projects}
+        scan.missing_projects = [p for p in scan.missing_projects if path_key(p) in recent]
         scan.entries.sort(key=lambda e: e.modified_at, reverse=True)
         return scan
 
@@ -305,18 +303,18 @@ class WorkspaceService:
         candidates: List[str] = []
         owners = [self._owner_path(self.read_meta(f)) for f in self._list_folders()]
         for path in list(recent_projects) + owners:
-            if path and _normalize(path) not in seen:
-                seen.add(_normalize(path))
+            if path and path_key(path) not in seen:
+                seen.add(path_key(path))
                 candidates.append(path)
         return candidates
 
-    def _referenced_folders(self, project: Project) -> Set[str]:
-        """專案引用到的工作區子資料夾（正規化後的路徑集合）"""
-        folders: Set[str] = set()
+    def _referenced_folders(self, project: Project) -> Dict[str, str]:
+        """專案引用到的工作區子資料夾：路徑比對鍵到子資料夾路徑的對應"""
+        folders: Dict[str, str] = {}
         for path in project.all_file_paths():
             folder = self.folder_of(path)
             if folder:
-                folders.add(_normalize(folder))
+                folders.setdefault(path_key(folder), folder)
         return folders
 
     def _build_entry(

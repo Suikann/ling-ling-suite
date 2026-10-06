@@ -10,6 +10,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.dirname(__file__))
 
 from core.constants import (
     ATOMIC_WRITE_TEMP_SUFFIX, WORKSPACE_FOLDER_HASH_LENGTH, WORKSPACE_META_FILE, WorkspaceStatus,
@@ -18,6 +19,7 @@ from core.models import FileInfo, Group, Project
 from services.file_service import FileService
 from services.project_service import ProjectService
 from services.workspace_service import WorkspaceService
+from path_spellings import spellings
 
 
 class _NoTrashFileService(FileService):
@@ -217,6 +219,13 @@ class TestWorkspaceService(unittest.TestCase):
         self.assertIsNone(self.service.other_owner(unowned, mine))
         self.assertIsNone(self.service.other_owner(unowned, ""))
 
+    def test_other_owner_is_none_for_any_spelling_of_the_same_project(self):
+        mine = os.path.join(os.getcwd(), "Winter.llproj")  # 只比對路徑，不讀寫
+        folder = self.service.prepare_folder(self.source, mine)
+        for label, spelled in spellings(mine).items():
+            with self.subTest(label):
+                self.assertIsNone(self.service.other_owner(folder, spelled))
+
     def test_other_owner_names_existing_project(self):
         theirs = self._save_project(Project(), "theirs.llproj")
         folder = self.service.prepare_folder(self.source, theirs)
@@ -330,6 +339,26 @@ class TestWorkspaceService(unittest.TestCase):
         removed = self.service.cleanup(scan.entries)
         self.assertEqual(removed, 1)
         self.assertFalse(os.path.exists(folder))
+
+
+class TestWorkspaceFolderOwnership(unittest.TestCase):
+    """子資料夾歸屬：同一條路徑的任何寫法都判到同一個子資料夾（只比對路徑，不碰磁碟）"""
+
+    def setUp(self):
+        self.service = WorkspaceService(FileService(), os.path.join(os.getcwd(), "workspace"))
+        self.source = os.path.join(os.getcwd(), "scores", "Winter Score.pdf")
+
+    def test_every_spelling_of_a_source_maps_to_the_same_folder(self):
+        folder = self.service.folder_for_source(self.source)
+        for label, spelled in spellings(self.source).items():
+            with self.subTest(label):
+                self.assertEqual(self.service.folder_for_source(spelled), folder)
+
+    def test_every_spelling_of_an_output_belongs_to_its_folder(self):
+        folder = self.service.folder_for_source(self.source)
+        for label, spelled in spellings(os.path.join(folder, "Flute.pdf")).items():
+            with self.subTest(label):
+                self.assertEqual(self.service.folder_of(spelled), folder)
 
 
 class TestFileServiceCrossDevice(unittest.TestCase):

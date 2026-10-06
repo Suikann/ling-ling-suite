@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional
 from core.filename import sanitize_filename
 from core.locale import t
 from core.models import Project, RenameEntry, UndoMapping, UndoRecord
+from core.paths import path_key
 from core.template_engine import build_variables_for_file, substitute_template
 from services.file_service import FileService
 from services.move_service import Move, MoveService
@@ -130,15 +131,13 @@ class RenameService:
         return plan
 
     def detect_conflicts(self, plan: List[RenameEntry]) -> Dict[str, List[str]]:
-        """偵測重新命名計畫中的檔名衝突
-
-        使用大小寫不敏感比較（Windows 檔案系統）。
+        """偵測重新命名計畫中的檔名衝突（路徑以 core.paths 判定同一性）
 
         Args:
             plan: 重新命名計畫
 
         Returns:
-            衝突的新路徑（小寫）到原始路徑清單的對應
+            衝突的新路徑（首次出現的寫法）到原始路徑清單的對應
         """
         return self._mover.detect_duplicate_targets(self._moves(plan))
 
@@ -193,7 +192,7 @@ class RenameService:
         seen = defaultdict(int)
         result = []
         for entry in plan:
-            key = entry.new_path.lower()
+            key = path_key(entry.new_path)
             count = seen[key]
             seen[key] += 1
             if count > 0:

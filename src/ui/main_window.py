@@ -20,6 +20,7 @@ from core.constants import (
 )
 from core.locale import t, get_locale, set_locale
 from core.models import Project, Group, FileInfo, UndoMapping, UndoRecord
+from core.paths import same_path
 from services.file_service import FileService
 from services.import_service import ImportService
 from services.move_service import RenameRollbackError
@@ -409,7 +410,7 @@ class MainWindow(QMainWindow):
             record = self._rename_service.execute_rename(
                 plan, self.project, self._get_undo_service().save_undo_record,
             )
-            self._update_project_paths(record.mappings)
+            self.project.replace_paths(record.mappings)
             self._mark_modified()
             self._rebuild_tabs()
             self._set_status(t("status.renamed", count=len(record.mappings)))
@@ -432,7 +433,7 @@ class MainWindow(QMainWindow):
             mappings=list(residual),
         )
         self._get_undo_service().save_undo_record(record)
-        self._update_project_paths(residual)
+        self.project.replace_paths(residual)
         self._mark_modified()
         self._rebuild_tabs()
 
@@ -512,36 +513,6 @@ class MainWindow(QMainWindow):
             return "keep"
         return None
 
-    def _remove_file_references(self, paths):
-        """從所有群組與未分組清單移除指向指定路徑的檔案項目（重新分割取代舊輸出時使用）"""
-        removed = set(paths)
-        for group in self.project.groups:
-            group.files = [f for f in group.files if f.original_path not in removed]
-            if group.score_file and group.score_file.original_path in removed:
-                group.score_file = None
-        self.project.ungrouped_files = [
-            f for f in self.project.ungrouped_files if f.original_path not in removed
-        ]
-
-    def _update_project_paths(self, mappings):
-        """根據重新命名結果更新專案內的檔案路徑"""
-        path_map = {m.original: m.renamed for m in mappings}
-        for group in self.project.groups:
-            if group.score_file and group.score_file.original_path in path_map:
-                new_path = path_map[group.score_file.original_path]
-                group.score_file.original_path = new_path
-                group.score_file.display_name = os.path.basename(new_path)
-            for f in group.files:
-                if f.original_path in path_map:
-                    new_path = path_map[f.original_path]
-                    f.original_path = new_path
-                    f.display_name = os.path.basename(new_path)
-        for f in self.project.ungrouped_files:
-            if f.original_path in path_map:
-                new_path = path_map[f.original_path]
-                f.original_path = new_path
-                f.display_name = os.path.basename(new_path)
-
     def _save_operation_undo(self, op_type, description, **kwargs):
         """儲存操作的復原紀錄"""
         from datetime import datetime
@@ -572,7 +543,7 @@ class MainWindow(QMainWindow):
         try:
             self._get_undo_service().execute_undo(record)
             if record.operation_type == "rename":
-                self._update_project_paths(
+                self.project.replace_paths(
                     [UndoMapping(original=m.renamed, renamed=m.original) for m in record.mappings],
                 )
                 self._mark_modified()
@@ -602,7 +573,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self._get_undo_service().execute_redo(record)
-            self._update_project_paths(record.mappings)
+            self.project.replace_paths(record.mappings)
             self._mark_modified()
             self._rebuild_tabs()
             self._set_status(t("status.redone"))
@@ -655,10 +626,10 @@ class MainWindow(QMainWindow):
                            created_directories=None, replaced_paths=None):
         selected = list(range(len(files)))
         if replaced_paths:
-            self._remove_file_references(replaced_paths)
+            self.project.remove_paths(replaced_paths)
         if source_group:
             source_group.files = [
-                f for f in source_group.files if f.original_path != source_path
+                f for f in source_group.files if not same_path(f.original_path, source_path)
             ]
             source_group.files.extend(files)
             source_group.instruments = instruments
