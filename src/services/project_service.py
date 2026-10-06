@@ -8,7 +8,8 @@ import json
 import os
 from typing import List, Optional
 from core.constants import APP_VERSION
-from core.models import FileInfo, Group, Project
+from core.locale import t
+from core.models import Project
 from services.file_service import FileService
 
 
@@ -19,31 +20,15 @@ class ProjectService:
         self.file_service = file_service or FileService()
 
     def save_project(self, project: Project, file_path: str) -> None:
-        """將專案序列化為 JSON 並儲存
+        """將專案序列化為 JSON 並儲存；寫入成功後以存出的內容作為專案的已存檔快照
 
         Args:
             project: 專案資料
             file_path: 儲存路徑
         """
-        data = {
-            "version": APP_VERSION,
-            "instruments": project.instruments,
-            "master_template": project.master_template,
-            "use_subfolders": project.use_subfolders,
-            "subfolder_template": project.subfolder_template,
-            "use_parts_subfolder": project.use_parts_subfolder,
-            "parts_subfolder_name": project.parts_subfolder_name,
-            "parts_output_mode": project.parts_output_mode,
-            "output_directory": project.output_directory,
-            "instrument_headcounts": project.instrument_headcounts,
-            "instrument_sections": project.instrument_sections,
-            "ungrouped_files": [
-                {"original_path": f.original_path, "display_name": f.display_name}
-                for f in project.ungrouped_files
-            ],
-            "groups": [self._serialize_group(g) for g in project.groups],
-        }
+        data = {"version": APP_VERSION, **project.to_data()}
         self.file_service.write_json_atomic(file_path, data)
+        project.mark_saved()
 
     def load_project(self, file_path: str) -> Project:
         """從 JSON 檔案載入專案
@@ -52,47 +37,11 @@ class ProjectService:
             file_path: 專案檔路徑
 
         Returns:
-            還原的 Project 物件
+            還原的 Project 物件，已完成舊格式遷移並判為已存檔
         """
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        project = Project(
-            instruments=data.get("instruments", []),
-            master_template=data.get("master_template", ""),
-            use_subfolders=data.get("use_subfolders", False),
-            subfolder_template=data.get("subfolder_template", ""),
-            use_parts_subfolder=data.get("use_parts_subfolder", False),
-            parts_subfolder_name=data.get("parts_subfolder_name", "Parts"),
-            parts_output_mode=data.get("parts_output_mode", "root"),
-            output_directory=data.get("output_directory", ""),
-            instrument_headcounts=data.get("instrument_headcounts", {}),
-            instrument_sections=data.get("instrument_sections", {}),
-        )
-        project.ungrouped_files = [
-            FileInfo(
-                original_path=f["original_path"],
-                display_name=f["display_name"],
-            )
-            for f in data.get("ungrouped_files", [])
-        ]
-        project.groups = [
-            self._deserialize_group(g)
-            for g in data.get("groups", [])
-        ]
-        if "parts_output_mode" not in data and project.use_parts_subfolder:
-            project.parts_output_mode = "parts"
-        for group in project.groups:
-            if not group.instruments and project.instruments:
-                group.instruments = list(project.instruments)
-            if group.instruments and group.selected_instruments:
-                if group.selected_instruments != list(range(len(group.instruments))):
-                    group.instruments = [
-                        group.instruments[i]
-                        for i in group.selected_instruments
-                        if i < len(group.instruments)
-                    ]
-            group.selected_instruments = list(range(len(group.instruments)))
-        return project
+        return Project.from_data(data, score_label=t("group.score_label"))
 
     @staticmethod
     def find_missing_files(project: Project) -> List[str]:
@@ -105,77 +54,3 @@ class ProjectService:
             找不到的檔案路徑清單（依群組順序）
         """
         return [p for p in project.all_file_paths() if not os.path.isfile(p)]
-
-    def _serialize_group(self, group: Group) -> dict:
-        """序列化單一群組
-
-        Args:
-            group: 群組資料
-
-        Returns:
-            可序列化的字典
-        """
-        return {
-            "id": group.id,
-            "name": group.name,
-            "files": [
-                {"original_path": f.original_path, "display_name": f.display_name}
-                for f in group.files
-            ],
-            "score_file": (
-                {"original_path": group.score_file.original_path,
-                 "display_name": group.score_file.display_name}
-                if group.score_file else None
-            ),
-            "instruments": group.instruments,
-            "score_label": group.score_label,
-            "selected_instruments": group.selected_instruments,
-            "piece_name": group.piece_name,
-            "movement_number": group.movement_number,
-            "movement_name": group.movement_name,
-            "composer": group.composer,
-            "genre": group.genre,
-            "use_small_template": group.use_small_template,
-            "small_template": group.small_template,
-        }
-
-    def _deserialize_group(self, data: dict) -> Group:
-        """反序列化單一群組
-
-        Args:
-            data: 群組字典
-
-        Returns:
-            Group 物件
-        """
-        score_data = data.get("score_file")
-        score_file = (
-            FileInfo(
-                original_path=score_data["original_path"],
-                display_name=score_data["display_name"],
-            )
-            if score_data else None
-        )
-        group = Group(
-            id=data.get("id", ""),
-            name=data.get("name", ""),
-            score_file=score_file,
-            instruments=data.get("instruments", []),
-            score_label=data.get("score_label", ""),
-            selected_instruments=data.get("selected_instruments", []),
-            piece_name=data.get("piece_name", ""),
-            movement_number=data.get("movement_number", ""),
-            movement_name=data.get("movement_name", ""),
-            composer=data.get("composer", ""),
-            genre=data.get("genre", ""),
-            use_small_template=data.get("use_small_template", False),
-            small_template=data.get("small_template", ""),
-        )
-        group.files = [
-            FileInfo(
-                original_path=f["original_path"],
-                display_name=f["display_name"],
-            )
-            for f in data.get("files", [])
-        ]
-        return group

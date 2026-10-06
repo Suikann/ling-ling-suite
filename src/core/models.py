@@ -7,7 +7,7 @@
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, NamedTuple, Optional
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional
 from core.constants import DEFAULT_MASTER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE, WorkspaceStatus
 from core.paths import path_key
 
@@ -17,6 +17,15 @@ class FileInfo:
     """檔案資訊"""
     original_path: str
     display_name: str
+
+    def to_data(self) -> Dict[str, str]:
+        """專案檔中存的內容"""
+        return {"original_path": self.original_path, "display_name": self.display_name}
+
+    @classmethod
+    def from_data(cls, data: Dict[str, str]) -> "FileInfo":
+        """由專案檔中的內容還原"""
+        return cls(original_path=data["original_path"], display_name=data["display_name"])
 
 
 @dataclass
@@ -36,6 +45,46 @@ class Group:
     score_label: str = ""
     use_small_template: bool = False
     small_template: str = ""
+
+    def to_data(self) -> Dict[str, Any]:
+        """專案檔中存的內容；串列一律複製，之後改動群組不會改到這份內容"""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "files": [f.to_data() for f in self.files],
+            "score_file": self.score_file.to_data() if self.score_file else None,
+            "instruments": list(self.instruments),
+            "score_label": self.score_label,
+            "selected_instruments": list(self.selected_instruments),
+            "piece_name": self.piece_name,
+            "movement_number": self.movement_number,
+            "movement_name": self.movement_name,
+            "composer": self.composer,
+            "genre": self.genre,
+            "use_small_template": self.use_small_template,
+            "small_template": self.small_template,
+        }
+
+    @classmethod
+    def from_data(cls, data: Dict[str, Any]) -> "Group":
+        """由專案檔中的內容還原（不做舊格式遷移，遷移由 Project.from_data 負責）"""
+        score_data = data.get("score_file")
+        return cls(
+            id=data.get("id", ""),
+            name=data.get("name", ""),
+            files=[FileInfo.from_data(f) for f in data.get("files", [])],
+            score_file=FileInfo.from_data(score_data) if score_data else None,
+            instruments=data.get("instruments", []),
+            score_label=data.get("score_label", ""),
+            selected_instruments=data.get("selected_instruments", []),
+            piece_name=data.get("piece_name", ""),
+            movement_number=data.get("movement_number", ""),
+            movement_name=data.get("movement_name", ""),
+            composer=data.get("composer", ""),
+            genre=data.get("genre", ""),
+            use_small_template=data.get("use_small_template", False),
+            small_template=data.get("small_template", ""),
+        )
 
 
 @dataclass
@@ -211,6 +260,85 @@ class Project:
     output_directory: str = ""
     instrument_headcounts: Dict[str, int] = field(default_factory=dict)
     instrument_sections: Dict[str, str] = field(default_factory=dict)
+    _saved: Optional[Dict[str, Any]] = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        self._saved = self.to_data()
+
+    # --- 內容與未存檔 ---
+
+    def to_data(self) -> Dict[str, Any]:
+        """專案檔中存的內容（不含存檔格式的版本號）；串列與字典一律複製
+
+        存檔寫出的就是這份內容，未存檔判定也拿它和快照比對，兩者不會分歧。
+        """
+        return {
+            "instruments": list(self.instruments),
+            "master_template": self.master_template,
+            "use_subfolders": self.use_subfolders,
+            "subfolder_template": self.subfolder_template,
+            "use_parts_subfolder": self.use_parts_subfolder,
+            "parts_subfolder_name": self.parts_subfolder_name,
+            "parts_output_mode": self.parts_output_mode,
+            "output_directory": self.output_directory,
+            "instrument_headcounts": dict(self.instrument_headcounts),
+            "instrument_sections": dict(self.instrument_sections),
+            "ungrouped_files": [f.to_data() for f in self.ungrouped_files],
+            "groups": [g.to_data() for g in self.groups],
+        }
+
+    @classmethod
+    def from_data(cls, data: Dict[str, Any], score_label: str) -> "Project":
+        """由專案檔中的內容還原，完成舊格式遷移後以還原結果作為已存檔的快照
+
+        Args:
+            data: 專案檔中的內容
+            score_label: 總譜標籤留空的舊群組要補上的標籤（依目前介面語言）
+
+        Returns:
+            判為已存檔的專案
+        """
+        project = cls(
+            instruments=data.get("instruments", []),
+            master_template=data.get("master_template", ""),
+            use_subfolders=data.get("use_subfolders", False),
+            subfolder_template=data.get("subfolder_template", ""),
+            use_parts_subfolder=data.get("use_parts_subfolder", False),
+            parts_subfolder_name=data.get("parts_subfolder_name", "Parts"),
+            parts_output_mode=data.get("parts_output_mode", "root"),
+            output_directory=data.get("output_directory", ""),
+            instrument_headcounts=data.get("instrument_headcounts", {}),
+            instrument_sections=data.get("instrument_sections", {}),
+            ungrouped_files=[FileInfo.from_data(f) for f in data.get("ungrouped_files", [])],
+            groups=[Group.from_data(g) for g in data.get("groups", [])],
+        )
+        if "parts_output_mode" not in data and project.use_parts_subfolder:
+            project.parts_output_mode = "parts"
+        for group in project.groups:
+            project._migrate_group(group, score_label)
+        project.mark_saved()
+        return project
+
+    def _migrate_group(self, group: Group, score_label: str) -> None:
+        """舊格式群組的遷移：補上總譜標籤、承接專案層級的樂器表、把勾選的子集收成群組自己的樂器表"""
+        if not group.score_label:
+            group.score_label = score_label
+        if not group.instruments and self.instruments:
+            group.instruments = list(self.instruments)
+        selected = group.selected_instruments
+        if group.instruments and selected and selected != list(range(len(group.instruments))):
+            group.instruments = [group.instruments[i] for i in selected if i < len(group.instruments)]
+        group.selected_instruments = list(range(len(group.instruments)))
+
+    def is_modified(self) -> bool:
+        """目前內容是否與上次存檔或開啟時的快照不同"""
+        return self.to_data() != self._saved
+
+    def mark_saved(self) -> None:
+        """以目前內容作為已存檔的快照（存檔或開啟後呼叫）"""
+        self._saved = self.to_data()
+
+    # --- 檔案引用 ---
 
     def file_refs(self) -> List[FileRef]:
         """專案引用到的所有檔案（分譜、總譜、未分組的唯一走訪）
