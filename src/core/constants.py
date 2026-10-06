@@ -70,6 +70,22 @@ RELATIVE_DIR_NAMES = (".", "..")
 SPLIT_FALLBACK_NAME = "Part"
 
 
+class OperationKind(str, Enum):
+    """操作種類：記在復原紀錄與批次搬移的進行中紀錄裡
+
+    復原與重做本身也是一種：它們中途失敗留下搬不回去的檔案時，殘留紀錄標示的就是它們。
+    """
+    RENAME = "rename"
+    UNDO = "undo"
+    REDO = "redo"
+    SPLIT = "split"
+    ROTATE = "rotate"
+
+
+# 以整批搬移完成的操作種類：這類紀錄的復原與重做就是把檔案在兩個位置之間搬來搬去
+MOVE_OPERATIONS = frozenset({OperationKind.RENAME, OperationKind.UNDO, OperationKind.REDO})
+
+
 class WorkspaceStatus(str, Enum):
     """工作區子資料夾相對於專案的引用狀態"""
     IN_USE = "in_use"

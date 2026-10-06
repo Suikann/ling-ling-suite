@@ -2,25 +2,18 @@
 """
 重新命名服務
 
-提供批次重新命名計畫生成、衝突偵測與執行。
+提供批次重新命名計畫生成與衝突偵測；執行交給搬移歷程（services/move_history.py）。
 """
 import os
 from collections import defaultdict
-from datetime import datetime
-from typing import Callable, Collection, Dict, List, Optional
+from typing import Collection, Dict, List, Optional
 from core.constants import PartsOutputMode, detect_instrument_section
-from core.locale import get_locale, t
-from core.models import Group, Project, RenameEntry, UndoMapping, UndoRecord
+from core.locale import get_locale
+from core.models import Group, Project, RenameEntry
 from core.naming import name_group, named_voices, settings_for
 from core.paths import path_key
 from services.file_service import FileService
 from services.move_service import Move, MoveService
-
-
-def _name_stem(path: str) -> str:
-    """取路徑最後一段去掉副檔名（最後一個點之後）的部分"""
-    name = os.path.basename(path)
-    return name.rpartition(".")[0] if "." in name else name
 
 
 class RenameService:
@@ -120,7 +113,7 @@ class RenameService:
         Returns:
             新檔名為空的項目原始路徑清單（依計畫順序）
         """
-        return [e.original_path for e in plan if not _name_stem(e.new_path)]
+        return self._mover.find_empty_names(self._moves(plan))
 
     def find_occupied_targets(self, plan: List[RenameEntry]) -> List[str]:
         """列出被計畫外檔案佔用的目標路徑（計畫內來源不算佔用），依計畫順序"""
@@ -156,44 +149,3 @@ class RenameService:
                 group_id=entry.group_id,
             ))
         return result
-
-    def execute_rename(
-        self, plan: List[RenameEntry], project: Project,
-        save_record: Optional[Callable[[UndoRecord], None]] = None,
-    ) -> UndoRecord:
-        """執行重新命名計畫
-
-        先檢查新檔名不為空，再交給搬移引擎驗證並以兩階段搬移執行
-        （對調與連鎖可執行；中途失敗回滾，搬不回去者以 RenameRollbackError 回報）。
-        復原紀錄透過 save_record 在引擎刪除進行中紀錄之前寫入，兩者之間沒有空窗。
-
-        Args:
-            plan: 重新命名計畫
-            project: 專案資料（用於判斷子資料夾設定）
-            save_record: 整批搬完後用來寫入復原紀錄的函式
-
-        Returns:
-            復原紀錄（只記原始位置到最終位置，暫名不出現）
-
-        Raises:
-            ValueError: 產生的新檔名為空
-        """
-        empty = self.find_empty_names(plan)
-        if empty:
-            raise ValueError(t("rename.error.empty_name", files="\n".join(empty)))
-        record = UndoRecord(
-            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-            description=t("rename.undo_description", count=len(plan)),
-            mappings=[
-                UndoMapping(original=entry.original_path, renamed=entry.new_path)
-                for entry in plan
-            ],
-        )
-
-        def complete(created_dirs: List[str]) -> None:
-            record.created_directories = created_dirs
-            if save_record:
-                save_record(record)
-
-        self._mover.execute(self._moves(plan), on_complete=complete)
-        return record

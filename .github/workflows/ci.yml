@@ -35,7 +35,7 @@ jobs:
           python -c "from core.locale import t, set_locale, get_locale"
           python -c "from services.rename_service import RenameService"
           python -c "from services.project_service import ProjectService"
-          python -c "from services.undo_service import UndoService"
+          python -c "from services.move_history import MoveHistory, MoveResult"
 
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short --cov=src --cov-report=term-missing

@@ -27,12 +27,14 @@ from PySide6.QtWidgets import (
 
 from core.constants import PartsOutputMode
 from core.locale import get_locale, set_locale, t
-from core.models import FileInfo, Group, Project
+from core.models import FileInfo, Group, Project, RenameEntry
 from services.file_service import FileService
 from main import launch
 from services.instance_lock import InstanceLock
+from services.move_history import MoveHistory
 from services.preferences_service import PreferencesService
 from services.project_service import ProjectService
+from services.workspace_service import WorkspaceService
 from ui.main_window import MainWindow
 from ui.preview_dialog import PreviewDialog
 from tests.failing_writes import FailingWrites
@@ -159,7 +161,14 @@ class MainWindowTestCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.temp_dir, True)
         self.preferences_path = os.path.join(self.temp_dir, "preferences.json")
         self.preferences = PreferencesService(self.preferences_path, self.preferences_file_service())
-        self.window = MainWindow(self.preferences)
+        self.history_files = FileService()
+        self.history = MoveHistory(
+            self.history_files, WorkspaceService(self.history_files, os.path.join(self.temp_dir, "workspace")),
+            undo_dir=os.path.join(self.temp_dir, "undo"), redo_dir=os.path.join(self.temp_dir, "redo"),
+            journal_path=os.path.join(self.temp_dir, "pending_move.json"),
+            backup_dir=os.path.join(self.temp_dir, "backups"),
+        )
+        self.window = MainWindow(self.preferences, history=self.history)
 
     def preferences_file_service(self) -> FileService:
         """偏好設定寫入用的檔案服務；要模擬最近清單寫不進去的測試換成寫不進去的"""
@@ -592,6 +601,108 @@ class TestMainWindowPreviewNaming(MainWindowTestCase):
             self.click_button(t("panel.preview_rename"))
         self.assertIn(t("preview.unsafe_folder_warning", name=".."), seen["warnings"])
         self.assertFalse(seen["enabled"])
+
+
+class _Crash(BaseException):
+    """模擬程式被強制結束：不是 Exception，所以搬移歷程不會攔下來回滾"""
+
+
+class TestMainWindowMoveHistory(MainWindowTestCase):
+    """復原、重做與中斷還原：結果交給專案套用，訊息列出略過與殘留"""
+
+    def _path(self, name: str) -> str:
+        return os.path.join(self.temp_dir, name)
+
+    def _open_group_of(self, *paths: str) -> str:
+        """從選單開啟一份專案，群組引用指定的檔案，回傳專案檔路徑"""
+        files = [FileInfo(p, os.path.basename(p)) for p in paths]
+        return self.open_from_menu(Project(groups=[Group(name="g", files=files, score_label="總譜")]))
+
+    def _shown_file_names(self) -> List[str]:
+        """目前分頁的分譜清單顯示的文字"""
+        _settle()
+        listing = self.window.findChild(QTabWidget).currentWidget().findChild(QListWidget)
+        return [listing.item(i).text() for i in range(listing.count())]
+
+    def _fail_moves_when(self, predicate):
+        """搬移歷程之後搬移檔案時，predicate(來源, 目標) 成立的那幾次拋出 OSError"""
+        real_rename = FileService.rename_file
+
+        def flaky_rename(old_path, new_path):
+            if predicate(old_path, new_path):
+                raise OSError("simulated")
+            real_rename(self.history_files, old_path, new_path)
+
+        self.history_files.rename_file = flaky_rename
+
+    def test_undo_marks_unsaved_and_shows_the_original_name(self):
+        a, = self.create_files("a.pdf")
+        renamed = self._path("01-Flute.pdf")
+        self.history.rename([RenameEntry(a.original_path, renamed)])
+        self._open_group_of(renamed)
+        self.assertFalse(self.is_marked_unsaved())
+        with answering_prompts(QMessageBox.Yes):
+            self.trigger_menu(t("menu.edit.undo"))
+        self.assertTrue(self.is_marked_unsaved())
+        self.assertEqual(self._shown_file_names(), ["a.pdf"])
+
+    def test_redo_marks_unsaved_and_shows_the_new_name(self):
+        a, = self.create_files("a.pdf")
+        self.history.rename([RenameEntry(a.original_path, self._path("01-Flute.pdf"))])
+        self.history.undo()
+        self._open_group_of(a.original_path)
+        with answering_prompts(QMessageBox.Yes):
+            self.trigger_menu(t("menu.edit.redo"))
+        self.assertTrue(self.is_marked_unsaved())
+        self.assertEqual(self._shown_file_names(), ["01-Flute.pdf"])
+
+    def test_undo_lists_the_skipped_files(self):
+        a, b = self.create_files("a.pdf", "b.pdf")
+        new_a, new_b = self._path("01-Flute.pdf"), self._path("02-Oboe.pdf")
+        self.history.rename([RenameEntry(a.original_path, new_a), RenameEntry(b.original_path, new_b)])
+        self._open_group_of(new_a, new_b)
+        os.remove(new_b)
+        with answering_prompts(QMessageBox.Yes) as shown:
+            self.trigger_menu(t("menu.edit.undo"))
+        self.assertIn((t("dialog.info"), t("history.skipped", files=new_b)), shown)
+        self.assertEqual(self._shown_file_names(), ["a.pdf", "02-Oboe.pdf"])
+
+    def test_residual_record_is_described_by_the_operation_that_left_it(self):
+        a, b = self.create_files("a.pdf", "b.pdf")
+        new_a, new_b = self._path("01-Flute.pdf"), self._path("02-Oboe.pdf")
+        self.history.rename([RenameEntry(a.original_path, new_a), RenameEntry(b.original_path, new_b)])
+        self._open_group_of(new_a, new_b)
+        # 第二個檔搬回原位失敗觸發回滾；第一個檔又搬不回新位置，留在原位
+        self._fail_moves_when(lambda old, new: old == new_b or new == new_a)
+        with answering_prompts(QMessageBox.Yes):
+            self.trigger_menu(t("menu.edit.undo"))
+        self.assertEqual(self._shown_file_names(), ["a.pdf", "02-Oboe.pdf"])
+        with answering_prompts(QMessageBox.No) as shown:
+            self.trigger_menu(t("menu.edit.undo"))
+        description = t("history.residual.undo", count=1)
+        self.assertEqual(shown, [(t("dialog.confirm_undo"), t("dialog.confirm_undo.message", description=description))])
+
+    def test_interrupted_rename_is_restored_from_the_prompt(self):
+        a, b = self.create_files("a.pdf", "b.pdf")
+        calls = []
+        real_rename = FileService.rename_file
+
+        def crash_on_second_move(old_path, new_path):
+            calls.append(old_path)
+            if len(calls) == 2:
+                raise _Crash()
+            real_rename(self.history_files, old_path, new_path)
+
+        self.history_files.rename_file = crash_on_second_move
+        with self.assertRaises(_Crash):
+            self.history.rename([
+                RenameEntry(a.original_path, self._path("01.pdf")), RenameEntry(b.original_path, self._path("02.pdf")),
+            ])
+        del self.history_files.rename_file
+        with answering_prompts(t("dialog.pending_move.restore")) as shown:
+            self.assertTrue(self.window.prompt_pending_recovery())
+        self.assertEqual(shown[-1], (t("dialog.pending_move.title"), t("dialog.pending_move.done", count=1)))
+        self.assertEqual(sorted(n for n in os.listdir(self.temp_dir) if n.endswith(".pdf")), ["a.pdf", "b.pdf"])
 
 
 class TestSingleInstanceLaunch(unittest.TestCase):

@@ -9,7 +9,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional
 from core.constants import (
-    DEFAULT_MASTER_TEMPLATE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE, PartsOutputMode, WorkspaceStatus,
+    DEFAULT_MASTER_TEMPLATE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE, OperationKind,
+    PartsOutputMode, WorkspaceStatus,
 )
 from core.paths import path_key, same_path
 from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
@@ -97,22 +98,34 @@ class Group:
 
 @dataclass
 class UndoMapping:
-    """復原對照項目"""
+    """搬移對照：檔案從 original 搬到 renamed"""
     original: str
     renamed: str
 
 
 @dataclass
 class UndoRecord:
-    """復原紀錄
+    """復原紀錄（復原與重做堆疊裡的一筆）
 
     Attributes:
+        id: 紀錄的唯一識別，在復原與重做堆疊之間轉移時不變；舊版紀錄沒有，載入時以檔名代替
+        timestamp: 建立時間（只供人閱讀，不作為鍵）
+        description: 確認復原、重做時顯示的描述（建立時依當時的介面語言寫入）
+        operation_type: 操作種類；殘留紀錄標示的是留下它的操作（重新命名、復原或重做）
+        residual: 是否為殘留紀錄（操作中途失敗、記下搬不回原位的檔案）
+        mappings: 整批搬移類的搬移對照（原位置到新位置）
+        created_directories: 這次操作新建的目錄
+        created_files: 這次操作產生的檔案（分割的分譜、旋轉另存的檔）
+        backup_path: 旋轉覆蓋原檔前的備份
+        original_path: 旋轉的來源檔
         workspace_meta: 來源位於工作區的項目，其子資料夾到 meta.json 內容的快照；
             復原時子資料夾已被清理掃描刪掉的話，用它把 meta 寫回
     """
+    id: str = ""
     timestamp: str = ""
     description: str = ""
-    operation_type: str = "rename"
+    operation_type: OperationKind = OperationKind.RENAME
+    residual: bool = False
     mappings: List[UndoMapping] = field(default_factory=list)
     created_directories: List[str] = field(default_factory=list)
     created_files: List[str] = field(default_factory=list)
@@ -120,72 +133,54 @@ class UndoRecord:
     original_path: str = ""
     workspace_meta: Dict[str, Dict] = field(default_factory=dict)
 
+    def to_data(self) -> Dict[str, Any]:
+        """紀錄檔中存的內容"""
+        return {
+            "id": self.id,
+            "timestamp": self.timestamp,
+            "description": self.description,
+            "operation_type": self.operation_type.value,
+            "residual": self.residual,
+            "mappings": [{"original": m.original, "renamed": m.renamed} for m in self.mappings],
+            "created_directories": list(self.created_directories),
+            "created_files": list(self.created_files),
+            "backup_path": self.backup_path,
+            "original_path": self.original_path,
+            "workspace_meta": dict(self.workspace_meta),
+        }
 
-@dataclass
-class MoveStep:
-    """兩階段搬移中的一次實際檔案搬移
+    @classmethod
+    def from_data(cls, data: Dict[str, Any], fallback_id: str) -> "UndoRecord":
+        """由紀錄檔中的內容還原；舊版紀錄缺少的欄位補預設值
 
-    Attributes:
-        index: 所屬搬移項目在批次中的索引
-        source: 搬移前的位置
-        target: 搬移後的位置
-    """
-    index: int
-    source: str
-    target: str
+        Args:
+            data: 紀錄檔中的內容
+            fallback_id: 舊版紀錄沒有 id 時使用的識別
 
-
-@dataclass
-class MoveJournal:
-    """批次搬移的進行中紀錄
-
-    steps 是目前仍生效的搬移（依執行順序），每個檔案目前的位置就是它最後一步的 target；
-    pending 是正向搬移時「即將執行、可能已做也可能沒做」的那一步，由 load_pending 對照磁碟判定；
-    complete 表示整批已搬完、只剩正式紀錄尚未確認寫入。
-
-    Attributes:
-        steps: 仍生效的搬移步驟（依執行順序）
-        pending: 正向搬移中尚未確認完成的下一步
-        complete: 整批是否已搬完
-        created_directories: 本次執行新建的目錄
-    """
-    steps: List[MoveStep] = field(default_factory=list)
-    pending: Optional[MoveStep] = None
-    complete: bool = False
-    created_directories: List[str] = field(default_factory=list)
-
-    def moved_indices(self) -> List[int]:
-        """已被搬動過的項目索引（依首次搬動順序）"""
-        seen = []
-        for step in self.steps:
-            if step.index not in seen:
-                seen.append(step.index)
-        return seen
-
-    def origins(self) -> Dict[int, str]:
-        """已被搬動過的項目索引到原始位置（第一步的 source）的對應"""
-        origins: Dict[int, str] = {}
-        for step in self.steps:
-            origins.setdefault(step.index, step.source)
-        return origins
-
-    def locations(self) -> Dict[int, str]:
-        """已被搬動過的項目索引到目前位置（最後一步的 target）的對應"""
-        return {step.index: step.target for step in self.steps}
-
-
-@dataclass
-class MoveRecoveryResult:
-    """中斷批次還原的結果
-
-    Attributes:
-        restored: 已回到原位的檔案（原始路徑）
-        skipped: 已不在紀錄位置而略過的檔案：原始路徑到紀錄位置的對應
-        residual: 搬不回去的檔案：原始路徑到目前位置的對應
-    """
-    restored: List[str] = field(default_factory=list)
-    skipped: List[UndoMapping] = field(default_factory=list)
-    residual: List[UndoMapping] = field(default_factory=list)
+        Raises:
+            ValueError: 操作種類不認得，或缺少必要欄位
+        """
+        try:
+            record = cls(
+                id=data.get("id") or fallback_id,
+                timestamp=data.get("timestamp", ""),
+                description=data.get("description", ""),
+                operation_type=OperationKind(data.get("operation_type", OperationKind.RENAME.value)),
+                residual=bool(data.get("residual", False)),
+                mappings=[UndoMapping(m["original"], m["renamed"]) for m in data.get("mappings", [])],
+                created_directories=data.get("created_directories", []),
+                created_files=data.get("created_files", []),
+                backup_path=data.get("backup_path", ""),
+                original_path=data.get("original_path", ""),
+                workspace_meta=data.get("workspace_meta", {}),
+            )
+        except (KeyError, TypeError) as e:
+            raise ValueError(str(e)) from e
+        if (record.operation_type == OperationKind.ROTATE and record.original_path
+                and not record.backup_path and not record.created_files):
+            # 舊版旋轉另存的紀錄只把另存出的檔記在 original_path
+            record.created_files = [record.original_path]
+        return record
 
 
 @dataclass

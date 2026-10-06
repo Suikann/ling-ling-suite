@@ -36,13 +36,20 @@ class _ThumbnailSignals(QObject):
 class RotatePdfDialog(QDialog):
     """PDF 旋轉對話框"""
 
-    def __init__(self, project=None, on_rotate_complete=None, initial_group=None, parent=None):
+    def __init__(self, project=None, history=None, initial_group=None, parent=None):
+        """
+        Args:
+            project: 目前的專案（選檔清單用）
+            history: 搬移歷程（覆蓋原檔前的備份與復原紀錄）；None 時不備份也不記錄
+            initial_group: 選檔清單預設篩選的群組
+            parent: 父元件
+        """
         super().__init__(parent)
         self.setWindowTitle(t("rotate.title"))
         self.resize(1100, 720)
         self.setMinimumSize(900, 520)
         self._project = project
-        self._on_rotate_complete = on_rotate_complete
+        self._history = history
         self._filter_group = initial_group
         self._pdf_path: Optional[str] = None
         self._page_count = 0
@@ -440,19 +447,23 @@ class RotatePdfDialog(QDialog):
             )
             if not output_path:
                 return
+        overwrite = self._overwrite_cb.isChecked()
         try:
-            backup_path = ""
-            if self._overwrite_cb.isChecked():
-                from services.undo_service import UndoService
-                backup_path = UndoService.create_backup(self._pdf_path)
+            backup_path = self._history.create_backup(self._pdf_path) if overwrite and self._history else ""
             from services.pdf_service import rotate_pdf_sections
             rotate_pdf_sections(self._pdf_path, rotation_ops, output_path)
-            if self._on_rotate_complete:
-                if self._overwrite_cb.isChecked():
-                    self._on_rotate_complete(backup_path, self._pdf_path)
-                else:
-                    self._on_rotate_complete("", output_path)
-            QMessageBox.information(self, t("dialog.complete"), t("rotate.done"))
-            self.accept()
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
+            return
+        self._record_rotation(output_path, backup_path)
+        QMessageBox.information(self, t("dialog.complete"), t("rotate.done"))
+        self.accept()
+
+    def _record_rotation(self, output_path: str, backup_path: str):
+        """把這次旋轉記進復原紀錄；寫不進去只提示，旋轉結果照留"""
+        if not self._history:
+            return
+        try:
+            self._history.record_rotate(self._pdf_path, output_path, backup_path)
+        except OSError as e:
+            QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=e))

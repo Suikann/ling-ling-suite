@@ -5,7 +5,7 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
-from typing import Optional
+from typing import Callable, Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog,
@@ -19,10 +19,10 @@ from core.constants import (
     TEMPLATE_VARIABLES,
 )
 from core.locale import t, get_locale, set_locale
-from core.models import Project, Group, UndoMapping, UndoRecord
+from core.models import Project, Group
 from services.file_service import FileService
 from services.import_service import ImportService
-from services.move_service import RenameRollbackError
+from services.move_history import MoveHistory, MoveResult
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from services.project_access import AccessResult, ProjectAccess
@@ -32,7 +32,15 @@ from ui.instrument_list import InstrumentListEditor
 class MainWindow(QMainWindow):
     """應用程式主視窗"""
 
-    def __init__(self, preferences: PreferencesService, parent=None):
+    def __init__(
+        self, preferences: PreferencesService, parent=None, history: Optional[MoveHistory] = None,
+    ):
+        """
+        Args:
+            preferences: 使用者偏好
+            parent: 父元件
+            history: 搬移歷程；省略時以使用者資料目錄建立
+        """
         super().__init__(parent)
         self.project = self._blank_project()
         self.project.subscribe(self._update_title)
@@ -41,10 +49,10 @@ class MainWindow(QMainWindow):
         self.import_service = ImportService(self.file_service)
         self.workspace_service = WorkspaceService(self.file_service)
         self._project_access = ProjectAccess(self.file_service, preferences, self.workspace_service)
+        self._history = history or MoveHistory(self.file_service, self.workspace_service)
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
         self._rename_service = None
-        self._undo_service = None
         self._create_menu()
         self._create_ui()
         self._update_title()
@@ -375,83 +383,82 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _execute_rename(self, plan):
-        try:
-            record = self._rename_service.execute_rename(
-                plan, self.project, self._get_undo_service().save_undo_record,
-            )
-            self.project.replace_paths(record.mappings)
-            self._rebuild_tabs()
-            self._set_status(t("status.renamed", count=len(record.mappings)))
-            QMessageBox.information(
-                self, t("dialog.complete"),
-                t("dialog.complete.renamed", count=len(record.mappings)),
-            )
-        except RenameRollbackError as e:
-            self._save_residual_rename(e.residual)
-            QMessageBox.critical(self, t("dialog.error"), str(e))
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), str(e))
+        result = self._history.rename(plan)
+        if self._apply_move_result(result, str):
+            count = len(result.changes)
+            self._set_status(t("status.renamed", count=count))
+            QMessageBox.information(self, t("dialog.complete"), t("dialog.complete.renamed", count=count))
 
-    def _save_residual_rename(self, residual):
-        """為搬不回原位的檔案寫入復原紀錄並更新專案路徑（重新命名、復原、重做與中斷還原共用）"""
-        from datetime import datetime
-        record = UndoRecord(
-            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-            description=t("rename.undo_description", count=len(residual)),
-            mappings=list(residual),
-        )
-        self._get_undo_service().save_undo_record(record)
-        self.project.replace_paths(residual)
-        self._rebuild_tabs()
+    def _apply_move_result(self, result: MoveResult, failure: Callable[[Exception], str]) -> bool:
+        """把搬移歷程的結果交給專案（含搬不回去的殘留）並顯示失敗
+
+        Args:
+            result: 搬移歷程的動作結果
+            failure: 由失敗原因組出錯誤訊息的函式
+
+        Returns:
+            動作是否照計畫完成且紀錄已寫入（呼叫端據此顯示完成訊息）
+        """
+        moved = result.changes + result.residual
+        if moved:
+            self.project.replace_paths(moved)
+            current = self._tab_widget.currentIndex()
+            self._rebuild_tabs()
+            self._tab_widget.setCurrentIndex(current)
+        if result.error is not None:
+            QMessageBox.critical(self, t("dialog.error"), failure(result.error))
+        if result.record_error is not None:
+            QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=result.record_error))
+        return result.error is None and result.record_error is None
+
+    def _show_skipped(self, result: MoveResult):
+        """列出已不在紀錄位置而略過的檔案"""
+        if result.skipped:
+            QMessageBox.information(self, t("dialog.info"), t("history.skipped", files="\n".join(result.skipped)))
 
     # --- 中斷後還原 ---
 
     def prompt_pending_recovery(self) -> bool:
         """若上次重新命名中途被中斷，詢問是否把已搬動的檔案還原到原位
 
-        啟動時呼叫；重新命名、復原、重做前也會再問一次，因為引擎在紀錄仍在時拒絕執行。
+        啟動時呼叫；重新命名、復原、重做前也會再問一次，因為搬移歷程在紀錄仍在時拒絕執行。
 
         Returns:
             是否已沒有待處理的進行中紀錄（可以繼續執行搬移）
         """
-        from services.move_service import MoveService
-        mover = MoveService(self.file_service)
         try:
-            journal = mover.load_pending()
+            pending = self._history.pending()
         except (ValueError, OSError) as e:
-            mover.discard_pending()
+            self._history.discard_pending()
             QMessageBox.warning(self, t("dialog.warning"), t("dialog.pending_move.unreadable", error=e))
             return True
-        if not journal:
+        if not pending:
             return True
-        moved = len(journal.moved_indices())
-        if journal.complete and moved:
-            choice = self._confirm_finished_batch(moved)
+        if pending.complete and pending.moved:
+            choice = self._confirm_finished_batch(pending.moved)
             if choice is None:
                 return False
             if choice == "keep":
-                mover.discard_pending()
+                self._history.discard_pending()
                 return True
-        elif moved and not self._confirm_pending_recovery(moved):
+        elif pending.moved and not self._confirm_pending_recovery(pending.moved):
             return False
-        try:
-            result = mover.recover(journal)
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.pending_move.failed", error=e))
+        result = self._history.recover()
+        self._apply_move_result(result, lambda e: t("dialog.pending_move.failed", error=e))
+        if result.error is not None:
             return False
-        if not moved:
-            return True
-        if result.residual:
-            self._save_residual_rename(result.residual)
-        lines = [t("dialog.pending_move.done", count=len(result.restored))]
-        if result.skipped:
-            lines.append(t("dialog.pending_move.skipped",
-                           files="\n".join(m.renamed for m in result.skipped)))
-        if result.residual:
-            lines.append(t("dialog.pending_move.residual",
-                           files="\n".join(m.renamed for m in result.residual)))
-        QMessageBox.information(self, t("dialog.pending_move.title"), "\n\n".join(lines))
+        if pending.moved:
+            self._show_recovery(result)
         return True
+
+    def _show_recovery(self, result: MoveResult):
+        """中斷還原完成：還原了幾個檔，略過與搬不回去的各列在後"""
+        lines = [t("dialog.pending_move.done", count=len(result.changes))]
+        if result.skipped:
+            lines.append(t("history.skipped", files="\n".join(result.skipped)))
+        if result.residual:
+            lines.append(t("dialog.pending_move.residual", files="\n".join(m.renamed for m in result.residual)))
+        QMessageBox.information(self, t("dialog.pending_move.title"), "\n\n".join(lines))
 
     def _confirm_pending_recovery(self, moved: int) -> bool:
         """詢問是否還原上次中斷的重新命名；選「稍後」回傳 False"""
@@ -480,73 +487,43 @@ class MainWindow(QMainWindow):
             return "keep"
         return None
 
-    def _save_operation_undo(self, op_type, description, **kwargs):
-        """儲存操作的復原紀錄"""
-        from datetime import datetime
-        record = UndoRecord(
-            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-            description=description,
-            operation_type=op_type,
-            created_files=kwargs.get("created_files", []),
-            created_directories=kwargs.get("created_directories", []),
-            backup_path=kwargs.get("backup_path", ""),
-            original_path=kwargs.get("original_path", ""),
-        )
-        self._get_undo_service().save_undo_record(record)
+    # --- 復原／重做 ---
 
     def _undo_last(self):
         if not self.prompt_pending_recovery():
             return
-        record = self._get_undo_service().get_latest_undo_record()
+        record = self._history.latest_undo()
         if not record:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_undo"))
             return
-        result = QMessageBox.question(
+        answer = QMessageBox.question(
             self, t("dialog.confirm_undo"),
             t("dialog.confirm_undo.message", description=record.description),
         )
-        if result != QMessageBox.Yes:
+        if answer != QMessageBox.Yes:
             return
-        try:
-            self._get_undo_service().execute_undo(record)
-            if record.operation_type == "rename":
-                self.project.replace_paths(
-                    [UndoMapping(original=m.renamed, renamed=m.original) for m in record.mappings],
-                )
-                self._rebuild_tabs()
+        result = self._history.undo()
+        if self._apply_move_result(result, lambda e: t("dialog.error.undo_failed", error=e)):
             self._set_status(t("status.undone"))
-        except RenameRollbackError as e:
-            self._save_residual_rename(e.residual)
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.undo_failed", error=e))
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.undo_failed", error=e))
+            self._show_skipped(result)
 
     def _redo_last(self):
         if not self.prompt_pending_recovery():
             return
-        record = self._get_undo_service().get_latest_redo_record()
+        record = self._history.latest_redo()
         if not record:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_redo"))
             return
-        if record.operation_type != "rename":
-            QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_redo"))
-            return
-        result = QMessageBox.question(
+        answer = QMessageBox.question(
             self, t("dialog.confirm_redo"),
             t("dialog.confirm_redo.message", description=record.description),
         )
-        if result != QMessageBox.Yes:
+        if answer != QMessageBox.Yes:
             return
-        try:
-            self._get_undo_service().execute_redo(record)
-            self.project.replace_paths(record.mappings)
-            self._rebuild_tabs()
+        result = self._history.redo()
+        if self._apply_move_result(result, str):
             self._set_status(t("status.redone"))
-        except RenameRollbackError as e:
-            self._save_residual_rename(e.residual)
-            QMessageBox.critical(self, t("dialog.error"), str(e))
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), str(e))
+            self._show_skipped(result)
 
     def _open_split_pdf(self):
         from ui.split_dialog import SplitPdfDialog
@@ -586,26 +563,17 @@ class MainWindow(QMainWindow):
         self.project.add_split_result(
             files, instruments, source_path, source_group, score_label=t("group.score_label"),
         )
-        self._save_operation_undo(
-            "split", t("undo.split_description", count=len(files)),
-            created_files=[f.original_path for f in files],
-            created_directories=created_directories or [],
-        )
         self._rebuild_tabs()
         self._set_status(t("split.files_added", count=len(files)))
+        try:
+            self._history.record_split([f.original_path for f in files], created_directories or [])
+        except OSError as e:
+            QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=e))
 
     def _open_rotate_pdf(self):
         from ui.rotate_dialog import RotatePdfDialog
-        dialog = RotatePdfDialog(
-            self.project, self._on_rotate_complete, self._current_group(), self,
-        )
+        dialog = RotatePdfDialog(self.project, self._history, self._current_group(), self)
         dialog.exec()
-
-    def _on_rotate_complete(self, backup_path, original_path):
-        self._save_operation_undo(
-            "rotate", t("undo.rotate_description"),
-            backup_path=backup_path, original_path=original_path,
-        )
 
     def _set_language(self, lang_code: str):
         if lang_code == get_locale():
@@ -621,13 +589,6 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     # --- 譜庫 ---
-
-    def _get_undo_service(self):
-        """取得或建立復原服務"""
-        if not self._undo_service:
-            from services.undo_service import UndoService
-            self._undo_service = UndoService(self.file_service, self.workspace_service)
-        return self._undo_service
 
     def _get_auth_service(self):
         """取得或建立 Google 認證服務"""
