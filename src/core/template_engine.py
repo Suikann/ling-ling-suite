@@ -2,84 +2,12 @@
 """
 模板引擎
 
-提供模板解析、變數替換與曲名偵測功能。
+提供曲名、總譜、樂器偵測與模板變數的雙語轉換；命名格式的套用見 core.naming。
 """
 import os
 import re
-from typing import TYPE_CHECKING, Dict, List, Optional
-from core.constants import ALL_VARIABLE_NAMES, SCORE_KEYWORDS, TEMPLATE_VARIABLES
-
-if TYPE_CHECKING:
-    from core.models import Group
-
-
-def substitute_template(template: str, variables: Dict[str, str]) -> str:
-    """將模板中的 {變數} 替換為對應值
-
-    Args:
-        template: 模板字串，例如 "{序號}. {樂器}.pdf"
-        variables: 變數名稱到值的對應字典
-
-    Returns:
-        替換後的字串
-    """
-    result = template
-    for name, value in variables.items():
-        result = result.replace(f"{{{name}}}", value)
-    return result
-
-
-def build_variables_for_file(
-    file_index: int,
-    group: "Group",
-    instruments: List[str] = None,
-) -> Dict[str, str]:
-    """為單一檔案組合所有模板變數（同時產生中英文鍵名）
-
-    Args:
-        file_index: 檔案在群組中的索引（從 0 開始）
-        group: 所屬群組
-        instruments: 樂器表（未提供時使用 group.instruments）
-
-    Returns:
-        變數名稱到值的對應字典（包含中英文鍵名）
-    """
-    group_instruments = getattr(group, "instruments", []) or []
-    if group_instruments:
-        total = len(group_instruments)
-        pad_width = len(str(total)) if total > 0 else 1
-        sequence_number = str(file_index + 1).zfill(pad_width)
-        instrument_name = (
-            group_instruments[file_index]
-            if file_index < len(group_instruments)
-            else ""
-        )
-    elif instruments:
-        total = len(instruments)
-        pad_width = len(str(total)) if total > 0 else 1
-        sequence_number = str(file_index + 1).zfill(pad_width)
-        instrument_name = (
-            instruments[file_index] if file_index < len(instruments) else ""
-        )
-    else:
-        pad_width = len(str(len(group.files))) if group.files else 1
-        sequence_number = str(file_index + 1).zfill(pad_width)
-        instrument_name = ""
-    values = {
-        "序號": sequence_number,
-        "樂器": instrument_name,
-        "曲名": group.piece_name,
-        "樂章編號": group.movement_number,
-        "樂章名稱": group.movement_name,
-        "作曲家": group.composer,
-        "曲種": group.genre,
-    }
-    en_mapping = {tv.name: tv.name_en for tv in TEMPLATE_VARIABLES}
-    for zh_name, val in list(values.items()):
-        en_name = en_mapping.get(zh_name)
-        if en_name:
-            values[en_name] = val
-    return values
+from typing import List, Optional
+from core.constants import SCORE_KEYWORDS, TEMPLATE_VARIABLES
 
 
 def detect_piece_name(filenames: List[str]) -> str:
@@ -222,17 +150,3 @@ def extract_instruments_from_filenames(filenames: List[str]) -> List[str]:
         else:
             instruments.append(name.strip())
     return instruments
-
-
-def validate_template(template: str) -> List[str]:
-    """驗證模板中的變數是否合法（中英文變數名皆可辨識）
-
-    Args:
-        template: 模板字串
-
-    Returns:
-        未知變數名稱清單，空清單表示所有變數皆合法
-    """
-    found = re.findall(r'\{([^}]+)\}', template)
-    unknown = [name for name in found if name not in ALL_VARIABLE_NAMES]
-    return unknown

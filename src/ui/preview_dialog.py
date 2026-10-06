@@ -10,8 +10,10 @@ from PySide6.QtWidgets import (
     QCheckBox, QLineEdit, QScrollArea, QWidget, QFileDialog,
     QMessageBox, QRadioButton, QButtonGroup,
 )
+from core.constants import PartsOutputMode
 from core.locale import t
 from core.models import Project
+from core.naming import UnsafeFolderNameError
 from core.paths import path_key
 from services.move_service import staging_path
 
@@ -19,7 +21,7 @@ from services.move_service import staging_path
 class PreviewDialog(QDialog):
     """預覽重新命名對話框"""
 
-    _PARTS_MODES = ("root", "parts", "section")
+    _PARTS_MODES = tuple(PartsOutputMode)
 
     def __init__(
         self, project: Project, rename_service,
@@ -34,6 +36,7 @@ class PreviewDialog(QDialog):
         self._on_execute = on_execute
         self._selected_ids = selected_group_ids
         self._plan = []
+        self._unsafe_folder = None
         self._conflicts = {}
         self._duplicate_sources = {}
         self._occupied_sources = []
@@ -150,9 +153,12 @@ class PreviewDialog(QDialog):
         self._refresh_plan()
 
     def _refresh_plan(self):
-        self._plan = self._rename_service.generate_rename_plan(self._project)
-        if self._selected_ids is not None:
-            self._plan = [e for e in self._plan if e.group_id in self._selected_ids]
+        try:
+            self._plan = self._rename_service.generate_rename_plan(self._project, self._selected_ids)
+            self._unsafe_folder = None
+        except UnsafeFolderNameError as e:
+            self._plan = []
+            self._unsafe_folder = e.name
         self._missing = self._rename_service.find_missing_sources(self._plan)
         if self._missing:
             missing = {path_key(p) for p in self._missing}
@@ -202,6 +208,12 @@ class PreviewDialog(QDialog):
                 t("preview.missing_warning", count=len(self._missing), files="\n".join(self._missing)),
             )
         self._missing_label.setVisible(bool(self._missing))
+        if self._unsafe_folder is not None:
+            self._warn_label.setText(t("preview.unsafe_folder_warning", name=self._unsafe_folder))
+            self._warn_label.setVisible(True)
+            self._count_label.setText("")
+            self._exec_btn.setEnabled(False)
+            return
         if not self._plan:
             self._count_label.setText(t("dialog.info.no_files"))
             self._exec_btn.setEnabled(False)

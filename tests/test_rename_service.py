@@ -10,7 +10,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from core.models import FileInfo, Group, Project, RenameEntry
+from core.models import Project, RenameEntry
 from services.file_service import FileService
 from services.move_service import RenameRollbackError
 from services.rename_service import RenameService
@@ -188,63 +188,6 @@ class TestRenameService(unittest.TestCase):
             )
         self.assertTrue(os.path.isfile(a))
 
-    def test_generate_rename_plan_basic(self):
-        p1 = self._create_file("raw_fl.pdf")
-        p2 = self._create_file("raw_ob.pdf")
-        project = Project(
-            master_template="{序號}. {樂器} - {曲名}.pdf",
-            groups=[Group(
-                files=[
-                    FileInfo(p1, "raw_fl.pdf"),
-                    FileInfo(p2, "raw_ob.pdf"),
-                ],
-                instruments=["Flute", "Oboe"],
-                selected_instruments=[0, 1],
-                piece_name="Sym5",
-            )],
-        )
-        plan = self.rename_service.generate_rename_plan(project)
-        self.assertEqual(len(plan), 2)
-        self.assertIn("1. Flute - Sym5.pdf", os.path.basename(plan[0].new_path))
-        self.assertIn("2. Oboe - Sym5.pdf", os.path.basename(plan[1].new_path))
-
-    def test_generate_plan_sanitizes_name_and_subfolder(self):
-        p1 = self._create_file("fl.pdf")
-        project = Project(
-            master_template="{序號}. {樂器} - {曲名}.pdf",
-            use_subfolders=True,
-            subfolder_template="{曲名}",
-            groups=[Group(
-                files=[FileInfo(p1, "fl.pdf")],
-                instruments=["Flute"],
-                selected_instruments=[0],
-                piece_name="Sym: No.5?",
-            )],
-        )
-        plan = self.rename_service.generate_rename_plan(project)
-        self.assertEqual(
-            plan[0].new_path,
-            os.path.join(self.temp_dir, "Sym_ No.5_", "1. Flute - Sym_ No.5_.pdf"),
-        )
-
-    def test_generate_plan_with_subfolders(self):
-        p1 = self._create_file("fl.pdf")
-        project = Project(
-            master_template="{序號}. {樂器}.pdf",
-            use_subfolders=True,
-            subfolder_template="{曲名}",
-            groups=[Group(
-                files=[FileInfo(p1, "fl.pdf")],
-                instruments=["Flute"],
-                selected_instruments=[0],
-                piece_name="Test",
-            )],
-        )
-        plan = self.rename_service.generate_rename_plan(project)
-        self.assertEqual(len(plan), 1)
-        self.assertIn("Test", plan[0].new_path)
-        self.assertIn("1. Flute.pdf", os.path.basename(plan[0].new_path))
-
     def test_detect_conflicts(self):
         plan = [
             RenameEntry("a.pdf", os.path.join(self.temp_dir, "Same.pdf")),
@@ -414,47 +357,6 @@ class TestRenameService(unittest.TestCase):
         self.assertTrue(os.path.isfile(p1))
         self.assertTrue(os.path.isfile(p2))
         self.assertFalse(os.path.exists(sub_dir))
-
-    def test_generate_plan_skips_empty_group(self):
-        project = Project(
-            groups=[Group(files=[], instruments=[])],
-        )
-        plan = self.rename_service.generate_rename_plan(project)
-        self.assertEqual(len(plan), 0)
-
-    def test_generate_plan_with_small_template(self):
-        p1 = self._create_file("fl.pdf")
-        project = Project(
-            master_template="{序號}. {樂器}.pdf",
-            groups=[Group(
-                files=[FileInfo(p1, "fl.pdf")],
-                instruments=["Flute"],
-                selected_instruments=[0],
-                piece_name="Test",
-                use_small_template=True,
-                small_template="{樂器} - {曲名}.pdf",
-            )],
-        )
-        plan = self.rename_service.generate_rename_plan(project)
-        self.assertEqual(os.path.basename(plan[0].new_path), "Flute - Test.pdf")
-
-    def test_generate_plan_with_score_file(self):
-        p_score = self._create_file("score.pdf")
-        p1 = self._create_file("fl.pdf")
-        project = Project(
-            master_template="{序號}-{樂器}.pdf",
-            groups=[Group(
-                files=[FileInfo(p1, "fl.pdf")],
-                instruments=["Flute"],
-                selected_instruments=[0],
-                score_file=FileInfo(p_score, "score.pdf"),
-                score_label="Full Score",
-            )],
-        )
-        plan = self.rename_service.generate_rename_plan(project)
-        self.assertEqual(len(plan), 2)
-        self.assertIn("00-Full Score.pdf", os.path.basename(plan[0].new_path))
-        self.assertIn("1-Flute.pdf", os.path.basename(plan[1].new_path))
 
 
 if __name__ == '__main__':

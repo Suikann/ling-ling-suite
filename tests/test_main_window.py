@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
     QPushButton, QRadioButton, QTabWidget, QWidget,
 )
 
-from core.locale import set_locale, t
+from core.constants import PartsOutputMode
+from core.locale import get_locale, set_locale, t
 from core.models import FileInfo, Group, Project
 from services.file_service import FileService
 from main import launch
@@ -537,6 +538,60 @@ class TestMainWindowInstrumentListFollowsGroup(MainWindowTestCase):
             self.trigger_menu(t("menu.file.save"))
         self.assertEqual(ProjectService().load_project(path).groups[0].instruments, ["Flute"])
 
+
+class TestMainWindowPreviewNaming(MainWindowTestCase):
+    """預覽的命名：聲部組名稱第一次用到時依當時的介面語言定下；資料夾名稱為 .. 時擋下"""
+
+    def _switch_language(self, lang_code: str):
+        self.trigger_menu(t(f"menu.view.language.{lang_code}"))
+
+    def _open_group(self, **project_fields) -> None:
+        """從選單開啟一份含一個群組（分譜 Flute、Horn）的專案"""
+        group = Group(name="g", files=self.create_files("fl.pdf", "hn.pdf"), instruments=["Flute", "Horn"])
+        self.open_from_menu(Project(master_template="{樂器}.pdf", groups=[group], **project_fields))
+
+    def _preview(self, operate=lambda dialog: None) -> List[str]:
+        """開啟預覽、操作後關閉，回傳預覽列出的新路徑"""
+        shown = []
+
+        def operate_and_read(dialog):
+            operate(dialog)
+            _settle()
+            rows = [label.text() for label in dialog.findChildren(QLabel) if "\u2192 " in label.text()]
+            shown.extend(row.split("\u2192 ", 1)[1] for row in rows)
+
+        with previewing(operate_and_read):
+            self.click_button(t("panel.preview_rename"))
+        return shown
+
+    def test_section_folders_named_in_english_stay_after_switching_to_chinese(self):
+        self.addCleanup(set_locale, get_locale())
+        self._open_group()
+        self._switch_language("en")
+        in_english = self._preview(
+            lambda dialog: button_in(dialog, QRadioButton, t("panel.parts_mode_section")).click(),
+        )
+        self._switch_language("zh_TW")
+        in_chinese = self._preview()
+        expected = [
+            os.path.join(self.temp_dir, "Woodwinds", "Flute.pdf"), os.path.join(self.temp_dir, "Brass", "Horn.pdf"),
+        ]
+        self.assertEqual(in_english, expected)
+        self.assertEqual(in_chinese, expected)
+
+    def test_parts_folder_named_dot_dot_blocks_the_rename(self):
+        self._open_group(parts_output_mode=PartsOutputMode.PARTS, parts_subfolder_name="..")
+        seen = {}
+
+        def read_state(dialog):
+            _settle()
+            seen["warnings"] = [label.text() for label in dialog.findChildren(QLabel) if label.isVisibleTo(dialog)]
+            seen["enabled"] = button_in(dialog, QPushButton, t("preview.execute")).isEnabled()
+
+        with previewing(read_state):
+            self.click_button(t("panel.preview_rename"))
+        self.assertIn(t("preview.unsafe_folder_warning", name=".."), seen["warnings"])
+        self.assertFalse(seen["enabled"])
 
 
 class TestSingleInstanceLaunch(unittest.TestCase):

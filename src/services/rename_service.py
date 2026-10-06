@@ -7,12 +7,12 @@
 import os
 from collections import defaultdict
 from datetime import datetime
-from typing import Callable, Dict, List, Optional
-from core.filename import sanitize_filename
-from core.locale import t
-from core.models import Project, RenameEntry, UndoMapping, UndoRecord
+from typing import Callable, Collection, Dict, List, Optional
+from core.constants import PartsOutputMode, detect_instrument_section
+from core.locale import get_locale, t
+from core.models import Group, Project, RenameEntry, UndoMapping, UndoRecord
+from core.naming import name_group, named_voices, settings_for
 from core.paths import path_key
-from core.template_engine import build_variables_for_file, substitute_template
 from services.file_service import FileService
 from services.move_service import Move, MoveService
 
@@ -35,100 +35,50 @@ class RenameService:
         """把計畫轉成搬移引擎的「來源 → 目標」清單"""
         return [(e.original_path, e.new_path) for e in plan]
 
-    def generate_rename_plan(self, project: Project) -> List[RenameEntry]:
+    def generate_rename_plan(
+        self, project: Project, group_ids: Optional[Collection[str]] = None,
+    ) -> List[RenameEntry]:
         """根據專案設定產生重新命名計畫
+
+        檔名與相對資料夾由命名模組決定，接在輸出位置之下；沒指定輸出位置時接在來源檔所在的資料夾。
+        分譜依聲部組分放時，還沒有聲部組的聲部先依目前介面語言寫進專案（第一次用到時定下，之後不隨介面語言改變）。
 
         Args:
             project: 專案資料
+            group_ids: 只為這些群組產生計畫；None 表示全部群組
 
         Returns:
-            重新命名項目清單
+            重新命名項目清單（各群組依序：總譜在前，接著依序的分譜；多於聲部數的分譜不在其中）
+
+        Raises:
+            UnsafeFolderNameError: 某一層資料夾名稱清理後是 . 或 ..
         """
+        groups = [g for g in project.groups if group_ids is None or g.id in group_ids]
+        if project.parts_output_mode == PartsOutputMode.SECTION:
+            self._assign_default_sections(project, groups)
         plan = []
-        for group in project.groups:
-            template = (
-                group.small_template
-                if group.use_small_template and group.small_template
-                else project.master_template
-            )
-            if group.score_file:
-                label = getattr(group, "score_label", "") or t("group.score_label")
-                score_vars = {
-                    "序號": "00", "Number": "00",
-                    "樂器": label,
-                    "Instrument": label,
-                    "曲名": group.piece_name,
-                    "PieceName": group.piece_name,
-                    "樂章編號": group.movement_number,
-                    "MovementNum": group.movement_number,
-                    "樂章名稱": group.movement_name,
-                    "MovementName": group.movement_name,
-                    "作曲家": group.composer,
-                    "Composer": group.composer,
-                    "曲種": group.genre,
-                    "Genre": group.genre,
-                }
-                score_name = sanitize_filename(substitute_template(template, score_vars))
-                base_dir = (
-                    project.output_directory
-                    if project.output_directory
-                    else os.path.dirname(group.score_file.original_path)
-                )
-                if project.use_subfolders and project.subfolder_template:
-                    subfolder_name = sanitize_filename(substitute_template(
-                        project.subfolder_template, score_vars,
-                    ))
-                    target_dir = os.path.join(base_dir, subfolder_name)
-                else:
-                    target_dir = base_dir
+        for group in groups:
+            for named in name_group(group, settings_for(project, group)).files:
+                source = named.file.original_path
+                base_dir = project.output_directory or os.path.dirname(source)
                 plan.append(RenameEntry(
-                    original_path=group.score_file.original_path,
-                    new_path=os.path.join(target_dir, score_name),
-                    group_id=group.id,
-                ))
-            if not group.files or not group.instruments:
-                continue
-            for i, file_info in enumerate(group.files):
-                if i >= len(group.instruments):
-                    break
-                variables = build_variables_for_file(
-                    i, group, project.instruments or None,
-                )
-                new_name = sanitize_filename(substitute_template(template, variables))
-                base_dir = (
-                    project.output_directory
-                    if project.output_directory
-                    else os.path.dirname(file_info.original_path)
-                )
-                if project.use_subfolders and project.subfolder_template:
-                    subfolder_name = sanitize_filename(substitute_template(
-                        project.subfolder_template, variables,
-                    ))
-                    target_dir = os.path.join(base_dir, subfolder_name)
-                else:
-                    target_dir = base_dir
-                if project.parts_output_mode == "parts" and project.parts_subfolder_name:
-                    target_dir = os.path.join(
-                        target_dir, sanitize_filename(project.parts_subfolder_name),
-                    )
-                elif project.parts_output_mode == "section":
-                    instrument = group.instruments[i] if i < len(group.instruments) else ""
-                    section = project.instrument_sections.get(instrument)
-                    if not section:
-                        from core.constants import detect_instrument_section
-                        section = detect_instrument_section(instrument)
-                    target_dir = os.path.join(target_dir, sanitize_filename(section))
-                elif project.use_parts_subfolder and project.parts_subfolder_name:
-                    target_dir = os.path.join(
-                        target_dir, sanitize_filename(project.parts_subfolder_name),
-                    )
-                new_path = os.path.join(target_dir, new_name)
-                plan.append(RenameEntry(
-                    original_path=file_info.original_path,
-                    new_path=new_path,
+                    original_path=source,
+                    new_path=os.path.join(base_dir, named.name.relative_path()),
                     group_id=group.id,
                 ))
         return plan
+
+    @staticmethod
+    def _assign_default_sections(project: Project, groups: List[Group]) -> None:
+        """這些群組會被命名的聲部中，還沒有聲部組（或留空）的，依目前介面語言寫入偵測到的聲部組"""
+        english = get_locale() == "en"
+        missing = {}
+        for group in groups:
+            for voice in named_voices(group):
+                if not project.instrument_sections.get(voice, "").strip():
+                    missing[voice] = detect_instrument_section(voice, english)
+        if missing:
+            project.update_ensemble(sections=missing)
 
     def detect_conflicts(self, plan: List[RenameEntry]) -> Dict[str, List[str]]:
         """偵測重新命名計畫中的檔名衝突（路徑以 core.paths 判定同一性）

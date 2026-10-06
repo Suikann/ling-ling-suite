@@ -8,7 +8,9 @@ import os
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional
-from core.constants import DEFAULT_MASTER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE, WorkspaceStatus
+from core.constants import (
+    DEFAULT_MASTER_TEMPLATE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE, PartsOutputMode, WorkspaceStatus,
+)
 from core.paths import path_key, same_path
 from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
 
@@ -261,8 +263,8 @@ class Project:
     use_subfolders: bool = False
     subfolder_template: str = DEFAULT_SUBFOLDER_TEMPLATE
     use_parts_subfolder: bool = False
-    parts_subfolder_name: str = "Parts"
-    parts_output_mode: str = "root"
+    parts_subfolder_name: str = DEFAULT_PARTS_SUBFOLDER_NAME
+    parts_output_mode: str = PartsOutputMode.ROOT
     output_directory: str = ""
     instrument_headcounts: Dict[str, int] = field(default_factory=dict)
     instrument_sections: Dict[str, str] = field(default_factory=dict)
@@ -325,8 +327,8 @@ class Project:
             use_subfolders=data.get("use_subfolders", False),
             subfolder_template=data.get("subfolder_template", ""),
             use_parts_subfolder=data.get("use_parts_subfolder", False),
-            parts_subfolder_name=data.get("parts_subfolder_name", "Parts"),
-            parts_output_mode=data.get("parts_output_mode", "root"),
+            parts_subfolder_name=data.get("parts_subfolder_name", DEFAULT_PARTS_SUBFOLDER_NAME),
+            parts_output_mode=data.get("parts_output_mode", PartsOutputMode.ROOT),
             output_directory=data.get("output_directory", ""),
             instrument_headcounts=data.get("instrument_headcounts", {}),
             instrument_sections=data.get("instrument_sections", {}),
@@ -334,7 +336,7 @@ class Project:
             groups=[Group.from_data(g) for g in data.get("groups", [])],
         )
         if "parts_output_mode" not in data and project.use_parts_subfolder:
-            project.parts_output_mode = "parts"
+            project.parts_output_mode = PartsOutputMode.PARTS
         for group in project.groups:
             project._migrate_group(group, score_label)
         project.mark_saved()
@@ -378,7 +380,7 @@ class Project:
             raise ValueError(f"不是輸出設定的欄位：{sorted(unknown)}")
         for name, value in settings.items():
             setattr(self, name, value)
-        self.use_parts_subfolder = self.parts_output_mode == "parts"
+        self.use_parts_subfolder = self.parts_output_mode == PartsOutputMode.PARTS
         self._changed()
 
     def update_ensemble(

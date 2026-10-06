@@ -31,7 +31,7 @@ jobs:
         run: |
           cd src
           python -c "from core.models import Project, Group, FileInfo"
-          python -c "from core.template_engine import substitute_template, build_variables_for_file"
+          python -c "from core.naming import NamingSettings, name_group, name_slot, settings_for"
           python -c "from core.locale import t, set_locale, get_locale"
           python -c "from services.rename_service import RenameService"
           python -c "from services.project_service import ProjectService"

@@ -136,10 +136,6 @@ TEMPLATE_VARIABLES: List[TemplateVariable] = [
 MIN_NUMBER_WIDTH = 2
 SCORE_NUMBER = "00"
 
-VARIABLE_NAMES: List[str] = [v.name for v in TEMPLATE_VARIABLES]
-VARIABLE_NAMES_EN: List[str] = [v.name_en for v in TEMPLATE_VARIABLES]
-ALL_VARIABLE_NAMES: List[str] = VARIABLE_NAMES + VARIABLE_NAMES_EN
-
 
 @dataclass(frozen=True)
 class InstrumentPreset:
@@ -270,26 +266,31 @@ SECTION_KEYWORDS: List[Tuple[str, str, List[str]]] = [
     ]),
 ]
 
+# 偵測不到聲部組時的名稱
+OTHER_SECTION = "其他"
+OTHER_SECTION_EN = "Other"
+
 SECTION_NAMES_EN = {
-    section_zh: section_en
-    for section_zh, section_en, _ in SECTION_KEYWORDS
+    **{section_zh: section_en for section_zh, section_en, _ in SECTION_KEYWORDS},
+    OTHER_SECTION: OTHER_SECTION_EN,
 }
 
 DEFAULT_HEADCOUNT = 1
 
 
-def detect_instrument_section(instrument_name: str) -> str:
-    """根據樂器名稱自動偵測所屬聲部組
+def detect_instrument_section(instrument_name: str, english: bool = False) -> str:
+    """根據聲部名稱自動偵測所屬聲部組
 
     Args:
-        instrument_name: 樂器名稱
+        instrument_name: 聲部名稱
+        english: 為 True 時回傳英文名稱
 
     Returns:
-        聲部組名稱（中文），偵測不到時回傳「其他」
+        聲部組名稱，偵測不到時回傳「其他」
     """
     name_lower = instrument_name.lower()
-    for section_zh, _section_en, keywords in SECTION_KEYWORDS:
+    for section_zh, section_en, keywords in SECTION_KEYWORDS:
         for kw in keywords:
             if kw.lower() in name_lower:
-                return section_zh
-    return "其他"
+                return section_en if english else section_zh
+    return OTHER_SECTION_EN if english else OTHER_SECTION

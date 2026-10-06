@@ -181,11 +181,16 @@ class InstrumentListEditor(QWidget):
             self._commit()
 
     def _edit_headcount(self):
-        """開啟編制設定（人數、聲部組）對話框；按下儲存後寫入專案"""
+        """開啟編制設定（人數、聲部組）對話框；按下儲存後寫入專案
+
+        還沒有聲部組的聲部，預設值依目前介面語言偵測，儲存後定下。
+        """
         instruments = self.get_instruments()
         if not instruments:
             return
         from core.constants import detect_instrument_section
+        from core.locale import get_locale
+        english = get_locale() == "en"
         headcounts = {}
         sections = {}
         if self._project:
@@ -211,7 +216,7 @@ class InstrumentListEditor(QWidget):
             name_item = QTableWidgetItem(inst)
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             table.setItem(row, 0, name_item)
-            section = sections.get(inst, detect_instrument_section(inst))
+            section = sections.get(inst) or detect_instrument_section(inst, english)
             section_item = QTableWidgetItem(section)
             table.setItem(row, 1, section_item)
             section_items.append(section_item)

@@ -210,6 +210,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "preview.occupied_warning": "有 {count} 個目標位置已有其他檔案，無法執行。請調整輸出設定或先移開該檔案。",
         "preview.empty_name_warning": "有 {count} 個檔案產生的新檔名為空，無法執行。請檢查模板與群組資訊。",
         "preview.staging_warning": "有 {count} 個檔案讓位用的暫名已被佔用，無法執行。請先移開該檔案。",
+        "preview.unsafe_folder_warning": "有資料夾名稱會是「{name}」，無法執行。請修改子資料夾模板、分譜資料夾或聲部組名稱。",
         # 重新命名服務
         "rename.undo_description": "重新命名 {count} 個檔案",
         "rename.error.source_missing": "以下來源檔案不存在，已取消操作：\n{files}",
@@ -672,6 +673,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "preview.occupied_warning": "{count} target path(s) are already taken by other files. Change the output settings or move those files first.",
         "preview.empty_name_warning": "{count} file(s) would get an empty name. Check the template and group info.",
         "preview.staging_warning": "The temporary names needed to make room for {count} file(s) are already taken. Move those files first.",
+        "preview.unsafe_folder_warning": "A folder name would be \"{name}\". Change the subfolder template, parts folder or section names before executing.",
         # 重新命名服務
         "rename.undo_description": "Renamed {count} file(s)",
         "rename.error.source_missing": "The following source files do not exist. Operation cancelled:\n{files}",
