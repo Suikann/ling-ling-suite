@@ -383,6 +383,13 @@ class TestGroupEdits(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.project.update_group(self.group, files=[])
 
+    def test_group_outside_any_project_follows_the_same_editing_rules(self):
+        group = Group(name="drive")
+        group.update(composer="Holst")
+        self.assertEqual(group.composer, "Holst")
+        with self.assertRaises(ValueError):
+            group.update(instruments=["Flute"])
+
     def test_deleting_a_group_moves_its_score_and_parts_to_ungrouped(self):
         self.project.delete_group(self.group)
         self.assertEqual(self.project.groups, [])

@@ -95,6 +95,21 @@ class Group:
             small_template=data.get("small_template", ""),
         )
 
+    def update(self, **fields: Any) -> None:
+        """修改群組的文字與小模板欄位（EDITABLE_FIELDS）；不發通知，專案裡的群組經由 Project.update_group 修改
+
+        Args:
+            fields: 欄位名稱與新值
+
+        Raises:
+            ValueError: 含有不能以此方式修改的欄位（檔案、總譜、樂器表各有專用操作）
+        """
+        unknown = set(fields) - Group.EDITABLE_FIELDS
+        if unknown:
+            raise ValueError(f"不能以 update 修改的群組欄位：{sorted(unknown)}")
+        for name, value in fields.items():
+            setattr(self, name, value)
+
     def assign_instruments(self, instruments: Iterable[str]) -> None:
         """換成新的樂器表（聲部清單），舊欄位 selected_instruments 跟著維持全選；不發通知，由專案的操作呼叫"""
         self.instruments = list(instruments)
@@ -662,7 +677,7 @@ class Project:
         self._changed()
 
     def update_group(self, group: Group, **fields: Any) -> None:
-        """修改群組的文字與小模板欄位（Group.EDITABLE_FIELDS）
+        """修改群組的文字與小模板欄位（規則見 Group.update）並發出已變更通知
 
         Args:
             group: 要修改的群組
@@ -671,11 +686,7 @@ class Project:
         Raises:
             ValueError: 含有不能以此方式修改的欄位（檔案、總譜、樂器表各有專用操作）
         """
-        unknown = set(fields) - Group.EDITABLE_FIELDS
-        if unknown:
-            raise ValueError(f"不能以 update_group 修改的欄位：{sorted(unknown)}")
-        for name, value in fields.items():
-            setattr(group, name, value)
+        group.update(**fields)
         self._changed()
 
     def delete_group(self, group: Group) -> None:

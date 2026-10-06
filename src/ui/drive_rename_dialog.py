@@ -18,7 +18,7 @@ from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     TEMPLATE_VARIABLES, INSTRUMENT_PRESETS,
 )
-from core.models import Group, Project
+from core.models import Group
 from services.drive_rename_service import generate_drive_rename_plan, execute_drive_rename
 
 if TYPE_CHECKING:
@@ -33,9 +33,8 @@ class DriveRenameDialog(QDialog):
     ):
         super().__init__(parent)
         self._drive = drive
-        # 暫存這次要命名的 Drive 群組，群組資訊的修改經過 Project.update_group；不存檔
-        self._groups_project = Project(groups=list(groups))
-        self._groups = self._groups_project.groups
+        # 這次要命名的 Drive 群組（不屬於任何專案、不存檔），群組資訊的修改經過 Group.update
+        self._groups = list(groups)
         self.setWindowTitle(t("catalog.rename.title"))
         self.setMinimumSize(900, 650)
         self._build_ui()
@@ -159,8 +158,7 @@ class DriveRenameDialog(QDialog):
         row = self._group_list.currentRow()
         if row < 0 or row >= len(self._groups):
             return
-        self._groups_project.update_group(
-            self._groups[row],
+        self._groups[row].update(
             piece_name=self._piece_name_edit.text(),
             composer=self._composer_edit.text(),
             genre=self._genre_edit.text(),
