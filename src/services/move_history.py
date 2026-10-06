@@ -10,7 +10,7 @@
 
 四個動作回傳同一種結果（MoveResult）：路徑變動、略過的檔、搬不回去的殘留、操作種類。
 中斷還原依進行中紀錄記下的操作種類與所屬紀錄處理，可選「還原」（recover）或「保留結果」（keep_result）。
-呼叫端只負責詢問與顯示，並把路徑變動交給 Project.replace_paths 套用。
+呼叫端只負責詢問與顯示，並把路徑變動交給 Project.replace_paths、復原的分割交給 Project.revert_split 套用。
 
 使用範例：
     history = MoveHistory(file_service, workspace_service)
@@ -66,6 +66,8 @@ class MoveResult:
         error: 動作失敗的原因；為 None 表示照計畫完成
         record_error: 檔案已搬好（或殘留已確定）、但復原或重做紀錄寫不進去的原因；
             中斷還原時發生則進行中紀錄保留，下次再處理
+        split: 復原了一次分割時為該次分割，交給 Project.revert_split 退回分割前的專案；
+            其中被取代的檔案（replaced_files）不找回，仍在資源回收桶
     """
     operation: OperationKind
     changes: List[UndoMapping] = field(default_factory=list)
@@ -73,6 +75,7 @@ class MoveResult:
     residual: List[UndoMapping] = field(default_factory=list)
     error: Optional[Exception] = None
     record_error: Optional[Exception] = None
+    split: Optional[SplitRecord] = None
 
 
 @dataclass
@@ -451,17 +454,19 @@ class MoveHistory:
     # --- 其他操作的紀錄 ---
 
     def record_split(self, record: SplitRecord) -> None:
-        """記下一次分割：復原時把產生的分譜移到資源回收桶、移除新建且已空的目錄
+        """記下一次分割：復原時把產生的分譜移到資源回收桶、移除新建且已空的目錄，並交回分割紀錄供專案退回
 
         Args:
-            record: 分割模組交回的分割紀錄
+            record: 分割紀錄（SplitResult.record(placement)，帶 Project.apply_split 回報的安置方式）
 
         Raises:
             OSError: 紀錄寫不進去
         """
         self._push_new(self._new_record(
             OperationKind.SPLIT, t("undo.split_description", count=len(record.created_files)),
+            original_path=record.source_path,
             created_files=list(record.created_files), created_directories=list(record.created_directories),
+            replaced_files=list(record.replaced_files), placement=record.placement,
         ))
 
     def record_rotate(self, source_path: str, output_path: str, backup_path: str = "") -> None:
@@ -515,7 +520,10 @@ class MoveHistory:
         return result
 
     def _undo_file_effects(self, record: UndoRecord) -> MoveResult:
-        """撤銷分割或旋轉：刪除產生的檔、以備份蓋回原檔，完成後移除紀錄"""
+        """撤銷分割或旋轉：刪除產生的檔、以備份蓋回原檔，完成後移除紀錄
+
+        分割的結果帶回該次分割（split），呼叫端交給專案退回分割前的樣子。
+        """
         result = MoveResult(record.operation_type)
         try:
             if record.backup_path and os.path.isfile(record.backup_path):
@@ -529,6 +537,12 @@ class MoveHistory:
             self._undo.remove(record.id)
         except OSError as e:
             result.error = e
+            return result
+        if record.operation_type == OperationKind.SPLIT:
+            result.split = SplitRecord(
+                record.original_path, list(record.created_files), list(record.created_directories),
+                list(record.replaced_files), record.placement,
+            )
         return result
 
     # --- 內部：執行與紀錄 ---

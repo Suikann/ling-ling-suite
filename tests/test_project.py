@@ -271,7 +271,8 @@ class TestAutoDetectWhenFilesEnterGroup(unittest.TestCase):
     def test_split_result_entering_a_group(self):
         project = Project()
         result = SplitResult(_path("合併譜.pdf"), self._files(), ["Score", "Flute", "Oboe"], replaced=[])
-        self.assert_detected(project.apply_split(result, score_label="總譜"))
+        project.apply_split(result, score_label="總譜")
+        self.assert_detected(project.groups[0])
 
     def test_existing_score_and_piece_name_are_kept(self):
         score = _info(_path("Conductor.pdf"))
@@ -396,7 +397,8 @@ class TestApplySplit(unittest.TestCase):
         """把分割結果（分譜為 folder 下的 names）套用到專案，回傳接手的群組"""
         parts = [_info(_path(folder, name + ".pdf")) for name in names]
         result = SplitResult(self.SOURCE, parts, list(names), replaced=list(replaced))
-        return project.apply_split(result, score_label="總譜")
+        placement = project.apply_split(result, score_label="總譜")
+        return next(g for g in project.groups if g.id == placement.group_id)
 
     @staticmethod
     def layout(project):
@@ -473,6 +475,57 @@ class TestApplySplit(unittest.TestCase):
         project.subscribe(lambda: heard.append(project.is_modified()))
         self.split(project, "Flute")
         self.assertEqual(heard, [True])
+
+
+class TestRevertSplit(unittest.TestCase):
+    """退回分割：分割後專案又有變動時，只退回分割改掉的部分，不丟掉其他引用
+
+    復原分割的完整流程（真 PDF、搬移歷程）在 test_split_service 的 TestUndoSplit。
+    """
+
+    SOURCE = _path("合併譜.pdf")
+
+    def split(self, project, *names, replaced=()):
+        """把分割結果套用到專案，回傳分割紀錄（帶安置方式）"""
+        parts = [_info(_path("ws", name + ".pdf")) for name in names]
+        result = SplitResult(self.SOURCE, parts, list(names), replaced=list(replaced))
+        return result.record(project.apply_split(result, score_label="總譜"))
+
+    def test_merged_score_keeps_its_order_among_the_parts_left_after_a_resplit(self):
+        old = [_info(_path("ws", "Flute.pdf")), _info(_path("ws", "Oboe.pdf"))]
+        horn = _info(_path("Horn.pdf"))
+        group = Group(name="g", files=old + [_info(self.SOURCE), horn], score_label="總譜")
+        project = Project(groups=[group])
+        project.revert_split(self.split(project, "Flute", "Tuba", replaced=[f.original_path for f in old]))
+        self.assertEqual([f.original_path for f in group.files], [self.SOURCE, horn.original_path])
+
+    def test_merged_score_goes_to_ungrouped_when_its_group_was_deleted_after_the_split(self):
+        group = Group(name="g", files=[_info(self.SOURCE)], score_label="總譜")
+        project = Project(groups=[group])
+        record = self.split(project, "Flute", "Oboe")
+        project.delete_group(group)
+        project.revert_split(record)
+        self.assertEqual(project.groups, [])
+        self.assertEqual([f.original_path for f in project.ungrouped_files], [self.SOURCE])
+
+    def test_files_put_into_the_created_group_after_the_split_go_to_ungrouped(self):
+        horn = _info(_path("Horn.pdf"))
+        project = Project(ungrouped_files=[_info(self.SOURCE), horn])
+        record = self.split(project, "Flute")
+        project.move_to_group([horn], project.groups[0])
+        project.revert_split(record)
+        self.assertEqual(project.groups, [])
+        self.assertEqual([f.original_path for f in project.ungrouped_files], [self.SOURCE, horn.original_path])
+
+    def test_group_fields_the_split_did_not_change_keep_later_edits(self):
+        group = Group(name="g", files=[_info(self.SOURCE)], instruments=["Flute", "Oboe"],
+                      selected_instruments=[0, 1], piece_name="命運", score_label="總譜")
+        project = Project(groups=[group])
+        record = self.split(project, "Flute", "Oboe")
+        project.update_group(group, piece_name="命運交響曲")
+        project.set_instruments(group, ["Flute 1", "Oboe"])
+        project.revert_split(record)
+        self.assertEqual((group.piece_name, group.instruments), ("命運交響曲", ["Flute 1", "Oboe"]))
 
 
 class TestProjectSettingEdits(unittest.TestCase):

@@ -149,6 +149,36 @@ class TestSplitFromMainWindow(MainWindowTestCase):
         listing = self.window.findChild(QTabWidget).currentWidget().findChild(QListWidget)
         return [listing.item(i).text().rsplit("  |  ", 1)[-1] for i in range(listing.count())]
 
+    def tab_names(self) -> List[str]:
+        """主視窗各分頁的標題"""
+        _settle()
+        tabs = self.window.findChild(QTabWidget)
+        return [tabs.tabText(i) for i in range(tabs.count())]
+
+    def split_merged(self, page: int, *answers):
+        """從主視窗開分割對話框，選合併譜、在第 page 頁前標記分割點後執行；answers 依序回答過程中的詢問"""
+        def operate(dialog):
+            self.load_merged(dialog)
+            self.mark_split_before_page(dialog, page)
+            with answering_prompts(*answers):
+                button_in(dialog, QPushButton, t("split.execute")).click()
+
+        with splitting(operate):
+            self.trigger_menu(t("menu.tools.split_pdf"))
+
+    def recycle_by_removing(self) -> List[str]:
+        """移到資源回收桶改為直接移除（不動到真的資源回收桶），回傳記下的路徑"""
+        trashed = []
+
+        def remove(_service, path):
+            trashed.append(path)
+            os.remove(path)
+
+        patcher = mock.patch.object(FileService, "delete_file", remove)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return trashed
+
     def test_segments_take_the_voices_typed_for_the_current_group(self):
         self.type_voices("Flute", "Oboe")
         seen = {}
@@ -167,17 +197,34 @@ class TestSplitFromMainWindow(MainWindowTestCase):
         with answering_prompts():
             self.trigger_menu(t("menu.file.save"))
         self.assertFalse(self.is_marked_unsaved())
-
-        def operate(dialog):
-            self.load_merged(dialog)
-            self.mark_split_before_page(dialog, 3)
-            with answering_prompts():
-                button_in(dialog, QPushButton, t("split.execute")).click()
-
-        with splitting(operate):
-            self.trigger_menu(t("menu.tools.split_pdf"))
+        self.split_merged(3)
         self.assertTrue(self.is_marked_unsaved())
         self.assertEqual(self.shown_parts(), ["Flute.pdf", "Oboe.pdf"])
+
+    def test_undoing_a_split_marks_unsaved_and_the_tabs_show_the_groups_from_before(self):
+        self.recycle_by_removing()
+        self.type_voices("Flute", "Oboe")
+        self.split_merged(3)
+        with answering_prompts():
+            self.trigger_menu(t("menu.file.save"))
+        self.assertFalse(self.is_marked_unsaved())
+        with answering_prompts(QMessageBox.Yes):
+            self.trigger_menu(t("menu.edit.undo"))
+        self.assertTrue(self.is_marked_unsaved())
+        self.assertEqual(self.tab_names(), [t("group.ungrouped"), "g"])
+        self.assertEqual(self.shown_parts(), ["merged.pdf"])
+
+    def test_undoing_a_resplit_says_the_replaced_parts_are_in_the_recycle_bin(self):
+        self.recycle_by_removing()
+        self.open_from_menu(Project(ungrouped_files=[FileInfo(self.merged, "merged.pdf")]))
+        self.split_merged(3)
+        replaced = [f.original_path for f in self.window.project.groups[0].files]
+        self.window.findChild(QTabWidget).setCurrentIndex(0)
+        self.split_merged(2, QMessageBox.Yes)
+        with answering_prompts(QMessageBox.Yes) as shown:
+            self.trigger_menu(t("menu.edit.undo"))
+        self.assertIn((t("dialog.info"), t("history.split_replaced", files="\n".join(replaced))), shown)
+        self.assertTrue(all(not os.path.exists(p) for p in replaced))
 
     def test_segments_with_the_same_name_are_named_in_the_error_and_nothing_is_written(self):
         shown = []

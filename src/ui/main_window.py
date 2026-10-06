@@ -215,10 +215,11 @@ class MainWindow(QMainWindow):
         """目前分頁的群組；未分組分頁為 None"""
         return getattr(self._tab_widget.currentWidget(), "group", None)
 
-    def _show_group(self, group: Group):
-        """切到該群組的分頁"""
+    def _show_group(self, group_id: str):
+        """切到指定 id 的群組的分頁"""
         for index in range(self._tab_widget.count()):
-            if getattr(self._tab_widget.widget(index), "group", None) is group:
+            group = getattr(self._tab_widget.widget(index), "group", None)
+            if group is not None and group.id == group_id:
                 self._tab_widget.setCurrentIndex(index)
                 return
 
@@ -418,7 +419,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, t("dialog.complete"), t("dialog.complete.renamed", count=count))
 
     def _apply_move_result(self, result: MoveResult, failure: Callable[[Exception], str]) -> bool:
-        """把搬移歷程的結果交給專案（含搬不回去的殘留）並顯示失敗
+        """把搬移歷程的結果交給專案（含搬不回去的殘留、復原的分割）並顯示失敗
 
         Args:
             result: 搬移歷程的動作結果
@@ -430,6 +431,9 @@ class MainWindow(QMainWindow):
         moved = result.changes + result.residual
         if moved:
             self.project.replace_paths(moved)
+        if result.split is not None:
+            self.project.revert_split(result.split)
+        if moved or result.split is not None:
             current = self._tab_widget.currentIndex()
             self._rebuild_tabs()
             self._tab_widget.setCurrentIndex(current)
@@ -443,6 +447,12 @@ class MainWindow(QMainWindow):
         """列出已不在紀錄位置而略過的檔案"""
         if result.skipped:
             QMessageBox.information(self, t("dialog.info"), t("history.skipped", files="\n".join(result.skipped)))
+
+    def _show_not_restored(self, result: MoveResult):
+        """復原的是重新分割時，列出被取代、沒有找回的檔案（仍在資源回收桶）"""
+        if result.split is not None and result.split.replaced_files:
+            files = "\n".join(result.split.replaced_files)
+            QMessageBox.information(self, t("dialog.info"), t("history.split_replaced", files=files))
 
     # --- 中斷後還原 ---
 
@@ -525,6 +535,7 @@ class MainWindow(QMainWindow):
         if self._apply_move_result(result, lambda e: t("dialog.error.undo_failed", error=e)):
             self._set_status(t("status.undone"))
             self._show_skipped(result)
+            self._show_not_restored(result)
 
     def _redo_last(self):
         if not self.prompt_pending_recovery():
@@ -575,13 +586,13 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _on_split_complete(self, result: SplitResult):
-        """分割完成：結果交給專案套用、切到接手新分譜的群組，分割紀錄交給搬移歷程"""
-        group = self.project.apply_split(result, score_label=t("group.score_label"))
+        """分割完成：結果交給專案套用、切到接手新分譜的群組，分割紀錄（帶專案回報的安置方式）交給搬移歷程"""
+        placement = self.project.apply_split(result, score_label=t("group.score_label"))
         self._rebuild_tabs()
-        self._show_group(group)
+        self._show_group(placement.group_id)
         self._set_status(t("split.files_added", count=len(result.parts)))
         try:
-            self._history.record_split(result.record)
+            self._history.record_split(result.record(placement))
         except OSError as e:
             QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=e))
 

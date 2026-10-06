@@ -16,7 +16,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from core.locale import set_locale
-from core.models import RenameEntry, SplitRecord
+from core.models import FileInfo, Group, Project, RenameEntry, SplitRecord
 from services.file_service import FileService
 from services.move_history import MoveHistory, RenameVerdict
 from services.project_service import ProjectService
@@ -627,6 +627,25 @@ class TestSplitAndRotateRecords(MoveHistoryTestCase):
         self.history.undo()
         self.history.record_split(SplitRecord(self.path("合併譜.pdf"), [self.create("Flute.pdf")], [], []))
         self.assertIsNone(self.history.latest_redo())
+
+    def test_legacy_split_record_is_undone_by_trashing_the_parts_and_removing_their_references(self):
+        parts = [self.create(n) for n in ("Flute.pdf", "Oboe.pdf")]
+        loose = self.create("Loose.pdf")
+        directory = os.path.join(self.data_dir, "undo")
+        os.makedirs(directory)
+        with open(os.path.join(directory, "undo_20260101_120000.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "timestamp": "20260101_120000", "description": "PDF 分割：建立 2 個檔案", "operation_type": "split",
+                "mappings": [], "created_directories": [], "created_files": parts,
+                "backup_path": "", "original_path": "", "workspace_meta": {},
+            }, f, ensure_ascii=False)
+        project = Project(groups=[Group(name="g", files=[FileInfo(p, os.path.basename(p)) for p in [loose] + parts])])
+        result = self.history.undo()
+        self.assertIsNone(result.error)
+        self.assertEqual(self.file_service.trashed, parts)
+        project.revert_split(result.split)
+        self.assertEqual([f.original_path for f in project.groups[0].files], [loose])
+        self.assertEqual(result.split.replaced_files, [])
 
     def test_legacy_rotate_save_as_record_is_undone_by_moving_the_saved_file_to_the_recycle_bin(self):
         output = self.create("a rotated.pdf")

@@ -18,8 +18,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from PyPDF2 import PdfReader, PdfWriter
 
 from core.constants import WORKSPACE_FOLDER_HASH_LENGTH
-from core.models import FileInfo, Project, SplitRecord, WorkspaceOwner
+from core.models import FileInfo, Group, Project, SplitRecord, WorkspaceOwner
 from services.file_service import FileService
+from services.move_history import MoveHistory
 from services.pdf_service import extract_pages
 from services.project_service import ProjectService
 from services.split_service import SplitRequest, SplitSegment, SplitService
@@ -126,7 +127,7 @@ class TestSplitIntoWorkspace(SplitServiceTestCase):
         self.assertEqual((_page_numbers(flute), _page_numbers(oboe)), ([0, 1], [2, 3]))
         self.assertEqual(_page_numbers(self.source), [0, 1, 2, 3])
         self.assertEqual(sorted(os.listdir(folder)), ["Flute.pdf", "Oboe.pdf", "meta.json"])
-        self.assertEqual(result.record.created_directories, [folder])
+        self.assertEqual(result.record().created_directories, [folder])
 
 
 class TestSplitPlan(SplitServiceTestCase):
@@ -232,7 +233,7 @@ class TestResplitInWorkspace(SplitServiceTestCase):
 
     def test_record_lists_the_new_parts_and_the_replaced_files(self):
         result = self.resplit()
-        self.assertEqual(result.record, SplitRecord(
+        self.assertEqual(result.record(), SplitRecord(
             source_path=self.source,
             created_files=[os.path.join(self.folder, "Flute.pdf"), os.path.join(self.folder, "Horn.pdf")],
             created_directories=[],
@@ -402,6 +403,83 @@ class TestWorkspaceFolder(SplitServiceTestCase):
         self.assertEqual([p.original_path for p in result.parts], [old_part, os.path.join(legacy, "Oboe.pdf")])
         self.assertEqual(_page_numbers(old_part), [0, 1])
         self.assertEqual(os.listdir(self.workspace.workspace_dir), ["1e9ac7d0"])
+
+
+class TestUndoSplit(SplitServiceTestCase):
+    """復原分割退回分割前的專案：新分譜移到資源回收桶、引用移除，合併譜回到原位，另建的群組移除"""
+
+    def setUp(self):
+        super().setUp()
+        data = os.path.join(self.temp_dir, "data")
+        self.history = MoveHistory(
+            self.file_service, self.workspace,
+            undo_dir=os.path.join(data, "undo"), redo_dir=os.path.join(data, "redo"),
+            journal_path=os.path.join(data, "pending_move.json"), backup_dir=os.path.join(data, "backups"),
+        )
+
+    def split(self, project, *segments):
+        """分割合併譜：結果交給專案套用、分割紀錄交給搬移歷程，回傳新分譜的路徑"""
+        result = self.splitter.execute(self.splitter.check(self.request(*segments)))
+        placement = project.apply_split(result, score_label="總譜")
+        self.history.record_split(result.record(placement))
+        return [p.original_path for p in result.parts]
+
+    def undo(self, project):
+        """復原上次操作，結果交給專案套用，回傳復原的結果"""
+        undone = self.history.undo()
+        self.assertIsNone(undone.error)
+        project.revert_split(undone.split)
+        return undone
+
+    def test_merged_score_among_a_groups_parts_returns_to_the_same_place(self):
+        loose, horn = FileInfo(self.path("Loose.pdf"), "Loose.pdf"), FileInfo(self.path("Horn.pdf"), "Horn.pdf")
+        group = Group(name="g", files=[loose, FileInfo(self.source, "合併譜.pdf"), horn], score_label="總譜")
+        project = Project(groups=[group])
+        project.set_instruments(group, ["Piano", "Horn"])
+        before = project.to_data()
+        new_parts = self.split(project, (0, 1, "Flute"), (2, 3, "Oboe"))
+        self.undo(project)
+        self.assertEqual(self.file_service.trashed, new_parts)
+        self.assertFalse(any(os.path.exists(p) for p in new_parts))
+        self.assertEqual([f.original_path for f in group.files], [loose.original_path, self.source, horn.original_path])
+        self.assertEqual(project.to_data(), before)
+
+    def test_merged_score_set_as_the_group_score_returns_to_being_its_score(self):
+        group = Group(name="g", score_file=FileInfo(self.source, "合併譜.pdf"), score_label="總譜")
+        project = Project(groups=[group])
+        before = project.to_data()
+        self.split(project, (0, 0, "Sym5 Score"), (1, 3, "Sym5 Flute"))
+        self.assertEqual((group.score_file.display_name, group.piece_name), ("Sym5 Score.pdf", "Sym5 Flute"))
+        self.undo(project)
+        self.assertEqual(group.score_file.original_path, self.source)
+        self.assertEqual(group.files, [])
+        self.assertEqual(project.to_data(), before)
+
+    def test_group_created_for_a_split_from_ungrouped_is_removed(self):
+        loose = FileInfo(self.path("Loose.pdf"), "Loose.pdf")
+        project = Project(ungrouped_files=[loose, FileInfo(self.source, "合併譜.pdf")])
+        before = project.to_data()
+        self.split(project, (0, 1, "Flute"), (2, 3, "Oboe"))
+        self.assertEqual([g.name for g in project.groups], ["合併譜"])
+        self.undo(project)
+        self.assertEqual(project.groups, [])
+        self.assertEqual([f.original_path for f in project.ungrouped_files], [loose.original_path, self.source])
+        self.assertEqual(project.to_data(), before)
+
+    def test_undoing_a_resplit_lists_the_replaced_parts_left_in_the_recycle_bin(self):
+        project = Project(ungrouped_files=[FileInfo(self.source, "合併譜.pdf")])
+        old_parts = self.split(project, (0, 1, "Flute"), (2, 3, "Oboe"))
+        new_parts = self.split(project, (0, 0, "Flute"), (1, 3, "Horn"))
+        undone = self.undo(project)
+        self.assertEqual(undone.split.replaced_files, old_parts)
+        self.assertFalse(any(os.path.exists(p) for p in old_parts + new_parts))
+        self.assertEqual(
+            sorted(os.path.basename(p) for p in self.file_service.trashed),
+            ["Flute.pdf", "Flute.pdf", "Horn.pdf", "Oboe.pdf"],
+        )
+        group, = project.groups
+        self.assertEqual((group.name, group.files, group.instruments), ("合併譜", [], ["Flute", "Oboe"]))
+        self.assertEqual([f.original_path for f in project.ungrouped_files], [self.source])
 
 
 class TestFailedFirstSplit(SplitServiceTestCase):

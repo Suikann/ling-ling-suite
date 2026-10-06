@@ -117,9 +117,11 @@ class UndoRecord:
         created_directories: 這次操作新建的目錄
         created_files: 這次操作產生的檔案（分割的分譜、旋轉另存的檔）
         backup_path: 旋轉覆蓋原檔前的備份
-        original_path: 旋轉的來源檔
+        original_path: 旋轉的來源檔；分割的合併譜
         workspace_meta: 來源位於工作區的項目，其子資料夾到 meta.json 內容的快照；
             復原時子資料夾已被清理掃描刪掉的話，用它把 meta 寫回
+        replaced_files: 分割時被取代、已移到資源回收桶的檔案（復原不找回）
+        placement: 專案怎麼安置分割的結果（復原時退回分割前的專案）；舊版紀錄沒有時為 None
     """
     id: str = ""
     timestamp: str = ""
@@ -132,6 +134,8 @@ class UndoRecord:
     backup_path: str = ""
     original_path: str = ""
     workspace_meta: Dict[str, Dict] = field(default_factory=dict)
+    replaced_files: List[str] = field(default_factory=list)
+    placement: Optional["SplitPlacement"] = None
 
     def to_data(self) -> Dict[str, Any]:
         """紀錄檔中存的內容"""
@@ -147,6 +151,8 @@ class UndoRecord:
             "backup_path": self.backup_path,
             "original_path": self.original_path,
             "workspace_meta": dict(self.workspace_meta),
+            "replaced_files": list(self.replaced_files),
+            "placement": self.placement.to_data() if self.placement else None,
         }
 
     @classmethod
@@ -173,6 +179,8 @@ class UndoRecord:
                 backup_path=data.get("backup_path", ""),
                 original_path=data.get("original_path", ""),
                 workspace_meta=data.get("workspace_meta", {}),
+                replaced_files=data.get("replaced_files", []),
+                placement=SplitPlacement.from_data(data["placement"]) if data.get("placement") else None,
             )
         except (KeyError, TypeError) as e:
             raise ValueError(str(e)) from e
@@ -240,19 +248,84 @@ class SplitEntry:
 
 
 @dataclass
-class SplitRecord:
-    """一次分割的檔案效果，交給搬移歷程記成復原紀錄
+class FilePosition:
+    """檔案引用在專案裡的位置
 
     Attributes:
-        source_path: 合併譜
+        group_id: 所在群組的 id；未分組為空字串
+        score: 是否為該群組的總譜
+        index: 在該群組分譜清單（未分組時為未分組清單）中的位置，從 0 起算；總譜為 0
+    """
+    group_id: str = ""
+    score: bool = False
+    index: int = 0
+
+    def to_data(self) -> Dict[str, Any]:
+        """紀錄檔中存的內容"""
+        return {"group_id": self.group_id, "score": self.score, "index": self.index}
+
+    @classmethod
+    def from_data(cls, data: Dict[str, Any]) -> "FilePosition":
+        """由紀錄檔中的內容還原"""
+        return cls(group_id=data["group_id"], score=bool(data["score"]), index=int(data["index"]))
+
+
+@dataclass
+class SplitPlacement:
+    """Project.apply_split 怎麼把分割結果放進專案；復原分割時據以退回分割前的專案
+
+    Attributes:
+        group_id: 接手新分譜的群組
+        created_group: 接手的群組是否為這次分割另建的（復原時移除）
+        instruments: 接手的群組在分割前的樂器表；分割沒有改變它時為 None
+        piece_name: 接手的群組在分割前的曲名（分割可能自動偵測填入）；分割沒有改變它時為 None
+        source: 合併譜在分割前的位置；專案沒有引用合併譜時為 None
+    """
+    group_id: str
+    created_group: bool
+    instruments: Optional[List[str]] = None
+    piece_name: Optional[str] = None
+    source: Optional[FilePosition] = None
+
+    def to_data(self) -> Dict[str, Any]:
+        """紀錄檔中存的內容"""
+        return {
+            "group_id": self.group_id,
+            "created_group": self.created_group,
+            "instruments": list(self.instruments) if self.instruments is not None else None,
+            "piece_name": self.piece_name,
+            "source": self.source.to_data() if self.source else None,
+        }
+
+    @classmethod
+    def from_data(cls, data: Dict[str, Any]) -> "SplitPlacement":
+        """由紀錄檔中的內容還原"""
+        source = data.get("source")
+        return cls(
+            group_id=data["group_id"],
+            created_group=bool(data["created_group"]),
+            instruments=data.get("instruments"),
+            piece_name=data.get("piece_name"),
+            source=FilePosition.from_data(source) if source else None,
+        )
+
+
+@dataclass
+class SplitRecord:
+    """一次分割：交給搬移歷程記成復原紀錄，復原時再交回專案退回（Project.revert_split）
+
+    Attributes:
+        source_path: 合併譜；舊版紀錄沒有時為空字串
         created_files: 產生的分譜
         created_directories: 這次新建的目錄
-        replaced_files: 被取代、已移到資源回收桶的檔案（上次的分譜，或指定資料夾內的同名檔案）
+        replaced_files: 被取代、已移到資源回收桶的檔案（上次的分譜，或指定資料夾內的同名檔案）；復原不找回
+        placement: 專案怎麼安置這次分割的結果；舊版紀錄沒有時為 None
     """
     source_path: str
     created_files: List[str]
     created_directories: List[str]
     replaced_files: List[str]
+    placement: Optional[SplitPlacement] = None
 
 
 @dataclass
@@ -272,14 +345,21 @@ class SplitResult:
     replaced: List[str]
     created_directories: List[str] = field(default_factory=list)
 
-    @property
-    def record(self) -> SplitRecord:
-        """交給搬移歷程的分割紀錄"""
+    def record(self, placement: Optional[SplitPlacement] = None) -> SplitRecord:
+        """交給搬移歷程的分割紀錄
+
+        Args:
+            placement: Project.apply_split 回報的安置方式
+
+        Returns:
+            分割紀錄
+        """
         return SplitRecord(
             source_path=self.source_path,
             created_files=[p.original_path for p in self.parts],
             created_directories=list(self.created_directories),
             replaced_files=list(self.replaced),
+            placement=placement,
         )
 
 
@@ -507,7 +587,7 @@ class Project:
         self._move_into(group, files)
         self._changed()
 
-    def apply_split(self, result: SplitResult, score_label: str) -> Group:
+    def apply_split(self, result: SplitResult, score_label: str) -> SplitPlacement:
         """套用分割結果：移除被取代的引用、把合併譜移出所在的群組，新分譜交給接手的群組
 
         接手的群組依序為：引用被取代檔案的群組（重新分割，不另建群組、不留下空群組）、
@@ -519,25 +599,59 @@ class Project:
             score_label: 另建群組時的總譜標籤（依建立時的介面語言）
 
         Returns:
-            接手新分譜的群組
+            安置方式（接手的群組、合併譜原本的位置、被改掉的群組欄位）；連同分割紀錄交給搬移歷程，復原時退回
         """
         group = self._group_referencing(result.replaced) or self._group_referencing([result.source_path])
-        replaced = {path_key(p) for p in result.replaced}
+        self._detach_paths(result.replaced)
+        source_position = self._position_of(result.source_path)
         source = path_key(result.source_path)
         for ref in self.file_refs():
-            key = path_key(ref.file.original_path)
-            if key in replaced or (key == source and ref.group is not None):
+            if ref.group is not None and path_key(ref.file.original_path) == source:
                 self._detach(ref)
-        if group is None:
+        created = group is None
+        if created:
             name = os.path.splitext(os.path.basename(result.source_path))[0]
             group = Group(name=name, score_label=score_label)
             self.groups.append(group)
+        instruments, piece_name = list(group.instruments), group.piece_name
         group.files.extend(result.parts)
         group.instruments = list(result.voices)
         group.selected_instruments = list(range(len(group.instruments)))
         self._detect_on_entry(group)
         self._changed()
-        return group
+        return SplitPlacement(
+            group_id=group.id, created_group=created,
+            instruments=instruments if instruments != group.instruments else None,
+            piece_name=piece_name if piece_name != group.piece_name else None,
+            source=source_position,
+        )
+
+    def revert_split(self, record: SplitRecord) -> None:
+        """退回一次分割（套用復原分割的結果）
+
+        移除新分譜的引用；分割時另建的群組移除（之後才放進去的檔案移回未分組），
+        接手的既有群組被分割改掉的樂器表與曲名改回；合併譜已不在專案裡時放回原本的位置
+        （同一個群組、同樣是分譜或總譜，分譜放回原本的順序；原本的群組已刪除就放回未分組）。
+        被取代的檔案不找回。舊版紀錄沒有安置資訊，只移除新分譜的引用。
+
+        Args:
+            record: 搬移歷程復原的分割紀錄
+        """
+        self._detach_paths(record.created_files)
+        placement = record.placement
+        if placement is not None:
+            group = self._group_by_id(placement.group_id)
+            if group is not None and placement.created_group:
+                self._remove_group(group)
+            elif group is not None:
+                if placement.instruments is not None:
+                    group.instruments = list(placement.instruments)
+                    group.selected_instruments = list(range(len(group.instruments)))
+                if placement.piece_name is not None:
+                    group.piece_name = placement.piece_name
+            if placement.source is not None and not self._references(record.source_path):
+                self._put_back(FileInfo(record.source_path, os.path.basename(record.source_path)), placement.source)
+        self._changed()
 
     def update_group(self, group: Group, **fields: Any) -> None:
         """修改群組的文字與小模板欄位（Group.EDITABLE_FIELDS）
@@ -558,11 +672,15 @@ class Project:
 
     def delete_group(self, group: Group) -> None:
         """刪除群組，總譜與分譜移回未分組（總譜在前）"""
+        self._remove_group(group)
+        self._changed()
+
+    def _remove_group(self, group: Group) -> None:
+        """移除群組，總譜與分譜移回未分組尾端（總譜在前；不發通知）"""
         self.groups = [g for g in self.groups if g is not group]
         if group.score_file:
             self.ungrouped_files.append(group.score_file)
         self.ungrouped_files.extend(group.files)
-        self._changed()
 
     def move_to_ungrouped(self, files: Iterable[FileInfo]) -> None:
         """把群組裡的檔案移回未分組的尾端"""
@@ -573,10 +691,7 @@ class Project:
 
     def set_score(self, group: Group, file: FileInfo) -> None:
         """把群組的一份分譜設為總譜，原本的總譜放回分譜尾端"""
-        if group.score_file:
-            group.files.append(group.score_file)
-        group.files = [f for f in group.files if f is not file]
-        group.score_file = file
+        self._assign_score(group, file)
         self._changed()
 
     def clear_score(self, group: Group) -> None:
@@ -632,6 +747,14 @@ class Project:
         self._detach_files(files)
         group.files.extend(files)
         self._detect_on_entry(group)
+
+    @staticmethod
+    def _assign_score(group: Group, file: FileInfo) -> None:
+        """把檔案設為群組的總譜（原本在分譜清單裡就拿出來），原本的總譜放回分譜尾端"""
+        if group.score_file:
+            group.files.append(group.score_file)
+        group.files = [f for f in group.files if f is not file]
+        group.score_file = file
 
     def _detach_files(self, files: Iterable[FileInfo]) -> None:
         """把指定的檔案資訊（依物件本身判定）從所在的群組或未分組拿掉"""
@@ -690,11 +813,15 @@ class Project:
         Args:
             paths: 要移除的檔案路徑
         """
+        self._detach_paths(paths)
+        self._changed()
+
+    def _detach_paths(self, paths: Iterable[str]) -> None:
+        """拿掉指向指定路徑的檔案引用（不發通知）"""
         doomed = {path_key(p) for p in paths}
         for ref in self.file_refs():
             if path_key(ref.file.original_path) in doomed:
                 self._detach(ref)
-        self._changed()
 
     def _group_referencing(self, paths: Iterable[str]) -> Optional[Group]:
         """第一個（依 file_refs 順序）引用到其中任一路徑的群組；沒有時為 None"""
@@ -704,6 +831,38 @@ class Project:
                 return ref.group
         return None
 
+    def _references(self, path: str) -> bool:
+        """專案是否引用指定路徑（分譜、總譜或未分組）"""
+        key = path_key(path)
+        return any(path_key(ref.file.original_path) == key for ref in self.file_refs())
+
+    def _group_by_id(self, group_id: str) -> Optional[Group]:
+        """指定 id 的群組；已不在專案裡時為 None"""
+        return next((g for g in self.groups if g.id == group_id), None)
+
+    def _position_of(self, path: str) -> Optional[FilePosition]:
+        """第一個（依 file_refs 順序）指向指定路徑的引用所在的位置；專案沒有引用它時為 None"""
+        key = path_key(path)
+        ref = next((r for r in self.file_refs() if path_key(r.file.original_path) == key), None)
+        if ref is None:
+            return None
+        if ref.group is None:
+            return FilePosition(index=_index_of(self.ungrouped_files, ref.file))
+        if ref.group.score_file is ref.file:
+            return FilePosition(group_id=ref.group.id, score=True)
+        return FilePosition(group_id=ref.group.id, index=_index_of(ref.group.files, ref.file))
+
+    def _put_back(self, file: FileInfo, position: FilePosition) -> None:
+        """把檔案引用放回記下的位置；原本的群組已不在專案裡時放回未分組尾端"""
+        group = self._group_by_id(position.group_id) if position.group_id else None
+        if group is None:
+            index = position.index if not position.group_id else len(self.ungrouped_files)
+            self.ungrouped_files.insert(index, file)
+        elif position.score:
+            self._assign_score(group, file)
+        else:
+            group.files.insert(position.index, file)
+
     def _detach(self, ref: FileRef) -> None:
         """把一個檔案引用從所在的群組或未分組清單拿掉"""
         if ref.group is None:
@@ -712,3 +871,8 @@ class Project:
             ref.group.score_file = None
         else:
             ref.group.files = [f for f in ref.group.files if f is not ref.file]
+
+
+def _index_of(files: List[FileInfo], file: FileInfo) -> int:
+    """檔案資訊（依物件本身判定）在清單中的位置"""
+    return next(i for i, f in enumerate(files) if f is file)

@@ -14,8 +14,8 @@ execute 依確認過的檢查結果一次執行，中途失敗整批撤回，成
     check = splitter.check(SplitRequest(source, [SplitSegment(0, 1, "Flute")], project_path=path))
     if not check.blocked:
         result = splitter.execute(check)
-        project.apply_split(result, score_label)
-        history.record_split(result.record)
+        placement = project.apply_split(result, score_label)
+        history.record_split(result.record(placement))
 """
 import hashlib
 import os
