@@ -4,6 +4,7 @@
 
 使用 QListWidget 內建拖拉排序，效能遠優於逐一建立元件。
 支援雙擊直接編輯樂器名稱、匯出編制表、編輯建議人數。
+顯示目前群組的樂器表；使用者的修改立即透過專案的編輯操作寫入，再發出 instruments_changed。
 """
 import os
 from collections import OrderedDict
@@ -17,17 +18,18 @@ from PySide6.QtWidgets import (
 from ui.widgets import DragListWidget
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
-from core.locale import t
+from core.constants import DEFAULT_HEADCOUNT, INSTRUMENT_PRESETS, SECTION_NAMES_EN
+from core.locale import is_english, localized, t
+from core.naming import section_for
 
 if TYPE_CHECKING:
-    from core.models import Project
+    from core.models import Group, Project
 
 
 class InstrumentListEditor(QWidget):
     """樂器表編輯面板"""
 
     instruments_changed = Signal(list)
-    ensemble_settings_changed = Signal()
 
     def __init__(self, project: Optional["Project"] = None, parent=None):
         super().__init__(parent)
@@ -86,22 +88,15 @@ class InstrumentListEditor(QWidget):
         layout.addLayout(extra_row)
 
     def _build_preset_options(self) -> List[str]:
-        from core.constants import INSTRUMENT_PRESETS
-        from core.locale import get_locale
-        locale = get_locale()
-        return [
-            preset.name_en if locale == "en" else preset.name
-            for preset in INSTRUMENT_PRESETS
-        ]
+        return [localized(preset.name, preset.name_en) for preset in INSTRUMENT_PRESETS]
 
     def _on_preset_selected(self, index: int):
         if index <= 0:
             return
-        from core.constants import INSTRUMENT_PRESETS
         preset_idx = index - 1
         if preset_idx < len(INSTRUMENT_PRESETS):
-            instruments = list(INSTRUMENT_PRESETS[preset_idx].instruments)
-            self.set_instruments(instruments)
+            self._fill(INSTRUMENT_PRESETS[preset_idx].instruments)
+            self._commit()
         self._preset_combo.blockSignals(True)
         self._preset_combo.setCurrentIndex(0)
         self._preset_combo.blockSignals(False)
@@ -114,7 +109,7 @@ class InstrumentListEditor(QWidget):
         item.setFlags(item.flags() | Qt.ItemIsEditable)
         self._list.addItem(item)
         self._entry.clear()
-        self._notify()
+        self._commit()
 
     def _remove_selected(self):
         items = self._list.selectedItems()
@@ -122,7 +117,7 @@ class InstrumentListEditor(QWidget):
             return
         for item in items:
             self._list.takeItem(self._list.row(item))
-        self._notify()
+        self._commit()
 
     def _select_all(self):
         self._list.selectAll()
@@ -136,7 +131,7 @@ class InstrumentListEditor(QWidget):
         action = menu.exec(self._list.mapToGlobal(pos))
         if action == remove_action:
             self._list.takeItem(self._list.row(item))
-            self._notify()
+            self._commit()
 
     def _on_item_edited(self, item):
         """雙擊編輯樂器名稱後觸發"""
@@ -147,10 +142,10 @@ class InstrumentListEditor(QWidget):
             self._editing = True
             self._list.takeItem(self._list.row(item))
             self._editing = False
-        self._notify()
+        self._commit()
 
     def _on_rows_moved(self):
-        self._notify()
+        self._commit()
 
     def _auto_extract(self):
         if not self._group:
@@ -177,14 +172,17 @@ class InstrumentListEditor(QWidget):
             t("instrument.auto_extract.confirm", instruments=preview),
         )
         if result == QMessageBox.Yes:
-            self.set_instruments(unique)
+            self._fill(unique)
+            self._commit()
 
     def _edit_headcount(self):
-        """開啟編制設定（人數、聲部）對話框；按下儲存後寫回專案並發出 ensemble_settings_changed"""
+        """開啟編制設定（人數、聲部組）對話框；按下儲存後寫入專案
+
+        還沒有聲部組的聲部，預設值依目前介面語言偵測，儲存後定下。
+        """
         instruments = self.get_instruments()
         if not instruments:
             return
-        from core.constants import detect_instrument_section
         headcounts = {}
         sections = {}
         if self._project:
@@ -210,14 +208,13 @@ class InstrumentListEditor(QWidget):
             name_item = QTableWidgetItem(inst)
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             table.setItem(row, 0, name_item)
-            section = sections.get(inst, detect_instrument_section(inst))
-            section_item = QTableWidgetItem(section)
+            section_item = QTableWidgetItem(section_for(inst, sections, is_english()))
             table.setItem(row, 1, section_item)
             section_items.append(section_item)
             spin = QSpinBox()
             spin.setMinimum(0)
             spin.setMaximum(99)
-            spin.setValue(headcounts.get(inst, 1))
+            spin.setValue(headcounts.get(inst, DEFAULT_HEADCOUNT))
             table.setCellWidget(row, 2, spin)
             spinboxes.append(spin)
         lay.addWidget(table)
@@ -233,10 +230,10 @@ class InstrumentListEditor(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return
         if self._project:
-            for row, inst in enumerate(instruments):
-                self._project.instrument_headcounts[inst] = spinboxes[row].value()
-                self._project.instrument_sections[inst] = section_items[row].text().strip()
-            self.ensemble_settings_changed.emit()
+            self._project.update_ensemble(
+                headcounts={inst: spinboxes[row].value() for row, inst in enumerate(instruments)},
+                sections={inst: section_items[row].text().strip() for row, inst in enumerate(instruments)},
+            )
 
     def _export_instruments(self):
         """匯出編制表為文字檔"""
@@ -249,8 +246,6 @@ class InstrumentListEditor(QWidget):
         )
         if not path:
             return
-        from core.constants import detect_instrument_section, SECTION_NAMES_EN
-        from core.locale import get_locale
         headcounts = {}
         sections_map = {}
         if self._project:
@@ -258,12 +253,12 @@ class InstrumentListEditor(QWidget):
             sections_map = self._project.instrument_sections
         grouped: Dict[str, List[tuple]] = OrderedDict()
         for inst in instruments:
-            section = sections_map.get(inst, detect_instrument_section(inst))
-            if get_locale() == "en":
+            section = section_for(inst, sections_map, is_english())
+            if is_english():
                 section = SECTION_NAMES_EN.get(section, section)
             if section not in grouped:
                 grouped[section] = []
-            count = headcounts.get(inst, 1)
+            count = headcounts.get(inst, DEFAULT_HEADCOUNT)
             grouped[section].append((inst, count))
         lines = [t("instrument.title"), "=" * 40, ""]
         total_parts = 0
@@ -287,7 +282,18 @@ class InstrumentListEditor(QWidget):
     def get_instruments(self) -> List[str]:
         return [self._list.item(i).text() for i in range(self._list.count())]
 
-    def set_instruments(self, instruments: List[str]):
+    def set_project(self, project: "Project"):
+        """切換到另一個專案（開啟或新增專案時）"""
+        self._project = project
+
+    def show_group(self, group: Optional["Group"]):
+        """顯示群組的樂器表；不是群組時清空並停用，輸入的樂器才不會沒有地方寫入。只顯示，不寫入專案"""
+        self._group = group
+        self.setEnabled(group is not None)
+        self._fill(group.instruments if group else [])
+
+    def _fill(self, instruments):
+        """由程式填入清單，不寫入專案、不發出 instruments_changed"""
         self._editing = True
         self._list.clear()
         for name in instruments:
@@ -295,7 +301,10 @@ class InstrumentListEditor(QWidget):
             item.setFlags(item.flags() | Qt.ItemIsEditable)
             self._list.addItem(item)
         self._editing = False
-        self._notify()
 
-    def _notify(self):
-        self.instruments_changed.emit(self.get_instruments())
+    def _commit(self):
+        """使用者修改樂器表後寫入目前群組，並發出 instruments_changed"""
+        instruments = self.get_instruments()
+        if self._project and self._group is not None:
+            self._project.set_instruments(self._group, instruments)
+        self.instruments_changed.emit(instruments)

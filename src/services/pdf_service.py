@@ -2,16 +2,14 @@
 """
 PDF 工具服務
 
-提供 PDF 檔案的分割計畫組裝、頁面分割、旋轉與縮圖算繪功能。
+提供 PDF 的頁數查詢、頁面擷取（分割模組用來寫出分譜）、分段旋轉與縮圖算繪。
 """
 import os
-from typing import List, Set, Tuple
+from typing import List, Tuple
 
 from PyPDF2 import PdfReader, PdfWriter
 
-from core.constants import SPLIT_FALLBACK_NAME
-from core.filename import ensure_pdf_extension, sanitize_filename
-from core.models import SplitEntry
+from core.paths import same_path
 
 
 def get_page_count(pdf_path: str) -> int:
@@ -25,120 +23,6 @@ def get_page_count(pdf_path: str) -> int:
     """
     reader = PdfReader(pdf_path)
     return len(reader.pages)
-
-
-def split_pdf(
-    pdf_path: str,
-    ranges: List[Tuple[int, int]],
-    output_dir: str,
-    name_pattern: str = "",
-) -> List[str]:
-    """依指定頁面範圍分割 PDF
-
-    Args:
-        pdf_path: 來源 PDF 檔案路徑
-        ranges: 頁面範圍清單，每項為 (起始頁, 結束頁)，從 1 開始
-        output_dir: 輸出資料夾路徑
-        name_pattern: 輸出檔名模式，含 {index} 與 {pages} 變數；
-                      空字串時使用預設 "原檔名_part{index}.pdf"
-
-    Returns:
-        產生的檔案路徑清單
-    """
-    reader = PdfReader(pdf_path)
-    total_pages = len(reader.pages)
-    base_name = os.path.splitext(os.path.basename(pdf_path))[0]
-    os.makedirs(output_dir, exist_ok=True)
-    output_files = []
-    for idx, (start, end) in enumerate(ranges, 1):
-        start_idx = max(0, start - 1)
-        end_idx = min(total_pages, end)
-        if start_idx >= end_idx:
-            continue
-        writer = PdfWriter()
-        for page_num in range(start_idx, end_idx):
-            writer.add_page(reader.pages[page_num])
-        if name_pattern:
-            filename = ensure_pdf_extension(name_pattern.replace(
-                "{index}", str(idx),
-            ).replace(
-                "{pages}", f"{start}-{end}",
-            ))
-        else:
-            filename = f"{base_name}_part{idx}.pdf"
-        output_path = os.path.join(output_dir, filename)
-        with open(output_path, "wb") as f:
-            writer.write(f)
-        output_files.append(output_path)
-    return output_files
-
-
-def split_pdf_every_n_pages(
-    pdf_path: str,
-    n: int,
-    output_dir: str,
-) -> List[str]:
-    """每 N 頁分割一個檔案
-
-    Args:
-        pdf_path: 來源 PDF 檔案路徑
-        n: 每個檔案的頁數
-        output_dir: 輸出資料夾路徑
-
-    Returns:
-        產生的檔案路徑清單
-    """
-    total = get_page_count(pdf_path)
-    ranges = []
-    for start in range(1, total + 1, n):
-        end = min(start + n - 1, total)
-        ranges.append((start, end))
-    return split_pdf(pdf_path, ranges, output_dir)
-
-
-def split_pdf_into_single_pages(
-    pdf_path: str,
-    output_dir: str,
-) -> List[str]:
-    """將 PDF 分割為逐頁獨立檔案
-
-    Args:
-        pdf_path: 來源 PDF 檔案路徑
-        output_dir: 輸出資料夾路徑
-
-    Returns:
-        產生的檔案路徑清單
-    """
-    return split_pdf_every_n_pages(pdf_path, 1, output_dir)
-
-
-def build_split_plan(
-    sections: List[Tuple[int, int]],
-    names: List[str],
-    deleted_pages: Set[int],
-    output_dir: str,
-) -> List[SplitEntry]:
-    """依區段與名稱組出分割計畫
-
-    Args:
-        sections: 區段清單，每項為 (起始頁, 結束頁)，0-based 且含結束頁
-        names: 各區段使用者輸入的名稱，與 sections 一一對應
-        deleted_pages: 已刪除、不輸出的頁面索引
-        output_dir: 輸出資料夾
-
-    Returns:
-        分割計畫項目清單；已略過刪光頁面的區段。顯示名稱為去頭尾空白的原始輸入，
-        檔名則清理非法字元、空名回退為 Part 並補上 .pdf
-    """
-    plan = []
-    for (start, end), name in zip(sections, names):
-        pages = [p for p in range(start, end + 1) if p not in deleted_pages]
-        if not pages:
-            continue
-        name = name.strip()
-        file_name = ensure_pdf_extension(sanitize_filename(name, fallback=SPLIT_FALLBACK_NAME))
-        plan.append(SplitEntry(pages, name, os.path.join(output_dir, file_name)))
-    return plan
 
 
 def extract_pages(
@@ -156,7 +40,7 @@ def extract_pages(
     Returns:
         輸出檔案路徑
     """
-    if os.path.normcase(os.path.abspath(output_path)) == os.path.normcase(os.path.abspath(pdf_path)):
+    if same_path(output_path, pdf_path):
         raise ValueError(f"輸出路徑與來源相同，拒絕覆蓋來源：{pdf_path}")
     reader = PdfReader(pdf_path)
     writer = PdfWriter()
@@ -255,44 +139,6 @@ def rotate_pdf_sections(
     for i, page in enumerate(reader.pages):
         if i in page_angles:
             page.rotate(page_angles[i])
-        writer.add_page(page)
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    with open(output_path, "wb") as f:
-        writer.write(f)
-    return output_path
-
-
-def rotate_pdf(
-    pdf_path: str,
-    angle: int,
-    page_ranges: List[Tuple[int, int]],
-    output_path: str,
-) -> str:
-    """旋轉 PDF 指定頁面
-
-    Args:
-        pdf_path: 來源 PDF 檔案路徑
-        angle: 旋轉角度，90、180 或 270（順時針）
-        page_ranges: 要旋轉的頁面範圍清單（從 1 開始），
-                     空清單表示旋轉所有頁面
-        output_path: 輸出檔案路徑
-
-    Returns:
-        輸出檔案路徑
-    """
-    reader = PdfReader(pdf_path)
-    writer = PdfWriter()
-    total = len(reader.pages)
-    pages_to_rotate = set()
-    if page_ranges:
-        for start, end in page_ranges:
-            for p in range(max(1, start), min(total, end) + 1):
-                pages_to_rotate.add(p)
-    else:
-        pages_to_rotate = set(range(1, total + 1))
-    for i, page in enumerate(reader.pages):
-        if (i + 1) in pages_to_rotate:
-            page.rotate(angle)
         writer.add_page(page)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "wb") as f:

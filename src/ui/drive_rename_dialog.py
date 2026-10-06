@@ -4,7 +4,7 @@ Drive 重新命名對話框
 
 讓使用者設定模板、樂器表與群組元資料，預覽後直接在 Drive 上重新命名。
 """
-from typing import List
+from typing import TYPE_CHECKING, List
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QSplitter, QListWidget, QListWidgetItem,
@@ -13,27 +13,28 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from core.locale import t, get_locale
+from core.locale import localized, t
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     TEMPLATE_VARIABLES, INSTRUMENT_PRESETS,
 )
 from core.models import Group
-from services.drive_service import DriveService
-from services.drive_rename_service import (
-    generate_drive_rename_plan, detect_conflicts, execute_drive_rename,
-)
+from services.drive_rename_service import generate_drive_rename_plan, execute_drive_rename
+
+if TYPE_CHECKING:
+    from services.drive_service import DriveService
 
 
 class DriveRenameDialog(QDialog):
     """Drive 重新命名對話框"""
 
     def __init__(
-        self, drive: DriveService, groups: List[Group], parent=None,
+        self, drive: "DriveService", groups: List[Group], parent=None,
     ):
         super().__init__(parent)
         self._drive = drive
-        self._groups = groups
+        # 這次要命名的 Drive 群組（不屬於任何專案、不存檔），群組資訊的修改經過 Group.update
+        self._groups = list(groups)
         self.setWindowTitle(t("catalog.rename.title"))
         self.setMinimumSize(900, 650)
         self._build_ui()
@@ -45,11 +46,7 @@ class DriveRenameDialog(QDialog):
         layout = QVBoxLayout(self)
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel(t("catalog.rename.template_label")))
-        default_tmpl = (
-            DEFAULT_MASTER_TEMPLATE_EN if get_locale() == "en"
-            else DEFAULT_MASTER_TEMPLATE
-        )
-        self._template_entry = QLineEdit(default_tmpl)
+        self._template_entry = QLineEdit(localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN))
         self._template_entry.textChanged.connect(self._update_preview)
         template_row.addWidget(self._template_entry, stretch=1)
         layout.addLayout(template_row)
@@ -75,8 +72,7 @@ class DriveRenameDialog(QDialog):
         self._preset_combo = QComboBox()
         self._preset_combo.addItem("")
         for preset in INSTRUMENT_PRESETS:
-            name = preset.name if get_locale() != "en" else preset.name_en
-            self._preset_combo.addItem(name)
+            self._preset_combo.addItem(localized(preset.name, preset.name_en))
         self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
         preset_row.addWidget(self._preset_combo, stretch=1)
         inst_layout.addLayout(preset_row)
@@ -128,9 +124,9 @@ class DriveRenameDialog(QDialog):
         layout.addWidget(splitter, stretch=1)
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        execute_btn = QPushButton(t("catalog.rename.execute"))
-        execute_btn.clicked.connect(self._execute_rename)
-        btn_row.addWidget(execute_btn)
+        self._execute_btn = QPushButton(t("catalog.rename.execute"))
+        self._execute_btn.clicked.connect(self._execute_rename)
+        btn_row.addWidget(self._execute_btn)
         cancel_btn = QPushButton(t("catalog.cancel"))
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
@@ -162,12 +158,13 @@ class DriveRenameDialog(QDialog):
         row = self._group_list.currentRow()
         if row < 0 or row >= len(self._groups):
             return
-        group = self._groups[row]
-        group.piece_name = self._piece_name_edit.text()
-        group.composer = self._composer_edit.text()
-        group.genre = self._genre_edit.text()
-        group.movement_number = self._mov_num_edit.text()
-        group.movement_name = self._mov_name_edit.text()
+        self._groups[row].update(
+            piece_name=self._piece_name_edit.text(),
+            composer=self._composer_edit.text(),
+            genre=self._genre_edit.text(),
+            movement_number=self._mov_num_edit.text(),
+            movement_name=self._mov_name_edit.text(),
+        )
         self._update_preview()
 
     def _on_preset_selected(self, index: int):
@@ -185,19 +182,12 @@ class DriveRenameDialog(QDialog):
         return [line.strip() for line in text.split("\n") if line.strip()]
 
     def _update_preview(self):
-        """重新產生預覽"""
-        template = self._template_entry.text()
-        instruments = self._get_instruments()
-        plan = generate_drive_rename_plan(
-            self._groups, template, instruments or None,
-        )
+        """重新產生預覽；有撞名時停用執行"""
+        plan = generate_drive_rename_plan(self._groups, self._template_entry.text(), self._get_instruments())
         self._current_plan = plan
-        self._preview_table.setRowCount(len(plan))
-        conflicts = detect_conflicts(plan)
-        conflict_names = set()
-        for names in conflicts.values():
-            conflict_names.update(names)
-        for row, entry in enumerate(plan):
+        conflict_ids = {file_id for ids in plan.conflicts for file_id in ids}
+        self._preview_table.setRowCount(len(plan.entries))
+        for row, entry in enumerate(plan.entries):
             group_item = QTableWidgetItem(entry.group_name)
             group_item.setFlags(group_item.flags() & ~Qt.ItemIsEditable)
             self._preview_table.setItem(row, 0, group_item)
@@ -206,25 +196,27 @@ class DriveRenameDialog(QDialog):
             self._preview_table.setItem(row, 1, orig_item)
             new_item = QTableWidgetItem(entry.new_name)
             new_item.setFlags(new_item.flags() & ~Qt.ItemIsEditable)
-            if entry.original_name in conflict_names:
+            if entry.file_id in conflict_ids:
                 new_item.setForeground(QColor("#e74c3c"))
             elif entry.original_name != entry.new_name:
                 new_item.setForeground(QColor("#2ecc71"))
             self._preview_table.setItem(row, 2, new_item)
-        if conflicts:
+        if plan.conflicts:
             self._conflict_label.setText(
-                t("catalog.rename.conflict_warning", count=len(conflicts)),
+                t("catalog.rename.conflict_warning", count=len(plan.conflicts)),
             )
             self._conflict_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
         else:
             self._conflict_label.setText(
-                t("catalog.rename.file_count", count=len(plan)),
+                t("catalog.rename.file_count", count=len(plan.entries)),
             )
             self._conflict_label.setStyleSheet("color: gray;")
+        self._execute_btn.setEnabled(not plan.conflicts)
 
     def _execute_rename(self):
         """執行重新命名"""
-        if not hasattr(self, "_current_plan") or not self._current_plan:
+        plan = self._current_plan
+        if not plan.entries or plan.conflicts:
             return
         result = QMessageBox.question(
             self, t("catalog.rename.title"),
@@ -232,8 +224,8 @@ class DriveRenameDialog(QDialog):
         )
         if result != QMessageBox.Yes:
             return
-        success, errors = execute_drive_rename(self._drive, self._current_plan)
-        total = len(self._current_plan)
+        success, errors = execute_drive_rename(self._drive, plan.entries)
+        total = len(plan.entries)
         msg = t("catalog.rename.success", success=success, total=total)
         if errors:
             msg += "\n" + t("catalog.rename.errors", files=", ".join(errors))

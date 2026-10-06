@@ -5,7 +5,7 @@ PDF 旋轉對話框（PySide6）
 提供頁面縮圖預覽，讓使用者標記旋轉段落，為不同區段指定不同旋轉角度。
 """
 import os
-import threading
+from functools import partial
 from typing import Dict, List, Optional, Set, Tuple
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
@@ -13,9 +13,10 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QFrame, QSplitter,
 )
 from PySide6.QtGui import QPixmap, QImage
-from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtCore import Qt
 from core.locale import t
-from ui.widgets import ensure_file_exists
+from services.pdf_service import get_page_count, render_page_thumbnails
+from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
 
 SECTION_COLORS = [
     "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
@@ -28,21 +29,23 @@ _THUMB_WIDTH = 150
 _MAX_COLS = 4
 
 
-class _ThumbnailSignals(QObject):
-    ready = Signal(list)
-    error = Signal(str)
-
-
 class RotatePdfDialog(QDialog):
     """PDF 旋轉對話框"""
 
-    def __init__(self, project=None, on_rotate_complete=None, initial_group=None, parent=None):
+    def __init__(self, project=None, history=None, initial_group=None, parent=None):
+        """
+        Args:
+            project: 目前的專案（選檔清單用）
+            history: 搬移歷程（覆蓋原檔前的備份與復原紀錄）；None 時不備份也不記錄
+            initial_group: 選檔清單預設篩選的群組
+            parent: 父元件
+        """
         super().__init__(parent)
         self.setWindowTitle(t("rotate.title"))
         self.resize(1100, 720)
         self.setMinimumSize(900, 520)
         self._project = project
-        self._on_rotate_complete = on_rotate_complete
+        self._history = history
         self._filter_group = initial_group
         self._pdf_path: Optional[str] = None
         self._page_count = 0
@@ -52,9 +55,11 @@ class RotatePdfDialog(QDialog):
         self._section_angles: Dict[int, int] = {}
         self._section_combos: Dict[int, QComboBox] = {}
         self._output_dir: Optional[str] = None
-        self._signals = _ThumbnailSignals()
-        self._signals.ready.connect(self._on_thumbnails_ready)
-        self._signals.error.connect(self._on_thumbnails_error)
+        self._thumbnails = ThumbnailLoader(
+            partial(render_page_thumbnails, max_width=_THUMB_WIDTH),
+            self._on_thumbnails_ready, self._on_thumbnails_error,
+        )
+        self.finished.connect(self._thumbnails.cancel)
         self._build_ui()
 
     def _build_ui(self):
@@ -162,7 +167,7 @@ class RotatePdfDialog(QDialog):
     def _refresh_file_combo(self):
         self._file_combo.blockSignals(True)
         self._file_combo.clear()
-        files = self._collect_files()
+        files = pdf_file_choices(self._project, self._filter_group)
         if files:
             self._file_combo.addItem(t("split.no_file"), None)
             for label, path, group in files:
@@ -170,24 +175,6 @@ class RotatePdfDialog(QDialog):
         else:
             self._file_combo.addItem(t("split.no_project_files"), None)
         self._file_combo.blockSignals(False)
-
-    def _collect_files(self):
-        files = []
-        if not self._project:
-            return files
-        if self._filter_group is None:
-            for f in self._project.ungrouped_files:
-                if f.original_path.lower().endswith(".pdf"):
-                    files.append((f.display_name, f.original_path, None))
-        else:
-            if self._filter_group.score_file:
-                sf = self._filter_group.score_file
-                if sf.original_path.lower().endswith(".pdf"):
-                    files.append((sf.display_name, sf.original_path, self._filter_group))
-            for f in self._filter_group.files:
-                if f.original_path.lower().endswith(".pdf"):
-                    files.append((f.display_name, f.original_path, self._filter_group))
-        return files
 
     def _on_file_selected(self, index):
         data = self._file_combo.currentData()
@@ -214,7 +201,6 @@ class RotatePdfDialog(QDialog):
         if not ensure_file_exists(self, path):
             return
         try:
-            from services.pdf_service import get_page_count
             self._pdf_path = path
             self._page_count = get_page_count(path)
             self._page_info.setText(t("split.page_count", count=self._page_count))
@@ -225,19 +211,9 @@ class RotatePdfDialog(QDialog):
             loading.setStyleSheet("color: gray; font-size: 14px;")
             loading.setAlignment(Qt.AlignCenter)
             self._thumb_layout.addWidget(loading)
-            threading.Thread(
-                target=self._render_bg, args=(path,), daemon=True,
-            ).start()
+            self._thumbnails.load(path)
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
-
-    def _render_bg(self, path):
-        try:
-            from services.pdf_service import render_page_thumbnails
-            pil_images = render_page_thumbnails(path, max_width=_THUMB_WIDTH)
-            self._signals.ready.emit(pil_images)
-        except Exception as e:
-            self._signals.error.emit(str(e))
 
     def _on_thumbnails_ready(self, pil_images):
         self._pil_thumbs = pil_images
@@ -458,19 +434,23 @@ class RotatePdfDialog(QDialog):
             )
             if not output_path:
                 return
+        overwrite = self._overwrite_cb.isChecked()
         try:
-            backup_path = ""
-            if self._overwrite_cb.isChecked():
-                from services.undo_service import UndoService
-                backup_path = UndoService.create_backup(self._pdf_path)
+            backup_path = self._history.create_backup(self._pdf_path) if overwrite and self._history else ""
             from services.pdf_service import rotate_pdf_sections
             rotate_pdf_sections(self._pdf_path, rotation_ops, output_path)
-            if self._on_rotate_complete:
-                if self._overwrite_cb.isChecked():
-                    self._on_rotate_complete(backup_path, self._pdf_path)
-                else:
-                    self._on_rotate_complete("", output_path)
-            QMessageBox.information(self, t("dialog.complete"), t("rotate.done"))
-            self.accept()
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
+            return
+        self._record_rotation(output_path, backup_path)
+        QMessageBox.information(self, t("dialog.complete"), t("rotate.done"))
+        self.accept()
+
+    def _record_rotation(self, output_path: str, backup_path: str):
+        """把這次旋轉記進復原紀錄；寫不進去只提示，旋轉結果照留"""
+        if not self._history:
+            return
+        try:
+            self._history.record_rotate(self._pdf_path, output_path, backup_path)
+        except OSError as e:
+            QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=e))

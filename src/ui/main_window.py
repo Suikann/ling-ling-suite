@@ -5,7 +5,7 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
-from typing import Optional
+from typing import Iterable, NamedTuple, Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog,
@@ -16,35 +16,71 @@ from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
-    TEMPLATE_VARIABLES,
+    LOCALE_EN, LOCALE_ZH_TW, TEMPLATE_VARIABLES, OperationKind,
 )
-from core.locale import t, get_locale, set_locale
-from core.models import Project, Group, FileInfo, UndoMapping, UndoRecord
+from core.locale import t, get_locale, is_english, localized, set_locale
+from core.models import Project, Group, SplitResult, UndoMapping
+from core.paths import same_path
 from services.file_service import FileService
 from services.import_service import ImportService
-from services.move_service import RenameRollbackError
+from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVerdict
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
+from services.project_access import AccessResult, ProjectAccess
+from services.rename_service import assign_default_sections
+from services.split_service import SplitService
 from ui.instrument_list import InstrumentListEditor
-from ui.widgets import ensure_file_exists
+
+
+class _PendingMoveTexts(NamedTuple):
+    """中斷提示的字串鍵：標題、未搬完時的訊息、已搬完時的訊息"""
+    title: str
+    message: str
+    finished_message: str
+
+
+# 中斷提示依被中斷的操作種類說明
+_PENDING_MOVE_TEXTS = {
+    OperationKind.RENAME: _PendingMoveTexts(
+        "dialog.pending_move.title", "dialog.pending_move.message", "dialog.pending_move.finished_message",
+    ),
+    OperationKind.UNDO: _PendingMoveTexts(
+        "dialog.pending_move.undo.title", "dialog.pending_move.undo.message",
+        "dialog.pending_move.undo.finished_message",
+    ),
+    OperationKind.REDO: _PendingMoveTexts(
+        "dialog.pending_move.redo.title", "dialog.pending_move.redo.message",
+        "dialog.pending_move.redo.finished_message",
+    ),
+}
 
 
 class MainWindow(QMainWindow):
     """應用程式主視窗"""
 
-    def __init__(self, preferences: PreferencesService, parent=None):
+    def __init__(
+        self, preferences: PreferencesService, parent=None, history: Optional[MoveHistory] = None,
+    ):
+        """
+        Args:
+            preferences: 使用者偏好
+            parent: 父元件
+            history: 搬移歷程；省略時以使用者資料目錄建立
+        """
         super().__init__(parent)
-        self.project = Project()
+        self.project = self._blank_project()
+        self.project.subscribe(self._update_title)
         self._preferences = preferences
         self.file_service = FileService()
         self.import_service = ImportService(self.file_service)
         self.workspace_service = WorkspaceService(self.file_service)
+        self._project_access = ProjectAccess(self.file_service, preferences, self.workspace_service)
+        self._history = history or MoveHistory(self.file_service, self.workspace_service)
+        self._splitter = SplitService(self.file_service, self.workspace_service)
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
-        self._modified = False
-        self._project_service = None
-        self._rename_service = None
-        self._undo_service = None
+        # 紀錄寫不進去而留下進行中紀錄的那批搬移，其路徑變動已套用到的專案（之後保留結果時不再套用一次）
+        self._pending_applied_to: Optional[Project] = None
         self._create_menu()
         self._create_ui()
         self._update_title()
@@ -81,7 +117,7 @@ class MainWindow(QMainWindow):
         self._add_action(tools_menu, t("menu.tools.cleanup_workspace"), self._open_workspace_cleanup)
         view_menu = mb.addMenu(t("menu.view"))
         lang_menu = view_menu.addMenu(t("menu.view.language"))
-        for code, label_key in [("zh_TW", "menu.view.language.zh_TW"), ("en", "menu.view.language.en")]:
+        for code, label_key in [(LOCALE_ZH_TW, "menu.view.language.zh_TW"), (LOCALE_EN, "menu.view.language.en")]:
             action = QAction(t(label_key), self)
             action.triggered.connect(lambda checked=False, c=code: self._set_language(c))
             lang_menu.addAction(action)
@@ -106,7 +142,6 @@ class MainWindow(QMainWindow):
         self._instrument_editor = InstrumentListEditor(project=self.project)
         self._instrument_editor.setFixedWidth(260)
         self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
-        self._instrument_editor.ensemble_settings_changed.connect(self._mark_modified)
         splitter.addWidget(self._instrument_editor)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
@@ -138,7 +173,7 @@ class MainWindow(QMainWindow):
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel(t("panel.master_template")))
         self._master_template_entry = QLineEdit(self.project.master_template)
-        self._master_template_entry.textEdited.connect(self._mark_modified)
+        self._master_template_entry.textEdited.connect(lambda text: self.project.set_master_template(text))
         template_row.addWidget(self._master_template_entry, stretch=1)
         vars_btn = QPushButton(t("panel.insert_variable"))
         vars_btn.clicked.connect(self._show_variable_menu)
@@ -157,7 +192,11 @@ class MainWindow(QMainWindow):
     # --- 分頁管理 ---
 
     def _rebuild_tabs(self):
+        """依專案重建所有分頁；舊分頁延後刪除（重建可能由舊分頁自己的按鈕觸發）"""
+        old_tabs = [self._tab_widget.widget(i) for i in range(self._tab_widget.count())]
         self._tab_widget.clear()
+        for widget in old_tabs:
+            widget.deleteLater()
         self._tab_widget.addTab(
             self._create_ungrouped_tab(), t("group.ungrouped"),
         )
@@ -166,18 +205,33 @@ class MainWindow(QMainWindow):
 
     def _create_ungrouped_tab(self):
         from ui.group_panel import UngroupedTab
-        tab = UngroupedTab(self.project, self)
+        tab = UngroupedTab(self.project)
+        tab.groups_changed.connect(self._rebuild_tabs)
         return tab
 
     def _add_group_tab(self, group: Group):
         from ui.group_panel import GroupTab
-        tab = GroupTab(group, self.project, self)
+        tab = GroupTab(group, self.project, self.file_service, self.import_service)
+        tab.groups_changed.connect(self._rebuild_tabs)
         self._tab_widget.addTab(tab, group.name or group.id[:8])
 
+    def _current_group(self) -> Optional[Group]:
+        """目前分頁的群組；未分組分頁為 None"""
+        return getattr(self._tab_widget.currentWidget(), "group", None)
+
+    def _show_group(self, group_id: str):
+        """切到指定 id 的群組的分頁"""
+        for index in range(self._tab_widget.count()):
+            group = getattr(self._tab_widget.widget(index), "group", None)
+            if group is not None and group.id == group_id:
+                self._tab_widget.setCurrentIndex(index)
+                return
+
     def _add_group(self):
-        group = Group(name=t("group.new_name", number=len(self.project.groups) + 1))
-        self.project.groups.append(group)
-        self._mark_modified()
+        self.project.add_group(
+            t("group.new_name", number=len(self.project.groups) + 1),
+            score_label=t("group.score_label"),
+        )
         self._rebuild_tabs()
         self._tab_widget.setCurrentIndex(self._tab_widget.count() - 1)
 
@@ -190,40 +244,19 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _on_link_confirmed(self, selected_groups, piece_name):
-        for i, group in enumerate(selected_groups):
-            group.piece_name = piece_name
-            group.movement_number = str(i + 1)
-            if not group.movement_name:
-                group.movement_name = group.name
-        self._mark_modified()
+        self.project.link_movements(selected_groups, piece_name)
         self._rebuild_tabs()
 
     def _on_tab_changed(self, index: int):
-        widget = self._tab_widget.widget(index)
-        self._sync_instrument_editor_to_group(getattr(widget, '_group', None))
-
-    def _sync_instrument_editor_to_group(self, group):
-        """樂器表跟著目前分頁的群組；目前分頁不是群組時清空並停用，輸入的樂器才不會沒有地方寫入"""
-        self._instrument_editor._group = group
-        self._instrument_editor.setEnabled(group is not None)
-        self._fill_instrument_editor(group.instruments if group else [])
-
-    def _fill_instrument_editor(self, instruments):
-        """由程式填入樂器表；不經過樂器表變更的回呼，所以不算使用者的修改"""
-        self._instrument_editor.instruments_changed.disconnect(self._on_instruments_changed)
-        self._instrument_editor.set_instruments(instruments)
-        self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
+        self._instrument_editor.show_group(self._current_group())
 
     # --- 樂器表回呼 ---
 
     def _on_instruments_changed(self, instruments):
-        self._mark_modified()
+        """樂器表已寫入目前群組，重新顯示目前分頁的分譜與樂器對應"""
         widget = self._tab_widget.currentWidget()
-        if widget and hasattr(widget, '_group'):
-            widget._group.instruments = instruments
-            widget._group.selected_instruments = list(range(len(instruments)))
-            if hasattr(widget, 'on_instruments_changed'):
-                widget.on_instruments_changed(instruments)
+        if widget is not None:
+            widget.refresh()
 
     # --- 檔案操作 ---
 
@@ -235,8 +268,7 @@ class MainWindow(QMainWindow):
         if not paths:
             return
         files = self.import_service.import_files(paths)
-        self.project.ungrouped_files.extend(files)
-        self._mark_modified()
+        self.project.add_files(files)
         self._rebuild_tabs()
         self._set_status(t("status.imported_files", count=len(files)))
 
@@ -245,10 +277,8 @@ class MainWindow(QMainWindow):
         if not folder:
             return
         groups, ungrouped = self.import_service.import_folder(folder)
-        self.project.ungrouped_files.extend(ungrouped)
-        for g in groups:
-            self.project.groups.append(g)
-        self._mark_modified()
+        self.project.add_files(ungrouped)
+        self.project.add_groups(groups, score_label=t("group.score_label"))
         self._rebuild_tabs()
         if not self._project_path and not self._suggested_name:
             self._suggested_name = os.path.basename(folder)
@@ -259,21 +289,26 @@ class MainWindow(QMainWindow):
 
     # --- 專案管理 ---
 
+    @staticmethod
+    def _blank_project() -> Project:
+        """依目前介面語言的預設模板建立新專案"""
+        return Project(
+            master_template=localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN),
+            subfolder_template=localized(DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN),
+        )
+
+    def _set_project(self, project: Project, path: Optional[str]):
+        """換成另一個專案（新增或開啟）：訂閱它的「已變更」通知並重建畫面"""
+        self.project = project
+        self.project.subscribe(self._update_title)
+        self._project_path = path
+        self._suggested_name = ""
+        self._sync_ui_from_project()
+
     def _new_project(self):
         if not self._confirm_unsaved():
             return
-        locale = get_locale()
-        self.project = Project()
-        self.project.master_template = (
-            DEFAULT_MASTER_TEMPLATE_EN if locale == "en" else DEFAULT_MASTER_TEMPLATE
-        )
-        self.project.subfolder_template = (
-            DEFAULT_SUBFOLDER_TEMPLATE_EN if locale == "en" else DEFAULT_SUBFOLDER_TEMPLATE
-        )
-        self._project_path = None
-        self._suggested_name = ""
-        self._modified = False
-        self._sync_ui_from_project()
+        self._set_project(self._blank_project(), None)
 
     def _open_project(self):
         if not self._confirm_unsaved():
@@ -286,35 +321,39 @@ class MainWindow(QMainWindow):
             return
         self._do_open_project(path)
 
-    def _do_open_project(self, path: str):
-        try:
-            self.project = self._get_project_service().load_project(path)
-            self._project_path = path
-            self._suggested_name = ""
-            self._modified = False
-            self._sync_ui_from_project()
-            self._set_status(t("status.opened", path=path))
-            self._add_recent_project(path)
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.open_failed", error=e))
+    def _do_open_project(self, path: str, moved: Iterable[UndoMapping] = ()):
+        """開啟專案檔；讀不到才顯示「無法開啟專案」，最近清單或 meta 寫不進去只在狀態列提示
+
+        Args:
+            path: 專案檔路徑
+            moved: 開啟後先套用的路徑變動（見 ProjectAccess.open）
+        """
+        result = self._project_access.open(path, moved)
+        self._refresh_recent_menu()
+        if result.error is not None:
+            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.open_failed", error=result.error))
             return
-        self._sync_workspace_owner(path)
-        self._warn_missing_files()
-
-    def _sync_workspace_owner(self, path: str):
-        """把專案引用到的工作區子資料夾記到目前的專案檔路徑；寫不進去只在狀態列提示，不阻止開啟或存檔"""
-        failed = self.workspace_service.update_project_path(self.project, path)
-        if failed:
-            self._set_status(t("status.workspace_owner_failed", count=len(failed)))
-
-    def _warn_missing_files(self):
-        """專案內有找不到的檔案時提醒使用者"""
-        missing = self._get_project_service().find_missing_files(self.project)
-        if missing:
+        self._set_project(result.project, path)
+        self._show_access_status(t("status.opened", path=path), result)
+        if result.missing_files:
             QMessageBox.warning(
                 self, t("dialog.warning"),
-                t("missing.on_load", count=len(missing), files="\n".join(missing)),
+                t("missing.on_load", count=len(result.missing_files), files="\n".join(result.missing_files)),
             )
+
+    def _show_access_status(self, done: str, result: AccessResult):
+        """開啟或存檔成功後的狀態列：附帶動作有失敗時改顯示失敗的提示
+
+        Args:
+            done: 都成功時顯示的訊息
+            result: 開啟或存檔的結果
+        """
+        notices = []
+        if result.recent_failed:
+            notices.append(t("status.recent_failed"))
+        if result.owner_failed:
+            notices.append(t("status.workspace_owner_failed", count=len(result.owner_failed)))
+        self._set_status(" ".join(notices) or done)
 
     def _save_project(self) -> bool:
         """存到目前的專案檔，尚未存過時改走另存新檔；回傳是否存成"""
@@ -333,175 +372,185 @@ class MainWindow(QMainWindow):
         return self._do_save(path)
 
     def _do_save(self, path: str) -> bool:
-        """執行存檔流程；任一步失敗即顯示「儲存失敗」並回報沒存成
-
-        工作區 meta 的所屬專案更新不在存檔流程內：只要專案檔已寫出就更新，
-        即使之後加入最近清單或寫入偏好設定失敗、整體算沒存成也一樣，
-        否則「清理工作區」會把這個專案引用的子資料夾當成未被引用。
-        這項更新失敗只提示在狀態列，不影響是否存成。
+        """存檔；專案檔寫不成才顯示「儲存失敗」，最近清單或 meta 寫不進去只在狀態列提示
 
         Args:
             path: 專案檔路徑
 
         Returns:
-            是否存成
+            專案檔是否寫成
         """
-        written = False
-        try:
-            self._sync_project_from_ui()
-            self._get_project_service().save_project(self.project, path)
-            written = True
-            self._project_path = path
-            self._modified = False
-            self._update_title()
-            self._set_status(t("status.saved", path=path))
-            self._add_recent_project(path)
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.save_failed", error=e))
+        result = self._project_access.save(self.project, path)
+        if result.error is not None:
+            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.save_failed", error=result.error))
             return False
-        finally:
-            if written:
-                self._sync_workspace_owner(path)
+        self._project_path = path
+        self._update_title()
+        self._refresh_recent_menu()
+        self._show_access_status(t("status.saved", path=path), result)
         return True
 
     def _sync_ui_from_project(self):
-        self._instrument_editor._project = self.project
+        """畫面改為顯示目前的專案"""
+        self._instrument_editor.set_project(self.project)
         self._master_template_entry.setText(self.project.master_template)
         self._rebuild_tabs()
         if self.project.groups:
             self._tab_widget.setCurrentIndex(1)
         self._update_title()
 
-    def _sync_project_from_ui(self):
-        self.project.master_template = self._master_template_entry.text()
-        for i in range(self._tab_widget.count()):
-            widget = self._tab_widget.widget(i)
-            if hasattr(widget, 'sync_to_group'):
-                widget.sync_to_group()
-
     # --- 工具 ---
 
     def _preview_and_rename(self):
         if not self.prompt_pending_recovery():
             return
-        self._sync_project_from_ui()
         if not self.project.master_template.strip():
             QMessageBox.warning(self, t("dialog.warning"), t("dialog.warning.empty_template"))
             return
-        if not self._rename_service:
-            from services.rename_service import RenameService
-            self._rename_service = RenameService(self.file_service)
         selected_ids = None
         if len(self.project.groups) > 1:
             selected_ids = self._select_groups_for_rename()
             if selected_ids is None:
                 return
         from ui.preview_dialog import PreviewDialog
-        dialog = PreviewDialog(
-            self.project, self._rename_service,
-            self._execute_rename, selected_ids, self,
-        )
-        dialog.settings_changed.connect(self._mark_modified)
+        def check() -> RenameVerdict:
+            assign_default_sections(self.project, is_english(), selected_ids)
+            return self._history.check_rename(self.project, selected_ids)
+        dialog = PreviewDialog(self.project, check, self._execute_rename, self)
         dialog.exec()
 
-    def _execute_rename(self, plan):
-        try:
-            record = self._rename_service.execute_rename(
-                plan, self.project, self._get_undo_service().save_undo_record,
-            )
-            self._update_project_paths(record.mappings)
-            self._mark_modified()
-            self._rebuild_tabs()
-            self._set_status(t("status.renamed", count=len(record.mappings)))
-            QMessageBox.information(
-                self, t("dialog.complete"),
-                t("dialog.complete.renamed", count=len(record.mappings)),
-            )
-        except RenameRollbackError as e:
-            self._save_residual_rename(e.residual)
-            QMessageBox.critical(self, t("dialog.error"), str(e))
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), str(e))
+    def _execute_rename(self, verdict: RenameVerdict):
+        result = self._history.rename(verdict, project_path=self._project_path or "")
+        if self._apply_move_result(result):
+            count = len(result.changes)
+            self._set_status(t("status.renamed", count=count))
+            QMessageBox.information(self, t("dialog.complete"), t("dialog.complete.renamed", count=count))
 
-    def _save_residual_rename(self, residual):
-        """為搬不回原位的檔案寫入復原紀錄並更新專案路徑（重新命名、復原、重做與中斷還原共用）"""
-        from datetime import datetime
-        record = UndoRecord(
-            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-            description=t("rename.undo_description", count=len(residual)),
-            mappings=list(residual),
-        )
-        self._get_undo_service().save_undo_record(record)
-        self._update_project_paths(residual)
-        self._mark_modified()
-        self._rebuild_tabs()
+    def _apply_move_result(self, result: MoveResult, failure_key: Optional[str] = None) -> bool:
+        """把搬移歷程的結果交給專案（含搬不回去的殘留、復原的分割）並顯示失敗
+
+        Args:
+            result: 搬移歷程的動作結果
+            failure_key: 失敗訊息的字串鍵（以 error 帶入失敗原因）；省略時直接顯示失敗原因，
+                搬移歷程的拒絕與失敗本身就是完整的訊息
+
+        Returns:
+            動作是否照計畫完成且紀錄已寫入（呼叫端據此顯示完成訊息）
+        """
+        moved = result.changes + result.residual
+        if moved:
+            self.project.replace_paths(moved)
+        if result.split is not None:
+            self.project.revert_split(result.split)
+        if moved or result.split is not None:
+            current = self._tab_widget.currentIndex()
+            self._rebuild_tabs()
+            self._tab_widget.setCurrentIndex(current)
+        self._pending_applied_to = self.project if result.record_error is not None else None
+        return self._report_move_result(result, failure_key)
+
+    def _report_move_result(self, result: MoveResult, failure_key: Optional[str] = None) -> bool:
+        """顯示搬移歷程動作的失敗；參數與回傳值同 _apply_move_result"""
+        if result.error is not None:
+            message = t(failure_key, error=result.error) if failure_key else str(result.error)
+            QMessageBox.critical(self, t("dialog.error"), message)
+        if result.record_error is not None:
+            QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=result.record_error))
+        return result.error is None and result.record_error is None
+
+    def _show_skipped(self, result: MoveResult):
+        """列出已不在紀錄位置而略過的檔案"""
+        if result.skipped:
+            QMessageBox.information(self, t("dialog.info"), t("history.skipped", files="\n".join(result.skipped)))
+
+    def _show_not_restored(self, result: MoveResult):
+        """復原的是重新分割時，列出被取代、沒有找回的檔案（仍在資源回收桶）"""
+        if result.split is not None and result.split.replaced_files:
+            files = "\n".join(result.split.replaced_files)
+            QMessageBox.information(self, t("dialog.info"), t("history.split_replaced", files=files))
 
     # --- 中斷後還原 ---
 
     def prompt_pending_recovery(self) -> bool:
-        """若上次重新命名中途被中斷，詢問是否把已搬動的檔案還原到原位
+        """若上次的重新命名、復原或重做中途被中斷，詢問要把已搬動的檔案還原到原位還是保留結果
 
-        啟動時呼叫；重新命名、復原、重做前也會再問一次，因為引擎在紀錄仍在時拒絕執行。
+        啟動時呼叫；重新命名、復原、重做前也會再問一次，因為搬移歷程在紀錄仍在時拒絕執行。
+        結果（含「保留結果」的路徑變動）交給專案套用。
 
         Returns:
             是否已沒有待處理的進行中紀錄（可以繼續執行搬移）
         """
-        from services.move_service import MoveService
-        mover = MoveService(self.file_service)
         try:
-            journal = mover.load_pending()
+            pending = self._history.pending()
         except (ValueError, OSError) as e:
-            mover.discard_pending()
+            self._history.discard_pending()
             QMessageBox.warning(self, t("dialog.warning"), t("dialog.pending_move.unreadable", error=e))
             return True
-        if not journal:
+        if not pending:
             return True
-        moved = len(journal.moved_indices())
-        if journal.complete and moved:
-            choice = self._confirm_finished_batch(moved)
-            if choice is None:
-                return False
-            if choice == "keep":
-                mover.discard_pending()
-                return True
-        elif moved and not self._confirm_pending_recovery(moved):
+        texts = _PENDING_MOVE_TEXTS[pending.operation]
+        choice = self._ask_pending_move(pending, texts) if pending.moved else "restore"
+        if choice is None:
             return False
-        try:
-            result = mover.recover(journal)
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.pending_move.failed", error=e))
+        if choice == "keep":
+            return self._keep_pending(pending)
+        result = self._history.recover()
+        settled = self._apply_move_result(result, "dialog.pending_move.failed")
+        if pending.moved and settled:
+            self._show_recovery(result, t(texts.title))
+        return settled
+
+    def _keep_pending(self, pending: PendingMove) -> bool:
+        """中斷提示選「保留結果」：路徑變動套用到這批搬移所屬的專案
+
+        所屬專案不是目前專案時照一般流程開啟它（目前專案有未存檔的修改時先詢問是否儲存）再套用，
+        開啟後判為未存檔；所屬專案當時尚未存檔、目前專案也沒有引用這批檔案時，告知路徑無法更新。
+        舊版進行中紀錄沒有記所屬專案，套用到目前專案。目前專案在本次執行中已套用過這批搬移
+        （紀錄寫不進去而留下進行中紀錄時）就不再套用，對調與連鎖套用兩次會錯。
+
+        Args:
+            pending: 已整批搬完、只差紀錄沒確認寫入的批次
+
+        Returns:
+            是否已沒有待處理的進行中紀錄；在「是否儲存」選取消時為 False，什麼都不做
+        """
+        owner = pending.project_path
+        applied = self._pending_applied_to is self.project
+        elsewhere = not applied and bool(owner) and not (self._project_path and same_path(owner, self._project_path))
+        if elsewhere and not self._confirm_unsaved():
             return False
-        if not moved:
-            return True
-        if result.residual:
-            self._save_residual_rename(result.residual)
-        lines = [t("dialog.pending_move.done", count=len(result.restored))]
+        result = self._history.keep_result()
+        if elsewhere and result.error is None:
+            self._do_open_project(owner, moved=result.changes)
+        elif not applied:
+            if owner == "" and not self.project.references_any(
+                    path for m in result.changes for path in (m.original, m.renamed)):
+                QMessageBox.information(self, t("dialog.info"), t("dialog.pending_move.project_unsaved"))
+            return self._apply_move_result(result)
+        self._pending_applied_to = self.project if result.record_error is not None else None
+        return self._report_move_result(result)
+
+    def _show_recovery(self, result: MoveResult, title: str):
+        """中斷還原完成：還原了幾個檔，略過與搬不回去的各列在後"""
+        lines = [t("dialog.pending_move.done", count=len(result.changes))]
         if result.skipped:
-            lines.append(t("dialog.pending_move.skipped",
-                           files="\n".join(m.renamed for m in result.skipped)))
+            lines.append(t("history.skipped", files="\n".join(result.skipped)))
         if result.residual:
-            lines.append(t("dialog.pending_move.residual",
-                           files="\n".join(m.renamed for m in result.residual)))
-        QMessageBox.information(self, t("dialog.pending_move.title"), "\n\n".join(lines))
-        return True
+            lines.append(t("dialog.pending_move.residual", files="\n".join(m.renamed for m in result.residual)))
+        QMessageBox.information(self, title, "\n\n".join(lines))
 
-    def _confirm_pending_recovery(self, moved: int) -> bool:
-        """詢問是否還原上次中斷的重新命名；選「稍後」回傳 False"""
-        return self._ask_pending_move(t("dialog.pending_move.message", count=moved)) == "restore"
+    def _ask_pending_move(self, pending: PendingMove, texts: _PendingMoveTexts) -> Optional[str]:
+        """中斷提示：「還原」／「稍後」，已整批搬完時多一個「保留結果」
 
-    def _confirm_finished_batch(self, moved: int) -> Optional[str]:
-        """上次重新命名已搬完但復原紀錄未確認寫入：回傳 "keep"、"restore"，選「稍後」回傳 None"""
-        return self._ask_pending_move(
-            t("dialog.pending_move.finished_message", count=moved), keep=True,
-        )
-
-    def _ask_pending_move(self, text: str, keep: bool = False) -> Optional[str]:
-        """進行中紀錄的共用問法：「還原」／「稍後」，keep 為 True 時多一個「保留結果」"""
+        Returns:
+            "restore" 或 "keep"；選「稍後」回傳 None
+        """
+        finished = pending.complete
         msg = QMessageBox(self)
-        msg.setWindowTitle(t("dialog.pending_move.title"))
-        msg.setText(text)
+        msg.setWindowTitle(t(texts.title))
+        msg.setText(t(texts.finished_message if finished else texts.message, count=pending.moved))
         msg.setIcon(QMessageBox.Question)
-        keep_btn = msg.addButton(t("dialog.pending_move.keep"), QMessageBox.AcceptRole) if keep else None
+        keep_btn = msg.addButton(t("dialog.pending_move.keep"), QMessageBox.AcceptRole) if finished else None
         restore_btn = msg.addButton(t("dialog.pending_move.restore"), QMessageBox.AcceptRole)
         msg.addButton(t("dialog.pending_move.later"), QMessageBox.RejectRole)
         msg.setDefaultButton(keep_btn or restore_btn)
@@ -512,116 +561,50 @@ class MainWindow(QMainWindow):
             return "keep"
         return None
 
-    def _remove_file_references(self, paths):
-        """從所有群組與未分組清單移除指向指定路徑的檔案項目（重新分割取代舊輸出時使用）"""
-        removed = set(paths)
-        for group in self.project.groups:
-            group.files = [f for f in group.files if f.original_path not in removed]
-            if group.score_file and group.score_file.original_path in removed:
-                group.score_file = None
-        self.project.ungrouped_files = [
-            f for f in self.project.ungrouped_files if f.original_path not in removed
-        ]
-
-    def _update_project_paths(self, mappings):
-        """根據重新命名結果更新專案內的檔案路徑"""
-        path_map = {m.original: m.renamed for m in mappings}
-        for group in self.project.groups:
-            if group.score_file and group.score_file.original_path in path_map:
-                new_path = path_map[group.score_file.original_path]
-                group.score_file.original_path = new_path
-                group.score_file.display_name = os.path.basename(new_path)
-            for f in group.files:
-                if f.original_path in path_map:
-                    new_path = path_map[f.original_path]
-                    f.original_path = new_path
-                    f.display_name = os.path.basename(new_path)
-        for f in self.project.ungrouped_files:
-            if f.original_path in path_map:
-                new_path = path_map[f.original_path]
-                f.original_path = new_path
-                f.display_name = os.path.basename(new_path)
-
-    def _save_operation_undo(self, op_type, description, **kwargs):
-        """儲存操作的復原紀錄"""
-        from datetime import datetime
-        record = UndoRecord(
-            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-            description=description,
-            operation_type=op_type,
-            created_files=kwargs.get("created_files", []),
-            created_directories=kwargs.get("created_directories", []),
-            backup_path=kwargs.get("backup_path", ""),
-            original_path=kwargs.get("original_path", ""),
-        )
-        self._get_undo_service().save_undo_record(record)
+    # --- 復原／重做 ---
 
     def _undo_last(self):
         if not self.prompt_pending_recovery():
             return
-        record = self._get_undo_service().get_latest_undo_record()
+        record = self._history.latest_undo()
         if not record:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_undo"))
             return
-        result = QMessageBox.question(
+        answer = QMessageBox.question(
             self, t("dialog.confirm_undo"),
             t("dialog.confirm_undo.message", description=record.description),
         )
-        if result != QMessageBox.Yes:
+        if answer != QMessageBox.Yes:
             return
-        try:
-            self._get_undo_service().execute_undo(record)
-            if record.operation_type == "rename":
-                self._update_project_paths(
-                    [UndoMapping(original=m.renamed, renamed=m.original) for m in record.mappings],
-                )
-                self._mark_modified()
-                self._rebuild_tabs()
+        result = self._history.undo(project_path=self._project_path or "")
+        if self._apply_move_result(result, "dialog.error.undo_failed"):
             self._set_status(t("status.undone"))
-        except RenameRollbackError as e:
-            self._save_residual_rename(e.residual)
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.undo_failed", error=e))
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.undo_failed", error=e))
+            self._show_skipped(result)
+            self._show_not_restored(result)
 
     def _redo_last(self):
         if not self.prompt_pending_recovery():
             return
-        record = self._get_undo_service().get_latest_redo_record()
+        record = self._history.latest_redo()
         if not record:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_redo"))
             return
-        if record.operation_type != "rename":
-            QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_redo"))
-            return
-        result = QMessageBox.question(
+        answer = QMessageBox.question(
             self, t("dialog.confirm_redo"),
             t("dialog.confirm_redo.message", description=record.description),
         )
-        if result != QMessageBox.Yes:
+        if answer != QMessageBox.Yes:
             return
-        try:
-            self._get_undo_service().execute_redo(record)
-            self._update_project_paths(record.mappings)
-            self._mark_modified()
-            self._rebuild_tabs()
+        result = self._history.redo(project_path=self._project_path or "")
+        if self._apply_move_result(result):
             self._set_status(t("status.redone"))
-        except RenameRollbackError as e:
-            self._save_residual_rename(e.residual)
-            QMessageBox.critical(self, t("dialog.error"), str(e))
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), str(e))
+            self._show_skipped(result)
 
     def _open_split_pdf(self):
         from ui.split_dialog import SplitPdfDialog
-        current_group = None
-        widget = self._tab_widget.currentWidget()
-        if widget and hasattr(widget, '_group'):
-            current_group = widget._group
         dialog = SplitPdfDialog(
-            self.project, self._on_split_complete, current_group, self,
-            workspace_service=self.workspace_service,
-            project_path=self._project_path or "",
+            self.project, self._on_split_complete, self._current_group(), self,
+            splitter=self._splitter, project_path=self._project_path or "",
         )
         dialog.exec()
 
@@ -637,13 +620,9 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     def _scan_workspace(self):
-        """掃描工作區；最近清單中已不存在的專案檔順手移除"""
-        recent = list(self._preferences.get("recent_projects") or [])
-        scan = self.workspace_service.scan(self.project, recent, self._get_project_service().load_project)
-        if scan.missing_projects:
-            self._preferences.remove_recent_projects(scan.missing_projects)
-            self._preferences.save()
-            self._refresh_recent_menu()
+        """掃描工作區（最近清單中已不存在的專案檔會被移除，選單跟著更新）"""
+        scan = self._project_access.scan_workspace(self.project)
+        self._refresh_recent_menu()
         return scan
 
     def _open_workspace_cleanup(self):
@@ -651,70 +630,29 @@ class MainWindow(QMainWindow):
         dialog = WorkspaceCleanupDialog(self.workspace_service, self._scan_workspace, self)
         dialog.exec()
 
-    def _on_split_complete(self, files, instruments, source_group, source_path,
-                           created_directories=None, replaced_paths=None):
-        selected = list(range(len(files)))
-        if replaced_paths:
-            self._remove_file_references(replaced_paths)
-        if source_group:
-            source_group.files = [
-                f for f in source_group.files if f.original_path != source_path
-            ]
-            source_group.files.extend(files)
-            source_group.instruments = instruments
-            source_group.selected_instruments = selected
-        else:
-            source_name = os.path.splitext(os.path.basename(source_path))[0]
-            new_group = Group(
-                name=source_name, files=files,
-                instruments=instruments, selected_instruments=selected,
-            )
-            self.project.groups.append(new_group)
-        self._save_operation_undo(
-            "split", t("undo.split_description", count=len(files)),
-            created_files=[f.original_path for f in files],
-            created_directories=created_directories or [],
-        )
-        self._mark_modified()
+    def _on_split_complete(self, result: SplitResult):
+        """分割完成：結果交給專案套用、切到接手新分譜的群組，分割紀錄（帶專案回報的安置方式）交給搬移歷程"""
+        placement = self.project.apply_split(result, score_label=t("group.score_label"))
         self._rebuild_tabs()
-        self._set_status(t("split.files_added", count=len(files)))
+        self._show_group(placement.group_id)
+        self._set_status(t("split.files_added", count=len(result.parts)))
+        try:
+            self._history.record_split(result.record(placement))
+        except OSError as e:
+            QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=e))
 
     def _open_rotate_pdf(self):
         from ui.rotate_dialog import RotatePdfDialog
-        current_group = None
-        widget = self._tab_widget.currentWidget()
-        if widget and hasattr(widget, '_group'):
-            current_group = widget._group
-        dialog = RotatePdfDialog(
-            self.project, self._on_rotate_complete, current_group, self,
-        )
+        dialog = RotatePdfDialog(self.project, self._history, self._current_group(), self)
         dialog.exec()
-
-    def _on_rotate_complete(self, backup_path, original_path):
-        self._save_operation_undo(
-            "rotate", t("undo.rotate_description"),
-            backup_path=backup_path, original_path=original_path,
-        )
 
     def _set_language(self, lang_code: str):
         if lang_code == get_locale():
             return
-        self._sync_project_from_ui()
         set_locale(lang_code)
         self._preferences.set("language", lang_code)
         self._preferences.save()
-        from core.template_engine import convert_template_language
-        self.project.master_template = convert_template_language(
-            self.project.master_template, lang_code,
-        )
-        self.project.subfolder_template = convert_template_language(
-            self.project.subfolder_template, lang_code,
-        )
-        for group in self.project.groups:
-            if group.small_template:
-                group.small_template = convert_template_language(
-                    group.small_template, lang_code,
-                )
+        self.project.convert_template_language(lang_code)
         self.menuBar().clear()
         self._create_menu()
         self._create_ui()
@@ -722,20 +660,6 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     # --- 譜庫 ---
-
-    def _get_project_service(self):
-        """取得或建立專案服務"""
-        if not self._project_service:
-            from services.project_service import ProjectService
-            self._project_service = ProjectService(self.file_service)
-        return self._project_service
-
-    def _get_undo_service(self):
-        """取得或建立復原服務"""
-        if not self._undo_service:
-            from services.undo_service import UndoService
-            self._undo_service = UndoService(self.file_service, self.workspace_service)
-        return self._undo_service
 
     def _get_auth_service(self):
         """取得或建立 Google 認證服務"""
@@ -809,15 +733,9 @@ class MainWindow(QMainWindow):
 
     def _show_variable_menu(self):
         menu = QMenu(self)
-        locale = get_locale()
         for var in TEMPLATE_VARIABLES:
-            if locale == "en":
-                label = f"{{{var.name_en}}} - {var.description}"
-                var_name = var.name_en
-            else:
-                label = f"{{{var.name}}} - {var.description}"
-                var_name = var.name
-            action = menu.addAction(label)
+            var_name = localized(var.name, var.name_en)
+            action = menu.addAction(f"{{{var_name}}} - {var.description}")
             action.triggered.connect(
                 lambda checked=False, v=var_name: self._insert_variable(v),
             )
@@ -825,11 +743,6 @@ class MainWindow(QMainWindow):
 
     def _insert_variable(self, var_name: str):
         self._master_template_entry.insert(f"{{{var_name}}}")
-
-    def _mark_modified(self):
-        if not self._modified:
-            self._modified = True
-            self._update_title()
 
     def _update_title(self):
         title = t("app.title")
@@ -839,26 +752,38 @@ class MainWindow(QMainWindow):
             title += f" - {self._suggested_name}"
         else:
             title += f" - {t('app.unsaved_project')}"
-        if self._modified:
+        if self.project.is_modified():
             title += " *"
         self.setWindowTitle(title)
 
     def _set_status(self, text: str):
         self._status_label.setText(text)
 
-    def _confirm_unsaved(self, title: Optional[str] = None, message: Optional[str] = None) -> bool:
-        """有未存檔的修改時詢問是否儲存，開新專案、開啟專案、開啟最近專案、關閉程式共用
+    def _confirm_unsaved(self) -> bool:
+        """有未存檔的修改時詢問是否儲存（開新專案、開啟專案、開啟最近專案）
+
+        Returns:
+            可以繼續原本的操作時為 True；選「取消」或選「儲存」但沒存成時為 False
+        """
+        return not self.project.is_modified() or self._ask_to_save()
+
+    def _differs_from_project_file(self) -> bool:
+        """目前內容是否與磁碟上的專案檔不同；還沒存過檔時沒有可比對的檔案，交給未存檔判定"""
+        if not self._project_path:
+            return False
+        return not self._project_access.matches_file(self.project, self._project_path)
+
+    def _ask_to_save(self, title: Optional[str] = None, message: Optional[str] = None) -> bool:
+        """詢問是否儲存目前的專案
 
         Args:
             title: 提示框標題，省略時用「未儲存的變更」
             message: 提示框訊息，省略時用「是否儲存目前的專案？」
 
         Returns:
-            可以繼續原本的操作時為 True（沒有未存檔的修改、選「不儲存」、或選「儲存」且存成）；
+            可以繼續原本的操作時為 True（選「不儲存」，或選「儲存」且存成）；
             選「取消」或選「儲存」但沒存成時為 False
         """
-        if not self._modified:
-            return True
         msg = QMessageBox(self)
         msg.setWindowTitle(title or t("dialog.unsaved"))
         msg.setText(message or t("dialog.unsaved.message"))
@@ -874,7 +799,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_recent_menu(self):
         self._recent_menu.clear()
-        recent = self._preferences.get("recent_projects") or []
+        recent = self._project_access.recent_projects()
         if not recent:
             action = self._recent_menu.addAction(t("menu.file.recent.empty"))
             action.setEnabled(False)
@@ -887,19 +812,19 @@ class MainWindow(QMainWindow):
             )
 
     def _open_recent(self, path: str):
-        if not ensure_file_exists(self, path):
+        """開啟最近清單中的專案；專案檔已不存在時提示並從清單移除，不詢問是否儲存"""
+        if self._project_access.forget_if_missing(path):
+            self._refresh_recent_menu()
+            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.file_not_found", path=path))
             return
         if not self._confirm_unsaved():
             return
         self._do_open_project(path)
 
-    def _add_recent_project(self, path: str):
-        self._preferences.add_recent_project(path)
-        self._preferences.save()
-        self._refresh_recent_menu()
-
     def closeEvent(self, event):
-        if not self._confirm_unsaved(t("dialog.close"), t("dialog.close.message")):
+        """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次；任一不同就詢問是否儲存"""
+        unsaved = self.project.is_modified() or self._differs_from_project_file()
+        if unsaved and not self._ask_to_save(t("dialog.close"), t("dialog.close.message")):
             event.ignore()
             return
         event.accept()

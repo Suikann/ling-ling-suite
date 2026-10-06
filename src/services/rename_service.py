@@ -1,250 +1,126 @@
 # -*- coding: utf-8 -*-
 """
-重新命名服務
+重新命名計畫
 
-提供批次重新命名計畫生成、衝突偵測與執行。
+依專案的命名設定產生重新命名計畫（還沒對照磁碟），以及重複目標的自動加後綴。
+對照磁碟的預檢與執行都在搬移歷程（services/move_history.py）。
+產生計畫不改專案；分譜依聲部組分放時，先以 assign_default_sections 把還沒有聲部組的聲部寫進專案。
+
+使用範例：
+    from services.rename_service import assign_default_sections, generate_rename_plan
+    assign_default_sections(project, english=False)
+    planned = generate_rename_plan(project)
+    for entry in planned.entries:
+        print(entry.original_path, entry.new_path)
 """
 import os
 from collections import defaultdict
-from datetime import datetime
-from typing import Callable, Dict, List, Optional
-from core.filename import sanitize_filename
-from core.locale import t
-from core.models import Project, RenameEntry, UndoMapping, UndoRecord
-from core.template_engine import build_variables_for_file, substitute_template
-from services.file_service import FileService
-from services.move_service import Move, MoveService
+from dataclasses import dataclass, field, replace
+from typing import Collection, Iterable, List, Optional
+from core.constants import PartsOutputMode, VariableLevel
+from core.models import Group, Project, RenameEntry
+from core.naming import default_sections, name_group, settings_for, unknown_variables, variable_level, variables_in
+from core.paths import path_key
 
 
-def _name_stem(path: str) -> str:
-    """取路徑最後一段去掉副檔名（最後一個點之後）的部分"""
-    name = os.path.basename(path)
-    return name.rpartition(".")[0] if "." in name else name
+@dataclass
+class RenamePlan:
+    """依命名設定產生、還沒對照磁碟的重新命名計畫
+
+    Attributes:
+        entries: 要改名的項目（各群組依序：總譜在前，接著依序的分譜）
+        extra_files: 多於聲部數、不改名的分譜（來源路徑，各群組依序）
+        folder_variables: 子資料夾模板裡的逐檔變數（不重複，依出現順序）；子資料夾只依群組區分，用了就不能執行
+        unknown_variables: 命名格式與子資料夾模板裡不是模板變數的名稱（不重複，依出現順序）；產出時已拿掉
+    """
+    entries: List[RenameEntry] = field(default_factory=list)
+    extra_files: List[str] = field(default_factory=list)
+    folder_variables: List[str] = field(default_factory=list)
+    unknown_variables: List[str] = field(default_factory=list)
 
 
-class RenameService:
-    """批次重新命名服務"""
+def assign_default_sections(
+    project: Project, english: bool, group_ids: Optional[Collection[str]] = None,
+) -> None:
+    """分譜依聲部組分放時，把這些群組會被命名、還沒有聲部組（或留空）的聲部寫進專案的編制設定
 
-    def __init__(self, file_service: FileService):
-        self.file_service = file_service
-        self._mover = MoveService(file_service)
+    預設值依指定語言偵測；寫進專案後就定下，之後切換介面語言不會改變。其他分譜存放模式不寫。
+    產生重新命名計畫（重新命名預檢）前呼叫。
 
-    @staticmethod
-    def _moves(plan: List[RenameEntry]) -> List[Move]:
-        """把計畫轉成搬移引擎的「來源 → 目標」清單"""
-        return [(e.original_path, e.new_path) for e in plan]
+    Args:
+        project: 專案資料
+        english: 預設值用英文名稱（通常依目前介面語言）
+        group_ids: 只處理這些群組；None 表示全部群組
+    """
+    if project.parts_output_mode != PartsOutputMode.SECTION:
+        return
+    missing = default_sections(_chosen_groups(project, group_ids), project.instrument_sections, english)
+    if missing:
+        project.update_ensemble(sections=missing)
 
-    def generate_rename_plan(self, project: Project) -> List[RenameEntry]:
-        """根據專案設定產生重新命名計畫
 
-        Args:
-            project: 專案資料
+def generate_rename_plan(project: Project, group_ids: Optional[Collection[str]] = None) -> RenamePlan:
+    """根據專案設定產生重新命名計畫（不改專案）
 
-        Returns:
-            重新命名項目清單
-        """
-        plan = []
-        for group in project.groups:
-            template = (
-                group.small_template
-                if group.use_small_template and group.small_template
-                else project.master_template
-            )
-            if group.score_file:
-                label = getattr(group, "score_label", "") or t("group.score_label")
-                score_vars = {
-                    "序號": "00", "Number": "00",
-                    "樂器": label,
-                    "Instrument": label,
-                    "曲名": group.piece_name,
-                    "PieceName": group.piece_name,
-                    "樂章編號": group.movement_number,
-                    "MovementNum": group.movement_number,
-                    "樂章名稱": group.movement_name,
-                    "MovementName": group.movement_name,
-                    "作曲家": group.composer,
-                    "Composer": group.composer,
-                    "曲種": group.genre,
-                    "Genre": group.genre,
-                }
-                score_name = sanitize_filename(substitute_template(template, score_vars))
-                base_dir = (
-                    project.output_directory
-                    if project.output_directory
-                    else os.path.dirname(group.score_file.original_path)
-                )
-                if project.use_subfolders and project.subfolder_template:
-                    subfolder_name = sanitize_filename(substitute_template(
-                        project.subfolder_template, score_vars,
-                    ))
-                    target_dir = os.path.join(base_dir, subfolder_name)
-                else:
-                    target_dir = base_dir
-                plan.append(RenameEntry(
-                    original_path=group.score_file.original_path,
-                    new_path=os.path.join(target_dir, score_name),
-                    group_id=group.id,
-                ))
-            if not group.files or not group.instruments:
-                continue
-            for i, file_info in enumerate(group.files):
-                if i >= len(group.instruments):
-                    break
-                variables = build_variables_for_file(
-                    i, group, project.instruments or None,
-                )
-                new_name = sanitize_filename(substitute_template(template, variables))
-                base_dir = (
-                    project.output_directory
-                    if project.output_directory
-                    else os.path.dirname(file_info.original_path)
-                )
-                if project.use_subfolders and project.subfolder_template:
-                    subfolder_name = sanitize_filename(substitute_template(
-                        project.subfolder_template, variables,
-                    ))
-                    target_dir = os.path.join(base_dir, subfolder_name)
-                else:
-                    target_dir = base_dir
-                if project.parts_output_mode == "parts" and project.parts_subfolder_name:
-                    target_dir = os.path.join(
-                        target_dir, sanitize_filename(project.parts_subfolder_name),
-                    )
-                elif project.parts_output_mode == "section":
-                    instrument = group.instruments[i] if i < len(group.instruments) else ""
-                    section = project.instrument_sections.get(instrument)
-                    if not section:
-                        from core.constants import detect_instrument_section
-                        section = detect_instrument_section(instrument)
-                    target_dir = os.path.join(target_dir, sanitize_filename(section))
-                elif project.use_parts_subfolder and project.parts_subfolder_name:
-                    target_dir = os.path.join(
-                        target_dir, sanitize_filename(project.parts_subfolder_name),
-                    )
-                new_path = os.path.join(target_dir, new_name)
-                plan.append(RenameEntry(
-                    original_path=file_info.original_path,
-                    new_path=new_path,
-                    group_id=group.id,
-                ))
-        return plan
+    檔名與相對資料夾由命名模組決定，接在輸出位置之下；沒指定輸出位置時接在來源檔所在的資料夾。
 
-    def detect_conflicts(self, plan: List[RenameEntry]) -> Dict[str, List[str]]:
-        """偵測重新命名計畫中的檔名衝突
+    Args:
+        project: 專案資料；分譜依聲部組分放時，要命名的聲部都必須已有聲部組（見 assign_default_sections）
+        group_ids: 只為這些群組產生計畫；None 表示全部群組
 
-        使用大小寫不敏感比較（Windows 檔案系統）。
+    Returns:
+        重新命名計畫（多於聲部數的分譜不在 entries 中）
 
-        Args:
-            plan: 重新命名計畫
+    Raises:
+        UnsafeFolderNameError: 某一層資料夾名稱清理後是 . 或 ..
+        KeyError: 分譜依聲部組分放時，有要命名的聲部沒有聲部組
+    """
+    plan = RenamePlan()
+    for group in _chosen_groups(project, group_ids):
+        settings = settings_for(project, group)
+        naming = name_group(group, settings)
+        for named in naming.files:
+            entry = RenameEntry(named.file.original_path, "", group.id, project.output_directory)
+            entry.new_path = os.path.join(entry.output_location(), named.name.relative_path())
+            plan.entries.append(entry)
+        plan.extra_files.extend(f.original_path for f in naming.extra_files)
+        _add_new(plan.folder_variables, (
+            name for name in variables_in(settings.subfolder_template) if variable_level(name) == VariableLevel.FILE
+        ))
+        for template in (settings.template, settings.subfolder_template):
+            _add_new(plan.unknown_variables, unknown_variables(template))
+    return plan
 
-        Returns:
-            衝突的新路徑（小寫）到原始路徑清單的對應
-        """
-        return self._mover.detect_duplicate_targets(self._moves(plan))
 
-    def detect_duplicate_sources(self, plan: List[RenameEntry]) -> Dict[str, List[str]]:
-        """偵測同一來源檔案被多個項目引用的情況
+def apply_auto_suffix(entries: List[RenameEntry]) -> List[RenameEntry]:
+    """重複的目標（路徑以 core.paths 判定同一性）從第二次出現起依序加上「 (1)」「 (2)」…後綴，只加一次
 
-        同一個檔案被兩個群組同時引用時，第一次搬移後第二次必定失敗，
-        且無法用自動加後綴解決，需由使用者修正群組內容。
+    Args:
+        entries: 重新命名項目
 
-        Args:
-            plan: 重新命名計畫
+    Returns:
+        加後綴後的項目（順序不變）
+    """
+    seen = defaultdict(int)
+    result = []
+    for entry in entries:
+        key = path_key(entry.new_path)
+        count = seen[key]
+        seen[key] += 1
+        if count > 0:
+            base, ext = os.path.splitext(entry.new_path)
+            entry = replace(entry, new_path=f"{base} ({count}){ext}")
+        result.append(entry)
+    return result
 
-        Returns:
-            被重複引用的原始路徑到新路徑清單的對應
-        """
-        return self._mover.detect_duplicate_sources(self._moves(plan))
 
-    def find_missing_sources(self, plan: List[RenameEntry]) -> List[str]:
-        """列出計畫中來源檔案已不存在的原始路徑"""
-        return self._mover.find_missing_sources(self._moves(plan))
+def _chosen_groups(project: Project, group_ids: Optional[Collection[str]]) -> List[Group]:
+    """指定的群組（依專案中的順序）；group_ids 為 None 表示全部群組"""
+    return [g for g in project.groups if group_ids is None or g.id in group_ids]
 
-    def find_empty_names(self, plan: List[RenameEntry]) -> List[str]:
-        """列出新檔名去掉副檔名後為空的項目
 
-        副檔名取最後一個點之後的部分，因此「.pdf」這種只剩副檔名的名字視為空。
-
-        Args:
-            plan: 重新命名計畫
-
-        Returns:
-            新檔名為空的項目原始路徑清單（依計畫順序）
-        """
-        return [e.original_path for e in plan if not _name_stem(e.new_path)]
-
-    def find_occupied_targets(self, plan: List[RenameEntry]) -> List[str]:
-        """列出被計畫外檔案佔用的目標路徑（計畫內來源不算佔用），依計畫順序"""
-        return self._mover.find_occupied_targets(self._moves(plan))
-
-    def find_taken_staging_names(self, plan: List[RenameEntry]) -> List[str]:
-        """列出讓位用暫名已被佔用的項目（暫名路徑），依計畫順序"""
-        return self._mover.find_taken_staging_names(self._moves(plan))
-
-    def apply_auto_suffix(self, plan: List[RenameEntry]) -> List[RenameEntry]:
-        """為衝突的檔名自動加上後綴
-
-        Args:
-            plan: 原始重新命名計畫
-
-        Returns:
-            處理後的重新命名計畫
-        """
-        seen = defaultdict(int)
-        result = []
-        for entry in plan:
-            key = entry.new_path.lower()
-            count = seen[key]
-            seen[key] += 1
-            if count > 0:
-                base, ext = os.path.splitext(entry.new_path)
-                new_path = f"{base} ({count}){ext}"
-            else:
-                new_path = entry.new_path
-            result.append(RenameEntry(
-                original_path=entry.original_path,
-                new_path=new_path,
-                group_id=entry.group_id,
-            ))
-        return result
-
-    def execute_rename(
-        self, plan: List[RenameEntry], project: Project,
-        save_record: Optional[Callable[[UndoRecord], None]] = None,
-    ) -> UndoRecord:
-        """執行重新命名計畫
-
-        先檢查新檔名不為空，再交給搬移引擎驗證並以兩階段搬移執行
-        （對調與連鎖可執行；中途失敗回滾，搬不回去者以 RenameRollbackError 回報）。
-        復原紀錄透過 save_record 在引擎刪除進行中紀錄之前寫入，兩者之間沒有空窗。
-
-        Args:
-            plan: 重新命名計畫
-            project: 專案資料（用於判斷子資料夾設定）
-            save_record: 整批搬完後用來寫入復原紀錄的函式
-
-        Returns:
-            復原紀錄（只記原始位置到最終位置，暫名不出現）
-
-        Raises:
-            ValueError: 產生的新檔名為空
-        """
-        empty = self.find_empty_names(plan)
-        if empty:
-            raise ValueError(t("rename.error.empty_name", files="\n".join(empty)))
-        record = UndoRecord(
-            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-            description=t("rename.undo_description", count=len(plan)),
-            mappings=[
-                UndoMapping(original=entry.original_path, renamed=entry.new_path)
-                for entry in plan
-            ],
-        )
-
-        def complete(created_dirs: List[str]) -> None:
-            record.created_directories = created_dirs
-            if save_record:
-                save_record(record)
-
-        self._mover.execute(self._moves(plan), on_complete=complete)
-        return record
+def _add_new(names: List[str], found: Iterable[str]) -> None:
+    """把 found 中還不在 names 裡的名稱依序加到後面"""
+    for name in found:
+        if name not in names:
+            names.append(name)

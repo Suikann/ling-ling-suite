@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 20
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -31,14 +32,14 @@ jobs:
         run: |
           cd src
           python -c "from core.models import Project, Group, FileInfo"
-          python -c "from core.template_engine import substitute_template, build_variables_for_file"
+          python -c "from core.naming import NamingSettings, name_group, name_slot, settings_for"
           python -c "from core.locale import t, set_locale, get_locale"
-          python -c "from services.rename_service import RenameService"
+          python -c "from services.rename_service import generate_rename_plan"
           python -c "from services.project_service import ProjectService"
-          python -c "from services.undo_service import UndoService"
+          python -c "from services.move_history import MoveHistory, MoveResult, RenameVerdict"
 
       - name: Run tests
-        run: python -m pytest tests/ -v --tb=short --cov=src --cov-report=term-missing
+        run: python -m pytest tests/ -v --tb=short -o faulthandler_timeout=120 --cov=src --cov-report=term-missing
 
       - name: Syntax check all Python files
         run: python -m py_compile src/main.py

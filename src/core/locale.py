@@ -4,21 +4,28 @@
 
 提供 zh_TW / en 雙語字典與 t(key, **kwargs) 存取函數。
 
+依介面語言挑選中英文版本（預設模板、預設編制名稱、聲部組預設值等）一律經過 is_english 或 localized。
+
 使用範例：
-    from core.locale import t, set_locale, get_locale
+    from core.locale import t, set_locale, get_locale, localized
     set_locale("en")
     label_text = t("menu.file")
     status = t("status.imported_files", count=5)
+    template = localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN)
 """
-from typing import Dict, FrozenSet, Optional
+from typing import Dict, FrozenSet, Optional, TypeVar
+from core.constants import LOCALE_EN, LOCALE_ZH_TW
 
-_current_locale = "zh_TW"
+_T = TypeVar("_T")
+
+_current_locale = LOCALE_ZH_TW
 
 _STRINGS: Dict[str, Dict[str, str]] = {
-    "zh_TW": {
+    LOCALE_ZH_TW: {
         # 應用程式
         "app.title": "泠靈小工具",
         "app.unsaved_project": "未命名",
+        "app.already_running": "程式已在執行中。",
         # 選單 - 檔案
         "menu.file": "檔案",
         "menu.file.new": "新增專案",
@@ -82,14 +89,20 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "dialog.pending_move.title": "上次重新命名未完成",
         "dialog.pending_move.message": "上次重新命名未完成（已搬移 {count} 個檔案）。\n要把這些檔案還原到原位嗎？",
         "dialog.pending_move.finished_message": "上次重新命名已完成（{count} 個檔案），但程式在寫入復原紀錄前被關掉，之後將無法復原這次操作。\n要保留結果，還是把這些檔案還原到原位？",
+        "dialog.pending_move.undo.title": "上次復原未完成",
+        "dialog.pending_move.undo.message": "上次復原未完成（已搬移 {count} 個檔案）。\n要把這些檔案還原到原位嗎？",
+        "dialog.pending_move.undo.finished_message": "上次復原已完成（{count} 個檔案），但程式在更新紀錄前被關掉。\n要保留結果，還是把這些檔案還原到原位？",
+        "dialog.pending_move.redo.title": "上次重做未完成",
+        "dialog.pending_move.redo.message": "上次重做未完成（已搬移 {count} 個檔案）。\n要把這些檔案還原到原位嗎？",
+        "dialog.pending_move.redo.finished_message": "上次重做已完成（{count} 個檔案），但程式在更新紀錄前被關掉。\n要保留結果，還是把這些檔案還原到原位？",
         "dialog.pending_move.keep": "保留結果",
         "dialog.pending_move.restore": "還原",
         "dialog.pending_move.later": "稍後",
         "dialog.pending_move.done": "已還原 {count} 個檔案。",
-        "dialog.pending_move.skipped": "以下檔案已不在紀錄的位置，已略過：\n{files}",
         "dialog.pending_move.residual": "以下檔案無法搬回原位，已留在目前位置並寫入復原紀錄：\n{files}",
         "dialog.pending_move.unreadable": "上次重新命名的進行中紀錄無法讀取，已捨棄：\n{error}",
         "dialog.pending_move.failed": "還原失敗：\n{error}",
+        "dialog.pending_move.project_unsaved": "這批檔案所屬的專案沒有存檔，專案裡的路徑無法更新。",
         "dialog.long_path": "路徑過長警告",
         "dialog.long_path.message": "以下 {count} 個路徑超過 255 字元，可能導致錯誤：",
         "dialog.long_path.confirm": "是否繼續？",
@@ -115,6 +128,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "status.opened": "已開啟專案：{path}",
         "status.saved": "已儲存專案：{path}",
         "status.workspace_owner_failed": "有 {count} 個工作區子資料夾的所屬專案更新失敗，清理工作區時可能顯示為舊位置。",
+        "status.recent_failed": "最近開啟的專案清單無法更新。",
         # 底部面板
         "panel.master_template": "命名格式：",
         "panel.insert_variable": "插入變數",
@@ -208,6 +222,12 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "preview.occupied_warning": "有 {count} 個目標位置已有其他檔案，無法執行。請調整輸出設定或先移開該檔案。",
         "preview.empty_name_warning": "有 {count} 個檔案產生的新檔名為空，無法執行。請檢查模板與群組資訊。",
         "preview.staging_warning": "有 {count} 個檔案讓位用的暫名已被佔用，無法執行。請先移開該檔案。",
+        "preview.unsafe_folder_warning": "有資料夾名稱會是「{name}」，無法執行。請修改子資料夾模板、分譜資料夾或聲部組名稱。",
+        "preview.duplicate_target_warning": "以下檔案加後綴後仍撞名，無法執行：\n{files}",
+        "preview.outside_output_warning": "有 {count} 個目標不在輸出位置裡，無法執行。",
+        "preview.folder_variable_warning": "子資料夾模板不能用逐檔變數，請拿掉：{names}",
+        "preview.extra_files_warning": "以下檔案多於聲部數，不會改名：\n{files}",
+        "preview.unknown_variables_warning": "以下變數不存在，已從名稱拿掉：{names}",
         # 重新命名服務
         "rename.undo_description": "重新命名 {count} 個檔案",
         "rename.error.source_missing": "以下來源檔案不存在，已取消操作：\n{files}",
@@ -216,11 +236,19 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "rename.error.duplicate_target": "以下新檔名有多個檔案要使用，已取消操作：\n{files}",
         "rename.error.empty_name": "以下檔案產生的新檔名為空，已取消操作：\n{files}",
         "rename.error.staging_exists": "以下讓位用的暫名已被佔用，已取消操作：\n{files}",
+        "rename.error.outside_output": "以下目標不在輸出位置裡，已取消操作：\n{files}",
+        "rename.error.blocked": "預覽有無法執行的問題，已取消操作。",
         "rename.error.rollback_failed": "重新命名失敗：{error}\n\n回滾時以下檔案無法搬回原位，已留在目前位置並寫入復原紀錄：\n{files}",
-        "rename.error.pending_move": "上次重新命名的進行中紀錄尚未處理，已取消操作。請重新啟動程式處理。",
+        "rename.error.pending_move": "上次中斷的操作尚未處理，已取消操作。請先處理中斷提示。",
         "undo.split_description": "PDF 分割：建立 {count} 個檔案",
         "undo.rotate_description": "PDF 旋轉",
         "status.redone": "已重做上次操作",
+        "history.skipped": "以下檔案已不在紀錄的位置，已略過：\n{files}",
+        "history.residual.rename": "重新命名失敗後留下的 {count} 個檔案",
+        "history.residual.undo": "復原失敗後留下的 {count} 個檔案",
+        "history.residual.redo": "重做失敗後留下的 {count} 個檔案",
+        "history.record_not_saved": "操作已完成，但紀錄無法寫入：\n{error}",
+        "history.split_replaced": "分割時被取代的檔案沒有找回，仍在資源回收桶：\n{files}",
         # PDF 分割
         "split.title": "PDF 分割",
         "split.select_file": "選擇要分割的檔案：",
@@ -233,6 +261,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "split.resplit_owner": "這些分譜屬於專案「{project}」{missing}，尚未重新命名。",
         "split.resplit_owner_missing": "（找不到）",
         "split.error.overwrite_source": "分譜「{name}」的輸出路徑與來源合併譜相同，會覆蓋來源。\n請改名或改用其他輸出資料夾。",
+        "split.error.duplicate_names": "第 {segments} 段的檔名相同（{name}）。",
+        "split.segment_separator": "、",
         "split.cancel": "取消",
         "split.execute": "執行分割",
         "split.done": "已分割為 {count} 個檔案。",
@@ -475,10 +505,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.loading": "載入中...",
         "catalog.no_connection": "尚未登入 Google 帳號或未設定試算表 ID，請至「譜庫 > 譜庫設定」完成設定。",
     },
-    "en": {
+    LOCALE_EN: {
         # 應用程式
         "app.title": "Ling Ling Suite",
         "app.unsaved_project": "Untitled",
+        "app.already_running": "The application is already running.",
         # 選單 - 檔案
         "menu.file": "File",
         "menu.file.new": "New Project",
@@ -542,14 +573,20 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "dialog.pending_move.title": "Last Rename Incomplete",
         "dialog.pending_move.message": "The last rename did not finish ({count} file(s) had been moved).\nMove these files back to where they were?",
         "dialog.pending_move.finished_message": "The last rename finished ({count} file(s)), but the application was closed before the undo record was written, so it cannot be undone later.\nKeep the result, or move these files back to where they were?",
+        "dialog.pending_move.undo.title": "Last Undo Incomplete",
+        "dialog.pending_move.undo.message": "The last undo did not finish ({count} file(s) had been moved).\nMove these files back to where they were?",
+        "dialog.pending_move.undo.finished_message": "The last undo finished ({count} file(s)), but the application was closed before its record was updated.\nKeep the result, or move these files back to where they were?",
+        "dialog.pending_move.redo.title": "Last Redo Incomplete",
+        "dialog.pending_move.redo.message": "The last redo did not finish ({count} file(s) had been moved).\nMove these files back to where they were?",
+        "dialog.pending_move.redo.finished_message": "The last redo finished ({count} file(s)), but the application was closed before its record was updated.\nKeep the result, or move these files back to where they were?",
         "dialog.pending_move.keep": "Keep Result",
         "dialog.pending_move.restore": "Restore",
         "dialog.pending_move.later": "Later",
         "dialog.pending_move.done": "Restored {count} file(s).",
-        "dialog.pending_move.skipped": "The following files are no longer where the record says and were skipped:\n{files}",
         "dialog.pending_move.residual": "The following files could not be moved back. They remain where they are and an undo record was written:\n{files}",
         "dialog.pending_move.unreadable": "The in-progress record of the last rename could not be read and was discarded:\n{error}",
         "dialog.pending_move.failed": "Restore failed:\n{error}",
+        "dialog.pending_move.project_unsaved": "The project these files belong to was never saved, so its file paths could not be updated.",
         "dialog.long_path": "Long Path Warning",
         "dialog.long_path.message": "The following {count} path(s) exceed 255 characters and may cause errors:",
         "dialog.long_path.confirm": "Continue?",
@@ -575,6 +612,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "status.opened": "Opened project: {path}",
         "status.saved": "Saved project: {path}",
         "status.workspace_owner_failed": "Could not update the owning project of {count} workspace folder(s); the cleanup dialog may show their old location.",
+        "status.recent_failed": "Could not update the recent projects list.",
         # 底部面板
         "panel.master_template": "Naming Format:",
         "panel.insert_variable": "Insert Variable",
@@ -668,6 +706,12 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "preview.occupied_warning": "{count} target path(s) are already taken by other files. Change the output settings or move those files first.",
         "preview.empty_name_warning": "{count} file(s) would get an empty name. Check the template and group info.",
         "preview.staging_warning": "The temporary names needed to make room for {count} file(s) are already taken. Move those files first.",
+        "preview.unsafe_folder_warning": "A folder name would be \"{name}\". Change the subfolder template, parts folder or section names before executing.",
+        "preview.duplicate_target_warning": "These files still share a name after adding suffixes. Cannot execute:\n{files}",
+        "preview.outside_output_warning": "{count} target(s) fall outside the output location. Cannot execute.",
+        "preview.folder_variable_warning": "The subfolder template cannot use per-file variables. Remove: {names}",
+        "preview.extra_files_warning": "These files exceed the number of voices and will not be renamed:\n{files}",
+        "preview.unknown_variables_warning": "These variables do not exist and were left out of the names: {names}",
         # 重新命名服務
         "rename.undo_description": "Renamed {count} file(s)",
         "rename.error.source_missing": "The following source files do not exist. Operation cancelled:\n{files}",
@@ -676,11 +720,19 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "rename.error.duplicate_target": "More than one file maps to each of the following names. Operation cancelled:\n{files}",
         "rename.error.empty_name": "The following files would get an empty name. Operation cancelled:\n{files}",
         "rename.error.staging_exists": "The following temporary names needed to make room are already taken. Operation cancelled:\n{files}",
+        "rename.error.outside_output": "The following targets are outside the output location. Operation cancelled:\n{files}",
+        "rename.error.blocked": "The preview has problems that block the rename. Operation cancelled.",
         "rename.error.rollback_failed": "Rename failed: {error}\n\nWhile rolling back, the following files could not be moved back. They remain where they are and an undo record was written:\n{files}",
-        "rename.error.pending_move": "The in-progress record of the last rename has not been dealt with yet. Operation cancelled. Restart the application to handle it.",
+        "rename.error.pending_move": "The last interrupted operation has not been dealt with yet. Operation cancelled. Deal with the interruption prompt first.",
         "undo.split_description": "PDF Split: created {count} file(s)",
         "undo.rotate_description": "PDF Rotation",
         "status.redone": "Redone last operation",
+        "history.skipped": "The following files are no longer where the record says and were skipped:\n{files}",
+        "history.residual.rename": "{count} file(s) left by a failed rename",
+        "history.residual.undo": "{count} file(s) left by a failed undo",
+        "history.residual.redo": "{count} file(s) left by a failed redo",
+        "history.record_not_saved": "The operation finished, but its record could not be written:\n{error}",
+        "history.split_replaced": "Files replaced by the split were not restored; they are still in the recycle bin:\n{files}",
         # PDF 分割
         "split.title": "PDF Split",
         "split.select_file": "Select file to split:",
@@ -693,6 +745,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "split.resplit_owner": "These parts belong to the project \"{project}\"{missing} and have not been renamed yet.",
         "split.resplit_owner_missing": " (not found)",
         "split.error.overwrite_source": "The output path of part \"{name}\" is the source PDF itself and would overwrite it.\nRename the part or choose another output folder.",
+        "split.error.duplicate_names": "Segments {segments} have the same file name ({name}).",
+        "split.segment_separator": ", ",
         "split.cancel": "Cancel",
         "split.execute": "Split",
         "split.done": "Split into {count} file(s).",
@@ -943,6 +997,24 @@ def get_locale() -> str:
     return _current_locale
 
 
+def is_english() -> bool:
+    """目前介面語言是否為英文"""
+    return _current_locale == LOCALE_EN
+
+
+def localized(zh: _T, en: _T) -> _T:
+    """依目前介面語言挑選中文或英文版本
+
+    Args:
+        zh: 中文版本
+        en: 英文版本
+
+    Returns:
+        介面語言為英文時為 en，否則為 zh
+    """
+    return en if is_english() else zh
+
+
 def set_locale(locale_code: str):
     """設定目前語言
 
@@ -981,10 +1053,10 @@ def t(key: str, **kwargs) -> str:
     Returns:
         翻譯後的字串，找不到時回傳鍵名本身
     """
-    strings = _STRINGS.get(_current_locale, _STRINGS["zh_TW"])
+    strings = _STRINGS.get(_current_locale, _STRINGS[LOCALE_ZH_TW])
     text = strings.get(key)
     if text is None:
-        fallback = _STRINGS["zh_TW"]
+        fallback = _STRINGS[LOCALE_ZH_TW]
         text = fallback.get(key, key)
     if kwargs:
         try:

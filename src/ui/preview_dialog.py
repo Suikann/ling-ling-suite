@@ -2,46 +2,49 @@
 """
 預覽對話框（PySide6）
 
-提供輸出設定（輸出位置、子資料夾）與重新命名預覽。
+提供輸出設定（輸出位置、子資料夾）與重新命名預覽。設定一經修改即透過專案的編輯操作寫入。
+顯示的是搬移歷程的預檢判定（RenameVerdict）；按下執行時交出的就是這份判定。
 """
-import os
-from typing import Callable, Optional, Set
-from PySide6.QtCore import Signal
+from typing import Callable, List
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QCheckBox, QLineEdit, QScrollArea, QWidget, QFileDialog,
-    QMessageBox, QRadioButton, QButtonGroup,
+    QRadioButton, QButtonGroup,
 )
+from core.constants import RENAME_PROBLEM_RULES, PartsOutputMode, RenameProblem, RenameProblemRule
 from core.locale import t
 from core.models import Project
-from services.move_service import staging_path
+from services.move_history import RenameVerdict
+
+
+def _variable_list(names: List[str]) -> str:
+    """變數名稱以「{名稱}」的寫法列成一行"""
+    return " ".join(f"{{{name}}}" for name in names)
 
 
 class PreviewDialog(QDialog):
     """預覽重新命名對話框"""
 
-    settings_changed = Signal()
+    _PARTS_MODES = tuple(PartsOutputMode)
 
     def __init__(
-        self, project: Project, rename_service,
-        on_execute: Callable, selected_group_ids: Optional[Set[str]] = None,
-        parent=None,
+        self, project: Project, check: Callable[[], RenameVerdict],
+        on_execute: Callable[[RenameVerdict], None], parent=None,
     ):
+        """
+        Args:
+            project: 專案（輸出設定直接寫入）
+            check: 依專案目前的設定做重新命名預檢，回傳判定
+            on_execute: 按下執行時呼叫，參數為目前顯示的判定
+            parent: 父元件
+        """
         super().__init__(parent)
         self.setWindowTitle(t("preview.title"))
         self.resize(750, 560)
         self._project = project
-        self._rename_service = rename_service
+        self._check = check
         self._on_execute = on_execute
-        self._selected_ids = selected_group_ids
-        self._plan = []
-        self._conflicts = {}
-        self._duplicate_sources = {}
-        self._occupied_sources = []
-        self._staging_taken_sources = []
-        self._empty_names = []
-        self._missing = []
-        self._last_settings = self._output_settings()
+        self._verdict = RenameVerdict()
         self._build_ui()
         self._refresh_plan()
 
@@ -67,11 +70,16 @@ class PreviewDialog(QDialog):
         subfolder_row = QHBoxLayout()
         self._subfolder_cb = QCheckBox(t("panel.subfolder"))
         self._subfolder_cb.setChecked(self._project.use_subfolders)
-        self._subfolder_cb.toggled.connect(self._on_settings_changed)
+        self._subfolder_cb.toggled.connect(
+            lambda checked: self._write_settings(use_subfolders=checked),
+        )
         subfolder_row.addWidget(self._subfolder_cb)
         subfolder_row.addWidget(QLabel(t("panel.subfolder_template")))
         self._subfolder_entry = QLineEdit(self._project.subfolder_template)
-        self._subfolder_entry.editingFinished.connect(self._on_settings_changed)
+        self._subfolder_entry.textEdited.connect(
+            lambda text: self._project.set_output_settings(subfolder_template=text),
+        )
+        self._subfolder_entry.editingFinished.connect(self._refresh_plan)
         subfolder_row.addWidget(self._subfolder_entry, stretch=1)
         layout.addLayout(subfolder_row)
         parts_row = QHBoxLayout()
@@ -80,34 +88,35 @@ class PreviewDialog(QDialog):
         self._radio_root = QRadioButton(t("panel.parts_mode_root"))
         self._radio_parts = QRadioButton(t("panel.parts_mode_parts"))
         self._radio_section = QRadioButton(t("panel.parts_mode_section"))
-        self._parts_group.addButton(self._radio_root, 0)
-        self._parts_group.addButton(self._radio_parts, 1)
-        self._parts_group.addButton(self._radio_section, 2)
+        for mode_id, radio in enumerate((self._radio_root, self._radio_parts, self._radio_section)):
+            self._parts_group.addButton(radio, mode_id)
         mode = self._project.parts_output_mode
-        if mode == "parts":
-            self._radio_parts.setChecked(True)
-        elif mode == "section":
-            self._radio_section.setChecked(True)
-        else:
-            self._radio_root.setChecked(True)
-        self._parts_group.buttonClicked.connect(self._on_settings_changed)
+        mode_id = self._PARTS_MODES.index(mode) if mode in self._PARTS_MODES else 0
+        self._parts_group.button(mode_id).setChecked(True)
+        self._parts_group.idClicked.connect(
+            lambda clicked_id: self._write_settings(parts_output_mode=self._PARTS_MODES[clicked_id]),
+        )
         parts_row.addWidget(self._radio_root)
         parts_row.addWidget(self._radio_parts)
         parts_row.addWidget(self._radio_section)
         self._parts_entry = QLineEdit(self._project.parts_subfolder_name)
         self._parts_entry.setFixedWidth(120)
-        self._parts_entry.editingFinished.connect(self._on_settings_changed)
+        self._parts_entry.textEdited.connect(
+            lambda text: self._project.set_output_settings(parts_subfolder_name=text),
+        )
+        self._parts_entry.editingFinished.connect(self._refresh_plan)
         parts_row.addWidget(self._parts_entry)
         layout.addLayout(parts_row)
         self._warn_label = QLabel("")
         self._warn_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
+        self._warn_label.setWordWrap(True)
         self._warn_label.setVisible(False)
         layout.addWidget(self._warn_label)
-        self._missing_label = QLabel("")
-        self._missing_label.setStyleSheet("color: #e0b060;")
-        self._missing_label.setWordWrap(True)
-        self._missing_label.setVisible(False)
-        layout.addWidget(self._missing_label)
+        self._notes_label = QLabel("")
+        self._notes_label.setStyleSheet("color: #e0b060;")
+        self._notes_label.setWordWrap(True)
+        self._notes_label.setVisible(False)
+        layout.addWidget(self._notes_label)
         self._count_label = QLabel("")
         layout.addWidget(self._count_label)
         self._scroll = QScrollArea()
@@ -132,140 +141,92 @@ class PreviewDialog(QDialog):
     def _browse_output(self):
         folder = QFileDialog.getExistingDirectory(self, t("panel.output_dir"))
         if folder:
-            self._project.output_directory = folder
             self._output_label.setText(folder)
             self._output_label.setStyleSheet("")
-            self._after_settings_written()
+            self._write_settings(output_directory=folder)
 
     def _clear_output(self):
-        self._project.output_directory = ""
         self._output_label.setText(t("panel.output_dir_hint"))
         self._output_label.setStyleSheet("color: gray;")
-        self._after_settings_written()
+        self._write_settings(output_directory="")
 
-    def _on_settings_changed(self, *_args):
-        self._project.use_subfolders = self._subfolder_cb.isChecked()
-        self._project.subfolder_template = self._subfolder_entry.text()
-        checked_id = self._parts_group.checkedId()
-        if checked_id == 1:
-            self._project.parts_output_mode = "parts"
-            self._project.use_parts_subfolder = True
-        elif checked_id == 2:
-            self._project.parts_output_mode = "section"
-            self._project.use_parts_subfolder = False
-        else:
-            self._project.parts_output_mode = "root"
-            self._project.use_parts_subfolder = False
-        self._project.parts_subfolder_name = self._parts_entry.text()
-        self._after_settings_written()
-
-    def _output_settings(self) -> tuple:
-        """專案中由本對話框編輯的輸出設定"""
-        p = self._project
-        return (
-            p.output_directory, p.use_subfolders, p.subfolder_template,
-            p.parts_output_mode, p.use_parts_subfolder, p.parts_subfolder_name,
-        )
-
-    def _after_settings_written(self):
-        """設定寫回專案後重新產生預覽；值實際改變時才發出 settings_changed，讓主視窗標記未存檔"""
-        settings = self._output_settings()
-        if settings != self._last_settings:
-            self._last_settings = settings
-            self.settings_changed.emit()
+    def _write_settings(self, **settings):
+        """把輸出設定寫入專案並重新產生預覽"""
+        self._project.set_output_settings(**settings)
         self._refresh_plan()
 
     def _refresh_plan(self):
-        self._plan = self._rename_service.generate_rename_plan(self._project)
-        if self._selected_ids is not None:
-            self._plan = [e for e in self._plan if e.group_id in self._selected_ids]
-        self._missing = self._rename_service.find_missing_sources(self._plan)
-        if self._missing:
-            missing = set(self._missing)
-            self._plan = [e for e in self._plan if e.original_path not in missing]
-        self._conflicts = self._rename_service.detect_conflicts(self._plan)
-        self._duplicate_sources = self._rename_service.detect_duplicate_sources(self._plan)
-        self._empty_names = self._rename_service.find_empty_names(self._plan)
-        self._check_disk_against_effective_plan()
+        self._verdict = self._check()
         self._render_list()
 
-    def _effective_plan(self):
-        """實際會執行的計畫：有衝突時為加後綴後的版本"""
-        if self._conflicts:
-            return self._rename_service.apply_auto_suffix(self._plan)
-        return self._plan
-
-    def _check_disk_against_effective_plan(self):
-        """以實際會執行的計畫判定目標被佔用、暫名被佔用，記下受影響項目的原始路徑"""
-        plan = self._effective_plan()
-        occupied = set(self._rename_service.find_occupied_targets(plan))
-        self._occupied_sources = [e.original_path for e in plan if e.new_path in occupied]
-        taken = set(self._rename_service.find_taken_staging_names(plan))
-        self._staging_taken_sources = [
-            e.original_path for e in plan if staging_path(e.original_path) in taken
-        ]
-
-    def _blocking_warnings(self):
-        """無法執行的原因清單，與 RenameService 執行前驗證的阻擋條件一致"""
+    def _blocking_warnings(self) -> List[str]:
+        """判定中阻擋執行的原因"""
+        verdict = self._verdict
         warnings = []
-        if self._duplicate_sources:
-            warnings.append(t("preview.duplicate_source_warning", count=len(self._duplicate_sources)))
-        if self._empty_names:
-            warnings.append(t("preview.empty_name_warning", count=len(self._empty_names)))
-        if self._occupied_sources:
-            warnings.append(t("preview.occupied_warning", count=len(self._occupied_sources)))
-        if self._staging_taken_sources:
-            warnings.append(t("preview.staging_warning", count=len(self._staging_taken_sources)))
-        return warnings
+        if verdict.unsafe_folder:
+            warnings.append(t("preview.unsafe_folder_warning", name=verdict.unsafe_folder))
+        if verdict.folder_variables:
+            warnings.append(t("preview.folder_variable_warning", names=_variable_list(verdict.folder_variables)))
+        return warnings + self._problem_messages(lambda rule: rule.blocking)
+
+    def _notes(self) -> List[str]:
+        """判定中不阻擋、但要讓使用者知道的事（加後綴另在警告列說明）"""
+        verdict = self._verdict
+        notes = self._problem_messages(lambda rule: not rule.blocking and not rule.highlight)
+        if verdict.unknown_variables:
+            notes.append(t("preview.unknown_variables_warning", names=_variable_list(verdict.unknown_variables)))
+        return notes
+
+    def _problem_messages(self, wanted: Callable[[RenameProblemRule], bool]) -> List[str]:
+        """判定中符合條件的問題種類，依 RENAME_PROBLEM_RULES 的順序各一則預覽訊息
+
+        Args:
+            wanted: 依問題的處理方式判斷要不要列出
+
+        Returns:
+            有來源出現這種問題的訊息
+        """
+        messages = []
+        for kind, rule in RENAME_PROBLEM_RULES.items():
+            sources = self._verdict.sources(kind)
+            if wanted(rule) and sources:
+                messages.append(t(rule.preview_key, count=len(sources), files="\n".join(sources)))
+        return messages
 
     def _render_list(self):
         while self._scroll_layout.count():
             item = self._scroll_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        if self._missing:
-            self._missing_label.setText(
-                t("preview.missing_warning", count=len(self._missing), files="\n".join(self._missing)),
-            )
-        self._missing_label.setVisible(bool(self._missing))
-        if not self._plan:
-            self._count_label.setText(t("dialog.info.no_files"))
-            self._exec_btn.setEnabled(False)
-            return
+        verdict = self._verdict
+        notes = self._notes()
+        self._notes_label.setText("\n\n".join(notes))
+        self._notes_label.setVisible(bool(notes))
         blocking = self._blocking_warnings()
-        self._exec_btn.setEnabled(not blocking)
-        conflict_keys = {k.lower() for k in self._conflicts}
-        duplicate_keys = set(self._duplicate_sources)
-        blocked_sources = (
-            set(self._occupied_sources) | set(self._staging_taken_sources) | set(self._empty_names)
-        )
+        suffixed = verdict.sources(RenameProblem.SUFFIXED)
         if blocking:
-            self._warn_label.setText("\n".join(blocking))
-            self._warn_label.setVisible(True)
-            self._exec_btn.setText(t("preview.execute"))
-        elif self._conflicts:
-            self._warn_label.setText(
-                t("preview.conflict_warning", count=len(self._conflicts)),
-            )
-            self._warn_label.setVisible(True)
-            self._exec_btn.setText(t("preview.execute_with_suffix"))
-        else:
-            self._warn_label.setVisible(False)
-            self._exec_btn.setText(t("preview.execute"))
-        self._count_label.setText(t("preview.file_count", count=len(self._plan)))
-        for entry in self._plan:
+            self._warn_label.setText("\n\n".join(blocking))
+        elif suffixed:
+            self._warn_label.setText(t(RENAME_PROBLEM_RULES[RenameProblem.SUFFIXED].preview_key, count=len(suffixed)))
+        self._warn_label.setVisible(bool(blocking or suffixed))
+        self._exec_btn.setText(t("preview.execute_with_suffix" if suffixed and not blocking else "preview.execute"))
+        self._exec_btn.setEnabled(verdict.runnable)
+        if not verdict.plan:
+            self._count_label.setText("" if verdict.unsafe_folder else t("dialog.info.no_files"))
+            return
+        self._count_label.setText(t("preview.file_count", count=len(verdict.plan)))
+        for entry in verdict.plan:
             row = QLabel(f"{entry.original_path}\n  \u2192 {entry.new_path}")
             row.setWordWrap(True)
-            if (entry.new_path.lower() in conflict_keys
-                    or os.path.normcase(entry.original_path) in duplicate_keys
-                    or entry.original_path in blocked_sources):
+            if self._needs_attention(entry.original_path):
                 row.setStyleSheet("color: #e74c3c;")
             self._scroll_layout.addWidget(row)
         self._scroll_layout.addStretch()
 
+    def _needs_attention(self, source: str) -> bool:
+        """這一項有要標紅的問題（阻擋的，或目標加了後綴）"""
+        return any(RENAME_PROBLEM_RULES[kind].highlight for kind in self._verdict.problems.get(source, ()))
+
     def _execute(self):
-        plan = self._plan
-        if self._conflicts:
-            plan = self._rename_service.apply_auto_suffix(plan)
-        self._on_execute(plan)
+        self._on_execute(self._verdict)
         self.accept()

@@ -2,82 +2,12 @@
 """
 模板引擎
 
-提供模板解析、變數替換與曲名偵測功能。
+提供曲名、總譜、樂器偵測與模板變數的雙語轉換；命名格式的套用見 core.naming。
 """
 import os
 import re
-from typing import Dict, List
-from core.constants import ALL_VARIABLE_NAMES, TEMPLATE_VARIABLES
-from core.models import Group
-
-
-def substitute_template(template: str, variables: Dict[str, str]) -> str:
-    """將模板中的 {變數} 替換為對應值
-
-    Args:
-        template: 模板字串，例如 "{序號}. {樂器}.pdf"
-        variables: 變數名稱到值的對應字典
-
-    Returns:
-        替換後的字串
-    """
-    result = template
-    for name, value in variables.items():
-        result = result.replace(f"{{{name}}}", value)
-    return result
-
-
-def build_variables_for_file(
-    file_index: int,
-    group: Group,
-    instruments: List[str] = None,
-) -> Dict[str, str]:
-    """為單一檔案組合所有模板變數（同時產生中英文鍵名）
-
-    Args:
-        file_index: 檔案在群組中的索引（從 0 開始）
-        group: 所屬群組
-        instruments: 樂器表（未提供時使用 group.instruments）
-
-    Returns:
-        變數名稱到值的對應字典（包含中英文鍵名）
-    """
-    group_instruments = getattr(group, "instruments", []) or []
-    if group_instruments:
-        total = len(group_instruments)
-        pad_width = len(str(total)) if total > 0 else 1
-        sequence_number = str(file_index + 1).zfill(pad_width)
-        instrument_name = (
-            group_instruments[file_index]
-            if file_index < len(group_instruments)
-            else ""
-        )
-    elif instruments:
-        total = len(instruments)
-        pad_width = len(str(total)) if total > 0 else 1
-        sequence_number = str(file_index + 1).zfill(pad_width)
-        instrument_name = (
-            instruments[file_index] if file_index < len(instruments) else ""
-        )
-    else:
-        pad_width = len(str(len(group.files))) if group.files else 1
-        sequence_number = str(file_index + 1).zfill(pad_width)
-        instrument_name = ""
-    values = {
-        "序號": sequence_number,
-        "樂器": instrument_name,
-        "曲名": group.piece_name,
-        "樂章編號": group.movement_number,
-        "樂章名稱": group.movement_name,
-        "作曲家": group.composer,
-        "曲種": group.genre,
-    }
-    en_mapping = {tv.name: tv.name_en for tv in TEMPLATE_VARIABLES}
-    for zh_name, val in list(values.items()):
-        en_name = en_mapping.get(zh_name)
-        if en_name:
-            values[en_name] = val
-    return values
+from typing import List, Optional
+from core.constants import LOCALE_EN, SCORE_KEYWORDS, TEMPLATE_VARIABLES
 
 
 def detect_piece_name(filenames: List[str]) -> str:
@@ -102,6 +32,22 @@ def detect_piece_name(filenames: List[str]) -> str:
     if result:
         return result
     return _detect_by_common_tokens(basenames)
+
+
+def detect_score_index(filenames: List[str]) -> Optional[int]:
+    """從檔名清單找出總譜
+
+    Args:
+        filenames: 檔案名稱清單（不含路徑）
+
+    Returns:
+        第一個檔名（不含副檔名、不分大小寫）含總譜關鍵字的索引，找不到時為 None
+    """
+    for i, name in enumerate(filenames):
+        stem = os.path.splitext(name)[0].lower()
+        if any(keyword in stem for keyword in SCORE_KEYWORDS):
+            return i
+    return None
 
 
 def _detect_by_common_prefix(basenames: List[str]) -> str:
@@ -153,12 +99,12 @@ def convert_template_language(template: str, to_locale: str) -> str:
 
     Args:
         template: 模板字串
-        to_locale: 目標語言代碼，"zh_TW" 或 "en"
+        to_locale: 目標語言代碼（LOCALE_ZH_TW 或 LOCALE_EN）
 
     Returns:
         轉換後的模板字串
     """
-    if to_locale == "en":
+    if to_locale == LOCALE_EN:
         for tv in TEMPLATE_VARIABLES:
             template = template.replace(f"{{{tv.name}}}", f"{{{tv.name_en}}}")
     else:
@@ -204,17 +150,3 @@ def extract_instruments_from_filenames(filenames: List[str]) -> List[str]:
         else:
             instruments.append(name.strip())
     return instruments
-
-
-def validate_template(template: str) -> List[str]:
-    """驗證模板中的變數是否合法（中英文變數名皆可辨識）
-
-    Args:
-        template: 模板字串
-
-    Returns:
-        未知變數名稱清單，空清單表示所有變數皆合法
-    """
-    found = re.findall(r'\{([^}]+)\}', template)
-    unknown = [name for name in found if name not in ALL_VARIABLE_NAMES]
-    return unknown

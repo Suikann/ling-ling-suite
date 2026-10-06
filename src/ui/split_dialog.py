@@ -2,10 +2,11 @@
 """
 PDF 分割對話框（PySide6）
 
-提供頁面縮圖預覽，讓使用者標記分割點，將合併的 PDF 拆分為各樂器的獨立檔案。
+提供頁面縮圖預覽，讓使用者標記分割點、為各段命名；檢查、確認與執行交給分割模組（services/split_service.py），
+對話框只負責詢問與顯示。
 """
 import os
-import threading
+from functools import partial
 from typing import Callable, Dict, List, Optional, Set, Tuple
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -13,14 +14,12 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QFrame, QSplitter,
 )
 from PySide6.QtGui import QPixmap, QImage, QColor
-from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtCore import Qt
 from core.locale import t
-from core.models import FileInfo, SplitEntry, WorkspaceOwner
-from services.pdf_service import (
-    build_split_plan, extract_pages, get_page_count, render_page_thumbnails,
-)
-from services.workspace_service import WorkspaceService
-from ui.widgets import ensure_file_exists
+from core.models import WorkspaceOwner
+from services.pdf_service import get_page_count, render_page_thumbnails
+from services.split_service import SplitCheck, SplitRequest, SplitSegment, SplitService
+from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
 
 SECTION_COLORS = [
     "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
@@ -31,29 +30,23 @@ _THUMB_WIDTH = 150
 _MAX_COLS = 4
 
 
-class _ThumbnailSignals(QObject):
-    ready = Signal(list)
-    error = Signal(str)
-
-
 class SplitPdfDialog(QDialog):
     """PDF 分割對話框"""
 
     def __init__(self, project, on_split_complete=None, initial_group=None, parent=None,
-                 workspace_service: WorkspaceService = None, project_path: str = ""):
+                 splitter: SplitService = None, project_path: str = ""):
         """建立分割對話框
 
         Args:
             project: 目前專案
-            on_split_complete: 分割完成回呼
+            on_split_complete: 分割完成回呼，參數為分割模組的執行結果（SplitResult）
             initial_group: 開啟時預選的群組
             parent: 父視窗
-            workspace_service: 工作區服務，分割輸出的預設落點
-            project_path: 目前專案檔路徑，尚未存檔時為空字串，寫入工作區 meta
+            splitter: 分割模組
+            project_path: 目前專案檔路徑，尚未存檔時為空字串（記為工作區子資料夾的所屬專案）
         """
         super().__init__(parent)
-        self._workspace = workspace_service
-        self._files = workspace_service.file_service
+        self._splitter = splitter
         self._project_path = project_path or ""
         self.setWindowTitle(t("split.title"))
         self.resize(1100, 720)
@@ -70,9 +63,11 @@ class SplitPdfDialog(QDialog):
         self._section_name_entries: Dict[int, QLineEdit] = {}
         self._source_group = None
         self._output_dir: Optional[str] = None
-        self._signals = _ThumbnailSignals()
-        self._signals.ready.connect(self._on_thumbnails_ready)
-        self._signals.error.connect(self._on_thumbnails_error)
+        self._thumbnails = ThumbnailLoader(
+            partial(render_page_thumbnails, max_width=_THUMB_WIDTH),
+            self._on_thumbnails_ready, self._on_thumbnails_error,
+        )
+        self.finished.connect(self._thumbnails.cancel)
         self._build_ui()
 
     def _build_ui(self):
@@ -184,7 +179,7 @@ class SplitPdfDialog(QDialog):
     def _refresh_file_combo(self):
         self._file_combo.blockSignals(True)
         self._file_combo.clear()
-        files = self._collect_files()
+        files = pdf_file_choices(self._project, self._filter_group)
         if files:
             self._file_combo.addItem(t("split.no_file"), None)
             for label, path, group in files:
@@ -192,24 +187,6 @@ class SplitPdfDialog(QDialog):
         else:
             self._file_combo.addItem(t("split.no_project_files"), None)
         self._file_combo.blockSignals(False)
-
-    def _collect_files(self):
-        files = []
-        if not self._project:
-            return files
-        if self._filter_group is None:
-            for f in self._project.ungrouped_files:
-                if f.original_path.lower().endswith(".pdf"):
-                    files.append((f.display_name, f.original_path, None))
-        else:
-            if self._filter_group.score_file:
-                sf = self._filter_group.score_file
-                if sf.original_path.lower().endswith(".pdf"):
-                    files.append((sf.display_name, sf.original_path, self._filter_group))
-            for f in self._filter_group.files:
-                if f.original_path.lower().endswith(".pdf"):
-                    files.append((f.display_name, f.original_path, self._filter_group))
-        return files
 
     def _on_file_selected(self, index):
         data = self._file_combo.currentData()
@@ -235,18 +212,9 @@ class SplitPdfDialog(QDialog):
             loading.setStyleSheet("color: gray; font-size: 14px;")
             loading.setAlignment(Qt.AlignCenter)
             self._thumb_layout.addWidget(loading)
-            threading.Thread(
-                target=self._render_bg, args=(path,), daemon=True,
-            ).start()
+            self._thumbnails.load(path)
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
-
-    def _render_bg(self, path):
-        try:
-            pil_images = render_page_thumbnails(path, max_width=_THUMB_WIDTH)
-            self._signals.ready.emit(pil_images)
-        except Exception as e:
-            self._signals.error.emit(str(e))
 
     def _on_thumbnails_ready(self, pil_images):
         self._pil_thumbs = pil_images
@@ -385,16 +353,12 @@ class SplitPdfDialog(QDialog):
 
     # --- Assignment panel ---
 
-    def _get_used_instruments(self) -> set:
-        used = set()
-        if not self._project:
-            return used
-        for group in self._project.groups:
-            used.update(group.instruments)
-        return used
+    def _voices(self) -> List[str]:
+        """分段自動帶入的聲部名稱：要分割的合併譜所在群組的樂器表；合併譜在未分組時沒有"""
+        return list(self._source_group.instruments) if self._source_group else []
 
     def _next_unused(self, used, start_after=-1):
-        instruments = self._project.instruments if self._project else []
+        instruments = self._voices()
         for i in range(start_after + 1, len(instruments)):
             if instruments[i] not in used:
                 return instruments[i]
@@ -410,8 +374,8 @@ class SplitPdfDialog(QDialog):
                 item.widget().deleteLater()
         self._section_name_entries = {}
         sections = self._get_sections()
-        instruments = self._project.instruments if self._project else []
-        used = set(self._get_used_instruments())
+        instruments = self._voices()
+        used = set()
         last_idx = -1
         for sec_idx, (start, end) in enumerate(sections):
             color = SECTION_COLORS[sec_idx % len(SECTION_COLORS)]
@@ -478,7 +442,7 @@ class SplitPdfDialog(QDialog):
         entry = self._section_name_entries.get(sec_idx)
         if not entry:
             return
-        instruments = self._project.instruments if self._project else []
+        instruments = self._voices()
         if not instruments:
             return
         current = entry.text()
@@ -519,20 +483,27 @@ class SplitPdfDialog(QDialog):
         self._browse_btn.setEnabled(self._radio_custom.isChecked())
         self._refresh_dir_label()
 
-    def _use_workspace(self) -> bool:
-        return self._radio_workspace.isChecked()
-
-    def _effective_output_dir(self) -> str:
-        """實際輸出資料夾：工作區內來源對應的子資料夾，或使用者指定／來源所在資料夾"""
-        if self._use_workspace():
-            return self._workspace.folder_for_source(self._pdf_path)
+    def _chosen_folder(self) -> Optional[str]:
+        """指定的輸出資料夾（沒選過就是合併譜所在的資料夾）；選「工作區」時為 None"""
+        if self._radio_workspace.isChecked():
+            return None
         return self._output_dir or os.path.dirname(self._pdf_path)
 
     def _refresh_dir_label(self):
         if not self._pdf_path:
             return
-        self._dir_label.setText(self._effective_output_dir())
+        self._dir_label.setText(self._splitter.output_folder(self._pdf_path, self._chosen_folder()))
         self._dir_label.setStyleSheet("font-size: 11px;")
+
+    def _request(self) -> SplitRequest:
+        """目前的分割點、名稱欄位與已刪頁面組成的分割請求"""
+        segments = [
+            SplitSegment(start, end, self._section_name_entries[idx].text())
+            for idx, (start, end) in enumerate(self._get_sections())
+        ]
+        return SplitRequest(
+            self._pdf_path, segments, set(self._deleted_pages), self._chosen_folder(), self._project_path,
+        )
 
     def _confirm_resplit(self, previous_count: int, owner: Optional[WorkspaceOwner]) -> bool:
         """工作區內已有上次的分割輸出時，詢問是否以這次結果取代
@@ -560,12 +531,6 @@ class SplitPdfDialog(QDialog):
             owner_line = "\n" + t("split.resplit_owner", project=owner.project_path, missing=missing)
         return t("split.resplit_confirm", count=previous_count, owner=owner_line)
 
-    def _build_split_plan(self, output_dir: str) -> List[SplitEntry]:
-        """把目前的分割點、名稱欄位與已刪頁面交給服務組出分割計畫"""
-        sections = self._get_sections()
-        names = [self._section_name_entries[idx].text() for idx in range(len(sections))]
-        return build_split_plan(sections, names, self._deleted_pages, output_dir)
-
     def _confirm_overwrite(self, existing: List[str]) -> bool:
         """輸出位置已有同名檔案時，詢問使用者是否覆蓋"""
         reply = QMessageBox.question(
@@ -577,57 +542,41 @@ class SplitPdfDialog(QDialog):
         )
         return reply == QMessageBox.Yes
 
+    @staticmethod
+    def _blocked_message(check: SplitCheck) -> str:
+        """組出擋下分割的原因：檔名相同的分段、會蓋掉合併譜的分譜"""
+        separator = t("split.segment_separator")
+        lines = [
+            t("split.error.duplicate_names", segments=separator.join(map(str, d.segments)), name=d.file_name)
+            for d in check.duplicates
+        ]
+        lines += [t("split.error.overwrite_source", name=name) for name in check.source_conflicts]
+        return "\n\n".join(lines)
+
+    def _confirmed(self, check: SplitCheck) -> bool:
+        """詢問檢查結果中需要確認的事：取代上次的分譜、覆蓋指定資料夾內的同名檔案"""
+        if check.previous_outputs and not self._confirm_resplit(len(check.previous_outputs), check.owner):
+            return False
+        return not check.overwritten or self._confirm_overwrite(check.overwritten)
+
     def _execute_split(self):
         if not self._pdf_path:
             return
-        output_dir = self._effective_output_dir()
-        plan = self._build_split_plan(output_dir)
-        if not plan:
+        check = self._splitter.check(self._request())
+        if not check.plan:
             QMessageBox.information(self, t("dialog.info"), t("dialog.info.no_files"))
             return
-        source_key = os.path.normcase(os.path.abspath(self._pdf_path))
-        for entry in plan:
-            if os.path.normcase(os.path.abspath(entry.output_path)) == source_key:
-                QMessageBox.critical(
-                    self, t("dialog.error"), t("split.error.overwrite_source", name=entry.display_name),
-                )
-                return
-        replaced = []
-        if self._use_workspace():
-            replaced = self._workspace.list_outputs(output_dir)
-            if replaced:
-                owner = self._workspace.other_owner(output_dir, self._project_path)
-                if not self._confirm_resplit(len(replaced), owner):
-                    return
-        else:
-            existing = [e.output_path for e in plan if self._files.file_exists(e.output_path)]
-            if existing and not self._confirm_overwrite(existing):
-                return
+        if check.blocked:
+            QMessageBox.critical(self, t("dialog.error"), self._blocked_message(check))
+            return
+        if not self._confirmed(check):
+            return
         try:
-            created_dirs = [] if self._files.directory_exists(output_dir) else [output_dir]
-            if self._use_workspace():
-                self._workspace.clear_outputs(output_dir)
-                self._workspace.prepare_folder(self._pdf_path, self._project_path)
-            else:
-                self._files.create_directory(output_dir)
-            split_files = []
-            split_instruments = []
-            for entry in plan:
-                extract_pages(self._pdf_path, entry.pages, entry.output_path)
-                split_files.append(FileInfo(
-                    original_path=entry.output_path,
-                    display_name=os.path.basename(entry.output_path),
-                ))
-                split_instruments.append(entry.display_name)
-            if self._on_split_complete:
-                self._on_split_complete(
-                    split_files, split_instruments,
-                    self._source_group, self._pdf_path, created_dirs, replaced,
-                )
-            QMessageBox.information(
-                self, t("dialog.complete"),
-                t("split.done", count=len(split_files)),
-            )
-            self.accept()
+            result = self._splitter.execute(check)
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
+            return
+        if self._on_split_complete:
+            self._on_split_complete(result)
+        QMessageBox.information(self, t("dialog.complete"), t("split.done", count=len(result.parts)))
+        self.accept()
