@@ -343,7 +343,7 @@ services/ 層
 
 專案（`core/models.py` 的 `Project`）自己管理修改、檔案引用與未存檔狀態；純記憶體，不匯入 Qt、不做檔案 I/O。
 
-- UI 只表達意圖並立即寫入：群組欄位（`update_group`）、新增／匯入／刪除群組（`add_group`、`add_groups`、`delete_group`）、檔案搬進群組或移回未分組（`move_to_group`、`move_to_ungrouped`）、加入檔案（`add_files`）、指定與清除總譜（`set_score`、`clear_score`）、分譜排序（`reorder_files`）、樂器表（`set_instruments`）、連結樂章（`link_movements`）、大模板（`set_master_template`）、輸出設定（`set_output_settings`）、編制設定（`update_ensemble`）、切換語言改寫模板變數（`convert_template_language`）、套用搬移結果（`replace_paths`）、移除引用（`remove_paths`）、套用分割結果（`apply_split`）。UI 不直接指定群組、檔案資訊或專案的欄位；群組分頁、樂器表、預覽對話框不呼叫主視窗的私有方法，影響其他分頁的修改以分頁的 `groups_changed` 訊號讓主視窗重建分頁
+- UI 只表達意圖並立即寫入：群組欄位（`update_group`）、新增／匯入／刪除群組（`add_group`、`add_groups`、`delete_group`）、檔案搬進群組或移回未分組（`move_to_group`、`move_to_ungrouped`）、加入檔案（`add_files`）、指定與清除總譜（`set_score`、`clear_score`）、分譜排序（`reorder_files`）、樂器表（`set_instruments`）、連結樂章（`link_movements`）、大模板（`set_master_template`）、輸出設定（`set_output_settings`）、編制設定（`update_ensemble`）、切換語言改寫模板變數（`convert_template_language`）、套用搬移結果（`replace_paths`）、移除引用（`remove_paths`）、套用分割結果（`apply_split`）、退回分割（`revert_split`）。UI 不直接指定群組、檔案資訊或專案的欄位；群組分頁、樂器表、預覽對話框不呼叫主視窗的私有方法，影響其他分頁的修改以分頁的 `groups_changed` 訊號讓主視窗重建分頁
 - 舊欄位鏡像（全選的 `selected_instruments`、`use_parts_subfolder`）由上述操作與載入流程維持，呼叫端不碰
 - **未存檔＝快照比對**：`is_modified()` 比對目前內容（`to_data()`，即專案檔會存的內容，不含版本號）與上次存檔或開啟時的快照；改回原值就回到已存檔。舊格式的遷移（總譜標籤留空補上依目前介面語言的預設值、承接專案層級樂器表、勾選子集收成群組樂器表、舊分譜子資料夾旗標）在 `from_data` 內、拍快照之前完成，所以開啟舊專案不標記未存檔。開啟專案、切換分頁不改內容，不標記；切換介面語言改寫了命名格式就標記
 - 每個編輯操作與存檔、開啟後都發出同一個「已變更」通知（`subscribe`，純 callback）；主視窗只訂閱它來更新標題的 `*`。存檔與預覽前沒有把畫面收回模型的步驟
@@ -412,7 +412,7 @@ services/ 層
   - 同一來源檔案被多個群組引用（無法自動修正，需使用者調整群組）、產生的檔名去掉副檔名後為空、目標位置已有不屬於本次計畫的檔案、讓位用暫名已被佔用；對調與連鎖的目標是計畫內來源，不算佔用
 - `check_rename` 由 `rename_service.generate_rename_plan` 產生計畫（`RenamePlan`）後交給 `check_plan`，給定的計畫也能直接用 `check_plan` 判定；`rename` 收到有阻擋的判定時不搬動任何檔案
 
-執行由搬移歷程（`services/move_history.py` 的 `MoveHistory`）負責：重新命名 `rename`、復原 `undo`、重做 `redo`、中斷還原（「還原」`recover`、「保留結果」`keep_result`）四個動作都回傳 `MoveResult`——`changes`（照計畫搬好的檔，動作前位置 → 目前位置）、`skipped`（已不在預期位置而略過的檔）、`residual`（搬不回原位的檔）、`operation`（操作種類）、`error`（失敗原因）、`record_error`（檔案已搬好但紀錄寫不進去的原因）。主視窗只詢問與顯示，把 `changes + residual` 交給 `Project.replace_paths` 套用。
+執行由搬移歷程（`services/move_history.py` 的 `MoveHistory`）負責：重新命名 `rename`、復原 `undo`、重做 `redo`、中斷還原（「還原」`recover`、「保留結果」`keep_result`）四個動作都回傳 `MoveResult`——`changes`（照計畫搬好的檔，動作前位置 → 目前位置）、`skipped`（已不在預期位置而略過的檔）、`residual`（搬不回原位的檔）、`operation`（操作種類）、`error`（失敗原因）、`record_error`（檔案已搬好但紀錄寫不進去的原因），復原分割時另有 `split`（該次分割的 `SplitRecord`）。主視窗只詢問與顯示，把 `changes + residual` 交給 `Project.replace_paths`、`split` 交給 `Project.revert_split` 套用。
 搬移本身交給內部的兩階段引擎（`services/move_service.py` 的 `MoveService`）：先以 `find_problems` 驗證目標在邊界內（只有重新命名有邊界，復原、重做沒有）、新檔名不為空、來源存在、來源未重複、目標未重複、目標未被計畫外的檔案佔用、讓位用的暫名未被佔用，任一不符即整批取消（結果帶 `error`、沒有路徑變動）。
 「佔用」指磁碟上存在、且不是本次計畫任何一筆的來源，所以對調（A→B、B→A）與連鎖（A→B、B→C）可以執行：
 來源同時是其他項目目標的檔案，第一階段先改成同資料夾的 `<原檔名>.moving` 暫名（`RENAME_STAGING_SUFFIX`）讓出位置，第二階段全部就位；復原紀錄只記原始位置到最終位置，暫名不出現。
@@ -420,7 +420,7 @@ services/ 層
 檔案已搬好、只有紀錄寫不進去（例如磁碟已滿）時，結果仍帶 `changes`，專案路徑照樣更新到檔案的實際位置，`record_error` 只提示；進行中紀錄保留，下次會依操作種類提示「上次…已完成」，可選保留結果或還原。
 程式被中途關掉（當機、斷電、強制結束）也不留下無紀錄的狀態：引擎在搬第一個檔案前就把進行中紀錄原子寫入，內容是「目前仍生效的步驟清單」加「即將執行的下一步（`pending`）」，以及這批搬移的操作種類（`operation`：重新命名、復原或重做）、所屬復原紀錄的 id（`record_id`）與該紀錄在搬移開始時的內容（`record`，含工作區 meta 快照；重新命名在搬移前就快照），每完成一步就把該步加進清單、下一步記為 `pending` 重寫；回滾與還原每逆轉一步就從清單移除並存檔，所以紀錄隨時反映每個檔案的實際位置，開始逆轉時也取消 `complete`。整批搬完先標記 `complete`、由搬移歷程寫正式紀錄（重新命名寫復原紀錄並清空重做堆疊；復原寫回工作區 meta、轉入重做堆疊；重做轉回復原堆疊），寫完才刪除進行中紀錄，兩者之間沒有空窗；回滾、還原與保留結果也都在寫完紀錄與 meta 後才刪除，途中寫不進去就保留進行中紀錄、下次再處理。紀錄仍在時引擎以 `PendingMoveError` 拒絕執行新批次（否則會蓋掉唯一的紀錄），訊息請使用者先處理中斷提示。啟動時 `MainWindow.prompt_pending_recovery` 以 `MoveHistory.pending()` 查看紀錄是否仍在，提示依被中斷的操作種類說明（「上次重新命名／復原／重做未完成」）：未搬完的提示「上次…未完成（已搬移 N 個檔案）」，「還原」則 `MoveHistory.recover()` 依生效清單反序搬回（與回滾共用 `_reverse_all`，對調、連鎖、停在暫名者都能還原，還原途中再被中斷也能接續），「稍後」則保留紀錄下次再問；已搬完（`complete`）但正式紀錄未確認寫入的，多一個「保留結果」（`MoveHistory.keep_result()`）。兩個選擇都讓堆疊與檔案位置一致（已寫過的紀錄不重寫）：「還原」讓堆疊回到這批搬移開始前——被中斷的復原其紀錄留在（或放回）復原堆疊、不在重做堆疊，重做反之，重新命名的紀錄移除——並用 `record` 的快照寫回工作區 meta；「保留結果」補做整批搬完後該寫的紀錄——復原寫回 meta 並轉入重做堆疊、重做轉回復原堆疊；重新命名照提示所說不補寫復原紀錄（無法復原），只清空重做堆疊——結果的 `changes`（原位置 → 目前位置）交給專案套用、標記未存檔。沒有操作種類的舊版進行中紀錄視為重新命名（也沒有 `record`，不動堆疊、不寫 meta）；無法讀取（含 `record` 損毀）時提示一次並捨棄。重新命名、復原、重做前也會再問一次。`load_pending` 對照磁碟判定 `pending` 那一步（來源已不在、目標已出現＝已完成），補上「搬完、來不及記就當機」的那一步；比對用 `file_exists_exact`（目錄列表的實際名稱），只改大小寫的那一步在不分大小寫的檔案系統上才判得出。還原時檔案已不在紀錄位置者略過並列出；搬不回去者留在原地，搬移歷程為其寫殘留紀錄（標示被中斷的操作種類），UI 套用其路徑。
 
-復原與重做堆疊後進先出：每筆紀錄有唯一 `id`（`UndoRecord.id`），檔名為「推入序號_id.json」，序號越大越靠近頂端，在兩個堆疊間轉移時 id 不變；舊版以時間戳命名、沒有 id 的紀錄（`undo_YYYYMMDD_HHMMSS.json`）照常載入並能執行，排在新紀錄之下，以檔名當 id。新的操作（重新命名、分割、旋轉）放上復原堆疊並清空重做堆疊。復原把整批搬移類紀錄（`MOVE_OPERATIONS`）的檔案搬回原位，已不在新位置的檔略過並列出，專案裡的路徑維持原樣，只有實際搬回的對照轉入重做堆疊；重做同理，已不在原位的檔略過。分割與旋轉的紀錄也由搬移歷程組裝（`record_split`、`record_rotate`；旋轉覆蓋原檔前以 `create_backup` 備份），主視窗與對話框不自己組紀錄：復原時分割的分譜與旋轉另存出的檔移到資源回收桶，覆蓋原檔的以備份蓋回，之後移除紀錄、不進重做堆疊（無法重做）。操作種類定義在 `core/constants.py` 的 `OperationKind`。新版寫出的紀錄不保證舊版能正確處理（不支援降版）。
+復原與重做堆疊後進先出：每筆紀錄有唯一 `id`（`UndoRecord.id`），檔名為「推入序號_id.json」，序號越大越靠近頂端，在兩個堆疊間轉移時 id 不變；舊版以時間戳命名、沒有 id 的紀錄（`undo_YYYYMMDD_HHMMSS.json`）照常載入並能執行，排在新紀錄之下，以檔名當 id。新的操作（重新命名、分割、旋轉）放上復原堆疊並清空重做堆疊。復原把整批搬移類紀錄（`MOVE_OPERATIONS`）的檔案搬回原位，已不在新位置的檔略過並列出，專案裡的路徑維持原樣，只有實際搬回的對照轉入重做堆疊；重做同理，已不在原位的檔略過。分割與旋轉的紀錄也由搬移歷程組裝（`record_split`、`record_rotate`；旋轉覆蓋原檔前以 `create_backup` 備份），主視窗與對話框不自己組紀錄：復原時分割的分譜與旋轉另存出的檔移到資源回收桶，覆蓋原檔的以備份蓋回，之後移除紀錄、不進重做堆疊（無法重做）。復原分割同時退回分割前的專案：結果的 `split` 交給 `Project.revert_split`——移除新分譜的引用；分割時另建的群組移除（之後才放進去的檔移回未分組）；接手的既有群組被分割改掉的樂器表與曲名改回（分割沒改的欄位不動，分割後的修改保留）；合併譜已不在專案裡就放回原位置（同一個群組、同樣是分譜或總譜，分譜依其餘分譜間的原順序；原群組已刪除就放回未分組；原本在未分組的本來就沒移動）。復原後標記未存檔、分頁立即重建。重新分割時被取代的舊分譜（`replaced_files`）不找回，主視窗列出它們並提示仍在資源回收桶（ADR-0001 的取代進資源回收桶不變）。沒有合併譜與安置資訊的舊版分割紀錄照常載入，復原時刪除新分譜並移除其引用。操作種類定義在 `core/constants.py` 的 `OperationKind`。新版寫出的紀錄不保證舊版能正確處理（不支援降版）。
 
 ---
 
@@ -432,7 +432,7 @@ services/ 層
 
 - `check(SplitRequest)` 不寫任何檔，回傳 `SplitCheck`：要產生的分譜（`plan`，頁面全被刪掉的分段略過）；擋下的問題（`duplicates`：清理非法字元、空名回退為 `Part`、不分大小寫後檔名相同的分段，以分段編號列出；`source_conflicts`：輸出就是合併譜本身）；需確認的事（工作區模式為上次的分譜 `previous_outputs` 與其所屬的另一個專案 `owner`，指定資料夾模式為已有的同名檔案 `overwritten`）。`blocked` 時對話框只列出原因
 - `execute(check)` 執行確認過的檢查結果：新分譜先全部寫進輸出資料夾裡的暫用子資料夾 `<代號>.splitting`；寫好後才把被取代的檔（`check.replaced`）挪進 `<代號>.replaced`（保留原檔名）、新分譜就位、（工作區模式）以 `WorkspaceService.write_meta` 改寫所屬專案；最後把挪開的檔移到資源回收桶。任一步失敗就撤回已做的步驟後拋出：被取代的檔原封不動、所屬專案不變、不留新分譜，專案與復原紀錄也不動。移不進資源回收桶的挪開檔留在 `<代號>.replaced`，不影響已完成的分割
-- 執行回傳 `SplitResult`（新分譜、聲部名稱、被取代的路徑、新建的目錄）。主視窗以 `Project.apply_split` 套用：移除被取代的引用；合併譜不論是分譜還是總譜都移出群組（未分組裡的留在未分組），重新命名才不會搬動它；接手新分譜的是引用被取代檔案的群組，其次是合併譜所在的群組，都沒有才另建以合併譜檔名命名的群組（重新分割不多出群組、不留空群組）。接著切到接手的群組，把 `result.record`（`SplitRecord`）交給 `MoveHistory.record_split`
+- 執行回傳 `SplitResult`（新分譜、聲部名稱、被取代的路徑、新建的目錄）。主視窗以 `Project.apply_split` 套用：移除被取代的引用；合併譜不論是分譜還是總譜都移出群組（未分組裡的留在未分組），重新命名才不會搬動它；接手新分譜的是引用被取代檔案的群組，其次是合併譜所在的群組，都沒有才另建以合併譜檔名命名的群組（重新分割不多出群組、不留空群組）。`apply_split` 回傳安置方式 `SplitPlacement`（接手群組的 id、是否另建、被改掉的樂器表與曲名的原值、合併譜原本的位置 `FilePosition`：群組 id、是否為總譜、在分譜清單中的位置，未分組時群組 id 為空），復原分割靠它退回。接著切到接手的群組，把 `result.record(placement)`（`SplitRecord`，含被取代的檔與安置方式）交給 `MoveHistory.record_split`
 - 分段自動帶入的聲部名稱讀合併譜所在群組的樂器表；專案層級的舊樂器表只在載入舊專案時遷移
 
 工作區的規則：
