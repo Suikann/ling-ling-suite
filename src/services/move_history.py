@@ -31,7 +31,7 @@ from core.constants import (
     OperationKind, RenameProblem,
 )
 from core.locale import t
-from core.models import Project, RenameEntry, UndoMapping, UndoRecord
+from core.models import Project, RenameEntry, SplitRecord, UndoMapping, UndoRecord
 from core.naming import UnsafeFolderNameError
 from core.paths import path_key
 from services.file_service import FileService
@@ -450,19 +450,18 @@ class MoveHistory:
 
     # --- 其他操作的紀錄 ---
 
-    def record_split(self, created_files: List[str], created_directories: List[str]) -> None:
+    def record_split(self, record: SplitRecord) -> None:
         """記下一次分割：復原時把產生的分譜移到資源回收桶、移除新建且已空的目錄
 
         Args:
-            created_files: 分割產生的分譜
-            created_directories: 分割新建的目錄
+            record: 分割模組交回的分割紀錄
 
         Raises:
             OSError: 紀錄寫不進去
         """
         self._push_new(self._new_record(
-            OperationKind.SPLIT, t("undo.split_description", count=len(created_files)),
-            created_files=list(created_files), created_directories=list(created_directories),
+            OperationKind.SPLIT, t("undo.split_description", count=len(record.created_files)),
+            created_files=list(record.created_files), created_directories=list(record.created_directories),
         ))
 
     def record_rotate(self, source_path: str, output_path: str, backup_path: str = "") -> None:

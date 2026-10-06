@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication
 
 from core.models import FileInfo, Group, Project
 from services.file_service import FileService
+from services.split_service import SplitService
 from services.workspace_service import WorkspaceService
 from ui.rotate_dialog import RotatePdfDialog
 from ui.split_dialog import SplitPdfDialog
@@ -50,8 +51,9 @@ class TestPdfFilePicker(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _dialogs(self, initial_group):
-        workspace = WorkspaceService(FileService(), os.path.join(self.temp_dir, "workspace"))
-        yield "分割", SplitPdfDialog(self.project, None, initial_group, workspace_service=workspace)
+        files = FileService()
+        splitter = SplitService(files, WorkspaceService(files, os.path.join(self.temp_dir, "workspace")))
+        yield "分割", SplitPdfDialog(self.project, None, initial_group, splitter=splitter)
         yield "旋轉", RotatePdfDialog(self.project, None, initial_group)
 
     @staticmethod

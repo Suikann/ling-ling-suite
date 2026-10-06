@@ -18,7 +18,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from core.models import FileInfo, Group, Project, UndoMapping
+from core.models import FileInfo, Group, Project, SplitResult, UndoMapping
 from services.project_service import ProjectService
 from path_spellings import spellings
 
@@ -270,10 +270,8 @@ class TestAutoDetectWhenFilesEnterGroup(unittest.TestCase):
 
     def test_split_result_entering_a_group(self):
         project = Project()
-        group = project.add_split_result(
-            self._files(), ["Score", "Flute", "Oboe"], _path("合併譜.pdf"), score_label="總譜",
-        )
-        self.assert_detected(group)
+        result = SplitResult(_path("合併譜.pdf"), self._files(), ["Score", "Flute", "Oboe"], replaced=[])
+        self.assert_detected(project.apply_split(result, score_label="總譜"))
 
     def test_existing_score_and_piece_name_are_kept(self):
         score = _info(_path("Conductor.pdf"))
@@ -387,6 +385,94 @@ class TestGroupEdits(unittest.TestCase):
             [("命運", "1", "Adagio"), ("命運", "2", "Allegro")],
         )
         self.assert_changed()
+
+
+class TestApplySplit(unittest.TestCase):
+    """套用分割結果：移除被取代的引用、加入新分譜、把合併譜移出群組；重新分割時由原群組接手"""
+
+    SOURCE = _path("合併譜.pdf")
+
+    def split(self, project, *names, folder="ws", replaced=()):
+        """把分割結果（分譜為 folder 下的 names）套用到專案，回傳接手的群組"""
+        parts = [_info(_path(folder, name + ".pdf")) for name in names]
+        result = SplitResult(self.SOURCE, parts, list(names), replaced=list(replaced))
+        return project.apply_split(result, score_label="總譜")
+
+    @staticmethod
+    def layout(project):
+        """各群組的（名稱、總譜、分譜）與未分組，皆以路徑表示"""
+        groups = [
+            (g.name, g.score_file.original_path if g.score_file else None, [f.original_path for f in g.files])
+            for g in project.groups
+        ]
+        return groups, [f.original_path for f in project.ungrouped_files]
+
+    def test_merged_score_among_parts_leaves_the_group_which_takes_the_new_parts(self):
+        group = Group(name="g", files=[_info(_path("Loose.pdf")), _info(self.SOURCE)], score_label="總譜")
+        project = Project(groups=[group])
+        self.assertIs(self.split(project, "Flute", "Oboe"), group)
+        self.assertEqual(self.layout(project), (
+            [("g", None, [_path("Loose.pdf"), _path("ws", "Flute.pdf"), _path("ws", "Oboe.pdf")])], [],
+        ))
+        self.assertEqual(group.instruments, ["Flute", "Oboe"])
+
+    def test_merged_score_set_as_the_group_score_leaves_the_group_too(self):
+        group = Group(name="g", score_file=_info(self.SOURCE), score_label="總譜")
+        project = Project(groups=[group])
+        self.split(project, "Flute", "Oboe")
+        self.assertEqual(self.layout(project), (
+            [("g", None, [_path("ws", "Flute.pdf"), _path("ws", "Oboe.pdf")])], [],
+        ))
+
+    def test_merged_score_in_ungrouped_stays_there_and_a_group_named_after_it_takes_the_parts(self):
+        project = Project(ungrouped_files=[_info(self.SOURCE)])
+        group = self.split(project, "Flute", "Oboe")
+        self.assertEqual(self.layout(project), (
+            [("合併譜", None, [_path("ws", "Flute.pdf"), _path("ws", "Oboe.pdf")])], [self.SOURCE],
+        ))
+        self.assertEqual(group.score_label, "總譜")
+
+    def test_resplit_into_the_workspace_hands_the_new_parts_to_the_group_of_the_replaced_ones(self):
+        old = [_info(_path("ws", "Flute.pdf")), _info(_path("ws", "Oboe.pdf"))]
+        held = Group(name="held", files=old, score_label="總譜")
+        other = Group(name="other", files=[_info(_path("Horn.pdf")), _info(self.SOURCE)], score_label="總譜")
+        project = Project(groups=[held, other])
+        self.assertIs(self.split(project, "Flute", "Horn", replaced=[f.original_path for f in old]), held)
+        self.assertEqual(self.layout(project), ([
+            ("held", None, [_path("ws", "Flute.pdf"), _path("ws", "Horn.pdf")]),
+            ("other", None, [_path("Horn.pdf")]),
+        ], []))
+
+    def test_resplit_into_a_chosen_folder_does_not_duplicate_the_parts_in_another_group(self):
+        old = [_path("out", "Flute.pdf"), _path("out", "Oboe.pdf")]
+        held = Group(name="held", files=[_info(p) for p in old], score_label="總譜")
+        project = Project(groups=[held], ungrouped_files=[_info(self.SOURCE)])
+        self.split(project, "Flute", "Oboe", folder="out", replaced=old)
+        self.assertEqual(self.layout(project), ([("held", None, old)], [self.SOURCE]))
+
+    def test_resplit_from_ungrouped_leaves_no_empty_group(self):
+        old = [_path("ws", "Flute.pdf"), _path("ws", "Oboe.pdf")]
+        project = Project(
+            groups=[Group(name="合併譜", files=[_info(p) for p in old], score_label="總譜")],
+            ungrouped_files=[_info(self.SOURCE)],
+        )
+        self.split(project, "Flute", "Horn", replaced=old)
+        self.assertEqual(self.layout(project), (
+            [("合併譜", None, [_path("ws", "Flute.pdf"), _path("ws", "Horn.pdf")])], [self.SOURCE],
+        ))
+
+    def test_replaced_refs_are_removed_wherever_they_are(self):
+        old = _path("ws", "Flute.pdf")
+        project = Project(groups=[Group(name="g", files=[_info(self.SOURCE)])], ungrouped_files=[_info(old)])
+        self.split(project, "Flute", replaced=[old])
+        self.assertEqual(self.layout(project), ([("g", None, [_path("ws", "Flute.pdf")])], []))
+
+    def test_applying_marks_the_project_unsaved(self):
+        project = Project(ungrouped_files=[_info(self.SOURCE)])
+        heard = []
+        project.subscribe(lambda: heard.append(project.is_modified()))
+        self.split(project, "Flute")
+        self.assertEqual(heard, [True])
 
 
 class TestProjectSettingEdits(unittest.TestCase):

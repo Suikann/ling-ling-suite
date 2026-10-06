@@ -12,7 +12,7 @@ from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE, OperationKind,
     PartsOutputMode, WorkspaceStatus,
 )
-from core.paths import path_key, same_path
+from core.paths import path_key
 from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
 
 
@@ -507,29 +507,33 @@ class Project:
         self._move_into(group, files)
         self._changed()
 
-    def add_split_result(
-        self, files: Iterable[FileInfo], voices: Iterable[str], source_path: str,
-        group: Optional[Group] = None, score_label: str = "",
-    ) -> Group:
-        """加入分割產生的分譜，並自動偵測總譜與曲名
+    def apply_split(self, result: SplitResult, score_label: str) -> Group:
+        """套用分割結果：移除被取代的引用、把合併譜移出所在的群組，新分譜交給接手的群組
+
+        接手的群組依序為：引用被取代檔案的群組（重新分割，不另建群組、不留下空群組）、
+        引用合併譜的群組（不論它是分譜還是總譜）；都沒有時另建一個以合併譜檔名命名的群組。
+        未分組裡的合併譜留在未分組。新分譜的聲部名稱成為接手群組的樂器表，並自動偵測總譜與曲名。
 
         Args:
-            files: 分割產生的分譜
-            voices: 各分譜的聲部名稱，成為群組的樂器表
-            source_path: 分割來源（合併譜）的路徑；從所在群組的分譜中移出
-            group: 合併譜所在的群組；None 表示另建一個以合併譜檔名命名的群組
+            result: 分割模組的執行結果
             score_label: 另建群組時的總譜標籤（依建立時的介面語言）
 
         Returns:
-            接收分譜的群組
+            接手新分譜的群組
         """
+        group = self._group_referencing(result.replaced) or self._group_referencing([result.source_path])
+        replaced = {path_key(p) for p in result.replaced}
+        source = path_key(result.source_path)
+        for ref in self.file_refs():
+            key = path_key(ref.file.original_path)
+            if key in replaced or (key == source and ref.group is not None):
+                self._detach(ref)
         if group is None:
-            group = Group(name=os.path.splitext(os.path.basename(source_path))[0], score_label=score_label)
+            name = os.path.splitext(os.path.basename(result.source_path))[0]
+            group = Group(name=name, score_label=score_label)
             self.groups.append(group)
-        else:
-            group.files = [f for f in group.files if not same_path(f.original_path, source_path)]
-        group.files.extend(files)
-        group.instruments = list(voices)
+        group.files.extend(result.parts)
+        group.instruments = list(result.voices)
         group.selected_instruments = list(range(len(group.instruments)))
         self._detect_on_entry(group)
         self._changed()
@@ -691,6 +695,14 @@ class Project:
             if path_key(ref.file.original_path) in doomed:
                 self._detach(ref)
         self._changed()
+
+    def _group_referencing(self, paths: Iterable[str]) -> Optional[Group]:
+        """第一個（依 file_refs 順序）引用到其中任一路徑的群組；沒有時為 None"""
+        keys = {path_key(p) for p in paths}
+        for ref in self.file_refs():
+            if ref.group is not None and path_key(ref.file.original_path) in keys:
+                return ref.group
+        return None
 
     def _detach(self, ref: FileRef) -> None:
         """把一個檔案引用從所在的群組或未分組清單拿掉"""

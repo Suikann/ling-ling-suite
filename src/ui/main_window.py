@@ -19,13 +19,14 @@ from core.constants import (
     TEMPLATE_VARIABLES, OperationKind,
 )
 from core.locale import t, get_locale, set_locale
-from core.models import Project, Group
+from core.models import Project, Group, SplitResult
 from services.file_service import FileService
 from services.import_service import ImportService
 from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVerdict
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from services.project_access import AccessResult, ProjectAccess
+from services.split_service import SplitService
 from ui.instrument_list import InstrumentListEditor
 
 
@@ -73,6 +74,7 @@ class MainWindow(QMainWindow):
         self.workspace_service = WorkspaceService(self.file_service)
         self._project_access = ProjectAccess(self.file_service, preferences, self.workspace_service)
         self._history = history or MoveHistory(self.file_service, self.workspace_service)
+        self._splitter = SplitService(self.file_service, self.workspace_service)
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
         self._create_menu()
@@ -539,8 +541,7 @@ class MainWindow(QMainWindow):
         from ui.split_dialog import SplitPdfDialog
         dialog = SplitPdfDialog(
             self.project, self._on_split_complete, self._current_group(), self,
-            workspace_service=self.workspace_service,
-            project_path=self._project_path or "",
+            splitter=self._splitter, project_path=self._project_path or "",
         )
         dialog.exec()
 
@@ -566,17 +567,14 @@ class MainWindow(QMainWindow):
         dialog = WorkspaceCleanupDialog(self.workspace_service, self._scan_workspace, self)
         dialog.exec()
 
-    def _on_split_complete(self, files, instruments, source_group, source_path,
-                           created_directories=None, replaced_paths=None):
-        if replaced_paths:
-            self.project.remove_paths(replaced_paths)
-        self.project.add_split_result(
-            files, instruments, source_path, source_group, score_label=t("group.score_label"),
-        )
+    def _on_split_complete(self, result: SplitResult):
+        """分割完成：結果交給專案套用、切到接手新分譜的群組，分割紀錄交給搬移歷程"""
+        group = self.project.apply_split(result, score_label=t("group.score_label"))
         self._rebuild_tabs()
-        self._set_status(t("split.files_added", count=len(files)))
+        self._tab_widget.setCurrentIndex(self.project.groups.index(group) + 1)
+        self._set_status(t("split.files_added", count=len(result.parts)))
         try:
-            self._history.record_split([f.original_path for f in files], created_directories or [])
+            self._history.record_split(result.record)
         except OSError as e:
             QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=e))
 

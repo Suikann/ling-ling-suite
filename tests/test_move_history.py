@@ -16,7 +16,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from core.locale import set_locale
-from core.models import RenameEntry
+from core.models import RenameEntry, SplitRecord
 from services.file_service import FileService
 from services.move_history import MoveHistory, RenameVerdict
 from services.project_service import ProjectService
@@ -612,7 +612,7 @@ class TestSplitAndRotateRecords(MoveHistoryTestCase):
     def test_undo_split_moves_the_parts_to_the_recycle_bin_and_removes_new_folders(self):
         folder = os.path.join(self.scores, "out")
         parts = [self.create(os.path.join("out", n)) for n in ("Flute.pdf", "Oboe.pdf")]
-        self.history.record_split(parts, [folder])
+        self.history.record_split(SplitRecord(self.path("合併譜.pdf"), parts, [folder], []))
         self.assertEqual(self.history.latest_undo().description, "PDF 分割：建立 2 個檔案")
         self.history.undo()
         self.assertEqual(self.file_service.trashed, parts)
@@ -624,7 +624,7 @@ class TestSplitAndRotateRecords(MoveHistoryTestCase):
         a = self.create("a.pdf")
         self.history.rename(RenameVerdict([RenameEntry(a, self.path("A1.pdf"))]))
         self.history.undo()
-        self.history.record_split([self.create("Flute.pdf")], [])
+        self.history.record_split(SplitRecord(self.path("合併譜.pdf"), [self.create("Flute.pdf")], [], []))
         self.assertIsNone(self.history.latest_redo())
 
     def test_legacy_rotate_save_as_record_is_undone_by_moving_the_saved_file_to_the_recycle_bin(self):
