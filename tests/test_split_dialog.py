@@ -22,7 +22,7 @@ from PyPDF2 import PdfWriter
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QTabWidget,
+    QApplication, QComboBox, QDialog, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QTabWidget,
 )
 
 from core.locale import get_locale, set_locale, t
@@ -105,6 +105,8 @@ def _other_thread_stacks() -> str:
 def _wait_until(condition: Callable[[], bool], timeout: float = 10.0):
     """處理事件直到 condition 成立（縮圖在背景執行緒產生，完成時以 signal 通知）
 
+    兩輪事件之間用 time.sleep 等候，它會放開 GIL，背景執行緒才跑得動；
+    QTest.qWait 等候時不放開 GIL，背景執行緒幾乎停擺（Windows 上十秒內連 PyMuPDF 都匯入不完）。
     逾時的失敗訊息附上其他執行緒當下的呼叫堆疊，看得出背景工作停在哪裡。
 
     Args:
@@ -115,7 +117,8 @@ def _wait_until(condition: Callable[[], bool], timeout: float = 10.0):
     while not condition():
         if time.monotonic() > deadline:
             raise AssertionError(f"等候 {timeout} 秒逾時，其他執行緒：\n{_other_thread_stacks()}")
-        QTest.qWait(20)
+        QApplication.processEvents()
+        time.sleep(0.02)
 
 
 def _make_pdf(path: str, pages: int) -> str:
