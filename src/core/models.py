@@ -240,6 +240,50 @@ class SplitEntry:
 
 
 @dataclass
+class SplitRecord:
+    """一次分割的檔案效果，交給搬移歷程記成復原紀錄
+
+    Attributes:
+        source_path: 合併譜
+        created_files: 產生的分譜
+        created_directories: 這次新建的目錄
+        replaced_files: 被取代、已移到資源回收桶的檔案（上次的分譜，或指定資料夾內的同名檔案）
+    """
+    source_path: str
+    created_files: List[str]
+    created_directories: List[str]
+    replaced_files: List[str]
+
+
+@dataclass
+class SplitResult:
+    """一次分割的結果，交給專案套用（Project.apply_split）
+
+    Attributes:
+        source_path: 合併譜
+        parts: 產生的分譜，依分段順序
+        voices: 各分譜的聲部名稱（使用者輸入的分段名稱）
+        replaced: 被取代的檔案；專案裡指向它們的引用要移除
+        created_directories: 這次新建的目錄
+    """
+    source_path: str
+    parts: List[FileInfo]
+    voices: List[str]
+    replaced: List[str]
+    created_directories: List[str] = field(default_factory=list)
+
+    @property
+    def record(self) -> SplitRecord:
+        """交給搬移歷程的分割紀錄"""
+        return SplitRecord(
+            source_path=self.source_path,
+            created_files=[p.original_path for p in self.parts],
+            created_directories=list(self.created_directories),
+            replaced_files=list(self.replaced),
+        )
+
+
+@dataclass
 class DriveRenameEntry:
     """Drive 重新命名計畫項目"""
     file_id: str = ""

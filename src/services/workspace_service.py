@@ -141,6 +141,18 @@ class WorkspaceService:
 
     # --- meta.json ---
 
+    def find_folder(self, source_path: str) -> Optional[str]:
+        """meta 記錄的來源是這份合併譜（core.paths 判定）的子資料夾；沒有時回傳 None"""
+        for folder in self._list_folders():
+            recorded = (self.read_meta(folder) or {}).get("source_path")
+            if recorded and same_path(recorded, source_path):
+                return folder
+        return None
+
+    def owner_of(self, folder: str) -> str:
+        """子資料夾 meta 記錄的所屬專案檔路徑；沒有 meta 或未記錄時為空字串"""
+        return self._owner_path(self.read_meta(folder))
+
     @staticmethod
     def _owner_path(meta: Optional[Dict]) -> str:
         """meta 記錄的所屬專案檔路徑；沒有 meta 或未記錄時為空字串"""
@@ -155,6 +167,23 @@ class WorkspaceService:
             return data if isinstance(data, dict) else None
         except (OSError, ValueError):
             return None
+
+    def write_meta(self, folder: str, source_path: str, project_path: str) -> None:
+        """記下子資料夾的來源合併譜與所屬專案（meta.json；建立時間沿用既有的）
+
+        Args:
+            folder: 子資料夾路徑，不存在時建立
+            source_path: 來源合併譜
+            project_path: 所屬專案檔，尚未存檔時為空字串（未知）
+        """
+        meta = self.read_meta(folder) or {}
+        meta.update({
+            "source_path": os.path.abspath(source_path),
+            "source_name": os.path.basename(source_path),
+            "project_path": _stored_project_path(project_path),
+            "created_at": meta.get("created_at") or time.time(),
+        })
+        self._write_meta(folder, meta)
 
     def _write_meta(self, folder: str, meta: Dict) -> None:
         """寫入子資料夾的 meta.json"""
@@ -222,7 +251,7 @@ class WorkspaceService:
 
     def recorded_owners(self) -> List[str]:
         """各子資料夾 meta 記錄的所屬專案檔路徑（依子資料夾順序，未記錄者略過，可能重複）"""
-        owners = [self._owner_path(self.read_meta(f)) for f in self._list_folders()]
+        owners = [self.owner_of(f) for f in self._list_folders()]
         return [p for p in owners if p]
 
     def scan(

@@ -68,6 +68,10 @@ PDF_EXTENSION = ".pdf"
 RELATIVE_DIR_NAMES = (".", "..")
 # 分割輸出：區段名清理後為空時的檔名
 SPLIT_FALLBACK_NAME = "Part"
+# 分割執行中在輸出資料夾裡暫用的子資料夾「<本次代號>{後綴}」：新分譜先全部寫進前者，
+# 被取代的檔案先挪進後者（保留原檔名），都就位後才把後者的檔移到資源回收桶；失敗時依此撤回
+SPLIT_STAGING_DIR_SUFFIX = ".splitting"
+SPLIT_REPLACED_DIR_SUFFIX = ".replaced"
 
 
 class OperationKind(str, Enum):
