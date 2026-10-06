@@ -224,7 +224,7 @@ src/
     instrument_list.py           - 樂器表編輯器
     group_panel.py               - 群組管理面板
     preview_dialog.py            - 預覽與衝突警告對話框
-    split_dialog.py              - PDF 分割對話框（縮圖標記分割點）
+    split_dialog.py              - PDF 分割對話框（縮圖標記分割點、命名、詢問與顯示；檢查與執行交給分割模組）
     rotate_dialog.py             - PDF 旋轉對話框（分段設定角度）
     merge_dialog.py              - 連結樂章對話框
     page_preview.py              - 頁面預覽對話框
@@ -250,16 +250,17 @@ src/
     move_history.py              - 搬移歷程：重新命名、復原、重做、中斷還原（還原或保留結果）的唯一入口，四個動作回傳同一種結果（MoveResult）；重新命名預檢（check_rename → RenameVerdict）也在這裡，rename 執行的就是判定的計畫；擁有復原／重做堆疊、進行中紀錄、工作區 meta 快照，也組裝分割與旋轉的復原紀錄
     move_service.py              - 搬移歷程內部的兩階段批次搬移引擎（驗證、對調／連鎖、回滾、進行中紀錄的讀寫與中斷後還原）；只有 move_history 使用，執行前驗證的規則（find_problems）與預檢共用
     instance_lock.py             - 單一實例鎖（作業系統檔案鎖，程式結束或當機時自動解除）
-    pdf_service.py               - PDF 分割計畫組裝、頁面擷取、旋轉、縮圖產生
+    pdf_service.py               - PDF 頁數、頁面擷取、分段旋轉、縮圖產生
+    split_service.py             - 分割模組：check 回報要產生的分譜、需確認與擋下的事，execute 一次執行、失敗整批撤回；工作區子資料夾的定位與所屬專案改寫只在這裡
     project_service.py           - 專案檔的序列化讀寫（內容由 Project.to_data／from_data 決定）、與磁碟上的專案檔比對（matches_file）
     project_access.py            - 專案存取：開啟與存檔（專案檔、最近專案清單、工作區 meta 所屬專案）、已知專案清單、清理工作區的掃描；主視窗開啟、存檔、關閉前比對都只經過它
     preferences_service.py       - 使用者偏好（語言、外觀、最近專案清單、譜庫設定）的存放；檔案位置建構時注入，預設值在 constants
-    workspace_service.py         - 工作區（分割輸出的暫存地）管理：子資料夾、meta.json、掃描、清理
+    workspace_service.py         - 工作區（分割輸出的暫存地）管理：meta.json 讀寫、檔案所屬的子資料夾、掃描、清理
     google_auth_service.py       - Google API OAuth 認證
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、naming、filename、rename_plan、rename_preflight、move_history、import、project、project_access、workspace、pdf_service、locale、instance_lock、drive_rename；main_window、split_dialog、Drive 重新命名對話框、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
+tests/                           - pytest 測試（template_engine、naming、filename、rename_plan、rename_preflight、move_history、split_service、import、project、project_access、workspace、pdf_service、locale、instance_lock、drive_rename；main_window、split_dialog、Drive 重新命名對話框、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
 GLOSSARY.md                      - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
@@ -342,7 +343,7 @@ services/ 層
 
 專案（`core/models.py` 的 `Project`）自己管理修改、檔案引用與未存檔狀態；純記憶體，不匯入 Qt、不做檔案 I/O。
 
-- UI 只表達意圖並立即寫入：群組欄位（`update_group`）、新增／匯入／刪除群組（`add_group`、`add_groups`、`delete_group`）、檔案搬進群組或移回未分組（`move_to_group`、`move_to_ungrouped`）、加入檔案（`add_files`）、指定與清除總譜（`set_score`、`clear_score`）、分譜排序（`reorder_files`）、樂器表（`set_instruments`）、連結樂章（`link_movements`）、大模板（`set_master_template`）、輸出設定（`set_output_settings`）、編制設定（`update_ensemble`）、切換語言改寫模板變數（`convert_template_language`）、套用搬移結果（`replace_paths`）、移除引用（`remove_paths`）、加入分割結果（`add_split_result`）。UI 不直接指定群組、檔案資訊或專案的欄位；群組分頁、樂器表、預覽對話框不呼叫主視窗的私有方法，影響其他分頁的修改以分頁的 `groups_changed` 訊號讓主視窗重建分頁
+- UI 只表達意圖並立即寫入：群組欄位（`update_group`）、新增／匯入／刪除群組（`add_group`、`add_groups`、`delete_group`）、檔案搬進群組或移回未分組（`move_to_group`、`move_to_ungrouped`）、加入檔案（`add_files`）、指定與清除總譜（`set_score`、`clear_score`）、分譜排序（`reorder_files`）、樂器表（`set_instruments`）、連結樂章（`link_movements`）、大模板（`set_master_template`）、輸出設定（`set_output_settings`）、編制設定（`update_ensemble`）、切換語言改寫模板變數（`convert_template_language`）、套用搬移結果（`replace_paths`）、移除引用（`remove_paths`）、套用分割結果（`apply_split`）。UI 不直接指定群組、檔案資訊或專案的欄位；群組分頁、樂器表、預覽對話框不呼叫主視窗的私有方法，影響其他分頁的修改以分頁的 `groups_changed` 訊號讓主視窗重建分頁
 - 舊欄位鏡像（全選的 `selected_instruments`、`use_parts_subfolder`）由上述操作與載入流程維持，呼叫端不碰
 - **未存檔＝快照比對**：`is_modified()` 比對目前內容（`to_data()`，即專案檔會存的內容，不含版本號）與上次存檔或開啟時的快照；改回原值就回到已存檔。舊格式的遷移（總譜標籤留空補上依目前介面語言的預設值、承接專案層級樂器表、勾選子集收成群組樂器表、舊分譜子資料夾旗標）在 `from_data` 內、拍快照之前完成，所以開啟舊專案不標記未存檔。開啟專案、切換分頁不改內容，不標記；切換介面語言改寫了命名格式就標記
 - 每個編輯操作與存檔、開啟後都發出同一個「已變更」通知（`subscribe`，純 callback）；主視窗只訂閱它來更新標題的 `*`。存檔與預覽前沒有把畫面收回模型的步驟
@@ -421,24 +422,30 @@ services/ 層
 
 復原與重做堆疊後進先出：每筆紀錄有唯一 `id`（`UndoRecord.id`），檔名為「推入序號_id.json」，序號越大越靠近頂端，在兩個堆疊間轉移時 id 不變；舊版以時間戳命名、沒有 id 的紀錄（`undo_YYYYMMDD_HHMMSS.json`）照常載入並能執行，排在新紀錄之下，以檔名當 id。新的操作（重新命名、分割、旋轉）放上復原堆疊並清空重做堆疊。復原把整批搬移類紀錄（`MOVE_OPERATIONS`）的檔案搬回原位，已不在新位置的檔略過並列出，專案裡的路徑維持原樣，只有實際搬回的對照轉入重做堆疊；重做同理，已不在原位的檔略過。分割與旋轉的紀錄也由搬移歷程組裝（`record_split`、`record_rotate`；旋轉覆蓋原檔前以 `create_backup` 備份），主視窗與對話框不自己組紀錄：復原時分割的分譜與旋轉另存出的檔移到資源回收桶，覆蓋原檔的以備份蓋回，之後移除紀錄、不進重做堆疊（無法重做）。操作種類定義在 `core/constants.py` 的 `OperationKind`。新版寫出的紀錄不保證舊版能正確處理（不支援降版）。
 
-PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後先清空該來源上次的輸出。
-指定資料夾模式下才做同名檔案覆蓋確認。
-
 ---
 
 ## Workspace
 
-分割產生的分譜先進工作區（`WORKSPACE_DIR`），重新命名時才搬到輸出位置；使用者匯入的檔案永遠不進工作區（見 `docs/adr/0001`）。
+分割產生的分譜預設先進工作區（`WORKSPACE_DIR`），重新命名時才搬到輸出位置；也可以指定資料夾。使用者匯入的檔案永遠不進工作區（見 `docs/adr/0001`）。
 
-- 每個來源合併譜對應一個子資料夾，名稱為來源路徑比對鍵（`path_key`：絕對路徑、不分大小寫）SHA-1 的前 8 碼；資料夾內 `meta.json` 記錄 `source_path`、`source_name`、`project_path`、`created_at`（路徑皆為絕對路徑，`project_path` 未存檔時為空字串）
-- 子資料夾以來源合併譜為鍵、跨專案共用：另一專案重新分割同一份合併譜會取代前者尚未重新命名的分譜，確認訊息點名所屬專案（`WorkspaceService.other_owner`），專案檔已不存在時加註「（找不到）」；`prepare_folder` 一律把所屬專案改成目前專案，未存檔時記為空（取代過一次後再分割就是自己的嘗試，不再點名別人）
+分割由分割模組（`services/split_service.py` 的 `SplitService`）負責，分兩段；分割對話框只標記分割點、命名、詢問與顯示：
+
+- `check(SplitRequest)` 不寫任何檔，回傳 `SplitCheck`：要產生的分譜（`plan`，頁面全被刪掉的分段略過）；擋下的問題（`duplicates`：清理非法字元、空名回退為 `Part`、不分大小寫後檔名相同的分段，以分段編號列出；`source_conflicts`：輸出就是合併譜本身）；需確認的事（工作區模式為上次的分譜 `previous_outputs` 與其所屬的另一個專案 `owner`，指定資料夾模式為已有的同名檔案 `overwritten`）。`blocked` 時對話框只列出原因
+- `execute(check)` 執行確認過的檢查結果：新分譜先全部寫進輸出資料夾裡的暫用子資料夾 `<代號>.splitting`；寫好後才把被取代的檔（`check.replaced`）挪進 `<代號>.replaced`（保留原檔名）、新分譜就位、（工作區模式）以 `WorkspaceService.write_meta` 改寫所屬專案；最後把挪開的檔移到資源回收桶。任一步失敗就撤回已做的步驟後拋出：被取代的檔原封不動、所屬專案不變、不留新分譜，專案與復原紀錄也不動。移不進資源回收桶的挪開檔留在 `<代號>.replaced`，不影響已完成的分割
+- 執行回傳 `SplitResult`（新分譜、聲部名稱、被取代的路徑、新建的目錄）。主視窗以 `Project.apply_split` 套用：移除被取代的引用；合併譜不論是分譜還是總譜都移出群組（未分組裡的留在未分組），重新命名才不會搬動它；接手新分譜的是引用被取代檔案的群組，其次是合併譜所在的群組，都沒有才另建以合併譜檔名命名的群組（重新分割不多出群組、不留空群組）。接著切到接手的群組，把 `result.record`（`SplitRecord`）交給 `MoveHistory.record_split`
+- 分段自動帶入的聲部名稱讀合併譜所在群組的樂器表；專案層級的舊樂器表只在載入舊專案時遷移
+
+工作區的規則：
+
+- 每個來源合併譜對應一個子資料夾，名稱為來源路徑比對鍵（`path_key`：絕對路徑、不分大小寫）SHA-1 的前 8 碼（`SplitService.output_folder`）；還沒有這個子資料夾、但有子資料夾的 `meta.source_path` 指向同一份來源時（升級前以保留大小寫的路徑雜湊建立，Linux／macOS 上名稱不同）沿用後者（`WorkspaceService.find_folder`）。資料夾內 `meta.json` 記錄 `source_path`、`source_name`、`project_path`、`created_at`（路徑皆為絕對路徑，`project_path` 未存檔時為空字串）
+- 子資料夾以來源合併譜為鍵、跨專案共用：另一專案重新分割同一份合併譜會取代前者尚未重新命名的分譜，確認訊息點名所屬專案（`SplitCheck.owner`），專案檔已不存在時加註「（找不到）」；分割成功後所屬專案一律改成目前專案，未存檔時記為空（取代過一次後再分割就是自己的嘗試，不再點名別人）
 - 專案開啟與存檔時都由專案存取更新引用到的子資料夾的 `meta.project_path`（`update_project_path` 回傳寫入失敗的子資料夾，UI 只在狀態列提示、不阻止開啟或存檔；見 Project Access）
 - 搬空的子資料夾保留 `meta.json`（復原重新命名時分譜會搬回來，需要它辨識來源）；「清理工作區」掃描時才移除既未被目前專案、也未被任何已知專案引用的空資料夾（`meta.json` 是程式自產的中繼資料，直接刪除不走資源回收桶；連同原子寫入殘留 `meta.json.tmp` 一起清，由 `FileService.remove_atomic_residue` 認得暫名）
 - 復原紀錄寫入時對來源位於工作區的項目快照其子資料夾的 meta（`UndoRecord.workspace_meta`，同一資料夾的不同寫法只記一份；因此 `MoveHistory` 注入 `WorkspaceService`）；復原後子資料夾若已沒有可讀的 meta 就用快照寫回（`restore_meta`；回滾失敗卡在工作區的檔案、中斷還原搬回工作區的分譜、保留結果的復原也寫回，都在刪除進行中紀錄之前），寫回失敗不影響檔案復原；重做前先以子資料夾目前的 meta 更新快照；舊紀錄沒有此欄照常載入
 - 「工具 → 開啟工作區資料夾」以系統檔案總管開啟 `WORKSPACE_DIR`
 - 「工具 → 清理工作區」列出各子資料夾的引用狀態（使用中／屬於其他專案／屬於無法讀取的專案／未被引用／來源不明），只有「未被引用」預設勾選，刪除走資源回收桶。「已知專案」= 最近專案清單 + 各 `meta.project_path` 指向的專案檔（`ProjectAccess.known_projects`）；開啟對話框時會順手把最近清單中已不存在的專案檔移除
 - 引用關係涵蓋群組內分譜、總譜與未分組檔案（`Project.file_refs()`）
-- 分割輸出路徑等於來源合併譜時拒絕執行（`pdf_service.extract_pages` 與分割對話框各擋一層）；重新分割同一來源時，所有指向舊輸出的群組／未分組項目一併移除
+- 分割輸出路徑等於來源合併譜時擋下（分割模組的檢查，`pdf_service.extract_pages` 再擋一層）
 - `rename_file` 跨磁碟時複製到 `.part` 再就位，失敗不留半成品
 
 ---
