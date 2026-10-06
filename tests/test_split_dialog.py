@@ -7,7 +7,9 @@
 """
 import os
 import sys
+import threading
 import time
+import traceback
 import unittest
 from contextlib import contextmanager
 from typing import Callable, List
@@ -88,12 +90,31 @@ def splitting(operate: Callable[[QDialog], None]):
         raise AssertionError("分割對話框沒有開啟")
 
 
+def _other_thread_stacks() -> str:
+    """主執行緒以外各執行緒當下的名稱與呼叫堆疊"""
+    frames = sys._current_frames()
+    blocks = []
+    for thread in threading.enumerate():
+        if thread is threading.current_thread() or thread.ident not in frames:
+            continue
+        stack = "".join(traceback.format_stack(frames[thread.ident]))
+        blocks.append(f"--- {thread.name}\n{stack}")
+    return "\n".join(blocks) or "（沒有其他執行緒）"
+
+
 def _wait_until(condition: Callable[[], bool], timeout: float = 10.0):
-    """處理事件直到 condition 成立（縮圖在背景執行緒產生，完成時以 signal 通知）"""
+    """處理事件直到 condition 成立（縮圖在背景執行緒產生，完成時以 signal 通知）
+
+    逾時的失敗訊息附上其他執行緒當下的呼叫堆疊，看得出背景工作停在哪裡。
+
+    Args:
+        condition: 每處理一輪事件後檢查的條件
+        timeout: 最多等候的秒數
+    """
     deadline = time.monotonic() + timeout
     while not condition():
         if time.monotonic() > deadline:
-            raise AssertionError("等候逾時")
+            raise AssertionError(f"等候 {timeout} 秒逾時，其他執行緒：\n{_other_thread_stacks()}")
         QTest.qWait(20)
 
 
