@@ -15,8 +15,7 @@ from core.constants import PartsOutputMode
 from core.locale import get_locale, set_locale
 from core.models import FileInfo, Group, Project
 from core.naming import UnsafeFolderNameError
-from services.file_service import FileService
-from services.rename_service import RenameService
+from services.rename_service import generate_rename_plan
 
 IN_DIR = os.path.abspath("in")
 OUT_DIR = os.path.abspath("out")
@@ -35,13 +34,10 @@ def _group(**fields):
 
 
 class TestRenamePlan(unittest.TestCase):
-    """RenameService.generate_rename_plan"""
-
-    def setUp(self):
-        self.service = RenameService(FileService())
+    """generate_rename_plan"""
 
     def _plan(self, project):
-        return [(e.original_path, e.new_path) for e in self.service.generate_rename_plan(project)]
+        return [(e.original_path, e.new_path) for e in generate_rename_plan(project).entries]
 
     def test_without_output_directory_files_are_renamed_beside_their_source(self):
         project = Project(master_template="{序號}-{樂器}.pdf", groups=[_group()])
@@ -64,7 +60,7 @@ class TestRenamePlan(unittest.TestCase):
 
     def test_plan_entries_carry_their_group_id(self):
         group = _group()
-        plan = self.service.generate_rename_plan(Project(groups=[group]))
+        plan = generate_rename_plan(Project(groups=[group])).entries
         self.assertEqual({e.group_id for e in plan}, {group.id})
 
     def test_files_beyond_the_voice_count_are_left_out(self):
@@ -91,7 +87,7 @@ class TestRenamePlan(unittest.TestCase):
         project = Project(
             master_template="{樂器}.pdf", use_subfolders=True, subfolder_template="{曲名}", groups=[unsafe, chosen],
         )
-        plan = self.service.generate_rename_plan(project, group_ids={chosen.id})
+        plan = generate_rename_plan(project, group_ids={chosen.id}).entries
         self.assertEqual([e.original_path for e in plan], [
             os.path.join(IN_DIR, "s.pdf"), os.path.join(IN_DIR, "fl.pdf"), os.path.join(IN_DIR, "hn.pdf"),
         ])
@@ -102,7 +98,7 @@ class TestRenamePlan(unittest.TestCase):
             parts_output_mode=PartsOutputMode.PARTS, parts_subfolder_name="..", groups=[_group()],
         )
         with self.assertRaises(UnsafeFolderNameError):
-            self.service.generate_rename_plan(project)
+            generate_rename_plan(project)
 
 
 
@@ -110,7 +106,6 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
     """聲部組資料夾模式下，還沒有聲部組的聲部依當時的介面語言寫進專案的編制設定"""
 
     def setUp(self):
-        self.service = RenameService(FileService())
         self.addCleanup(set_locale, get_locale())
 
     def _project(self, **fields):
@@ -124,7 +119,7 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
     def test_missing_sections_are_written_in_the_current_language(self):
         set_locale("en")
         project = self._project(instrument_sections={"Horn": "Corni"})
-        new_paths = [e.new_path for e in self.service.generate_rename_plan(project)]
+        new_paths = [e.new_path for e in generate_rename_plan(project).entries]
         self.assertEqual(project.instrument_sections, {"Flute": "Woodwinds", "Horn": "Corni"})
         self.assertEqual(new_paths[1:], [
             os.path.join(OUT_DIR, "Woodwinds", "Flute.pdf"), os.path.join(OUT_DIR, "Corni", "Horn.pdf"),
@@ -134,28 +129,28 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
     def test_written_sections_stay_after_switching_language(self):
         set_locale("en")
         project = self._project()
-        self.service.generate_rename_plan(project)
+        generate_rename_plan(project)
         set_locale("zh_TW")
-        new_paths = [e.new_path for e in self.service.generate_rename_plan(project)]
+        new_paths = [e.new_path for e in generate_rename_plan(project).entries]
         self.assertEqual(new_paths[1], os.path.join(OUT_DIR, "Woodwinds", "Flute.pdf"))
 
     def test_chinese_interface_writes_chinese_sections(self):
         set_locale("zh_TW")
         project = self._project()
-        self.service.generate_rename_plan(project)
+        generate_rename_plan(project)
         self.assertEqual(project.instrument_sections, {"Flute": "木管", "Horn": "銅管"})
 
     def test_voice_without_a_known_family_goes_to_the_other_section(self):
         set_locale("en")
         project = self._project()
         project.set_instruments(project.groups[0], ["Flute", "Theremin"])
-        self.service.generate_rename_plan(project)
+        generate_rename_plan(project)
         self.assertEqual(project.instrument_sections["Theremin"], "Other")
 
     def test_blank_section_is_replaced_by_the_default(self):
         set_locale("zh_TW")
         project = self._project(instrument_sections={"Flute": "  ", "Horn": "銅管"})
-        self.service.generate_rename_plan(project)
+        generate_rename_plan(project)
         self.assertEqual(project.instrument_sections, {"Flute": "木管", "Horn": "銅管"})
 
     def test_only_voices_of_selected_groups_are_written(self):
@@ -163,7 +158,7 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
         project = self._project()
         other = Group(name="other", files=[_info("x.pdf")], instruments=["Oboe"])
         project.add_groups([other], score_label="Score")
-        self.service.generate_rename_plan(project, group_ids={project.groups[0].id})
+        generate_rename_plan(project, group_ids={project.groups[0].id})
         self.assertNotIn("Oboe", project.instrument_sections)
 
     def test_other_modes_do_not_touch_the_project(self):
@@ -172,7 +167,7 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
                 project = self._project()
                 project.set_output_settings(parts_output_mode=mode)
                 project.mark_saved()
-                self.service.generate_rename_plan(project)
+                generate_rename_plan(project)
                 self.assertEqual(project.instrument_sections, {})
                 self.assertFalse(project.is_modified())
 

@@ -22,8 +22,7 @@ from core.constants import DEFAULT_MASTER_TEMPLATE
 from core.locale import get_locale, set_locale, t
 from core.models import FileInfo, Group, Project
 from services.drive_rename_service import build_groups_from_drive, generate_drive_rename_plan
-from services.file_service import FileService
-from services.rename_service import RenameService
+from services.rename_service import generate_rename_plan
 from ui.drive_rename_dialog import DriveRenameDialog
 
 
@@ -59,10 +58,9 @@ class TestSameNamesAsLocal(unittest.TestCase):
     }
 
     def test_drive_names_match_the_local_plan(self):
-        local_service = RenameService(FileService())
         for case, (group, template) in self.CASES.items():
             with self.subTest(case):
-                local = local_service.generate_rename_plan(Project(master_template=template, groups=[group]))
+                local = generate_rename_plan(Project(master_template=template, groups=[group])).entries
                 drive = generate_drive_rename_plan([group], template)
                 self.assertEqual(
                     [(e.file_id, e.new_name) for e in drive.entries],

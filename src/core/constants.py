@@ -86,6 +86,28 @@ class OperationKind(str, Enum):
 MOVE_OPERATIONS = frozenset({OperationKind.RENAME, OperationKind.UNDO, OperationKind.REDO})
 
 
+class RenameProblem(str, Enum):
+    """重新命名預檢以來源為鍵的問題種類
+
+    搬移引擎的執行前驗證用同一套規則判定其中與搬移有關的種類（復原、重做沒有輸出位置，不檢查邊界）。
+    """
+    MISSING_SOURCE = "missing_source"
+    SUFFIXED = "suffixed"
+    EXTRA_FILE = "extra_file"
+    OUTSIDE_OUTPUT = "outside_output"
+    EMPTY_NAME = "empty_name"
+    DUPLICATE_SOURCE = "duplicate_source"
+    DUPLICATE_TARGET = "duplicate_target"
+    TARGET_OCCUPIED = "target_occupied"
+    STAGING_TAKEN = "staging_taken"
+
+
+# 預檢不阻擋的問題：來源已不在的從計畫丟掉、重複的目標加後綴、多於聲部數的分譜不改名；其餘一律阻擋
+NON_BLOCKING_RENAME_PROBLEMS = frozenset({
+    RenameProblem.MISSING_SOURCE, RenameProblem.SUFFIXED, RenameProblem.EXTRA_FILE,
+})
+
+
 class WorkspaceStatus(str, Enum):
     """工作區子資料夾相對於專案的引用狀態"""
     IN_USE = "in_use"

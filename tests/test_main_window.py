@@ -31,7 +31,7 @@ from core.models import FileInfo, Group, Project, RenameEntry
 from services.file_service import FileService
 from main import launch
 from services.instance_lock import InstanceLock
-from services.move_history import MoveHistory
+from services.move_history import MoveHistory, RenameVerdict
 from services.preferences_service import PreferencesService
 from services.project_service import ProjectService
 from services.workspace_service import WorkspaceService
@@ -130,6 +130,35 @@ def previewing(operate: Callable[[QDialog], None]):
         raise errors[0]
     if not opened:
         raise AssertionError("預覽對話框沒有開啟")
+
+
+@contextmanager
+def executing_preview():
+    """模擬使用者在預覽對話框直接按下執行鈕（不論它顯示「執行重新命名」還是「繼續（自動加後綴）」）
+
+    執行鈕停用（按不下去）或對話框沒有開啟，都在離開區塊時判定失敗。
+
+    Yields:
+        按下的執行鈕文字（清單，對話框開啟後才有）
+    """
+    pressed = []
+
+    def fake_exec(dialog):
+        button = next(
+            b for b in dialog.findChildren(QPushButton)
+            if b.text() in (t("preview.execute"), t("preview.execute_with_suffix"))
+        )
+        if button.isEnabled():
+            pressed.append(button.text())
+            button.click()
+        else:
+            dialog.reject()
+        return dialog.result()
+
+    with mock.patch.object(PreviewDialog, "exec", fake_exec):
+        yield pressed
+    if not pressed:
+        raise AssertionError("預覽對話框沒有開啟，或執行鈕停用")
 
 
 def _settle():
@@ -603,6 +632,43 @@ class TestMainWindowPreviewNaming(MainWindowTestCase):
         self.assertFalse(seen["enabled"])
 
 
+class TestMainWindowPreviewVerdict(MainWindowTestCase):
+    """預覽顯示搬移歷程的預檢判定，按下執行用的就是同一份判定"""
+
+    def _open_group(self, voices: List[str]) -> None:
+        """從選單開啟一份專案：一個群組，分譜依序為 p1.pdf、p2.pdf…，命名格式為 {樂器}.pdf"""
+        files = self.create_files(*(f"p{i}.pdf" for i in range(1, len(voices) + 1)))
+        group = Group(name="g", files=files, instruments=voices, score_label="總譜")
+        self.open_from_menu(Project(master_template="{樂器}.pdf", groups=[group]))
+
+    def _pdf_names(self) -> List[str]:
+        return sorted(n for n in os.listdir(self.temp_dir) if n.endswith(".pdf"))
+
+    def test_continue_with_suffix_really_renames(self):
+        self._open_group(["Same", "Same"])
+        with answering_prompts() as shown, executing_preview() as pressed:
+            self.click_button(t("panel.preview_rename"))
+        self.assertEqual(pressed, [t("preview.execute_with_suffix")])
+        self.assertEqual(self._pdf_names(), ["Same (1).pdf", "Same.pdf"])
+        self.assertEqual(shown, [(t("dialog.complete"), t("dialog.complete.renamed", count=2))])
+
+    def test_blocked_preview_disables_execute_and_shows_the_reason(self):
+        self._open_group(["Same", "Same", "Same (1)"])
+        seen = {}
+
+        def read_state(dialog):
+            _settle()
+            seen["warnings"] = [label.text() for label in dialog.findChildren(QLabel) if label.isVisibleTo(dialog)]
+            seen["enabled"] = button_in(dialog, QPushButton, t("preview.execute")).isEnabled()
+
+        with previewing(read_state):
+            self.click_button(t("panel.preview_rename"))
+        blocked = [os.path.join(self.temp_dir, name) for name in ("p2.pdf", "p3.pdf")]
+        self.assertIn(t("preview.duplicate_target_warning", files="\n".join(blocked)), seen["warnings"])
+        self.assertFalse(seen["enabled"])
+        self.assertEqual(self._pdf_names(), ["p1.pdf", "p2.pdf", "p3.pdf"])
+
+
 class _Crash(BaseException):
     """模擬程式被強制結束：不是 Exception，所以搬移歷程不會攔下來回滾"""
 
@@ -638,7 +704,7 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
     def test_undo_marks_unsaved_and_shows_the_original_name(self):
         a, = self.create_files("a.pdf")
         renamed = self._path("01-Flute.pdf")
-        self.history.rename([RenameEntry(a.original_path, renamed)])
+        self.history.rename(RenameVerdict([RenameEntry(a.original_path, renamed)]))
         self._open_group_of(renamed)
         self.assertFalse(self.is_marked_unsaved())
         with answering_prompts(QMessageBox.Yes):
@@ -648,7 +714,7 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
 
     def test_redo_marks_unsaved_and_shows_the_new_name(self):
         a, = self.create_files("a.pdf")
-        self.history.rename([RenameEntry(a.original_path, self._path("01-Flute.pdf"))])
+        self.history.rename(RenameVerdict([RenameEntry(a.original_path, self._path("01-Flute.pdf"))]))
         self.history.undo()
         self._open_group_of(a.original_path)
         with answering_prompts(QMessageBox.Yes):
@@ -659,7 +725,7 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
     def test_undo_lists_the_skipped_files(self):
         a, b = self.create_files("a.pdf", "b.pdf")
         new_a, new_b = self._path("01-Flute.pdf"), self._path("02-Oboe.pdf")
-        self.history.rename([RenameEntry(a.original_path, new_a), RenameEntry(b.original_path, new_b)])
+        self.history.rename(RenameVerdict([RenameEntry(a.original_path, new_a), RenameEntry(b.original_path, new_b)]))
         self._open_group_of(new_a, new_b)
         os.remove(new_b)
         with answering_prompts(QMessageBox.Yes) as shown:
@@ -670,7 +736,7 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
     def test_residual_record_is_described_by_the_operation_that_left_it(self):
         a, b = self.create_files("a.pdf", "b.pdf")
         new_a, new_b = self._path("01-Flute.pdf"), self._path("02-Oboe.pdf")
-        self.history.rename([RenameEntry(a.original_path, new_a), RenameEntry(b.original_path, new_b)])
+        self.history.rename(RenameVerdict([RenameEntry(a.original_path, new_a), RenameEntry(b.original_path, new_b)]))
         self._open_group_of(new_a, new_b)
         # 第二個檔搬回原位失敗觸發回滾；第一個檔又搬不回新位置，留在原位
         self._fail_moves_when(lambda old, new: old == new_b or new == new_a)
@@ -695,9 +761,9 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
 
         self.history_files.rename_file = crash_on_second_move
         with self.assertRaises(_Crash):
-            self.history.rename([
+            self.history.rename(RenameVerdict([
                 RenameEntry(a.original_path, self._path("01.pdf")), RenameEntry(b.original_path, self._path("02.pdf")),
-            ])
+            ]))
         del self.history_files.rename_file
         with answering_prompts(t("dialog.pending_move.restore")) as shown:
             self.assertTrue(self.window.prompt_pending_recovery())
@@ -721,7 +787,7 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
     def test_prompt_after_an_interrupted_undo_says_undo_did_not_finish(self):
         a, b = self.create_files("a.pdf", "b.pdf")
         new_a, new_b = self._path("01-Flute.pdf"), self._path("02-Oboe.pdf")
-        self.history.rename([RenameEntry(a.original_path, new_a), RenameEntry(b.original_path, new_b)])
+        self.history.rename(RenameVerdict([RenameEntry(a.original_path, new_a), RenameEntry(b.original_path, new_b)]))
         real_rename = FileService.rename_file
 
         def crash_on_second_move(old_path, new_path):
@@ -740,7 +806,7 @@ class TestMainWindowMoveHistory(MainWindowTestCase):
     def test_keeping_a_finished_undo_updates_project_paths_and_marks_unsaved(self):
         a, = self.create_files("a.pdf")
         renamed = self._path("01-Flute.pdf")
-        self.history.rename([RenameEntry(a.original_path, renamed)])
+        self.history.rename(RenameVerdict([RenameEntry(a.original_path, renamed)]))
         self._open_group_of(renamed)
         self._crash_writing_into(self.history.undo, os.path.join(self.temp_dir, "redo"))
         with answering_prompts(t("dialog.pending_move.keep")) as shown:

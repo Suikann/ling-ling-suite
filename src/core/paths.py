@@ -11,6 +11,7 @@
     same_path("Flute.pdf", os.path.abspath("FLUTE.pdf"))  # True
     in_use = {path_key(p) for p in paths}
     name_key("Flute.pdf") == name_key("FLUTE.pdf")  # True
+    is_inside("out/Sym/01.pdf", "OUT")  # True
 """
 import os
 
@@ -35,3 +36,20 @@ def path_key(path: str) -> str:
 def same_path(a: str, b: str) -> bool:
     """兩條路徑是否指向同一個檔案"""
     return path_key(a) == path_key(b)
+
+
+def is_inside(path: str, folder: str) -> bool:
+    """path 是否在 folder 之內（任意深度，不含 folder 本身）
+
+    Args:
+        path: 要判斷的路徑
+        folder: 資料夾
+
+    Returns:
+        兩者正規化後，folder 是 path 的上層目錄時為 True；不同磁碟時為 False
+    """
+    path, folder = path_key(path), path_key(folder)
+    try:
+        return path != folder and os.path.commonpath([path, folder]) == folder
+    except ValueError:
+        return False

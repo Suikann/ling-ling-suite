@@ -213,10 +213,22 @@ class WorkspaceScan:
 
 @dataclass
 class RenameEntry:
-    """重新命名計畫項目"""
+    """重新命名計畫項目
+
+    Attributes:
+        original_path: 來源
+        new_path: 目標
+        group_id: 所屬群組
+        output_directory: 專案的輸出位置；空字串表示沒指定（放在來源檔所在的資料夾）
+    """
     original_path: str
     new_path: str
     group_id: Optional[str] = None
+    output_directory: str = ""
+
+    def output_location(self) -> str:
+        """這一項實際的輸出位置：目標必須在它之內；沒指定輸出位置時為來源檔所在的資料夾"""
+        return self.output_directory or os.path.dirname(self.original_path)
 
 
 @dataclass

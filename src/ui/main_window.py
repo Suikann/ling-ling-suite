@@ -22,7 +22,7 @@ from core.locale import t, get_locale, set_locale
 from core.models import Project, Group
 from services.file_service import FileService
 from services.import_service import ImportService
-from services.move_history import MoveHistory, MoveResult, PendingMove
+from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVerdict
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from services.project_access import AccessResult, ProjectAccess
@@ -75,7 +75,6 @@ class MainWindow(QMainWindow):
         self._history = history or MoveHistory(self.file_service, self.workspace_service)
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
-        self._rename_service = None
         self._create_menu()
         self._create_ui()
         self._update_title()
@@ -390,9 +389,6 @@ class MainWindow(QMainWindow):
         if not self.project.master_template.strip():
             QMessageBox.warning(self, t("dialog.warning"), t("dialog.warning.empty_template"))
             return
-        if not self._rename_service:
-            from services.rename_service import RenameService
-            self._rename_service = RenameService(self.file_service)
         selected_ids = None
         if len(self.project.groups) > 1:
             selected_ids = self._select_groups_for_rename()
@@ -400,13 +396,13 @@ class MainWindow(QMainWindow):
                 return
         from ui.preview_dialog import PreviewDialog
         dialog = PreviewDialog(
-            self.project, self._rename_service,
-            self._execute_rename, selected_ids, self,
+            self.project, lambda: self._history.check_rename(self.project, selected_ids),
+            self._execute_rename, self,
         )
         dialog.exec()
 
-    def _execute_rename(self, plan):
-        result = self._history.rename(plan)
+    def _execute_rename(self, verdict: RenameVerdict):
+        result = self._history.rename(verdict)
         if self._apply_move_result(result, str):
             count = len(result.changes)
             self._set_status(t("status.renamed", count=count))

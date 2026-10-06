@@ -15,14 +15,14 @@
 """
 import json
 import os
-from collections import defaultdict
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from core.constants import MOVE_JOURNAL_FILE, RENAME_STAGING_SUFFIX
+from core.constants import MOVE_JOURNAL_FILE, RENAME_STAGING_SUFFIX, RenameProblem
 from core.locale import t
 from core.models import UndoMapping
-from core.paths import path_key, same_path
+from core.paths import is_inside, path_key, same_path
 from services.file_service import FileService
 
 
@@ -186,17 +186,10 @@ class PendingMoveError(OSError):
         super().__init__(t("rename.error.pending_move"))
 
 
-def _group_duplicates(
-    items: List[Move], path_of: Callable[[Move], str], value: Callable[[Move], str],
-) -> Dict[str, List[str]]:
-    """依路徑同一性分組，回傳出現多次的路徑（首次出現的寫法）及其對應值清單"""
-    spelled: Dict[str, str] = {}
-    grouped = defaultdict(list)
-    for item in items:
-        key = path_key(path_of(item))
-        spelled.setdefault(key, path_of(item))
-        grouped[key].append(value(item))
-    return {spelled[k]: v for k, v in grouped.items() if len(v) > 1}
+def _repeated(moves: List[Move], side: int) -> Set[int]:
+    """路徑（side 為 0 看來源、1 看目標）與其他項目相同的項目索引"""
+    counts = Counter(path_key(move[side]) for move in moves)
+    return {i for i, move in enumerate(moves) if counts[path_key(move[side])] > 1}
 
 
 def _name_stem(path: str) -> str:
@@ -210,108 +203,108 @@ def staging_path(path: str) -> str:
     return path + RENAME_STAGING_SUFFIX
 
 
+# 執行前驗證依序檢查：第一種有問題的種類決定拒絕的例外與訊息，訊息列出該項的來源、目標或暫名
+_REFUSALS: Tuple[Tuple[RenameProblem, type, str, Callable[[Move], str]], ...] = (
+    (RenameProblem.OUTSIDE_OUTPUT, ValueError, "rename.error.outside_output", lambda m: m[1]),
+    (RenameProblem.EMPTY_NAME, ValueError, "rename.error.empty_name", lambda m: m[0]),
+    (RenameProblem.MISSING_SOURCE, FileNotFoundError, "rename.error.source_missing", lambda m: m[0]),
+    (RenameProblem.DUPLICATE_SOURCE, FileExistsError, "rename.error.duplicate_source", lambda m: m[0]),
+    (RenameProblem.DUPLICATE_TARGET, FileExistsError, "rename.error.duplicate_target", lambda m: m[1]),
+    (RenameProblem.TARGET_OCCUPIED, FileExistsError, "rename.error.target_exists", lambda m: m[1]),
+    (RenameProblem.STAGING_TAKEN, FileExistsError, "rename.error.staging_exists", lambda m: staging_path(m[0])),
+)
+
+
 class MoveService:
-    """兩階段批次搬移引擎：只有搬移歷程執行搬移；檢查規則另供重新命名預覽判斷"""
+    """兩階段批次搬移引擎：只有搬移歷程執行搬移；執行前驗證的規則也供重新命名預檢使用"""
 
     def __init__(self, file_service: FileService, journal_path: str = MOVE_JOURNAL_FILE):
         self.file_service = file_service
         self._journal = _JournalFile(file_service, journal_path)
 
-    def find_empty_names(self, moves: List[Move]) -> List[str]:
-        """列出目標檔名去掉副檔名後為空的來源路徑（依批次順序）
-
-        副檔名取最後一個點之後的部分，因此「.pdf」這種只剩副檔名的名字視為空。
-        """
-        return [src for src, dst in moves if not _name_stem(dst)]
-
     def find_missing_sources(self, moves: List[Move]) -> List[str]:
-        """列出來源檔案已不存在的來源路徑"""
+        """列出來源檔案已不存在的來源路徑（依批次順序）"""
         return [src for src, _ in moves if not self.file_service.file_exists(src)]
 
-    def detect_duplicate_sources(self, moves: List[Move]) -> Dict[str, List[str]]:
-        """偵測同一來源被多個項目引用：來源路徑（首次出現的寫法）到目標清單的對應"""
-        return _group_duplicates(moves, lambda m: m[0], lambda m: m[1])
+    def find_problems(
+        self, moves: List[Move], bounds: Optional[List[str]] = None,
+    ) -> Dict[str, List[RenameProblem]]:
+        """執行前驗證的規則：批次中每個來源的問題
 
-    def detect_duplicate_targets(self, moves: List[Move]) -> Dict[str, List[str]]:
-        """偵測多個項目要用同一目標：目標路徑（首次出現的寫法）到來源清單的對應"""
-        return _group_duplicates(moves, lambda m: m[1], lambda m: m[0])
-
-    def find_occupied_targets(self, moves: List[Move]) -> List[str]:
-        """列出被批次外檔案佔用的目標路徑
-
-        「佔用」指磁碟上已存在、且不是本批次任何一筆的來源；
-        批次內來源（對調、連鎖、原地不動）會在搬移時讓出位置，不算佔用。
+        目標落在邊界外、目標檔名去掉副檔名後為空（「.pdf」也算）、來源不存在、
+        同一來源被多個項目引用、多個項目要用同一目標、目標被批次外的檔案佔用、讓位用的暫名被佔用。
+        「佔用」指磁碟上已存在、且不是本批次任何一筆的來源；批次內來源（對調、連鎖、原地不動）
+        會在搬移時讓出位置，不算佔用。暫名已存在於磁碟（檔案或目錄），或與批次內任一來源、目標相同，都算被佔用。
 
         Args:
             moves: 搬移項目清單
+            bounds: 各項目標必須在其中的資料夾（與 moves 一一對應）；None 表示不限制
 
         Returns:
-            被佔用的目標路徑清單（依批次順序）
+            來源路徑（該項的寫法）→ 問題種類（依 RenameProblem 的順序）；只列有問題的來源，依批次順序
         """
+        missing = set(self.find_missing_sources(moves))
+        hits = {
+            RenameProblem.OUTSIDE_OUTPUT: {
+                i for i, (_, dst) in enumerate(moves) if bounds is not None and not is_inside(dst, bounds[i])
+            },
+            RenameProblem.EMPTY_NAME: {i for i, (_, dst) in enumerate(moves) if not _name_stem(dst)},
+            RenameProblem.MISSING_SOURCE: {i for i, (src, _) in enumerate(moves) if src in missing},
+            RenameProblem.DUPLICATE_SOURCE: _repeated(moves, 0),
+            RenameProblem.DUPLICATE_TARGET: _repeated(moves, 1),
+            RenameProblem.TARGET_OCCUPIED: self._occupied_targets(moves),
+            RenameProblem.STAGING_TAKEN: self._taken_staging_names(moves),
+        }
+        problems: Dict[str, List[RenameProblem]] = {}
+        for i, (src, _) in enumerate(moves):
+            for kind, indices in hits.items():
+                if i in indices and kind not in problems.setdefault(src, []):
+                    problems[src].append(kind)
+        return {src: kinds for src, kinds in problems.items() if kinds}
+
+    def validate(self, moves: List[Move], bounds: Optional[List[str]] = None) -> None:
+        """執行前檢查批次是否可安全執行（規則見 find_problems）；任一項不符即拋出例外，不會搬動任何檔案
+
+        Args:
+            moves: 搬移項目清單
+            bounds: 各項目標必須在其中的資料夾（與 moves 一一對應）；None 表示不限制
+
+        Raises:
+            ValueError: 目標落在邊界外，或目標檔名為空
+            FileNotFoundError: 來源檔案不存在
+            FileExistsError: 目標或暫名已有檔案，或同一來源、同一目標被多個項目引用
+        """
+        problems = self.find_problems(moves, bounds)
+        for kind, error, key, listed in _REFUSALS:
+            paths = [listed(move) for move in moves if kind in problems.get(move[0], ())]
+            if paths:
+                raise error(t(key, files="\n".join(dict.fromkeys(paths))))
+
+    def _occupied_targets(self, moves: List[Move]) -> Set[int]:
+        """目標被批次外檔案佔用的項目索引"""
         sources = {path_key(src) for src, _ in moves}
-        return [
-            dst for _, dst in moves
+        return {
+            i for i, (_, dst) in enumerate(moves)
             if path_key(dst) not in sources and self.file_service.file_exists(dst)
-        ]
+        }
 
-    def find_taken_staging_names(self, moves: List[Move]) -> List[str]:
-        """列出無法使用的讓位用暫名
-
-        暫名已存在於磁碟（檔案或目錄），或與批次內任一來源、目標相同，都算被佔用。
-
-        Args:
-            moves: 搬移項目清單
-
-        Returns:
-            被佔用的暫名清單（依批次順序）
-        """
+    def _taken_staging_names(self, moves: List[Move]) -> Set[int]:
+        """需要讓位、但暫名已被佔用的項目索引"""
         reserved = {path_key(p) for move in moves for p in move}
-        taken = []
-        for i in sorted(self._staged_indices(moves)):
+        taken = set()
+        for i in self._staged_indices(moves):
             staging = staging_path(moves[i][0])
             if (path_key(staging) in reserved
                     or self.file_service.file_exists(staging)
                     or self.file_service.directory_exists(staging)):
-                taken.append(staging)
+                taken.add(i)
         return taken
-
-    def validate(self, moves: List[Move]) -> None:
-        """執行前檢查批次是否可安全執行
-
-        檢查目標檔名不為空、來源存在、來源未被重複引用、目標未重複、目標未被批次外檔案佔用、
-        讓位用的暫名未被佔用。任一項不符即拋出例外，不會搬動任何檔案。
-
-        Args:
-            moves: 搬移項目清單
-
-        Raises:
-            ValueError: 目標檔名為空
-            FileNotFoundError: 來源檔案不存在
-            FileExistsError: 目標或暫名已有檔案，或同一來源被多個項目引用
-        """
-        empty = self.find_empty_names(moves)
-        if empty:
-            raise ValueError(t("rename.error.empty_name", files="\n".join(empty)))
-        missing = self.find_missing_sources(moves)
-        if missing:
-            raise FileNotFoundError(t("rename.error.source_missing", files="\n".join(missing)))
-        duplicates = self.detect_duplicate_sources(moves)
-        if duplicates:
-            raise FileExistsError(t("rename.error.duplicate_source", files="\n".join(duplicates)))
-        conflicts = self.detect_duplicate_targets(moves)
-        if conflicts:
-            raise FileExistsError(t("rename.error.duplicate_target", files="\n".join(conflicts)))
-        occupied = self.find_occupied_targets(moves)
-        if occupied:
-            raise FileExistsError(t("rename.error.target_exists", files="\n".join(occupied)))
-        staging_taken = self.find_taken_staging_names(moves)
-        if staging_taken:
-            raise FileExistsError(t("rename.error.staging_exists", files="\n".join(staging_taken)))
 
     def execute(
         self, moves: List[Move], on_complete: Optional[Callable[[List[str]], None]] = None,
         on_rollback: Optional[Callable[[List[UndoMapping]], None]] = None,
         operation: str = "", record_id: str = "", record: Optional[Dict[str, Any]] = None,
+        bounds: Optional[List[str]] = None,
     ) -> List[str]:
         """驗證後以兩階段搬移執行整批
 
@@ -332,6 +325,7 @@ class MoveService:
             operation: 記進進行中紀錄的操作種類
             record_id: 記進進行中紀錄的所屬復原紀錄 id
             record: 記進進行中紀錄的所屬復原紀錄內容（中斷後據以整理堆疊、寫回工作區 meta）
+            bounds: 各項目標必須在其中的資料夾（與 moves 一一對應）；None 表示不限制
 
         Returns:
             本次新建的目錄（排序後）
@@ -343,7 +337,7 @@ class MoveService:
         """
         if self._journal.exists():
             raise PendingMoveError()
-        self.validate(moves)
+        self.validate(moves, bounds)
         steps = self._build_steps(moves)
         journal = MoveJournal(
             pending=steps[0] if steps else None, complete=not steps,

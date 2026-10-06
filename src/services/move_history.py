@@ -12,7 +12,8 @@
 
 使用範例：
     history = MoveHistory(file_service, workspace_service)
-    result = history.rename(plan)
+    verdict = history.check_rename(project)
+    result = history.rename(verdict)
     project.replace_paths(result.changes + result.residual)
 """
 import json
@@ -21,18 +22,21 @@ import shutil
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Callable, Collection, Dict, Iterable, List, Optional, Tuple
 
 from core.constants import (
-    BACKUP_DIR, MOVE_JOURNAL_FILE, MOVE_OPERATIONS, REDO_DIR, UNDO_DIR, OperationKind,
+    BACKUP_DIR, MOVE_JOURNAL_FILE, MOVE_OPERATIONS, NON_BLOCKING_RENAME_PROBLEMS, REDO_DIR, UNDO_DIR,
+    OperationKind, RenameProblem,
 )
 from core.locale import t
-from core.models import RenameEntry, UndoMapping, UndoRecord
+from core.models import Project, RenameEntry, UndoMapping, UndoRecord
+from core.naming import UnsafeFolderNameError
 from core.paths import path_key
 from services.file_service import FileService
 from services.move_service import (
     Move, MoveJournal, MoveRecoveryResult, MoveService, RenameRollbackError,
 )
+from services.rename_service import RenamePlan, apply_auto_suffix, generate_rename_plan
 from services.workspace_service import WorkspaceService
 
 
@@ -70,6 +74,36 @@ class MoveResult:
 
 
 @dataclass
+class RenameVerdict:
+    """重新命名預檢的判定：實際會執行的計畫，加上以來源為鍵、分類好的問題
+
+    Attributes:
+        plan: 實際會執行的計畫：來源已不在的項目已丟掉
+        problems: 來源路徑 → 該檔的問題種類（依計畫順序）
+        unsafe_folder: 清理後是 . 或 .. 的資料夾名稱，阻擋（此時計畫為空）；沒有時為空字串
+    """
+    plan: List[RenameEntry] = field(default_factory=list)
+    problems: Dict[str, List[RenameProblem]] = field(default_factory=dict)
+    unsafe_folder: str = ""
+
+    def sources(self, kind: RenameProblem) -> List[str]:
+        """有這種問題的來源（依計畫順序）"""
+        return [source for source, kinds in self.problems.items() if kind in kinds]
+
+    @property
+    def blocked(self) -> bool:
+        """有阻擋的問題：資料夾名稱不安全，或有 NON_BLOCKING_RENAME_PROBLEMS 以外的種類"""
+        return bool(self.unsafe_folder) or any(
+            kind not in NON_BLOCKING_RENAME_PROBLEMS for kinds in self.problems.values() for kind in kinds
+        )
+
+    @property
+    def runnable(self) -> bool:
+        """可以執行：計畫不為空且沒有阻擋"""
+        return bool(self.plan) and not self.blocked
+
+
+@dataclass
 class PendingMove:
     """上次中途中斷、尚未處理的批次搬移摘要（供啟動時詢問）
 
@@ -95,6 +129,17 @@ class _Interrupted:
     journal: MoveJournal
     kind: OperationKind
     record: Optional[UndoRecord]
+
+
+def _by_source(order: List[str], found: Dict[RenameProblem, List[str]]) -> Dict[str, List[RenameProblem]]:
+    """把各種問題的來源清單轉成「來源 → 問題種類」：來源依 order 排列，種類依 RenameProblem 的順序"""
+    hits = {kind: set(sources) for kind, sources in found.items()}
+    problems: Dict[str, List[RenameProblem]] = {}
+    for source in order:
+        kinds = [kind for kind in RenameProblem if source in hits.get(kind, ())]
+        if kinds:
+            problems.setdefault(source, kinds)
+    return problems
 
 
 class _RecordStack:
@@ -200,17 +245,64 @@ class MoveHistory:
         """下一次重做會處理的紀錄；沒有時為 None（舊版留在重做堆疊、無法重做的分割與旋轉紀錄不算）"""
         return self._redo.top(MOVE_OPERATIONS)
 
-    # --- 四個動作 ---
+    # --- 重新命名預檢 ---
 
-    def rename(self, plan: List[RenameEntry]) -> MoveResult:
-        """依計畫重新命名，整批搬完後寫入復原紀錄並清空重做堆疊
+    def check_rename(self, project: Project, group_ids: Optional[Collection[str]] = None) -> RenameVerdict:
+        """重新命名預檢：依專案的命名設定產生計畫並判定
 
         Args:
-            plan: 實際要執行的重新命名計畫
+            project: 專案
+            group_ids: 只檢查這些群組；None 表示全部群組
 
         Returns:
-            結果；changes 為計畫的每一項（原路徑 → 新路徑）
+            判定；rename 執行的就是它的計畫
         """
+        try:
+            planned = generate_rename_plan(project, group_ids)
+        except UnsafeFolderNameError as e:
+            return RenameVerdict(unsafe_folder=e.name)
+        return self.check_plan(planned)
+
+    def check_plan(self, planned: RenamePlan) -> RenameVerdict:
+        """重新命名預檢：判定一份依命名設定產生的計畫
+
+        來源已不在的項目從計畫丟掉，重複的目標自動加後綴（只加一次），
+        再以執行前驗證的規則檢查加後綴後的計畫；遺失來源、加後綴、多出的檔以外的問題一律阻擋。
+
+        Args:
+            planned: 還沒對照磁碟的計畫
+
+        Returns:
+            判定；rename 執行的就是它的計畫
+        """
+        planned = planned.entries
+        found: Dict[RenameProblem, List[str]] = {}
+        found[RenameProblem.MISSING_SOURCE] = self._engine.find_missing_sources(self._moves(planned))
+        missing = {path_key(source) for source in found[RenameProblem.MISSING_SOURCE]}
+        present = [e for e in planned if path_key(e.original_path) not in missing]
+        plan = apply_auto_suffix(present)
+        found[RenameProblem.SUFFIXED] = [
+            e.original_path for e, suffixed in zip(present, plan) if e.new_path != suffixed.new_path
+        ]
+        for source, kinds in self._engine.find_problems(self._moves(plan), self._bounds(plan)).items():
+            for kind in kinds:
+                found.setdefault(kind, []).append(source)
+        return RenameVerdict(plan=plan, problems=_by_source([e.original_path for e in planned], found))
+
+    # --- 四個動作 ---
+
+    def rename(self, verdict: RenameVerdict) -> MoveResult:
+        """依預檢的判定重新命名，整批搬完後寫入復原紀錄並清空重做堆疊
+
+        Args:
+            verdict: check_rename 的判定
+
+        Returns:
+            結果；changes 為計畫的每一項（原路徑 → 新路徑）；判定有阻擋時不搬動任何檔案、結果帶 error
+        """
+        if verdict.blocked:
+            return MoveResult(OperationKind.RENAME, error=ValueError(t("rename.error.blocked")))
+        plan = verdict.plan
         record = self._new_record(
             OperationKind.RENAME, t("rename.undo_description", count=len(plan)),
             mappings=[UndoMapping(e.original_path, e.new_path) for e in plan],
@@ -222,7 +314,7 @@ class MoveHistory:
             self._push_new(record)
 
         moves = [(m.original, m.renamed) for m in record.mappings]
-        return self._execute(OperationKind.RENAME, record, moves, finish)
+        return self._execute(OperationKind.RENAME, record, moves, finish, bounds=self._bounds(plan))
 
     def undo(self) -> Optional[MoveResult]:
         """復原最上面的紀錄；沒有可復原的紀錄時回傳 None
@@ -435,6 +527,7 @@ class MoveHistory:
     def _execute(
         self, kind: OperationKind, record: UndoRecord, moves: List[Move],
         finish: Callable[[List[str]], None], on_rollback: Optional[Callable[[], None]] = None,
+        bounds: Optional[List[str]] = None,
     ) -> MoveResult:
         """交給引擎整批搬移，整批搬完後（刪除進行中紀錄前）呼叫 finish 寫紀錄
 
@@ -446,6 +539,7 @@ class MoveHistory:
             moves: 搬移項目
             finish: 整批搬完後寫紀錄的函式，參數為本次新建的目錄
             on_rollback: 回滾結束、刪除進行中紀錄前另外要做的事（不得拋出 OSError）
+            bounds: 各項目標必須在其中的資料夾（與 moves 一一對應）；None 表示不限制
 
         Returns:
             結果；operation 為 kind，呼叫端視需要改寫
@@ -467,7 +561,7 @@ class MoveHistory:
         try:
             self._engine.execute(
                 moves, on_complete=complete, on_rollback=rolled_back,
-                operation=kind.value, record_id=record.id, record=record.to_data(),
+                operation=kind.value, record_id=record.id, record=record.to_data(), bounds=bounds,
             )
         except RenameRollbackError as e:
             result.error = e
@@ -582,6 +676,16 @@ class MoveHistory:
         if kind == OperationKind.REDO:
             return self._redo, self._undo
         return None, self._undo
+
+    @staticmethod
+    def _moves(plan: List[RenameEntry]) -> List[Move]:
+        """重新命名計畫的「來源 → 目標」"""
+        return [(e.original_path, e.new_path) for e in plan]
+
+    @staticmethod
+    def _bounds(plan: List[RenameEntry]) -> List[str]:
+        """重新命名計畫各項目標必須在其中的資料夾：該項的輸出位置"""
+        return [e.output_location() for e in plan]
 
     @staticmethod
     def _operation_of(journal: MoveJournal) -> OperationKind:

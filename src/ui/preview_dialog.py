@@ -3,19 +3,28 @@
 預覽對話框（PySide6）
 
 提供輸出設定（輸出位置、子資料夾）與重新命名預覽。設定一經修改即透過專案的編輯操作寫入。
+顯示的是搬移歷程的預檢判定（RenameVerdict）；按下執行時交出的就是這份判定。
 """
-from typing import Callable, Optional, Set
+from typing import Callable, List
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QCheckBox, QLineEdit, QScrollArea, QWidget, QFileDialog,
-    QMessageBox, QRadioButton, QButtonGroup,
+    QRadioButton, QButtonGroup,
 )
-from core.constants import PartsOutputMode
+from core.constants import NON_BLOCKING_RENAME_PROBLEMS, PartsOutputMode, RenameProblem
 from core.locale import t
 from core.models import Project
-from core.naming import UnsafeFolderNameError
-from core.paths import path_key
-from services.move_service import staging_path
+from services.move_history import RenameVerdict
+
+# 阻擋的問題種類 → 預覽的警告訊息（訊息可用 count 與 files）
+_BLOCKING_WARNINGS = {
+    RenameProblem.OUTSIDE_OUTPUT: "preview.outside_output_warning",
+    RenameProblem.EMPTY_NAME: "preview.empty_name_warning",
+    RenameProblem.DUPLICATE_SOURCE: "preview.duplicate_source_warning",
+    RenameProblem.DUPLICATE_TARGET: "preview.duplicate_target_warning",
+    RenameProblem.TARGET_OCCUPIED: "preview.occupied_warning",
+    RenameProblem.STAGING_TAKEN: "preview.staging_warning",
+}
 
 
 class PreviewDialog(QDialog):
@@ -24,25 +33,23 @@ class PreviewDialog(QDialog):
     _PARTS_MODES = tuple(PartsOutputMode)
 
     def __init__(
-        self, project: Project, rename_service,
-        on_execute: Callable, selected_group_ids: Optional[Set[str]] = None,
-        parent=None,
+        self, project: Project, check: Callable[[], RenameVerdict],
+        on_execute: Callable[[RenameVerdict], None], parent=None,
     ):
+        """
+        Args:
+            project: 專案（輸出設定直接寫入）
+            check: 依專案目前的設定做重新命名預檢，回傳判定
+            on_execute: 按下執行時呼叫，參數為目前顯示的判定
+            parent: 父元件
+        """
         super().__init__(parent)
         self.setWindowTitle(t("preview.title"))
         self.resize(750, 560)
         self._project = project
-        self._rename_service = rename_service
+        self._check = check
         self._on_execute = on_execute
-        self._selected_ids = selected_group_ids
-        self._plan = []
-        self._unsafe_folder = None
-        self._conflicts = {}
-        self._duplicate_sources = {}
-        self._occupied_sources = []
-        self._staging_taken_sources = []
-        self._empty_names = []
-        self._missing = []
+        self._verdict = RenameVerdict()
         self._build_ui()
         self._refresh_plan()
 
@@ -107,13 +114,14 @@ class PreviewDialog(QDialog):
         layout.addLayout(parts_row)
         self._warn_label = QLabel("")
         self._warn_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
+        self._warn_label.setWordWrap(True)
         self._warn_label.setVisible(False)
         layout.addWidget(self._warn_label)
-        self._missing_label = QLabel("")
-        self._missing_label.setStyleSheet("color: #e0b060;")
-        self._missing_label.setWordWrap(True)
-        self._missing_label.setVisible(False)
-        layout.addWidget(self._missing_label)
+        self._notes_label = QLabel("")
+        self._notes_label.setStyleSheet("color: #e0b060;")
+        self._notes_label.setWordWrap(True)
+        self._notes_label.setVisible(False)
+        layout.addWidget(self._notes_label)
         self._count_label = QLabel("")
         layout.addWidget(self._count_label)
         self._scroll = QScrollArea()
@@ -153,106 +161,66 @@ class PreviewDialog(QDialog):
         self._refresh_plan()
 
     def _refresh_plan(self):
-        try:
-            self._plan = self._rename_service.generate_rename_plan(self._project, self._selected_ids)
-            self._unsafe_folder = None
-        except UnsafeFolderNameError as e:
-            self._plan = []
-            self._unsafe_folder = e.name
-        self._missing = self._rename_service.find_missing_sources(self._plan)
-        if self._missing:
-            missing = {path_key(p) for p in self._missing}
-            self._plan = [e for e in self._plan if path_key(e.original_path) not in missing]
-        self._conflicts = self._rename_service.detect_conflicts(self._plan)
-        self._duplicate_sources = self._rename_service.detect_duplicate_sources(self._plan)
-        self._empty_names = self._rename_service.find_empty_names(self._plan)
-        self._check_disk_against_effective_plan()
+        self._verdict = self._check()
         self._render_list()
 
-    def _effective_plan(self):
-        """實際會執行的計畫：有衝突時為加後綴後的版本"""
-        if self._conflicts:
-            return self._rename_service.apply_auto_suffix(self._plan)
-        return self._plan
-
-    def _check_disk_against_effective_plan(self):
-        """以實際會執行的計畫判定目標被佔用、暫名被佔用，記下受影響項目的原始路徑"""
-        plan = self._effective_plan()
-        occupied = {path_key(p) for p in self._rename_service.find_occupied_targets(plan)}
-        self._occupied_sources = [e.original_path for e in plan if path_key(e.new_path) in occupied]
-        taken = {path_key(p) for p in self._rename_service.find_taken_staging_names(plan)}
-        self._staging_taken_sources = [
-            e.original_path for e in plan if path_key(staging_path(e.original_path)) in taken
-        ]
-
-    def _blocking_warnings(self):
-        """無法執行的原因清單，與 RenameService 執行前驗證的阻擋條件一致"""
+    def _blocking_warnings(self) -> List[str]:
+        """判定中阻擋執行的原因"""
+        verdict = self._verdict
         warnings = []
-        if self._duplicate_sources:
-            warnings.append(t("preview.duplicate_source_warning", count=len(self._duplicate_sources)))
-        if self._empty_names:
-            warnings.append(t("preview.empty_name_warning", count=len(self._empty_names)))
-        if self._occupied_sources:
-            warnings.append(t("preview.occupied_warning", count=len(self._occupied_sources)))
-        if self._staging_taken_sources:
-            warnings.append(t("preview.staging_warning", count=len(self._staging_taken_sources)))
+        if verdict.unsafe_folder:
+            warnings.append(t("preview.unsafe_folder_warning", name=verdict.unsafe_folder))
+        for kind, key in _BLOCKING_WARNINGS.items():
+            sources = verdict.sources(kind)
+            if sources:
+                warnings.append(t(key, count=len(sources), files="\n".join(sources)))
         return warnings
+
+    def _notes(self) -> List[str]:
+        """判定中不阻擋、但要讓使用者知道的事"""
+        missing = self._verdict.sources(RenameProblem.MISSING_SOURCE)
+        notes = []
+        if missing:
+            notes.append(t("preview.missing_warning", count=len(missing), files="\n".join(missing)))
+        return notes
 
     def _render_list(self):
         while self._scroll_layout.count():
             item = self._scroll_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        if self._missing:
-            self._missing_label.setText(
-                t("preview.missing_warning", count=len(self._missing), files="\n".join(self._missing)),
-            )
-        self._missing_label.setVisible(bool(self._missing))
-        if self._unsafe_folder is not None:
-            self._warn_label.setText(t("preview.unsafe_folder_warning", name=self._unsafe_folder))
-            self._warn_label.setVisible(True)
-            self._count_label.setText("")
-            self._exec_btn.setEnabled(False)
-            return
-        if not self._plan:
-            self._count_label.setText(t("dialog.info.no_files"))
-            self._exec_btn.setEnabled(False)
-            return
+        verdict = self._verdict
+        notes = self._notes()
+        self._notes_label.setText("\n\n".join(notes))
+        self._notes_label.setVisible(bool(notes))
         blocking = self._blocking_warnings()
-        self._exec_btn.setEnabled(not blocking)
-        conflict_keys = {path_key(p) for p in self._conflicts}
-        duplicate_keys = {path_key(p) for p in self._duplicate_sources}
-        blocked_sources = {
-            path_key(p)
-            for p in self._occupied_sources + self._staging_taken_sources + self._empty_names
-        }
+        suffixed = verdict.sources(RenameProblem.SUFFIXED)
         if blocking:
-            self._warn_label.setText("\n".join(blocking))
-            self._warn_label.setVisible(True)
-            self._exec_btn.setText(t("preview.execute"))
-        elif self._conflicts:
-            self._warn_label.setText(
-                t("preview.conflict_warning", count=len(self._conflicts)),
-            )
-            self._warn_label.setVisible(True)
-            self._exec_btn.setText(t("preview.execute_with_suffix"))
-        else:
-            self._warn_label.setVisible(False)
-            self._exec_btn.setText(t("preview.execute"))
-        self._count_label.setText(t("preview.file_count", count=len(self._plan)))
-        for entry in self._plan:
+            self._warn_label.setText("\n\n".join(blocking))
+        elif suffixed:
+            self._warn_label.setText(t("preview.conflict_warning", count=len(suffixed)))
+        self._warn_label.setVisible(bool(blocking or suffixed))
+        self._exec_btn.setText(t("preview.execute_with_suffix" if suffixed and not blocking else "preview.execute"))
+        self._exec_btn.setEnabled(verdict.runnable)
+        if not verdict.plan:
+            self._count_label.setText("" if verdict.unsafe_folder else t("dialog.info.no_files"))
+            return
+        self._count_label.setText(t("preview.file_count", count=len(verdict.plan)))
+        for entry in verdict.plan:
             row = QLabel(f"{entry.original_path}\n  \u2192 {entry.new_path}")
             row.setWordWrap(True)
-            if (path_key(entry.new_path) in conflict_keys
-                    or path_key(entry.original_path) in duplicate_keys
-                    or path_key(entry.original_path) in blocked_sources):
+            if self._needs_attention(entry.original_path):
                 row.setStyleSheet("color: #e74c3c;")
             self._scroll_layout.addWidget(row)
         self._scroll_layout.addStretch()
 
+    def _needs_attention(self, source: str) -> bool:
+        """這一項的目標加了後綴，或有阻擋的問題"""
+        return any(
+            kind == RenameProblem.SUFFIXED or kind not in NON_BLOCKING_RENAME_PROBLEMS
+            for kind in self._verdict.problems.get(source, ())
+        )
+
     def _execute(self):
-        plan = self._plan
-        if self._conflicts:
-            plan = self._rename_service.apply_auto_suffix(plan)
-        self._on_execute(plan)
+        self._on_execute(self._verdict)
         self.accept()
