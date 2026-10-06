@@ -246,21 +246,20 @@ src/
   services/                      - 檔案操作、PDF 處理、雲端整合
     file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾、JSON 原子寫入）
     import_service.py            - 檔案/資料夾匯入與自動分組
-    rename_service.py            - 批次重新命名邏輯編排（計畫生成：命名結果接在輸出位置之下、聲部組第一次用到時寫進專案；空檔名檢查）
-    move_service.py              - 兩階段批次搬移引擎（驗證、對調／連鎖、回滾、進行中紀錄與中斷後還原）；重新命名、復原、重做共用
-    move_journal.py              - 批次搬移進行中紀錄的讀寫（pending_move.json）
+    rename_service.py            - 批次重新命名計畫生成（命名結果接在輸出位置之下、聲部組第一次用到時寫進專案）與衝突偵測；執行交給 move_history
+    move_history.py              - 搬移歷程：重新命名、復原、重做、中斷還原的唯一入口，四個動作回傳同一種結果（MoveResult）；擁有復原／重做堆疊、進行中紀錄、工作區 meta 快照，也組裝分割與旋轉的復原紀錄
+    move_service.py              - 搬移歷程內部的兩階段批次搬移引擎（驗證、對調／連鎖、回滾、進行中紀錄的讀寫與中斷後還原）；只有 move_history 執行搬移
     instance_lock.py             - 單一實例鎖（作業系統檔案鎖，程式結束或當機時自動解除）
     pdf_service.py               - PDF 分割計畫組裝、頁面擷取、旋轉、縮圖產生
     project_service.py           - 專案檔的序列化讀寫（內容由 Project.to_data／from_data 決定）、與磁碟上的專案檔比對（matches_file）
     project_access.py            - 專案存取：開啟與存檔（專案檔、最近專案清單、工作區 meta 所屬專案）、已知專案清單、清理工作區的掃描；主視窗開啟、存檔、關閉前比對都只經過它
-    undo_service.py              - 復原／重做操作管理
     preferences_service.py       - 使用者偏好（語言、外觀、最近專案清單、譜庫設定）的存放；檔案位置建構時注入，預設值在 constants
     workspace_service.py         - 工作區（分割輸出的暫存地）管理：子資料夾、meta.json、掃描、清理
     google_auth_service.py       - Google API OAuth 認證
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、naming、filename、rename、rename_plan、move、import、project、project_access、undo、workspace、pdf_service、locale、instance_lock、drive_rename；main_window、split_dialog、Drive 重新命名對話框、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
+tests/                           - pytest 測試（template_engine、naming、filename、rename、rename_plan、move_history、import、project、project_access、workspace、pdf_service、locale、instance_lock、drive_rename；main_window、split_dialog、Drive 重新命名對話框、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
 GLOSSARY.md                      - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
@@ -409,11 +408,15 @@ services/ 層
 - 若同一來源檔案被多個群組引用，標記警告並停用執行（無法自動修正，需使用者調整群組）
 - 若目標位置已有不屬於本次計畫的檔案（`find_occupied_targets`）、讓位用暫名已被佔用（`find_taken_staging_names`）、或產生的檔名去掉副檔名後為空（`find_empty_names`），同樣標記警告並停用執行；對調與連鎖的目標是計畫內來源，不算佔用。預覽的阻擋條件與執行前驗證一致，且以實際會執行的計畫（有衝突時為加後綴後）判定
 
-執行階段（`RenameService.execute_rename`）先檢查新檔名不為空，再交給 `MoveService.execute`：驗證來源存在、來源未重複、目標未重複、目標未被計畫外的檔案佔用、讓位用的暫名未被佔用，任一不符即整批取消。
+執行由搬移歷程（`services/move_history.py` 的 `MoveHistory`）負責：`rename`、`undo`、`redo`、`recover` 四個動作都回傳 `MoveResult`——`changes`（照計畫搬好的檔，動作前位置 → 目前位置）、`skipped`（已不在預期位置而略過的檔）、`residual`（搬不回原位的檔）、`operation`（操作種類）、`error`（失敗原因）、`record_error`（檔案已搬好但紀錄寫不進去的原因）。主視窗只詢問與顯示，把 `changes + residual` 交給 `Project.replace_paths` 套用。
+搬移本身交給內部的兩階段引擎（`services/move_service.py` 的 `MoveService`）：先驗證新檔名不為空、來源存在、來源未重複、目標未重複、目標未被計畫外的檔案佔用、讓位用的暫名未被佔用，任一不符即整批取消（結果帶 `error`、沒有路徑變動）。
 「佔用」指磁碟上存在、且不是本次計畫任何一筆的來源（`find_occupied_targets`），所以對調（A→B、B→A）與連鎖（A→B、B→C）可以執行：
 來源同時是其他項目目標的檔案，第一階段先改成同資料夾的 `<原檔名>.moving` 暫名（`RENAME_STAGING_SUFFIX`）讓出位置，第二階段全部就位；復原紀錄只記原始位置到最終位置，暫名不出現。
-執行中途失敗則依搬移的反序回滾至原位；回滾也失敗的檔案（含停在暫名者）以 `RenameRollbackError` 回報，UI 為其寫入復原紀錄並更新專案路徑，不留下無紀錄的半完成狀態。
-程式被中途關掉（當機、斷電、強制結束）也不留下無紀錄的狀態：`MoveService.execute` 在搬第一個檔案前就把進行中紀錄（`MOVE_JOURNAL_FILE`）原子寫入，內容是「目前仍生效的步驟清單」加「即將執行的下一步（`pending`）」，每完成一步就把該步加進清單、下一步記為 `pending` 重寫；回滾與還原每逆轉一步就從清單移除並存檔，所以紀錄隨時反映每個檔案的實際位置。整批搬完先標記 `complete`、呼叫呼叫端傳入的 `on_complete` 寫正式紀錄（重新命名寫復原紀錄、復原轉入重做堆疊、重做轉回復原堆疊），寫完才刪除進行中紀錄，兩者之間沒有空窗；回滾結束也刪除。紀錄仍在時 `execute` 以 `PendingMoveError` 拒絕執行新批次（否則會蓋掉唯一的紀錄）。啟動時 `MainWindow.prompt_pending_recovery` 若發現紀錄仍在：未搬完的提示「上次重新命名未完成（已搬移 N 個檔案）」，「還原」則 `MoveService.recover` 依生效清單反序搬回（與回滾共用 `_reverse_all`，對調、連鎖、停在暫名者都能還原，還原途中再被中斷也能接續），「稍後」則保留紀錄下次再問；已搬完（`complete`）但正式紀錄未確認寫入的，提示「已完成但復原紀錄未寫入」，多一個「保留結果」（捨棄紀錄、無法復原）。重新命名、復原、重做前也會再問一次。`load_pending` 對照磁碟判定 `pending` 那一步（來源已不在、目標已出現＝已完成），補上「搬完、來不及記就當機」的那一步；比對用 `file_exists_exact`（目錄列表的實際名稱），只改大小寫的那一步在不分大小寫的檔案系統上才判得出。還原時檔案已不在紀錄位置者略過並列出；搬不回去者留在原地，UI 沿 residual 路徑寫入復原紀錄；紀錄損毀無法讀取時提示一次並捨棄。
+執行中途失敗則依搬移的反序回滾至原位；回滾也失敗的檔案（含停在暫名者）列在 `residual`，搬移歷程替它們寫一筆殘留紀錄（`residual` 為真，`operation_type` 為留下它的操作：重新命名、復原或重做，描述如「復原失敗後留下的 N 個檔案」）放上復原堆疊、不清空重做堆疊，UI 套用其路徑，不留下無紀錄的半完成狀態。
+檔案已搬好、只有紀錄寫不進去（例如磁碟已滿）時，結果仍帶 `changes`，專案路徑照樣更新到檔案的實際位置，`record_error` 只提示；進行中紀錄保留，下次會提示「已完成但復原紀錄未寫入」。
+程式被中途關掉（當機、斷電、強制結束）也不留下無紀錄的狀態：引擎在搬第一個檔案前就把進行中紀錄原子寫入，內容是「目前仍生效的步驟清單」加「即將執行的下一步（`pending`）」，以及這批搬移的操作種類（`operation`：重新命名、復原或重做）與所屬復原紀錄的 id（`record_id`），每完成一步就把該步加進清單、下一步記為 `pending` 重寫；回滾與還原每逆轉一步就從清單移除並存檔，所以紀錄隨時反映每個檔案的實際位置。整批搬完先標記 `complete`、由搬移歷程寫正式紀錄（重新命名寫復原紀錄、復原轉入重做堆疊、重做轉回復原堆疊），寫完才刪除進行中紀錄，兩者之間沒有空窗；回滾結束也刪除。紀錄仍在時引擎以 `PendingMoveError` 拒絕執行新批次（否則會蓋掉唯一的紀錄）。啟動時 `MainWindow.prompt_pending_recovery` 以 `MoveHistory.pending()` 查看紀錄是否仍在：未搬完的提示「上次重新命名未完成（已搬移 N 個檔案）」，「還原」則 `MoveHistory.recover()` 依生效清單反序搬回（與回滾共用 `_reverse_all`，對調、連鎖、停在暫名者都能還原，還原途中再被中斷也能接續），「稍後」則保留紀錄下次再問；已搬完（`complete`）但正式紀錄未確認寫入的，提示「已完成但復原紀錄未寫入」，多一個「保留結果」（`discard_pending()` 捨棄紀錄、無法復原）。沒有操作種類的舊版進行中紀錄視為重新命名。重新命名、復原、重做前也會再問一次。`load_pending` 對照磁碟判定 `pending` 那一步（來源已不在、目標已出現＝已完成），補上「搬完、來不及記就當機」的那一步；比對用 `file_exists_exact`（目錄列表的實際名稱），只改大小寫的那一步在不分大小寫的檔案系統上才判得出。還原時檔案已不在紀錄位置者略過並列出；搬不回去者留在原地，搬移歷程為其寫殘留紀錄（標示被中斷的操作種類），UI 套用其路徑；紀錄損毀無法讀取時提示一次並捨棄。
+
+復原與重做堆疊後進先出：每筆紀錄有唯一 `id`（`UndoRecord.id`），檔名為「推入序號_id.json」，序號越大越靠近頂端，在兩個堆疊間轉移時 id 不變；舊版以時間戳命名、沒有 id 的紀錄（`undo_YYYYMMDD_HHMMSS.json`）照常載入並能執行，排在新紀錄之下，以檔名當 id。新的操作（重新命名、分割、旋轉）放上復原堆疊並清空重做堆疊。復原把整批搬移類紀錄（`MOVE_OPERATIONS`）的檔案搬回原位，已不在新位置的檔略過並列出，專案裡的路徑維持原樣，只有實際搬回的對照轉入重做堆疊；重做同理，已不在原位的檔略過。分割與旋轉的紀錄也由搬移歷程組裝（`record_split`、`record_rotate`；旋轉覆蓋原檔前以 `create_backup` 備份），主視窗與對話框不自己組紀錄：復原時分割的分譜與旋轉另存出的檔移到資源回收桶，覆蓋原檔的以備份蓋回，之後移除紀錄、不進重做堆疊（無法重做）。操作種類定義在 `core/constants.py` 的 `OperationKind`。新版寫出的紀錄不保證舊版能正確處理（不支援降版）。
 
 PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後先清空該來源上次的輸出。
 指定資料夾模式下才做同名檔案覆蓋確認。
@@ -428,7 +431,7 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 - 子資料夾以來源合併譜為鍵、跨專案共用：另一專案重新分割同一份合併譜會取代前者尚未重新命名的分譜，確認訊息點名所屬專案（`WorkspaceService.other_owner`），專案檔已不存在時加註「（找不到）」；`prepare_folder` 一律把所屬專案改成目前專案，未存檔時記為空（取代過一次後再分割就是自己的嘗試，不再點名別人）
 - 專案開啟與存檔時都由專案存取更新引用到的子資料夾的 `meta.project_path`（`update_project_path` 回傳寫入失敗的子資料夾，UI 只在狀態列提示、不阻止開啟或存檔；見 Project Access）
 - 搬空的子資料夾保留 `meta.json`（復原重新命名時分譜會搬回來，需要它辨識來源）；「清理工作區」掃描時才移除既未被目前專案、也未被任何已知專案引用的空資料夾（`meta.json` 是程式自產的中繼資料，直接刪除不走資源回收桶；連同原子寫入殘留 `meta.json.tmp` 一起清，由 `FileService.remove_atomic_residue` 認得暫名）
-- 復原紀錄寫入時對來源位於工作區的項目快照其子資料夾的 meta（`UndoRecord.workspace_meta`，因此 `UndoService` 注入 `WorkspaceService`）；復原後子資料夾若已沒有可讀的 meta 就用快照寫回（`restore_meta`；回滾失敗卡在工作區的檔案也寫回），寫回失敗不影響檔案復原；重做前先以子資料夾目前的 meta 更新快照；舊紀錄沒有此欄照常載入
+- 復原紀錄寫入時對來源位於工作區的項目快照其子資料夾的 meta（`UndoRecord.workspace_meta`，同一資料夾的不同寫法只記一份；因此 `MoveHistory` 注入 `WorkspaceService`）；復原後子資料夾若已沒有可讀的 meta 就用快照寫回（`restore_meta`；回滾失敗卡在工作區的檔案也寫回），寫回失敗不影響檔案復原；重做前先以子資料夾目前的 meta 更新快照；舊紀錄沒有此欄照常載入
 - 「工具 → 開啟工作區資料夾」以系統檔案總管開啟 `WORKSPACE_DIR`
 - 「工具 → 清理工作區」列出各子資料夾的引用狀態（使用中／屬於其他專案／屬於無法讀取的專案／未被引用／來源不明），只有「未被引用」預設勾選，刪除走資源回收桶。「已知專案」= 最近專案清單 + 各 `meta.project_path` 指向的專案檔（`ProjectAccess.known_projects`）；開啟對話框時會順手把最近清單中已不存在的專案檔移除
 - 引用關係涵蓋群組內分譜、總譜與未分組檔案（`Project.file_refs()`）
@@ -443,12 +446,14 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 |------|------|
 | 使用者資料目錄 | Windows：`%APPDATA%/LingLingSuite/`；Linux／macOS：`$XDG_CONFIG_HOME/LingLingSuite/`（預設 `~/.config/LingLingSuite/`），由 `core/constants.py` 的 `APPDATA_DIR` 決定 |
 | 偏好設定 | `<使用者資料目錄>/preferences.json`（`PREFERENCES_FILE`；語言、外觀、最近專案清單、譜庫設定，預設值 `DEFAULT_PREFERENCES`） |
-| 復原／重做紀錄 | `<使用者資料目錄>/undo/`、`redo/`（每次操作一個 JSON 檔） |
-| 批次搬移進行中紀錄 | `<使用者資料目錄>/pending_move.json`（只在重新命名／復原／重做進行中存在；啟動時仍在即為上次中斷） |
+| 復原／重做紀錄 | `<使用者資料目錄>/undo/`、`redo/`（`UNDO_DIR`、`REDO_DIR`；每筆紀錄一個 JSON 檔，檔名為推入序號＋紀錄 id；舊版以時間戳命名的照常讀取） |
+| 批次搬移進行中紀錄 | `<使用者資料目錄>/pending_move.json`（`MOVE_JOURNAL_FILE`；只在重新命名／復原／重做進行中存在，記下操作種類與所屬紀錄 id；啟動時仍在即為上次中斷） |
 | 單一實例鎖 | `<使用者資料目錄>/instance.lock`（`INSTANCE_LOCK_FILE`；執行期間由作業系統鎖住，結束或當機時自動解除，檔案留著不刪。啟動時先取得，取不到就提示「已在執行中」後結束，不開主視窗、不檢查進行中紀錄） |
 | 工作區 | `<使用者資料目錄>/workspace/<hash8>/`（分割輸出與 `meta.json`） |
-| PDF 旋轉備份 | `<使用者資料目錄>/backups/` |
+| PDF 旋轉備份 | `<使用者資料目錄>/backups/`（`BACKUP_DIR`） |
 | 專案檔 | 使用者自選位置（儲存/載入對話框） |
+
+復原、重做、進行中紀錄與旋轉備份的位置在建構 `MoveHistory` 時注入（預設為上表的常數），測試傳入暫存目錄、不替換全域常數。
 
 ---
 
