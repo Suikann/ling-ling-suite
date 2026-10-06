@@ -122,6 +122,11 @@ class WorkspaceStatus(str, Enum):
 
 
 PROJECT_EXTENSION = ".llproj"
+# 專案檔的格式版本（寫在專案檔的 version 欄）；之後改變專案檔內容的意義時遞增
+PROJECT_FILE_VERSION = 2
+# 舊版程式寫的 version（當時寫的是應用程式版本；None 為沒有這一欄）：只有開啟這些專案檔時才做舊格式遷移，
+# 遷移結果存檔後就是新版的檔，使用者之後清掉的值不會在下次開啟時又被補回
+LEGACY_PROJECT_FILE_VERSIONS = frozenset({None, "1.1.0-alpha"})
 # 檔案進入群組時，檔名（不含副檔名、不分大小寫）含這些字樣的第一個檔案自動設為總譜
 SCORE_KEYWORDS = ("score", "full score", "conductor", "總譜", "指揮譜", "full")
 DEFAULT_MASTER_TEMPLATE = "{序號}-{曲名}-{樂器}.pdf"

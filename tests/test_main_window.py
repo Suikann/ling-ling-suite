@@ -5,6 +5,7 @@
 只測主視窗與服務層的接線，不測畫面；以 QT_QPA_PLATFORM=offscreen 執行，不需要顯示器。
 提示框、檔案對話框與預覽對話框以替換的方式模擬使用者的操作，不會跳出真的對話框；文字欄位以 QTest 模擬鍵入（QTest 只能輸入 ASCII 字元，中文會讓 Qt 直接中止）。
 """
+import json
 import os
 import shutil
 import sys
@@ -392,7 +393,13 @@ class TestMainWindowMarksUserEdits(MainWindowTestCase):
         self.assertFalse(self.is_marked_unsaved())
 
     def test_opening_an_old_project_with_blank_score_labels_then_closing_does_not_ask_to_save(self):
-        self.open_from_menu(Project(groups=[Group(name="g", score_label="", files=self.create_files("Flute.pdf"))]))
+        path = os.path.join(self.temp_dir, "old.llproj")
+        old = Project(groups=[Group(name="g", score_label="", files=self.create_files("Flute.pdf"))])
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"version": "1.1.0-alpha", **old.to_data()}, f)
+        with answering_prompts(), opening(path):
+            self.trigger_menu(t("menu.file.open"))
+        self.assertEqual(self.window.project.groups[0].score_label, t("group.score_label"))
         self.assertFalse(self.is_marked_unsaved())
         with answering_prompts() as shown:
             closed = self.window.close()

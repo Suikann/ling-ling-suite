@@ -9,8 +9,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional
 from core.constants import (
-    DEFAULT_MASTER_TEMPLATE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE, OperationKind,
-    PartsOutputMode, WorkspaceStatus,
+    DEFAULT_MASTER_TEMPLATE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE, LEGACY_PROJECT_FILE_VERSIONS,
+    OperationKind, PartsOutputMode, WorkspaceStatus,
 )
 from core.paths import path_key
 from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
@@ -445,9 +445,12 @@ class Project:
     def from_data(cls, data: Dict[str, Any], score_label: str) -> "Project":
         """由專案檔中的內容還原，完成舊格式遷移後以還原結果作為已存檔的快照
 
+        群組的遷移只在舊版程式寫的專案檔（version 在 LEGACY_PROJECT_FILE_VERSIONS）做，
+        新版存的檔裡留空的總譜標籤與樂器表是使用者清掉的，不補回。
+
         Args:
-            data: 專案檔中的內容
-            score_label: 總譜標籤留空的舊群組要補上的標籤（依目前介面語言）
+            data: 專案檔中的內容（含 version）
+            score_label: 舊版專案檔裡總譜標籤留空的群組要補上的標籤（依目前介面語言）
 
         Returns:
             判為已存檔的專案
@@ -468,8 +471,9 @@ class Project:
         )
         if "parts_output_mode" not in data and project.use_parts_subfolder:
             project.parts_output_mode = PartsOutputMode.PARTS
-        for group in project.groups:
-            project._migrate_group(group, score_label)
+        if data.get("version") in LEGACY_PROJECT_FILE_VERSIONS:
+            for group in project.groups:
+                project._migrate_group(group, score_label)
         project.mark_saved()
         return project
 

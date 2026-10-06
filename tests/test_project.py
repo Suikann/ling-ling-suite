@@ -214,6 +214,53 @@ class TestOpenedProjectIsSaved(unittest.TestCase):
         self.assertEqual(Project.from_data(project.to_data(), score_label="").to_data(), project.to_data())
 
 
+class TestMigrationOnlyForOldProjectFiles(unittest.TestCase):
+    """舊格式的遷移只在開啟舊版程式寫的專案檔時做一次；存檔後再開啟，使用者清掉的值不會被補回"""
+
+    def setUp(self):
+        temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, temp_dir, True)
+        self.path = os.path.join(temp_dir, "p.llproj")
+        self.service = ProjectService()
+
+    def _reopen(self, project: Project) -> Project:
+        self.service.save_project(project, self.path)
+        return self.service.load_project(self.path)
+
+    def _write_old_file(self, data: dict) -> None:
+        """照舊版程式的寫法（version 是當時的應用程式版本）寫一份專案檔"""
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump({"version": "1.1.0-alpha", **data}, f)
+
+    def test_cleared_score_label_stays_cleared(self):
+        project = Project(groups=[Group(name="g", score_label="總譜")])
+        project.update_group(project.groups[0], score_label="")
+        self.assertEqual(self._reopen(project).groups[0].score_label, "")
+
+    def test_cleared_voice_list_stays_cleared_even_with_an_old_project_level_list(self):
+        project = Project(instruments=["Flute", "Oboe"], groups=[Group(name="g", instruments=["Flute", "Oboe"])])
+        project.set_instruments(project.groups[0], [])
+        self.assertEqual(self._reopen(project).groups[0].instruments, [])
+
+    def test_file_written_by_the_old_version_still_migrates(self):
+        self._write_old_file({
+            "instruments": ["Flute", "Oboe", "Horn"],
+            "groups": [
+                {"name": "a", "score_label": "", "selected_instruments": [0, 2]},
+                {"name": "b", "score_label": "Score", "instruments": ["Tuba"]},
+            ],
+        })
+        project = self.service.load_project(self.path)
+        self.assertEqual([g.score_label for g in project.groups], ["總譜", "Score"])
+        self.assertEqual([g.instruments for g in project.groups], [["Flute", "Horn"], ["Tuba"]])
+        self.assertFalse(project.is_modified())
+
+    def test_old_file_matches_itself_after_migration(self):
+        self._write_old_file({"groups": [{"name": "a", "score_label": ""}]})
+        project = self.service.load_project(self.path)
+        self.assertTrue(self.service.matches_file(project, self.path))
+
+
 class TestChangedNotification(unittest.TestCase):
     """專案只有一個「已變更」通知；訂閱者收到時看得到最新的未存檔狀態"""
 
