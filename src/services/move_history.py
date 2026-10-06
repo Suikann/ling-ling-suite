@@ -18,9 +18,7 @@
     result = history.rename(verdict)
     project.replace_paths(result.changes + result.residual)
 """
-import json
 import os
-import shutil
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -42,6 +40,8 @@ from services.rename_service import RenamePlan, apply_auto_suffix, generate_rena
 from services.workspace_service import WorkspaceService
 
 
+# 復原與重做堆疊裡紀錄檔的副檔名
+_RECORD_EXTENSION = ".json"
 # 殘留紀錄的描述：依留下它的操作種類
 _RESIDUAL_DESCRIPTIONS = {
     OperationKind.RENAME: lambda count: t("history.residual.rename", count=count),
@@ -172,7 +172,7 @@ class _RecordStack:
     def push(self, record: UndoRecord) -> None:
         """把紀錄放到頂端"""
         sequences = [key[1] for key, _, _ in self._entries() if key[0] == 1]
-        name = f"{max(sequences, default=0) + 1:08d}_{record.id}.json"
+        name = f"{max(sequences, default=0) + 1:08d}_{record.id}{_RECORD_EXTENSION}"
         self.file_service.write_json_atomic(os.path.join(self.directory, name), record.to_data())
 
     def top(self, kinds: Optional[Iterable[OperationKind]] = None) -> Optional[UndoRecord]:
@@ -196,33 +196,34 @@ class _RecordStack:
         """移除指定 id 的紀錄；不在這個堆疊裡時不做事"""
         for _, entry_id, path in self._entries():
             if entry_id == record_id:
-                os.remove(path)
+                self.file_service.remove_file(path)
 
     def clear(self) -> None:
         """移除堆疊裡所有紀錄"""
         for _, _, path in self._entries():
-            os.remove(path)
+            self.file_service.remove_file(path)
 
     def _entries(self) -> List[Tuple[Tuple[int, object], str, str]]:
         """堆疊裡的紀錄檔：（排序鍵、檔名推得的 id、路徑），排序鍵越大越靠近頂端"""
-        if not os.path.isdir(self.directory):
+        if not self.file_service.directory_exists(self.directory):
             return []
         entries = []
-        for name in os.listdir(self.directory):
-            stem, ext = os.path.splitext(name)
-            if ext != ".json":
-                continue
+        for path in self.file_service.list_files(self.directory, _RECORD_EXTENSION):
+            stem = os.path.splitext(os.path.basename(path))[0]
             sequence, _, record_id = stem.partition("_")
             if sequence.isdigit() and record_id:
-                entries.append(((1, int(sequence)), record_id, os.path.join(self.directory, name)))
+                entries.append(((1, int(sequence)), record_id, path))
             elif stem.startswith(self.legacy_prefix):
-                entries.append(((0, stem), stem, os.path.join(self.directory, name)))
+                entries.append(((0, stem), stem, path))
         return entries
 
-    @staticmethod
-    def _load(path: str, fallback_id: str) -> UndoRecord:
-        with open(path, "r", encoding="utf-8") as f:
-            return UndoRecord.from_data(json.load(f), fallback_id)
+    def _load(self, path: str, fallback_id: str) -> UndoRecord:
+        """讀取一筆紀錄；舊版紀錄沒有 id 時以 fallback_id 代替
+
+        Raises:
+            ValueError: 紀錄內容損毀
+        """
+        return UndoRecord.from_data(self.file_service.read_json(path), fallback_id)
 
 
 class MoveHistory:
@@ -517,7 +518,7 @@ class MoveHistory:
         """
         self.file_service.create_directory(self.backup_dir)
         backup = os.path.join(self.backup_dir, f"{uuid.uuid4().hex}_{os.path.basename(path)}")
-        shutil.copy2(path, backup)
+        self.file_service.copy_file(path, backup)
         return backup
 
     # --- 內部：復原 ---
@@ -545,9 +546,9 @@ class MoveHistory:
         """
         result = MoveResult(record.operation_type)
         try:
-            if record.backup_path and os.path.isfile(record.backup_path):
-                shutil.copy2(record.backup_path, record.original_path)
-                os.remove(record.backup_path)
+            if record.backup_path and self.file_service.file_exists(record.backup_path):
+                self.file_service.copy_file(record.backup_path, record.original_path)
+                self.file_service.remove_file(record.backup_path)
             for path in record.created_files:
                 if self.file_service.file_exists(path):
                     self.file_service.delete_file(path)

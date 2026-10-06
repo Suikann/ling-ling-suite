@@ -19,7 +19,6 @@ execute 依確認過的檢查結果一次執行，中途失敗整批撤回，成
 """
 import hashlib
 import os
-import shutil
 import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -279,13 +278,16 @@ class SplitService:
         新分譜）；放挪開檔案的暫用子資料夾與這次新建的目錄只在已空時移除。
         """
         for path in reversed(placed):
-            _remove_quietly(path)
+            try:
+                self.file_service.remove_file(path)
+            except OSError:
+                continue
         for original, kept in reversed(moved_aside):
             try:
                 self.file_service.rename_file(kept, original)
             except OSError:
                 continue
-        shutil.rmtree(staging, ignore_errors=True)
+        self.file_service.discard_directory(staging)
         self.file_service.remove_empty_directory(set_aside)
         for directory in reversed(created):
             self.file_service.remove_empty_directory(directory)
@@ -315,11 +317,3 @@ class SplitService:
         for directory in scratch:
             self.file_service.remove_empty_directory(directory)
         return trashed
-
-
-def _remove_quietly(path: str) -> None:
-    """移除檔案；不存在或移除失敗都不拋出"""
-    try:
-        os.remove(path)
-    except OSError:
-        pass

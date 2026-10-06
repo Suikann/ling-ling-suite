@@ -610,6 +610,24 @@ class TestSplitAndRotateRecords(MoveHistoryTestCase):
         self.assertFalse(os.path.exists(backup))
         self.assertEqual(self.file_service.trashed, [])
 
+    def test_undo_rotate_that_cannot_put_the_backup_back_reports_it_and_stays_undoable(self):
+        source = self.create("a.pdf", "original")
+        backup = self.history.create_backup(source)
+        with open(source, "w") as f:
+            f.write("rotated")
+        self.history.record_rotate(source, source, backup)
+
+        def locked(_source, _target):
+            raise PermissionError("locked")
+
+        self.file_service.copy_file = locked
+        result = self.history.undo()
+        self.assertIsInstance(result.error, PermissionError)
+        self.assertEqual((self.read(source), self.read(backup)), ("rotated", "original"))
+        del self.file_service.copy_file
+        self.assertIsNone(self.history.undo().error)
+        self.assertEqual(self.read(source), "original")
+
     def test_undo_split_moves_the_parts_to_the_recycle_bin_and_removes_new_folders(self):
         folder = os.path.join(self.scores, "out")
         parts = [self.create(os.path.join("out", n)) for n in ("Flute.pdf", "Oboe.pdf")]

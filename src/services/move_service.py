@@ -13,7 +13,6 @@
     mover = MoveService(file_service, journal_path)
     created_dirs = mover.execute([(src, dst), ...], context=BatchContext(OperationKind.RENAME, record.id))
 """
-import json
 import os
 from collections import Counter
 from dataclasses import dataclass, field
@@ -138,7 +137,7 @@ class _JournalFile:
 
     def exists(self) -> bool:
         """是否有進行中紀錄（不論內容能否讀取）"""
-        return os.path.isfile(self.path)
+        return self.file_service.file_exists(self.path)
 
     def load(self) -> Optional[MoveJournal]:
         """讀取紀錄；不存在時回傳 None
@@ -146,10 +145,9 @@ class _JournalFile:
         Raises:
             ValueError: 紀錄內容不是合法的 JSON 或缺少必要欄位
         """
-        if not os.path.isfile(self.path):
+        if not self.file_service.file_exists(self.path):
             return None
-        with open(self.path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = self.file_service.read_json(self.path)
         try:
             return MoveJournal(
                 steps=[self._step_from_json(s) for s in data["steps"]],
@@ -169,7 +167,7 @@ class _JournalFile:
     def clear(self) -> None:
         """刪除紀錄；不存在時不拋出"""
         try:
-            os.remove(self.path)
+            self.file_service.remove_file(self.path)
         except FileNotFoundError:
             pass
 

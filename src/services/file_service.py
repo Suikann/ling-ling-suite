@@ -12,7 +12,7 @@ import time
 from typing import Any, List
 
 from core.constants import (
-    ATOMIC_WRITE_RETRIES, ATOMIC_WRITE_RETRY_INTERVAL, ATOMIC_WRITE_TEMP_SUFFIX,
+    ATOMIC_WRITE_RETRIES, ATOMIC_WRITE_RETRY_INTERVAL, ATOMIC_WRITE_TEMP_SUFFIX, PDF_EXTENSION,
 )
 
 
@@ -66,6 +66,22 @@ class FileService:
                 os.remove(part_path)
             raise
         os.remove(old_path)
+
+    def read_json(self, path: str) -> Any:
+        """讀取 JSON 檔
+
+        Args:
+            path: 檔案路徑
+
+        Returns:
+            解析後的資料
+
+        Raises:
+            OSError: 檔案讀不到
+            ValueError: 內容不是合法的 JSON
+        """
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
     def write_json_atomic(self, path: str, data: Any) -> None:
         """將資料序列化為 JSON 並原子寫入
@@ -180,9 +196,21 @@ class FileService:
         Returns:
             PDF 檔案的完整路徑清單，按檔名排序
         """
+        return self.list_files(directory, PDF_EXTENSION)
+
+    def list_files(self, directory: str, extension: str) -> List[str]:
+        """列出目錄內副檔名相符（不分大小寫）的檔案
+
+        Args:
+            directory: 目錄路徑
+            extension: 副檔名（含點）
+
+        Returns:
+            檔案的完整路徑清單，按檔名排序
+        """
         files = []
         for entry in os.scandir(directory):
-            if entry.is_file() and entry.name.lower().endswith('.pdf'):
+            if entry.is_file() and entry.name.lower().endswith(extension.lower()):
                 files.append(entry.path)
         files.sort(key=lambda p: os.path.basename(p).lower())
         return files
@@ -220,6 +248,34 @@ class FileService:
     def delete_file(self, path: str) -> None:
         """將檔案移至資源回收桶"""
         self._move_to_trash(path)
+
+    def remove_file(self, path: str) -> None:
+        """直接刪除檔案，不進資源回收桶；只用於程式自己產生的檔案（紀錄、備份、寫到一半的輸出）
+
+        Args:
+            path: 檔案路徑
+
+        Raises:
+            OSError: 刪不掉（檔案不存在時為 FileNotFoundError）
+        """
+        os.remove(path)
+
+    def copy_file(self, source: str, target: str) -> None:
+        """複製檔案（連同修改日期等中繼資料）；目的地已有檔案時覆蓋
+
+        Args:
+            source: 來源檔案
+            target: 目的地
+        """
+        shutil.copy2(source, target)
+
+    def discard_directory(self, path: str) -> None:
+        """直接刪除目錄與其中的所有內容，不進資源回收桶；盡力而為、不拋出。只用於程式自己建立的暫用目錄
+
+        Args:
+            path: 目錄路徑
+        """
+        shutil.rmtree(path, ignore_errors=True)
 
     def delete_directory(self, path: str) -> None:
         """將整個目錄移至資源回收桶"""
