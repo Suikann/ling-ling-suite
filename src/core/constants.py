@@ -46,6 +46,8 @@ ATOMIC_WRITE_RETRY_INTERVAL = 0.2
 RENAME_STAGING_SUFFIX = ".moving"
 # 批次搬移的進行中紀錄：執行前寫入、每完成一步更新，成功或回滾後刪除；啟動時若仍存在即為上次中途中斷
 MOVE_JOURNAL_FILE = os.path.join(APPDATA_DIR, "pending_move.json")
+# 單一實例鎖：程式執行期間由作業系統鎖住，程式結束（含當機、強制結束）時自動解除；檔案本身留著不刪
+INSTANCE_LOCK_FILE = os.path.join(APPDATA_DIR, "instance.lock")
 
 # 檔名不得含有的字元（Windows 最嚴），一律換成底線；Windows 保留名（CON、NUL 等）與尾端點空白不處理，這類名字不應出現
 FILENAME_ILLEGAL_CHARS = '<>:"/\\|?*'

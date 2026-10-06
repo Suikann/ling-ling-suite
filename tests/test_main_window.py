@@ -29,11 +29,14 @@ from core.constants import WORKSPACE_META_FILE
 from core.locale import t
 from core.models import FileInfo, Group, Project
 from services.file_service import FileService
+from main import launch
+from services.instance_lock import InstanceLock
 from services.preferences_service import PREFERENCES_FILE, PreferencesService
 from services.project_service import ProjectService
 from services.workspace_service import WorkspaceService
 from ui.main_window import MainWindow
 from ui.preview_dialog import PreviewDialog
+from tests.other_instance import OtherInstance
 
 
 @contextmanager
@@ -410,6 +413,48 @@ class TestMainWindowInstrumentListFollowsGroup(MainWindowTestCase):
         with answering_prompts(), saving_as(path):
             self.trigger_menu(t("menu.file.save"))
         self.assertEqual(ProjectService().load_project(path).groups[0].instruments, ["Flute"])
+
+
+
+class TestSingleInstanceLaunch(unittest.TestCase):
+    """啟動：第一個程式執行中時，第二個只提示已在執行中，不開主視窗、不檢查進行中紀錄"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, temp_dir, True)
+        self.lock = InstanceLock(os.path.join(temp_dir, "instance.lock"))
+        self.addCleanup(self.lock.release)
+
+    def _main_windows(self) -> set:
+        return {w for w in QApplication.topLevelWidgets() if isinstance(w, MainWindow)}
+
+    def _launch(self):
+        """啟動並處理完排定的事件，回傳（主視窗或 None，跳出過的提示框，新開的主視窗）"""
+        before = self._main_windows()
+        with answering_prompts() as shown:
+            window = launch(PreferencesService(), self.lock)
+            QApplication.processEvents()
+        if window is not None:
+            self.addCleanup(window.close)
+        return window, shown, self._main_windows() - before
+
+    def test_second_instance_only_says_already_running(self):
+        first = OtherInstance(self.lock.lock_path)
+        self.addCleanup(first.kill)
+        window, shown, opened = self._launch()
+        self.assertIsNone(window)
+        self.assertEqual(shown, [(t("app.title"), t("app.already_running"))])
+        self.assertEqual(opened, set())
+
+    def test_opens_main_window_after_first_instance_exits(self):
+        OtherInstance(self.lock.lock_path).exit()
+        window, shown, opened = self._launch()
+        self.assertEqual(opened, {window})
+        self.assertEqual(shown, [])
 
 
 if __name__ == '__main__':

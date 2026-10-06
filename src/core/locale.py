@@ -19,6 +19,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # 應用程式
         "app.title": "泠靈小工具",
         "app.unsaved_project": "未命名",
+        "app.already_running": "程式已在執行中。",
         # 選單 - 檔案
         "menu.file": "檔案",
         "menu.file.new": "新增專案",
@@ -479,6 +480,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # 應用程式
         "app.title": "Ling Ling Suite",
         "app.unsaved_project": "Untitled",
+        "app.already_running": "The application is already running.",
         # 選單 - 檔案
         "menu.file": "File",
         "menu.file.new": "New Project",

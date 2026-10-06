@@ -2,17 +2,20 @@
 """
 泠靈小工具 - 應用程式進入點
 
-啟動 PySide6 主視窗。
+啟動 PySide6 主視窗；同一時間只允許一個程式執行。
 """
 import sys
 import os
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from PySide6.QtWidgets import QApplication, QProxyStyle, QStyleFactory
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QProxyStyle, QStyleFactory
 from PySide6.QtCore import Qt, QTimer
+from core.constants import INSTANCE_LOCK_FILE
 from core.locale import t, set_locale
 from core.models import Project
+from services.instance_lock import InstanceLock
 from services.preferences_service import PreferencesService
 
 
@@ -37,6 +40,32 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle(_AppStyle())
     _apply_dark_theme(app)
+    lock = InstanceLock(INSTANCE_LOCK_FILE)
+    window = launch(prefs, lock)
+    if window is None:
+        return
+    try:
+        code = app.exec()
+    finally:
+        lock.release()
+    sys.exit(code)
+
+
+def launch(prefs: PreferencesService, lock: InstanceLock) -> Optional[QMainWindow]:
+    """取得單一實例鎖後開啟主視窗，並排定檢查上次中斷的重新命名
+
+    鎖要在檢查進行中紀錄之前取得：另一個程式執行中時，它的進行中紀錄不是上次中斷留下的。
+
+    Args:
+        prefs: 已載入的使用者偏好
+        lock: 單一實例鎖
+
+    Returns:
+        主視窗；已有另一個程式在執行時提示後回傳 None
+    """
+    if not lock.acquire():
+        QMessageBox.information(None, t("app.title"), t("app.already_running"))
+        return None
     from ui.main_window import MainWindow
     window = MainWindow(prefs)
     window.setWindowTitle(t("app.title"))
@@ -44,7 +73,7 @@ def main():
     window.setMinimumSize(900, 600)
     window.show()
     QTimer.singleShot(0, window.prompt_pending_recovery)
-    sys.exit(app.exec())
+    return window
 
 
 def _apply_dark_theme(app: QApplication):

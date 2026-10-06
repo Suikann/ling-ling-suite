@@ -216,7 +216,7 @@ python -m pytest tests/ -v      # 執行測試
 
 ```
 src/
-  main.py                        - 應用程式進入點（QApplication、深色主題）
+  main.py                        - 應用程式進入點（QApplication、深色主題、單一實例）
   assets/                        - 靜態資源（svg 圖示）
   ui/                            - PySide6 UI 元件
     main_window.py               - 主視窗
@@ -247,6 +247,7 @@ src/
     rename_service.py            - 批次重新命名邏輯編排（計畫生成、空檔名檢查）
     move_service.py              - 兩階段批次搬移引擎（驗證、對調／連鎖、回滾、進行中紀錄與中斷後還原）；重新命名、復原、重做共用
     move_journal.py              - 批次搬移進行中紀錄的讀寫（pending_move.json）
+    instance_lock.py             - 單一實例鎖（作業系統檔案鎖，程式結束或當機時自動解除）
     pdf_service.py               - PDF 分割計畫組裝、頁面擷取、旋轉、縮圖產生
     project_service.py           - 專案檔儲存/載入
     undo_service.py              - 復原／重做操作管理
@@ -256,7 +257,7 @@ src/
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、undo、workspace、pdf_service、locale；main_window、split_dialog 以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄
+tests/                           - pytest 測試（template_engine、filename、rename、move、import、project、undo、workspace、pdf_service、locale、instance_lock；main_window、split_dialog 以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄
 GLOSSARY.md                      - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
@@ -403,6 +404,7 @@ PDF 分割預設輸出到工作區；重新分割同一份來源時，確認後�
 | 偏好設定 | `<使用者資料目錄>/preferences.json` |
 | 復原／重做紀錄 | `<使用者資料目錄>/undo/`、`redo/`（每次操作一個 JSON 檔） |
 | 批次搬移進行中紀錄 | `<使用者資料目錄>/pending_move.json`（只在重新命名／復原／重做進行中存在；啟動時仍在即為上次中斷） |
+| 單一實例鎖 | `<使用者資料目錄>/instance.lock`（`INSTANCE_LOCK_FILE`；執行期間由作業系統鎖住，結束或當機時自動解除，檔案留著不刪。啟動時先取得，取不到就提示「已在執行中」後結束，不開主視窗、不檢查進行中紀錄） |
 | 工作區 | `<使用者資料目錄>/workspace/<hash8>/`（分割輸出與 `meta.json`） |
 | PDF 旋轉備份 | `<使用者資料目錄>/backups/` |
 | 專案檔 | 使用者自選位置（儲存/載入對話框） |
