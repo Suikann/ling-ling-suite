@@ -246,9 +246,9 @@ src/
   services/                      - 檔案操作、PDF 處理、雲端整合
     file_service.py              - 檔案系統操作（讀取、重新命名、建立資料夾、JSON 原子寫入）
     import_service.py            - 檔案/資料夾匯入與自動分組
-    rename_service.py            - 批次重新命名計畫生成（命名結果接在輸出位置之下、聲部組第一次用到時寫進專案）與衝突偵測；執行交給 move_history
-    move_history.py              - 搬移歷程：重新命名、復原、重做、中斷還原（還原或保留結果）的唯一入口，四個動作回傳同一種結果（MoveResult）；擁有復原／重做堆疊、進行中紀錄、工作區 meta 快照，也組裝分割與旋轉的復原紀錄
-    move_service.py              - 搬移歷程內部的兩階段批次搬移引擎（驗證、對調／連鎖、回滾、進行中紀錄的讀寫與中斷後還原）；只有 move_history 執行搬移
+    rename_service.py            - 重新命名計畫（RenamePlan）：命名結果接在輸出位置之下，帶出多出的檔、子資料夾模板的逐檔變數與未知變數；聲部組第一次用到時寫進專案；重複目標加後綴。預檢與執行在 move_history
+    move_history.py              - 搬移歷程：重新命名、復原、重做、中斷還原（還原或保留結果）的唯一入口，四個動作回傳同一種結果（MoveResult）；重新命名預檢（check_rename → RenameVerdict）也在這裡，rename 執行的就是判定的計畫；擁有復原／重做堆疊、進行中紀錄、工作區 meta 快照，也組裝分割與旋轉的復原紀錄
+    move_service.py              - 搬移歷程內部的兩階段批次搬移引擎（驗證、對調／連鎖、回滾、進行中紀錄的讀寫與中斷後還原）；只有 move_history 使用，執行前驗證的規則（find_problems）與預檢共用
     instance_lock.py             - 單一實例鎖（作業系統檔案鎖，程式結束或當機時自動解除）
     pdf_service.py               - PDF 分割計畫組裝、頁面擷取、旋轉、縮圖產生
     project_service.py           - 專案檔的序列化讀寫（內容由 Project.to_data／from_data 決定）、與磁碟上的專案檔比對（matches_file）
@@ -259,7 +259,7 @@ src/
     sheets_service.py            - Google Sheets 譜庫存取
     drive_service.py             - Google Drive 檔案存取
     drive_rename_service.py      - 透過 Drive API 重新命名譜庫檔案
-tests/                           - pytest 測試（template_engine、naming、filename、rename、rename_plan、move_history、import、project、project_access、workspace、pdf_service、locale、instance_lock、drive_rename；main_window、split_dialog、Drive 重新命名對話框、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
+tests/                           - pytest 測試（template_engine、naming、filename、rename_plan、rename_preflight、move_history、import、project、project_access、workspace、pdf_service、locale、instance_lock、drive_rename；main_window、split_dialog、Drive 重新命名對話框、分割與旋轉的選檔清單以 offscreen Qt 測 UI 接線）；conftest 把使用者資料目錄導到暫存目錄；path_spellings 提供同一路徑的不同寫法；failing_writes 提供寫到指定檔案就失敗的檔案服務
 GLOSSARY.md                      - 領域詞彙表（總譜、分譜、合併譜、群組、工作區…）
 docs/adr/                        - 架構決策紀錄
 docs/notes/                      - 審查報告等史料（檔名帶日期，為當時快照，不隨程式碼更新）
@@ -382,7 +382,7 @@ services/ 層
 
 專案層級開關：「將各群組分別放入子資料夾」。
 
-啟用後，每個群組可設定資料夾名稱模板，支援群組層級變數（`{曲名}`、`{樂章編號}`、`{樂章名稱}`）。
+啟用後，各群組的總譜與分譜放進以子資料夾模板命名的資料夾。子資料夾只依群組區分，模板只接受群組層級變數（`{曲名}`、`{樂章編號}`、`{樂章名稱}`、`{作曲家}`、`{曲種}`，含英文名稱）；用了逐檔變數（`{序號}`、`{樂器}`，含英文名稱 `{Number}`、`{Instrument}`）時預覽阻擋並指出要拿掉的變數。哪些變數屬於群組層級由 `TEMPLATE_VARIABLES` 的 `level` 決定。
 
 ```
 範例：
@@ -402,15 +402,18 @@ services/ 層
 
 ## Conflict Handling
 
-預覽階段檢查所有產生的新檔名（路徑是否相同一律以 `core/paths.py` 判定：絕對路徑、不分大小寫）：
-- 若有重複，標記警告並顯示衝突的檔案
-- 使用者可選擇取消修改，或繼續執行（自動加後綴區分）
-- 若同一來源檔案被多個群組引用，標記警告並停用執行（無法自動修正，需使用者調整群組）
-- 若目標位置已有不屬於本次計畫的檔案（`find_occupied_targets`）、讓位用暫名已被佔用（`find_taken_staging_names`）、或產生的檔名去掉副檔名後為空（`find_empty_names`），同樣標記警告並停用執行；對調與連鎖的目標是計畫內來源，不算佔用。預覽的阻擋條件與執行前驗證一致，且以實際會執行的計畫（有衝突時為加後綴後）判定
+重新命名前的檢查只做一次：`MoveHistory.check_rename(project, group_ids)` 回傳判定（`RenameVerdict`）——實際會執行的計畫（`plan`），加上以來源為鍵、分類好的問題（`problems`：來源 → `RenameProblem`）。預覽只顯示這份判定；按下執行時 `MoveHistory.rename(verdict)` 執行的就是它的計畫。預檢與執行前驗證共用搬移引擎的同一套規則（`MoveService.find_problems`），預覽與執行不可能判得不一樣。路徑是否相同一律以 `core/paths.py` 判定（絕對路徑、不分大小寫）。
+- 來源已不在（`MISSING_SOURCE`）：從計畫丟掉，預覽列出，不阻擋
+- 目標重複：自動加後綴（`SUFFIXED`，只加一次），預覽警告並把執行鈕改為「繼續（自動加後綴）」；加後綴後的計畫再檢查一次，仍重複（例如兩個檔要改成 Same.pdf、第三個要改成 Same (1).pdf）就阻擋並列出撞名的檔
+- 多於聲部數的分譜不改名（`EXTRA_FILE`）、命名格式與子資料夾模板裡的未知變數（`unknown_variables`）從名稱拿掉：預覽列出，不阻擋。不阻擋的種類只有這三種（`NON_BLOCKING_RENAME_PROBLEMS`），其餘一律阻擋、停用執行，預覽顯示原因：
+  - **目標路徑邊界**（`OUTSIDE_OUTPUT`）：每個目標都必須在該項的輸出位置之內（`RenameEntry.output_location()`，沒指定輸出位置時為來源檔所在的資料夾；以 `core.paths.is_inside` 判定），只要有一個不在就整批阻擋。這是命名模組擋 `.`、`..`（`unsafe_folder`）之外的第二道防線，預檢與執行前驗證共用
+  - **子資料夾模板的逐檔變數**（`folder_variables`）：用了 `{序號}`、`{樂器}`（含英文名稱）時阻擋並指出要拿掉的變數（見「Subfolder Output」）
+  - 同一來源檔案被多個群組引用（無法自動修正，需使用者調整群組）、產生的檔名去掉副檔名後為空、目標位置已有不屬於本次計畫的檔案、讓位用暫名已被佔用；對調與連鎖的目標是計畫內來源，不算佔用
+- `check_rename` 由 `rename_service.generate_rename_plan` 產生計畫（`RenamePlan`）後交給 `check_plan`，給定的計畫也能直接用 `check_plan` 判定；`rename` 收到有阻擋的判定時不搬動任何檔案
 
 執行由搬移歷程（`services/move_history.py` 的 `MoveHistory`）負責：重新命名 `rename`、復原 `undo`、重做 `redo`、中斷還原（「還原」`recover`、「保留結果」`keep_result`）四個動作都回傳 `MoveResult`——`changes`（照計畫搬好的檔，動作前位置 → 目前位置）、`skipped`（已不在預期位置而略過的檔）、`residual`（搬不回原位的檔）、`operation`（操作種類）、`error`（失敗原因）、`record_error`（檔案已搬好但紀錄寫不進去的原因）。主視窗只詢問與顯示，把 `changes + residual` 交給 `Project.replace_paths` 套用。
-搬移本身交給內部的兩階段引擎（`services/move_service.py` 的 `MoveService`）：先驗證新檔名不為空、來源存在、來源未重複、目標未重複、目標未被計畫外的檔案佔用、讓位用的暫名未被佔用，任一不符即整批取消（結果帶 `error`、沒有路徑變動）。
-「佔用」指磁碟上存在、且不是本次計畫任何一筆的來源（`find_occupied_targets`），所以對調（A→B、B→A）與連鎖（A→B、B→C）可以執行：
+搬移本身交給內部的兩階段引擎（`services/move_service.py` 的 `MoveService`）：先以 `find_problems` 驗證目標在邊界內（只有重新命名有邊界，復原、重做沒有）、新檔名不為空、來源存在、來源未重複、目標未重複、目標未被計畫外的檔案佔用、讓位用的暫名未被佔用，任一不符即整批取消（結果帶 `error`、沒有路徑變動）。
+「佔用」指磁碟上存在、且不是本次計畫任何一筆的來源，所以對調（A→B、B→A）與連鎖（A→B、B→C）可以執行：
 來源同時是其他項目目標的檔案，第一階段先改成同資料夾的 `<原檔名>.moving` 暫名（`RENAME_STAGING_SUFFIX`）讓出位置，第二階段全部就位；復原紀錄只記原始位置到最終位置，暫名不出現。
 執行中途失敗則依搬移的反序回滾至原位；回滾也失敗的檔案（含停在暫名者）列在 `residual`，搬移歷程替它們寫一筆殘留紀錄（`residual` 為真，`operation_type` 為留下它的操作：重新命名、復原或重做，描述如「復原失敗後留下的 N 個檔案」）放上復原堆疊、不清空重做堆疊，UI 套用其路徑，不留下無紀錄的半完成狀態。殘留紀錄與（復原時的）工作區 meta 寫回都經引擎的 `on_rollback` 在刪除進行中紀錄之前完成。
 檔案已搬好、只有紀錄寫不進去（例如磁碟已滿）時，結果仍帶 `changes`，專案路徑照樣更新到檔案的實際位置，`record_error` 只提示；進行中紀錄保留，下次會依操作種類提示「上次…已完成」，可選保留結果或還原。
