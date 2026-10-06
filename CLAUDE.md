@@ -232,7 +232,7 @@ src/
     catalog_settings_dialog.py   - 譜庫設定對話框
     drive_rename_dialog.py       - Drive 重新命名對話框
     workspace_dialog.py          - 工作區清理對話框
-    widgets.py                   - 共用增強元件與 UI 輔助函式（如找不到檔案的提示）
+    widgets.py                   - 共用增強元件與 UI 輔助函式（如找不到檔案的提示；分割與旋轉對話框共用的背景縮圖載入，只交出最近一次載入的結果）
   core/                          - 模板引擎、資料模型、常數定義
     constants.py                 - 模板變數定義（含層級欄位）、分譜存放模式、重新命名問題的處理方式（RENAME_PROBLEM_RULES）、介面語言代碼、專案檔格式版本、預設值、應用程式路徑等常數
     filename.py                  - 檔名清理（非法字元換底線、空名回退），重新命名與分割共用

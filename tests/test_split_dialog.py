@@ -30,6 +30,7 @@ from core.models import FileInfo, Group, Project, WorkspaceOwner
 from services.file_service import FileService
 from services.project_service import ProjectService
 from services.split_service import SplitRequest, SplitSegment, SplitService
+from ui import split_dialog
 from ui.split_dialog import SplitPdfDialog
 from tests.test_main_window import MainWindowTestCase, _settle, answering_prompts, button_in
 
@@ -121,10 +122,11 @@ def _wait_until(condition: Callable[[], bool], timeout: float = 10.0):
         time.sleep(0.02)
 
 
-def _make_pdf(path: str, pages: int) -> str:
+def _make_pdf(path: str, pages: int, height: int = 100) -> str:
+    """建立 pages 頁、寬 100、高 height 的空白 PDF"""
     writer = PdfWriter()
     for _ in range(pages):
-        writer.add_blank_page(width=100, height=100)
+        writer.add_blank_page(width=100, height=height)
     with open(path, "wb") as f:
         writer.write(f)
     return path
@@ -149,18 +151,56 @@ class TestSplitFromMainWindow(MainWindowTestCase):
             QTest.keyClick(entry, Qt.Key_Return)
 
     @staticmethod
-    def load_merged(dialog: QDialog):
-        """在對話框選取合併譜，等縮圖出現"""
-        combo = next(c for c in dialog.findChildren(QComboBox) if c.findText("merged.pdf") >= 0)
-        combo.setCurrentIndex(combo.findText("merged.pdf"))
+    def select(dialog: QDialog, name: str):
+        """在對話框的選檔清單選取 name"""
+        combo = next(c for c in dialog.findChildren(QComboBox) if c.findText(name) >= 0)
+        combo.setCurrentIndex(combo.findText(name))
+
+    def load(self, dialog: QDialog, name: str = "merged.pdf"):
+        """在對話框選取 name（預設為合併譜），等縮圖出現"""
+        self.select(dialog, name)
         _wait_until(lambda: button_in(dialog, QPushButton, t("split.execute")).isEnabled())
 
     @staticmethod
-    def mark_split_before_page(dialog: QDialog, page: int):
-        """點第 page 頁（從 1 起算）的縮圖，標記分割點"""
+    def thumbnails(dialog: QDialog) -> List[QLabel]:
+        """對話框顯示的頁面縮圖"""
         _settle()
-        thumbnails = [label for label in dialog.findChildren(QLabel) if not label.pixmap().isNull()]
-        QTest.mouseClick(thumbnails[page - 1], Qt.LeftButton)
+        return [label for label in dialog.findChildren(QLabel) if not label.pixmap().isNull()]
+
+    def mark_split_before_page(self, dialog: QDialog, page: int):
+        """點第 page 頁（從 1 起算）的縮圖，標記分割點"""
+        QTest.mouseClick(self.thumbnails(dialog)[page - 1], Qt.LeftButton)
+
+    def hold_rendering(self, path: str) -> Callable[[], None]:
+        """path 的縮圖停在背景執行緒先不算繪，如同大檔案算繪得久
+
+        Args:
+            path: 要停住的 PDF 路徑；其他檔案照常算繪
+
+        Returns:
+            放行的函式：讓算繪繼續，等背景執行緒結束、處理完它送出的通知才返回
+        """
+        gate = threading.Event()
+        held = []
+        render = split_dialog.render_page_thumbnails
+
+        def held_render(pdf_path, *args, **kwargs):
+            if pdf_path == path:
+                held.append(threading.current_thread())
+                gate.wait(10)
+            return render(pdf_path, *args, **kwargs)
+
+        patcher = mock.patch.object(split_dialog, "render_page_thumbnails", held_render)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(gate.set)
+
+        def release():
+            gate.set()
+            _wait_until(lambda: held and not any(thread.is_alive() for thread in held))
+            QApplication.processEvents()
+
+        return release
 
     @staticmethod
     def segment_names(dialog: QDialog) -> List[str]:
@@ -182,7 +222,7 @@ class TestSplitFromMainWindow(MainWindowTestCase):
     def split_merged(self, page: int, *answers):
         """從主視窗開分割對話框，選合併譜、在第 page 頁前標記分割點後執行；answers 依序回答過程中的詢問"""
         def operate(dialog):
-            self.load_merged(dialog)
+            self.load(dialog)
             self.mark_split_before_page(dialog, page)
             with answering_prompts(*answers):
                 button_in(dialog, QPushButton, t("split.execute")).click()
@@ -208,13 +248,41 @@ class TestSplitFromMainWindow(MainWindowTestCase):
         seen = {}
 
         def operate(dialog):
-            self.load_merged(dialog)
+            self.load(dialog)
             self.mark_split_before_page(dialog, 3)
             seen["names"] = self.segment_names(dialog)
 
         with splitting(operate):
             self.trigger_menu(t("menu.tools.split_pdf"))
         self.assertEqual(seen["names"], ["Flute", "Oboe"])
+
+    def test_thumbnails_of_a_file_no_longer_selected_do_not_replace_the_selected_ones(self):
+        # 另一份的頁面高度只有一半：它的縮圖寬 150、高 75，合併譜的縮圖寬高都是 150
+        other = _make_pdf(os.path.join(self.temp_dir, "other.pdf"), 2, height=50)
+        self.open_from_menu(Project(groups=[Group(
+            name="g", files=[FileInfo(self.merged, "merged.pdf"), FileInfo(other, "other.pdf")],
+        )]))
+        release = self.hold_rendering(self.merged)
+        seen = {}
+
+        def operate(dialog):
+            self.select(dialog, "merged.pdf")
+            self.load(dialog, "other.pdf")
+            release()
+            seen["shapes"] = [(label.pixmap().width(), label.pixmap().height()) for label in self.thumbnails(dialog)]
+
+        with splitting(operate):
+            self.trigger_menu(t("menu.tools.split_pdf"))
+        self.assertEqual(seen["shapes"], [(150, 75), (150, 75)])
+
+    def test_thumbnails_failing_after_the_dialog_closed_show_no_error(self):
+        release = self.hold_rendering(self.merged)
+        with splitting(lambda dialog: self.select(dialog, "merged.pdf")):
+            self.trigger_menu(t("menu.tools.split_pdf"))
+        os.remove(self.merged)
+        with answering_prompts() as shown:
+            release()
+        self.assertEqual(shown, [])
 
     def test_split_marks_unsaved_and_the_group_tab_lists_the_new_parts(self):
         self.type_voices("Flute", "Oboe")
@@ -256,7 +324,7 @@ class TestSplitFromMainWindow(MainWindowTestCase):
         shown = []
 
         def operate(dialog):
-            self.load_merged(dialog)
+            self.load(dialog)
             self.mark_split_before_page(dialog, 3)
             _settle()
             for entry in dialog.findChildren(QLineEdit):
@@ -285,7 +353,7 @@ class TestSplitFromMainWindow(MainWindowTestCase):
         shown = []
 
         def operate(dialog):
-            self.load_merged(dialog)
+            self.load(dialog)
             with answering_prompts(QMessageBox.No) as prompts:
                 button_in(dialog, QPushButton, t("split.execute")).click()
             shown.extend(prompts)

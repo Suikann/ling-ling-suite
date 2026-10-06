@@ -5,7 +5,7 @@ PDF 旋轉對話框（PySide6）
 提供頁面縮圖預覽，讓使用者標記旋轉段落，為不同區段指定不同旋轉角度。
 """
 import os
-import threading
+from functools import partial
 from typing import Dict, List, Optional, Set, Tuple
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
@@ -13,9 +13,10 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QFrame, QSplitter,
 )
 from PySide6.QtGui import QPixmap, QImage
-from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtCore import Qt
 from core.locale import t
-from ui.widgets import ensure_file_exists, pdf_file_choices
+from services.pdf_service import get_page_count, render_page_thumbnails
+from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
 
 SECTION_COLORS = [
     "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
@@ -26,11 +27,6 @@ ROTATION_LABELS = ["0\u00B0", "90\u00B0", "180\u00B0", "270\u00B0"]
 
 _THUMB_WIDTH = 150
 _MAX_COLS = 4
-
-
-class _ThumbnailSignals(QObject):
-    ready = Signal(list)
-    error = Signal(str)
 
 
 class RotatePdfDialog(QDialog):
@@ -59,9 +55,11 @@ class RotatePdfDialog(QDialog):
         self._section_angles: Dict[int, int] = {}
         self._section_combos: Dict[int, QComboBox] = {}
         self._output_dir: Optional[str] = None
-        self._signals = _ThumbnailSignals()
-        self._signals.ready.connect(self._on_thumbnails_ready)
-        self._signals.error.connect(self._on_thumbnails_error)
+        self._thumbnails = ThumbnailLoader(
+            partial(render_page_thumbnails, max_width=_THUMB_WIDTH),
+            self._on_thumbnails_ready, self._on_thumbnails_error,
+        )
+        self.finished.connect(self._thumbnails.cancel)
         self._build_ui()
 
     def _build_ui(self):
@@ -203,7 +201,6 @@ class RotatePdfDialog(QDialog):
         if not ensure_file_exists(self, path):
             return
         try:
-            from services.pdf_service import get_page_count
             self._pdf_path = path
             self._page_count = get_page_count(path)
             self._page_info.setText(t("split.page_count", count=self._page_count))
@@ -214,19 +211,9 @@ class RotatePdfDialog(QDialog):
             loading.setStyleSheet("color: gray; font-size: 14px;")
             loading.setAlignment(Qt.AlignCenter)
             self._thumb_layout.addWidget(loading)
-            threading.Thread(
-                target=self._render_bg, args=(path,), daemon=True,
-            ).start()
+            self._thumbnails.load(path)
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
-
-    def _render_bg(self, path):
-        try:
-            from services.pdf_service import render_page_thumbnails
-            pil_images = render_page_thumbnails(path, max_width=_THUMB_WIDTH)
-            self._signals.ready.emit(pil_images)
-        except Exception as e:
-            self._signals.error.emit(str(e))
 
     def _on_thumbnails_ready(self, pil_images):
         self._pil_thumbs = pil_images

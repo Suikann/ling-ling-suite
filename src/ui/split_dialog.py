@@ -6,7 +6,7 @@ PDF 分割對話框（PySide6）
 對話框只負責詢問與顯示。
 """
 import os
-import threading
+from functools import partial
 from typing import Callable, Dict, List, Optional, Set, Tuple
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -14,12 +14,12 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QFrame, QSplitter,
 )
 from PySide6.QtGui import QPixmap, QImage, QColor
-from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtCore import Qt
 from core.locale import t
 from core.models import WorkspaceOwner
 from services.pdf_service import get_page_count, render_page_thumbnails
 from services.split_service import SplitCheck, SplitRequest, SplitSegment, SplitService
-from ui.widgets import ensure_file_exists, pdf_file_choices
+from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
 
 SECTION_COLORS = [
     "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
@@ -28,11 +28,6 @@ SECTION_COLORS = [
 
 _THUMB_WIDTH = 150
 _MAX_COLS = 4
-
-
-class _ThumbnailSignals(QObject):
-    ready = Signal(list)
-    error = Signal(str)
 
 
 class SplitPdfDialog(QDialog):
@@ -68,9 +63,11 @@ class SplitPdfDialog(QDialog):
         self._section_name_entries: Dict[int, QLineEdit] = {}
         self._source_group = None
         self._output_dir: Optional[str] = None
-        self._signals = _ThumbnailSignals()
-        self._signals.ready.connect(self._on_thumbnails_ready)
-        self._signals.error.connect(self._on_thumbnails_error)
+        self._thumbnails = ThumbnailLoader(
+            partial(render_page_thumbnails, max_width=_THUMB_WIDTH),
+            self._on_thumbnails_ready, self._on_thumbnails_error,
+        )
+        self.finished.connect(self._thumbnails.cancel)
         self._build_ui()
 
     def _build_ui(self):
@@ -215,18 +212,9 @@ class SplitPdfDialog(QDialog):
             loading.setStyleSheet("color: gray; font-size: 14px;")
             loading.setAlignment(Qt.AlignCenter)
             self._thumb_layout.addWidget(loading)
-            threading.Thread(
-                target=self._render_bg, args=(path,), daemon=True,
-            ).start()
+            self._thumbnails.load(path)
         except Exception as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
-
-    def _render_bg(self, path):
-        try:
-            pil_images = render_page_thumbnails(path, max_width=_THUMB_WIDTH)
-            self._signals.ready.emit(pil_images)
-        except Exception as e:
-            self._signals.error.emit(str(e))
 
     def _on_thumbnails_ready(self, pil_images):
         self._pil_thumbs = pil_images
