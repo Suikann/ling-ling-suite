@@ -101,7 +101,6 @@ class TestRenamePlan(unittest.TestCase):
             generate_rename_plan(project)
 
 
-
 class TestSectionsWrittenOnFirstUse(unittest.TestCase):
     """聲部組資料夾模式下，還沒有聲部組的聲部依當時的介面語言寫進專案的編制設定"""
 

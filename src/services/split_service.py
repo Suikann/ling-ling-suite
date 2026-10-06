@@ -316,6 +316,7 @@ class SplitService:
             self.file_service.remove_empty_directory(directory)
         return trashed
 
+
 def _remove_quietly(path: str) -> None:
     """移除檔案；不存在或移除失敗都不拋出"""
     try:

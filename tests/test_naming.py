@@ -90,7 +90,6 @@ class TestVariableTable(unittest.TestCase):
                     self.assertEqual(name_slot(self.group, 2, settings).file_name, f"[{part_value}].pdf")
 
 
-
 class TestVoices(unittest.TestCase):
     """分譜依序對應聲部；多於聲部數的分譜不改名，明確傳入的樂器表優先於群組的樂器表"""
 
@@ -270,7 +269,6 @@ class TestVariableLevel(unittest.TestCase):
         template = "{PieceName} {序號} {樂器}"
         per_file = [name for name in variables_in(template) if variable_level(name) == VariableLevel.FILE]
         self.assertEqual(per_file, ["序號", "樂器"])
-
 
 
 class TestSettingsFor(unittest.TestCase):
