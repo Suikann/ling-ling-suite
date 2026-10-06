@@ -218,6 +218,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "preview.unsafe_folder_warning": "有資料夾名稱會是「{name}」，無法執行。請修改子資料夾模板、分譜資料夾或聲部組名稱。",
         "preview.duplicate_target_warning": "以下檔案加後綴後仍撞名，無法執行：\n{files}",
         "preview.outside_output_warning": "有 {count} 個目標不在輸出位置裡，無法執行。",
+        "preview.folder_variable_warning": "子資料夾模板不能用逐檔變數，請拿掉：{names}",
+        "preview.extra_files_warning": "以下檔案多於聲部數，不會改名：\n{files}",
+        "preview.unknown_variables_warning": "以下變數不存在，已從名稱拿掉：{names}",
         # 重新命名服務
         "rename.undo_description": "重新命名 {count} 個檔案",
         "rename.error.source_missing": "以下來源檔案不存在，已取消操作：\n{files}",
@@ -695,6 +698,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "preview.unsafe_folder_warning": "A folder name would be \"{name}\". Change the subfolder template, parts folder or section names before executing.",
         "preview.duplicate_target_warning": "These files still share a name after adding suffixes. Cannot execute:\n{files}",
         "preview.outside_output_warning": "{count} target(s) fall outside the output location. Cannot execute.",
+        "preview.folder_variable_warning": "The subfolder template cannot use per-file variables. Remove: {names}",
+        "preview.extra_files_warning": "These files exceed the number of voices and will not be renamed:\n{files}",
+        "preview.unknown_variables_warning": "These variables do not exist and were left out of the names: {names}",
         # 重新命名服務
         "rename.undo_description": "Renamed {count} file(s)",
         "rename.error.source_missing": "The following source files do not exist. Operation cancelled:\n{files}",

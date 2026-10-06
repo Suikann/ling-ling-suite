@@ -92,6 +92,29 @@ class TestAdjustments(PreflightTestCase):
                 self.assertEqual(self.files(), after)
 
 
+class TestReminders(PreflightTestCase):
+    """提醒、不阻擋：多於聲部數的分譜不改名、命名格式裡的未知變數"""
+
+    def test_files_beyond_the_voice_count_are_listed_and_left_alone(self):
+        group = self.group("a.pdf", "b.pdf", "c.pdf", "d.pdf", voices=["Fl", "Ob"])
+        verdict = self.history.check_rename(Project(master_template="{樂器}.pdf", groups=[group]))
+        self.assertEqual(verdict.sources(RenameProblem.EXTRA_FILE), [self.path("c.pdf"), self.path("d.pdf")])
+        self.assertTrue(verdict.runnable)
+        self.assertIsNone(self.history.rename(verdict).error)
+        self.assertEqual(self.files(), ["Fl.pdf", "Ob.pdf", "c.pdf", "d.pdf"])
+
+    def test_unknown_variables_are_listed_without_blocking(self):
+        group = self.group("a.pdf", voices=["Fl"], piece_name="Sym")
+        project = Project(
+            master_template="{樂器}{Foo}.pdf", use_subfolders=True, subfolder_template="{曲名}{Bar}{Foo}",
+            groups=[group],
+        )
+        verdict = self.history.check_rename(project)
+        self.assertEqual(verdict.unknown_variables, ["Foo", "Bar"])
+        self.assertEqual(self.targets(verdict), [("a.pdf", os.path.join("Sym", "Fl.pdf"))])
+        self.assertTrue(verdict.runnable)
+
+
 class TestBlocking(PreflightTestCase):
     """遺失來源與重複目標以外的問題一律阻擋，執行時也被拒絕"""
 
@@ -211,6 +234,31 @@ class TestSettingsProblems(PreflightTestCase):
         verdict = self.history.check_rename(project)
         self.assertEqual(verdict.unsafe_folder, "..")
         self.assert_refused(verdict)
+
+    def _subfolder_project(self, subfolder_template: str, use_subfolders: bool = True) -> Project:
+        group = self.group("a.pdf", "b.pdf", voices=["Fl", "Ob"], piece_name="Sym", movement_number="1")
+        return Project(
+            master_template="{樂器}.pdf", use_subfolders=use_subfolders,
+            subfolder_template=subfolder_template, groups=[group],
+        )
+
+    def test_per_file_variable_in_subfolder_template_blocks_and_names_it(self):
+        for name in ("序號", "Number", "樂器", "Instrument"):
+            with self.subTest(name):
+                verdict = self.history.check_rename(self._subfolder_project(f"{{曲名}} {{{name}}}"))
+                self.assertEqual(verdict.folder_variables, [name])
+                self.assert_refused(verdict)
+
+    def test_group_level_variables_in_subfolder_template_do_not_block(self):
+        project = self._subfolder_project("{曲名} {MovementNum} {樂章名稱} {Composer} {曲種}")
+        verdict = self.history.check_rename(project)
+        self.assertEqual(verdict.folder_variables, [])
+        self.assertTrue(verdict.runnable)
+
+    def test_subfolder_template_is_not_checked_while_subfolders_are_off(self):
+        verdict = self.history.check_rename(self._subfolder_project("{序號}", use_subfolders=False))
+        self.assertEqual(verdict.folder_variables, [])
+        self.assertTrue(verdict.runnable)
 
 
 if __name__ == '__main__':

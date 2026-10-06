@@ -14,22 +14,28 @@
 import os
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
-from typing import Collection, List, Optional
-from core.constants import PartsOutputMode, detect_instrument_section
+from typing import Collection, Iterable, List, Optional
+from core.constants import PartsOutputMode, VariableLevel, detect_instrument_section
 from core.locale import get_locale
 from core.models import Group, Project, RenameEntry
-from core.naming import name_group, named_voices, settings_for
+from core.naming import name_group, named_voices, settings_for, unknown_variables, variable_level, variables_in
 from core.paths import path_key
 
 
-@dataclass(frozen=True)
+@dataclass
 class RenamePlan:
     """依命名設定產生、還沒對照磁碟的重新命名計畫
 
     Attributes:
         entries: 要改名的項目（各群組依序：總譜在前，接著依序的分譜）
+        extra_files: 多於聲部數、不改名的分譜（來源路徑，各群組依序）
+        folder_variables: 子資料夾模板裡的逐檔變數（不重複，依出現順序）；子資料夾只依群組區分，用了就不能執行
+        unknown_variables: 命名格式與子資料夾模板裡不是模板變數的名稱（不重複，依出現順序）；產出時已拿掉
     """
     entries: List[RenameEntry] = field(default_factory=list)
+    extra_files: List[str] = field(default_factory=list)
+    folder_variables: List[str] = field(default_factory=list)
+    unknown_variables: List[str] = field(default_factory=list)
 
 
 def generate_rename_plan(project: Project, group_ids: Optional[Collection[str]] = None) -> RenamePlan:
@@ -51,13 +57,21 @@ def generate_rename_plan(project: Project, group_ids: Optional[Collection[str]] 
     groups = [g for g in project.groups if group_ids is None or g.id in group_ids]
     if project.parts_output_mode == PartsOutputMode.SECTION:
         _assign_default_sections(project, groups)
-    entries = []
+    plan = RenamePlan()
     for group in groups:
-        for named in name_group(group, settings_for(project, group)).files:
+        settings = settings_for(project, group)
+        naming = name_group(group, settings)
+        for named in naming.files:
             entry = RenameEntry(named.file.original_path, "", group.id, project.output_directory)
             entry.new_path = os.path.join(entry.output_location(), named.name.relative_path())
-            entries.append(entry)
-    return RenamePlan(entries=entries)
+            plan.entries.append(entry)
+        plan.extra_files.extend(f.original_path for f in naming.extra_files)
+        _add_new(plan.folder_variables, (
+            name for name in variables_in(settings.subfolder_template) if variable_level(name) == VariableLevel.FILE
+        ))
+        for template in (settings.template, settings.subfolder_template):
+            _add_new(plan.unknown_variables, unknown_variables(template))
+    return plan
 
 
 def apply_auto_suffix(entries: List[RenameEntry]) -> List[RenameEntry]:
@@ -80,6 +94,13 @@ def apply_auto_suffix(entries: List[RenameEntry]) -> List[RenameEntry]:
             entry = replace(entry, new_path=f"{base} ({count}){ext}")
         result.append(entry)
     return result
+
+
+def _add_new(names: List[str], found: Iterable[str]) -> None:
+    """把 found 中還不在 names 裡的名稱依序加到後面"""
+    for name in found:
+        if name not in names:
+            names.append(name)
 
 
 def _assign_default_sections(project: Project, groups: List[Group]) -> None:

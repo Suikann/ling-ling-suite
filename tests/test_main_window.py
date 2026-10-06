@@ -668,6 +668,26 @@ class TestMainWindowPreviewVerdict(MainWindowTestCase):
         self.assertFalse(seen["enabled"])
         self.assertEqual(self._pdf_names(), ["p1.pdf", "p2.pdf", "p3.pdf"])
 
+    def test_reminders_are_shown_and_execute_stays_enabled(self):
+        files = self.create_files("p1.pdf", "p2.pdf")
+        group = Group(name="g", files=files, instruments=["Flute"], score_label="總譜")
+        self.open_from_menu(Project(master_template="{樂器}{Foo}.pdf", groups=[group]))
+        seen = {}
+
+        def read_state(dialog):
+            _settle()
+            seen["notes"] = [label.text() for label in dialog.findChildren(QLabel) if label.isVisibleTo(dialog)]
+            seen["enabled"] = button_in(dialog, QPushButton, t("preview.execute")).isEnabled()
+
+        with previewing(read_state):
+            self.click_button(t("panel.preview_rename"))
+        expected = "\n\n".join([
+            t("preview.extra_files_warning", files=files[1].original_path),
+            t("preview.unknown_variables_warning", names="{Foo}"),
+        ])
+        self.assertIn(expected, seen["notes"])
+        self.assertTrue(seen["enabled"])
+
 
 class _Crash(BaseException):
     """模擬程式被強制結束：不是 Exception，所以搬移歷程不會攔下來回滾"""

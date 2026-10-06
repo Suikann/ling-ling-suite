@@ -27,6 +27,11 @@ _BLOCKING_WARNINGS = {
 }
 
 
+def _variable_list(names: List[str]) -> str:
+    """變數名稱以「{名稱}」的寫法列成一行"""
+    return " ".join(f"{{{name}}}" for name in names)
+
+
 class PreviewDialog(QDialog):
     """預覽重新命名對話框"""
 
@@ -170,6 +175,8 @@ class PreviewDialog(QDialog):
         warnings = []
         if verdict.unsafe_folder:
             warnings.append(t("preview.unsafe_folder_warning", name=verdict.unsafe_folder))
+        if verdict.folder_variables:
+            warnings.append(t("preview.folder_variable_warning", names=_variable_list(verdict.folder_variables)))
         for kind, key in _BLOCKING_WARNINGS.items():
             sources = verdict.sources(kind)
             if sources:
@@ -178,10 +185,16 @@ class PreviewDialog(QDialog):
 
     def _notes(self) -> List[str]:
         """判定中不阻擋、但要讓使用者知道的事"""
-        missing = self._verdict.sources(RenameProblem.MISSING_SOURCE)
+        verdict = self._verdict
+        missing = verdict.sources(RenameProblem.MISSING_SOURCE)
+        extra = verdict.sources(RenameProblem.EXTRA_FILE)
         notes = []
         if missing:
             notes.append(t("preview.missing_warning", count=len(missing), files="\n".join(missing)))
+        if extra:
+            notes.append(t("preview.extra_files_warning", files="\n".join(extra)))
+        if verdict.unknown_variables:
+            notes.append(t("preview.unknown_variables_warning", names=_variable_list(verdict.unknown_variables)))
         return notes
 
     def _render_list(self):

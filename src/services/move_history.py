@@ -2,7 +2,9 @@
 """
 搬移歷程
 
-重新命名、復原、重做與中斷還原的唯一入口。擁有復原／重做堆疊、批次搬移的進行中紀錄
+重新命名、復原、重做與中斷還原的唯一入口；重新命名前的預檢（check_rename）也在這裡，
+回傳的判定（RenameVerdict）就是 rename 執行的計畫，預檢與執行前驗證共用搬移引擎的同一套規則。
+擁有復原／重做堆疊、批次搬移的進行中紀錄
 （透過內部的兩階段搬移引擎 services/move_service.py）與工作區 meta 的快照與寫回；
 分割與旋轉的復原紀錄也在這裡組裝。
 
@@ -78,13 +80,17 @@ class RenameVerdict:
     """重新命名預檢的判定：實際會執行的計畫，加上以來源為鍵、分類好的問題
 
     Attributes:
-        plan: 實際會執行的計畫：來源已不在的項目已丟掉
-        problems: 來源路徑 → 該檔的問題種類（依計畫順序）
+        plan: 實際會執行的計畫：來源已不在的項目已丟掉、重複的目標已加後綴
+        problems: 來源路徑 → 該檔的問題種類（來源依計畫順序，多出的檔在最後）
         unsafe_folder: 清理後是 . 或 .. 的資料夾名稱，阻擋（此時計畫為空）；沒有時為空字串
+        folder_variables: 子資料夾模板裡的逐檔變數，阻擋
+        unknown_variables: 命名格式與子資料夾模板裡不是模板變數的名稱，只提醒（產出時已拿掉）
     """
     plan: List[RenameEntry] = field(default_factory=list)
     problems: Dict[str, List[RenameProblem]] = field(default_factory=dict)
     unsafe_folder: str = ""
+    folder_variables: List[str] = field(default_factory=list)
+    unknown_variables: List[str] = field(default_factory=list)
 
     def sources(self, kind: RenameProblem) -> List[str]:
         """有這種問題的來源（依計畫順序）"""
@@ -92,8 +98,8 @@ class RenameVerdict:
 
     @property
     def blocked(self) -> bool:
-        """有阻擋的問題：資料夾名稱不安全，或有 NON_BLOCKING_RENAME_PROBLEMS 以外的種類"""
-        return bool(self.unsafe_folder) or any(
+        """有阻擋的問題：資料夾名稱不安全、子資料夾模板用了逐檔變數，或有 NON_BLOCKING_RENAME_PROBLEMS 以外的種類"""
+        return bool(self.unsafe_folder or self.folder_variables) or any(
             kind not in NON_BLOCKING_RENAME_PROBLEMS for kinds in self.problems.values() for kind in kinds
         )
 
@@ -275,19 +281,23 @@ class MoveHistory:
         Returns:
             判定；rename 執行的就是它的計畫
         """
-        planned = planned.entries
-        found: Dict[RenameProblem, List[str]] = {}
-        found[RenameProblem.MISSING_SOURCE] = self._engine.find_missing_sources(self._moves(planned))
-        missing = {path_key(source) for source in found[RenameProblem.MISSING_SOURCE]}
-        present = [e for e in planned if path_key(e.original_path) not in missing]
+        missing = self._engine.find_missing_sources(self._moves(planned.entries))
+        missing_keys = {path_key(source) for source in missing}
+        present = [e for e in planned.entries if path_key(e.original_path) not in missing_keys]
         plan = apply_auto_suffix(present)
-        found[RenameProblem.SUFFIXED] = [
-            e.original_path for e, suffixed in zip(present, plan) if e.new_path != suffixed.new_path
-        ]
+        found: Dict[RenameProblem, List[str]] = {
+            RenameProblem.MISSING_SOURCE: missing,
+            RenameProblem.SUFFIXED: [e.original_path for e, s in zip(present, plan) if e.new_path != s.new_path],
+            RenameProblem.EXTRA_FILE: list(planned.extra_files),
+        }
         for source, kinds in self._engine.find_problems(self._moves(plan), self._bounds(plan)).items():
             for kind in kinds:
                 found.setdefault(kind, []).append(source)
-        return RenameVerdict(plan=plan, problems=_by_source([e.original_path for e in planned], found))
+        order = [e.original_path for e in planned.entries] + planned.extra_files
+        return RenameVerdict(
+            plan=plan, problems=_by_source(order, found),
+            folder_variables=list(planned.folder_variables), unknown_variables=list(planned.unknown_variables),
+        )
 
     # --- 四個動作 ---
 

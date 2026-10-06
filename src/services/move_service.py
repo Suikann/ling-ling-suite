@@ -6,8 +6,8 @@
 可以執行；中途失敗依反序回滾，搬不回去的檔案以 RenameRollbackError 回報。
 搬第一個檔案前寫入進行中紀錄、每完成一步更新，程式被中途關掉也能據以還原。
 
-只有 services.move_history.MoveHistory 執行搬移（重新命名、復原、重做、中斷還原）；
-其他模組只用這裡的檢查規則判斷一批搬移能否執行。
+只有 services.move_history.MoveHistory 使用這裡：執行搬移（重新命名、復原、重做、中斷還原），
+以及重新命名預檢以執行前驗證的同一套規則（find_problems）判定計畫。
 
 使用範例：
     mover = MoveService(file_service, journal_path)
