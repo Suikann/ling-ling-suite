@@ -49,6 +49,18 @@ MOVE_JOURNAL_FILE = os.path.join(APPDATA_DIR, "pending_move.json")
 # 單一實例鎖：程式執行期間由作業系統鎖住，程式結束（含當機、強制結束）時自動解除；檔案本身留著不刪
 INSTANCE_LOCK_FILE = os.path.join(APPDATA_DIR, "instance.lock")
 
+# 使用者偏好：檔案位置、各鍵的預設值；最近專案清單由專案存取（services/project_access.py）維護，最多記這麼多筆
+PREFERENCES_FILE = os.path.join(APPDATA_DIR, "preferences.json")
+RECENT_PROJECTS_KEY = "recent_projects"
+MAX_RECENT_PROJECTS = 8
+DEFAULT_PREFERENCES = {
+    "language": "zh_TW",
+    "appearance_mode": "Dark",
+    RECENT_PROJECTS_KEY: [],
+    "catalog_spreadsheet_id": "",
+    "catalog_root_folder_id": "",
+}
+
 # 檔名不得含有的字元（Windows 最嚴），一律換成底線；Windows 保留名（CON、NUL 等）與尾端點空白不處理，這類名字不應出現
 FILENAME_ILLEGAL_CHARS = '<>:"/\\|?*'
 PDF_EXTENSION = ".pdf"

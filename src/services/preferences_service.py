@@ -2,59 +2,47 @@
 """
 使用者偏好服務
 
-將語言與外觀模式等偏好持久化至 %APPDATA%/LingLingSuite/preferences.json。
+將語言、外觀模式、最近專案清單等偏好持久化成一個 JSON 檔；檔案位置在建構時注入，
+預設值見 core.constants.DEFAULT_PREFERENCES。最近專案清單的規則由專案存取維護，這裡只負責存放。
 
 使用範例：
+    from core.constants import PREFERENCES_FILE
     from services.preferences_service import PreferencesService
-    prefs = PreferencesService()
+    prefs = PreferencesService(PREFERENCES_FILE)
     prefs.load()
     prefs.set("language", "en")
     prefs.save()
 """
+import copy
 import json
-import os
-from typing import Any, Dict, List, Optional
-from core.constants import APPDATA_DIR
-from core.paths import path_key, same_path
+from typing import Any, Dict, Optional
+from core.constants import DEFAULT_PREFERENCES
 from services.file_service import FileService
-
-PREFERENCES_FILE = os.path.join(APPDATA_DIR, "preferences.json")
-
-_DEFAULTS: Dict[str, Any] = {
-    "language": "zh_TW",
-    "appearance_mode": "Dark",
-    "recent_projects": [],
-    "catalog_spreadsheet_id": "",
-    "catalog_root_folder_id": "",
-}
-
-MAX_RECENT = 8
 
 
 class PreferencesService:
     """使用者偏好管理服務"""
 
-    def __init__(self, file_service: Optional[FileService] = None):
-        self._data: Dict[str, Any] = dict(_DEFAULTS)
+    def __init__(self, path: str, file_service: Optional[FileService] = None):
+        self.path = path
         self.file_service = file_service or FileService()
+        self._data: Dict[str, Any] = copy.deepcopy(DEFAULT_PREFERENCES)
 
     def load(self):
-        """從檔案載入偏好設定，檔案不存在或格式錯誤時使用預設值"""
-        if not os.path.isfile(PREFERENCES_FILE):
-            return
+        """從檔案載入偏好設定；檔案不存在或格式錯誤時保留預設值，不認得的鍵略過"""
         try:
-            with open(PREFERENCES_FILE, "r", encoding="utf-8") as f:
+            with open(self.path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
-            if isinstance(loaded, dict):
-                for key in _DEFAULTS:
-                    if key in loaded:
-                        self._data[key] = loaded[key]
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (OSError, ValueError):
+            return
+        if isinstance(loaded, dict):
+            for key in DEFAULT_PREFERENCES:
+                if key in loaded:
+                    self._data[key] = loaded[key]
 
     def save(self):
-        """將偏好設定寫入檔案"""
-        self.file_service.write_json_atomic(PREFERENCES_FILE, self._data)
+        """將偏好設定原子寫入檔案；寫不進去時拋出 OSError"""
+        self.file_service.write_json_atomic(self.path, self._data)
 
     def get(self, key: str) -> Any:
         """取得偏好值
@@ -68,32 +56,10 @@ class PreferencesService:
         return self._data.get(key)
 
     def set(self, key: str, value: Any):
-        """設定偏好值
+        """設定偏好值（只改記憶體，save 才寫入檔案）
 
         Args:
             key: 偏好鍵名
             value: 偏好值
         """
         self._data[key] = value
-
-    def add_recent_project(self, path: str):
-        """將路徑加入最近專案清單頂部，自動去重與截斷
-
-        Args:
-            path: 專案檔路徑
-        """
-        recent = self._data.get("recent_projects", [])
-        path = os.path.normpath(path)
-        recent = [p for p in recent if not same_path(p, path)]
-        recent.insert(0, path)
-        self._data["recent_projects"] = recent[:MAX_RECENT]
-
-    def remove_recent_projects(self, paths: List[str]):
-        """從最近專案清單移除指定路徑
-
-        Args:
-            paths: 要移除的專案檔路徑
-        """
-        targets = {path_key(p) for p in paths}
-        recent = self._data.get("recent_projects", [])
-        self._data["recent_projects"] = [p for p in recent if path_key(p) not in targets]

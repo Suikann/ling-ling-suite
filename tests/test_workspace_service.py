@@ -299,16 +299,6 @@ class TestWorkspaceService(unittest.TestCase):
         scan = self.service.scan(current, [], ProjectService().load_project)
         self.assertEqual(scan.entries[0].status, WorkspaceStatus.IN_USE)
 
-    def test_scan_loads_owner_from_meta_even_if_not_recent(self):
-        folder = self.service.prepare_folder(self.source)
-        part = self._create_file("高笙.pdf", folder)
-        owner_path = self._save_project(self._project_with(part), "old.llproj")
-        self.service.update_project_path(self._project_with(part), owner_path)
-        scan = self.service.scan(None, [], ProjectService().load_project)
-        self.assertEqual(scan.entries[0].status, WorkspaceStatus.OWNED_BY_OTHER)
-        self.assertEqual(scan.entries[0].project_path, owner_path)
-        self.assertEqual(scan.missing_projects, [])
-
     def test_scan_keeps_emptied_folder_owned_by_other_project(self):
         folder = self.service.prepare_folder(self.source)
         part = self._create_file("高笙.pdf", folder)

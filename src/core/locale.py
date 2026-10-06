@@ -116,6 +116,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "status.opened": "已開啟專案：{path}",
         "status.saved": "已儲存專案：{path}",
         "status.workspace_owner_failed": "有 {count} 個工作區子資料夾的所屬專案更新失敗，清理工作區時可能顯示為舊位置。",
+        "status.recent_failed": "最近開啟的專案清單無法更新。",
         # 底部面板
         "panel.master_template": "命名格式：",
         "panel.insert_variable": "插入變數",
@@ -577,6 +578,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "status.opened": "Opened project: {path}",
         "status.saved": "Saved project: {path}",
         "status.workspace_owner_failed": "Could not update the owning project of {count} workspace folder(s); the cleanup dialog may show their old location.",
+        "status.recent_failed": "Could not update the recent projects list.",
         # 底部面板
         "panel.master_template": "Naming Format:",
         "panel.insert_variable": "Insert Variable",

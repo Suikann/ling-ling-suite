@@ -220,27 +220,34 @@ class WorkspaceService:
 
     # --- 清理 ---
 
+    def recorded_owners(self) -> List[str]:
+        """各子資料夾 meta 記錄的所屬專案檔路徑（依子資料夾順序，未記錄者略過，可能重複）"""
+        owners = [self._owner_path(self.read_meta(f)) for f in self._list_folders()]
+        return [p for p in owners if p]
+
     def scan(
         self,
         current_project: Optional[Project],
-        recent_projects: List[str],
+        known_projects: List[str],
         load_project: Callable[[str], Project],
     ) -> WorkspaceScan:
         """掃描工作區並判定各子資料夾的引用狀態
 
+        先移除只剩 meta.json、且沒有被目前專案或任何已知專案引用的空資料夾（ADR-0001），再列出其餘的。
+
         Args:
             current_project: 目前開啟的專案，可為 None
-            recent_projects: 最近專案檔路徑清單
+            known_projects: 要載入以判定引用關係的專案檔（已知專案清單，由專案存取提供）
             load_project: 載入專案檔的函式
 
         Returns:
-            掃描結果，含各子資料夾摘要與無法處理的專案檔清單
+            掃描結果，含各子資料夾摘要、已不存在與無法讀取的專案檔清單
         """
         scan = WorkspaceScan()
         in_use = set(self._referenced_folders(current_project)) if current_project else set()
         owned: Dict[str, str] = {}
         unreadable: Set[str] = set()
-        for path in self._candidate_projects(recent_projects):
+        for path in known_projects:
             if not os.path.isfile(path):
                 scan.missing_projects.append(path)
                 continue
@@ -268,8 +275,6 @@ class WorkspaceService:
             else:
                 status = WorkspaceStatus.ORPHAN
             scan.entries.append(self._build_entry(folder, meta, status, owned.get(key, "")))
-        recent = {path_key(p) for p in recent_projects}
-        scan.missing_projects = [p for p in scan.missing_projects if path_key(p) in recent]
         scan.entries.sort(key=lambda e: e.modified_at, reverse=True)
         return scan
 
@@ -296,17 +301,6 @@ class WorkspaceService:
         if not os.path.isdir(self.workspace_dir):
             return []
         return self.file_service.list_subdirectories(self.workspace_dir)
-
-    def _candidate_projects(self, recent_projects: List[str]) -> List[str]:
-        """需要載入以判定引用關係的專案檔：最近清單，加上各子資料夾 meta 指向的專案"""
-        seen: Set[str] = set()
-        candidates: List[str] = []
-        owners = [self._owner_path(self.read_meta(f)) for f in self._list_folders()]
-        for path in list(recent_projects) + owners:
-            if path and path_key(path) not in seen:
-                seen.add(path_key(path))
-                candidates.append(path)
-        return candidates
 
     def _referenced_folders(self, project: Project) -> Dict[str, str]:
         """專案引用到的工作區子資料夾：路徑比對鍵到子資料夾路徑的對應"""

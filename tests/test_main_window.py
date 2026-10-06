@@ -21,21 +21,20 @@ from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFileDialog, QLineEdit, QListWidget, QMessageBox, QPushButton,
-    QRadioButton, QTabWidget, QWidget,
+    QApplication, QCheckBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox,
+    QPushButton, QRadioButton, QTabWidget, QWidget,
 )
 
-from core.constants import WORKSPACE_META_FILE
 from core.locale import set_locale, t
 from core.models import FileInfo, Group, Project
 from services.file_service import FileService
 from main import launch
 from services.instance_lock import InstanceLock
-from services.preferences_service import PREFERENCES_FILE, PreferencesService
+from services.preferences_service import PreferencesService
 from services.project_service import ProjectService
-from services.workspace_service import WorkspaceService
 from ui.main_window import MainWindow
 from ui.preview_dialog import PreviewDialog
+from tests.failing_writes import FailingWrites
 from tests.other_instance import OtherInstance
 
 
@@ -157,8 +156,13 @@ class MainWindowTestCase(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.temp_dir, True)
-        self.preferences = PreferencesService()
+        self.preferences_path = os.path.join(self.temp_dir, "preferences.json")
+        self.preferences = PreferencesService(self.preferences_path, self.preferences_file_service())
         self.window = MainWindow(self.preferences)
+
+    def preferences_file_service(self) -> FileService:
+        """偏好設定寫入用的檔案服務；要模擬最近清單寫不進去的測試換成寫不進去的"""
+        return FileService()
 
     def tearDown(self):
         with answering_prompts(t("dialog.discard_btn")):
@@ -176,6 +180,18 @@ class MainWindowTestCase(unittest.TestCase):
     def is_marked_unsaved(self) -> bool:
         """視窗標題是否帶有未存檔標記"""
         return self.window.windowTitle().endswith(" *")
+
+    def status_shows(self, text: str) -> bool:
+        """狀態列是否顯示這段文字"""
+        return any(label.text() == text for label in self.window.findChildren(QLabel))
+
+    def recent_menu(self) -> QMenu:
+        """「最近開啟的專案」選單"""
+        return next(m for m in self.window.findChildren(QMenu) if m.title() == t("menu.file.recent"))
+
+    def recent_menu_paths(self) -> List[str]:
+        """最近專案選單列出的專案檔路徑（各項的提示文字）"""
+        return [a.toolTip() for a in self.recent_menu().actions() if a.isEnabled()]
 
     def open_from_menu(self, project: Project) -> str:
         """把專案存成檔案後從選單開啟，回傳專案檔路徑"""
@@ -202,75 +218,46 @@ class MainWindowTestCase(unittest.TestCase):
         return files
 
 
-class TestMainWindowWorkspaceOwner(MainWindowTestCase):
-    """開啟專案或寫出專案檔後，工作區 meta 的所屬專案要跟著更新"""
+class TestMainWindowRecentListUnwritable(MainWindowTestCase):
+    """最近清單寫不進去時，專案檔讀寫成功就算成功：不跳錯誤提示框，只在狀態列提示"""
 
-    def setUp(self):
-        super().setUp()
-        self.workspace = WorkspaceService(self.window.file_service, os.path.join(self.temp_dir, "workspace"))
-        self.window.workspace_service = self.workspace
+    def preferences_file_service(self) -> FileService:
+        return FailingWrites(self.preferences_path)
 
-    def _create(self, name, directory=None):
-        path = os.path.join(directory or self.temp_dir, name)
-        with open(path, "w") as f:
-            f.write("dummy")
-        return path
+    def test_project_still_opens_without_error_box(self):
+        path = os.path.join(self.temp_dir, "opened.llproj")
+        ProjectService().save_project(Project(groups=[Group(name="g", score_label="總譜")]), path)
+        with answering_prompts() as shown, opening(path):
+            self.trigger_menu(t("menu.file.open"))
+        self.assertEqual(shown, [])
+        self.assertEqual([g.name for g in self.window.project.groups], ["g"])
+        self.assertIn("opened.llproj", self.window.windowTitle())
+        self.assertTrue(self.status_shows(t("status.recent_failed")))
 
-    def _project_saved_at(self, folder, name):
-        """把一份工作區分譜放進專案並存到指定位置"""
-        part = self._create("高笙.pdf", folder)
-        project = Project()
-        project.groups.append(Group(name="g", files=[FileInfo(part, "高笙.pdf")]))
-        path = os.path.join(self.temp_dir, name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        ProjectService().save_project(project, path)
-        return path
-
-    def test_open_project_records_its_location_in_workspace_meta(self):
-        old_path = os.path.join(self.temp_dir, "old.llproj")
-        folder = self.workspace.prepare_folder(self._create("合併譜.pdf"), old_path)
-        new_path = self._project_saved_at(folder, os.path.join("moved", "new.llproj"))
-        self.window._do_open_project(new_path)
-        self.assertEqual(self.workspace.read_meta(folder)["project_path"], new_path)
-        self.assertEqual(self.window._project_path, new_path)
-
-    def test_open_project_still_opens_when_meta_cannot_be_written(self):
-        old_path = os.path.join(self.temp_dir, "old.llproj")
-        folder = self.workspace.prepare_folder(self._create("合併譜.pdf"), old_path)
-        new_path = self._project_saved_at(folder, "new.llproj")
-        real_write = self.window.file_service.write_json_atomic
-
-        def failing_write(path, data):
-            if os.path.basename(path) == WORKSPACE_META_FILE:
-                raise OSError("locked")
-            real_write(path, data)
-
-        self.window.file_service.write_json_atomic = failing_write
-        self.window._do_open_project(new_path)
-        self.assertEqual(self.window._project_path, new_path)
-        self.assertEqual(self.workspace.read_meta(folder)["project_path"], old_path)
-        self.assertEqual(self.window._status_label.text(), t("status.workspace_owner_failed", count=1))
-
-    def test_save_records_its_location_in_workspace_meta_when_recent_list_cannot_be_written(self):
-        """專案檔已寫好、只有最近清單寫不進去時，存檔仍算沒存成，但 meta 要記到專案檔的位置"""
-        folder = self.workspace.prepare_folder(self._create("合併譜.pdf"))
-        part = self._create("高笙.pdf", folder)
-        with mock.patch.object(QFileDialog, "getOpenFileNames", return_value=([part], "")):
-            self.trigger_menu(t("menu.import.files"))
+    def test_close_proceeds_after_choosing_save(self):
+        self.window.show()
+        self.click_button(t("group.add"))
         path = os.path.join(self.temp_dir, "saved.llproj")
-        real_write = FileService.write_json_atomic
-
-        def failing_write(file_service, target, data):
-            if target == PREFERENCES_FILE:
-                raise OSError("read-only")
-            real_write(file_service, target, data)
-
-        with mock.patch.object(FileService, "write_json_atomic", failing_write), \
-                answering_prompts(t("dialog.save_btn")) as shown, saving_as(path):
+        with answering_prompts(t("dialog.save_btn")) as shown, saving_as(path):
             closed = self.window.close()
-        self.assertFalse(closed)
-        self.assertIn((t("dialog.error"), t("dialog.error.save_failed", error="read-only")), shown)
-        self.assertEqual(self.workspace.read_meta(folder)["project_path"], path)
+        self.assertTrue(closed)
+        self.assertEqual(shown, [(t("dialog.close"), t("dialog.close.message"))])
+        self.assertEqual(len(ProjectService().load_project(path).groups), 1)
+        self.assertTrue(self.status_shows(t("status.recent_failed")))
+
+
+class TestMainWindowRecentMenu(MainWindowTestCase):
+    """最近專案選單"""
+
+    def test_missing_project_is_gone_from_menu_after_trying_to_open_it(self):
+        path = self.open_from_menu(Project())
+        self.assertEqual(self.recent_menu_paths(), [path])
+        os.remove(path)
+        action = next(a for a in self.recent_menu().actions() if a.toolTip() == path)
+        with answering_prompts() as shown:
+            action.trigger()
+        self.assertEqual(shown, [(t("dialog.error"), t("dialog.error.file_not_found", path=path))])
+        self.assertEqual(self.recent_menu_paths(), [])
 
 
 class TestMainWindowUnsavedPrompt(MainWindowTestCase):
@@ -562,6 +549,7 @@ class TestSingleInstanceLaunch(unittest.TestCase):
     def setUp(self):
         temp_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, temp_dir, True)
+        self.preferences_path = os.path.join(temp_dir, "preferences.json")
         self.lock = InstanceLock(os.path.join(temp_dir, "instance.lock"))
         self.addCleanup(self.lock.release)
 
@@ -572,7 +560,7 @@ class TestSingleInstanceLaunch(unittest.TestCase):
         """啟動並處理完排定的事件，回傳（主視窗或 None，跳出過的提示框，新開的主視窗）"""
         before = self._main_windows()
         with answering_prompts() as shown:
-            window = launch(PreferencesService(), self.lock)
+            window = launch(PreferencesService(self.preferences_path), self.lock)
             QApplication.processEvents()
         if window is not None:
             self.addCleanup(window.close)

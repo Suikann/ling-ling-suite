@@ -25,8 +25,8 @@ from services.import_service import ImportService
 from services.move_service import RenameRollbackError
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
+from services.project_access import AccessResult, ProjectAccess
 from ui.instrument_list import InstrumentListEditor
-from ui.widgets import ensure_file_exists
 
 
 class MainWindow(QMainWindow):
@@ -40,9 +40,9 @@ class MainWindow(QMainWindow):
         self.file_service = FileService()
         self.import_service = ImportService(self.file_service)
         self.workspace_service = WorkspaceService(self.file_service)
+        self._project_access = ProjectAccess(self.file_service, preferences, self.workspace_service)
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
-        self._project_service = None
         self._rename_service = None
         self._undo_service = None
         self._create_menu()
@@ -279,30 +279,33 @@ class MainWindow(QMainWindow):
         self._do_open_project(path)
 
     def _do_open_project(self, path: str):
-        try:
-            self._set_project(self._get_project_service().load_project(path), path)
-            self._set_status(t("status.opened", path=path))
-            self._add_recent_project(path)
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.open_failed", error=e))
+        """開啟專案檔；讀不到才顯示「無法開啟專案」，最近清單或 meta 寫不進去只在狀態列提示"""
+        result = self._project_access.open(path)
+        self._refresh_recent_menu()
+        if result.error is not None:
+            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.open_failed", error=result.error))
             return
-        self._sync_workspace_owner(path)
-        self._warn_missing_files()
-
-    def _sync_workspace_owner(self, path: str):
-        """把專案引用到的工作區子資料夾記到目前的專案檔路徑；寫不進去只在狀態列提示，不阻止開啟或存檔"""
-        failed = self.workspace_service.update_project_path(self.project, path)
-        if failed:
-            self._set_status(t("status.workspace_owner_failed", count=len(failed)))
-
-    def _warn_missing_files(self):
-        """專案內有找不到的檔案時提醒使用者"""
-        missing = self._get_project_service().find_missing_files(self.project)
-        if missing:
+        self._set_project(result.project, path)
+        self._show_access_status(t("status.opened", path=path), result)
+        if result.missing_files:
             QMessageBox.warning(
                 self, t("dialog.warning"),
-                t("missing.on_load", count=len(missing), files="\n".join(missing)),
+                t("missing.on_load", count=len(result.missing_files), files="\n".join(result.missing_files)),
             )
+
+    def _show_access_status(self, done: str, result: AccessResult):
+        """開啟或存檔成功後的狀態列：附帶動作有失敗時改顯示失敗的提示
+
+        Args:
+            done: 都成功時顯示的訊息
+            result: 開啟或存檔的結果
+        """
+        notices = []
+        if result.recent_failed:
+            notices.append(t("status.recent_failed"))
+        if result.owner_failed:
+            notices.append(t("status.workspace_owner_failed", count=len(result.owner_failed)))
+        self._set_status(" ".join(notices) or done)
 
     def _save_project(self) -> bool:
         """存到目前的專案檔，尚未存過時改走另存新檔；回傳是否存成"""
@@ -321,33 +324,22 @@ class MainWindow(QMainWindow):
         return self._do_save(path)
 
     def _do_save(self, path: str) -> bool:
-        """執行存檔流程；任一步失敗即顯示「儲存失敗」並回報沒存成
-
-        工作區 meta 的所屬專案更新不在存檔流程內：只要專案檔已寫出就更新，
-        即使之後加入最近清單或寫入偏好設定失敗、整體算沒存成也一樣，
-        否則「清理工作區」會把這個專案引用的子資料夾當成未被引用。
-        這項更新失敗只提示在狀態列，不影響是否存成。
+        """存檔；專案檔寫不成才顯示「儲存失敗」，最近清單或 meta 寫不進去只在狀態列提示
 
         Args:
             path: 專案檔路徑
 
         Returns:
-            是否存成
+            專案檔是否寫成
         """
-        written = False
-        try:
-            self._get_project_service().save_project(self.project, path)
-            written = True
-            self._project_path = path
-            self._update_title()
-            self._set_status(t("status.saved", path=path))
-            self._add_recent_project(path)
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.save_failed", error=e))
+        result = self._project_access.save(self.project, path)
+        if result.error is not None:
+            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.save_failed", error=result.error))
             return False
-        finally:
-            if written:
-                self._sync_workspace_owner(path)
+        self._project_path = path
+        self._update_title()
+        self._refresh_recent_menu()
+        self._show_access_status(t("status.saved", path=path), result)
         return True
 
     def _sync_ui_from_project(self):
@@ -577,13 +569,9 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     def _scan_workspace(self):
-        """掃描工作區；最近清單中已不存在的專案檔順手移除"""
-        recent = list(self._preferences.get("recent_projects") or [])
-        scan = self.workspace_service.scan(self.project, recent, self._get_project_service().load_project)
-        if scan.missing_projects:
-            self._preferences.remove_recent_projects(scan.missing_projects)
-            self._preferences.save()
-            self._refresh_recent_menu()
+        """掃描工作區（最近清單中已不存在的專案檔會被移除，選單跟著更新）"""
+        scan = self._project_access.scan_workspace(self.project)
+        self._refresh_recent_menu()
         return scan
 
     def _open_workspace_cleanup(self):
@@ -633,13 +621,6 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     # --- 譜庫 ---
-
-    def _get_project_service(self):
-        """取得或建立專案服務"""
-        if not self._project_service:
-            from services.project_service import ProjectService
-            self._project_service = ProjectService(self.file_service)
-        return self._project_service
 
     def _get_undo_service(self):
         """取得或建立復原服務"""
@@ -764,7 +745,7 @@ class MainWindow(QMainWindow):
         """目前內容是否與磁碟上的專案檔不同；還沒存過檔時沒有可比對的檔案，交給未存檔判定"""
         if not self._project_path:
             return False
-        return not self._get_project_service().matches_file(self.project, self._project_path)
+        return not self._project_access.matches_file(self.project, self._project_path)
 
     def _ask_to_save(self, title: Optional[str] = None, message: Optional[str] = None) -> bool:
         """詢問是否儲存目前的專案
@@ -792,7 +773,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_recent_menu(self):
         self._recent_menu.clear()
-        recent = self._preferences.get("recent_projects") or []
+        recent = self._project_access.recent_projects()
         if not recent:
             action = self._recent_menu.addAction(t("menu.file.recent.empty"))
             action.setEnabled(False)
@@ -805,16 +786,14 @@ class MainWindow(QMainWindow):
             )
 
     def _open_recent(self, path: str):
-        if not ensure_file_exists(self, path):
+        """開啟最近清單中的專案；專案檔已不存在時提示並從清單移除，不詢問是否儲存"""
+        if self._project_access.forget_if_missing(path):
+            self._refresh_recent_menu()
+            QMessageBox.critical(self, t("dialog.error"), t("dialog.error.file_not_found", path=path))
             return
         if not self._confirm_unsaved():
             return
         self._do_open_project(path)
-
-    def _add_recent_project(self, path: str):
-        self._preferences.add_recent_project(path)
-        self._preferences.save()
-        self._refresh_recent_menu()
 
     def closeEvent(self, event):
         """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次；任一不同就詢問是否儲存"""

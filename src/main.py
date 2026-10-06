@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QProxyStyle, QStyleFactory
 from PySide6.QtCore import Qt, QTimer
-from core.constants import INSTANCE_LOCK_FILE
+from core.constants import INSTANCE_LOCK_FILE, PREFERENCES_FILE
 from core.locale import t, set_locale
 from core.models import Project
 from services.instance_lock import InstanceLock
@@ -33,7 +33,7 @@ class _AppStyle(QProxyStyle):
 
 
 def main():
-    prefs = PreferencesService()
+    prefs = PreferencesService(PREFERENCES_FILE)
     prefs.load()
     language = prefs.get("language") or "zh_TW"
     set_locale(language)

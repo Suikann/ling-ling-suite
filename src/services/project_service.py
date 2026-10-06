@@ -5,8 +5,7 @@
 提供專案檔案的儲存與載入功能。
 """
 import json
-import os
-from typing import List, Optional
+from typing import Optional
 from core.constants import APP_VERSION
 from core.locale import t
 from core.models import Project
@@ -58,15 +57,3 @@ class ProjectService:
         except Exception:
             return False
         return on_disk.to_data() == project.to_data()
-
-    @staticmethod
-    def find_missing_files(project: Project) -> List[str]:
-        """列出專案內指向不存在檔案的路徑
-
-        Args:
-            project: 專案資料
-
-        Returns:
-            找不到的檔案路徑清單（依群組順序）
-        """
-        return [p for p in project.all_file_paths() if not os.path.isfile(p)]
