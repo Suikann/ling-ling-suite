@@ -215,6 +215,13 @@ class MainWindow(QMainWindow):
         """目前分頁的群組；未分組分頁為 None"""
         return getattr(self._tab_widget.currentWidget(), "group", None)
 
+    def _show_group(self, group: Group):
+        """切到該群組的分頁"""
+        for index in range(self._tab_widget.count()):
+            if getattr(self._tab_widget.widget(index), "group", None) is group:
+                self._tab_widget.setCurrentIndex(index)
+                return
+
     def _add_group(self):
         self.project.add_group(
             t("group.new_name", number=len(self.project.groups) + 1),
@@ -571,7 +578,7 @@ class MainWindow(QMainWindow):
         """分割完成：結果交給專案套用、切到接手新分譜的群組，分割紀錄交給搬移歷程"""
         group = self.project.apply_split(result, score_label=t("group.score_label"))
         self._rebuild_tabs()
-        self._tab_widget.setCurrentIndex(self.project.groups.index(group) + 1)
+        self._show_group(group)
         self._set_status(t("split.files_added", count=len(result.parts)))
         try:
             self._history.record_split(result.record)

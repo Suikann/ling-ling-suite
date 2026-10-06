@@ -2,7 +2,6 @@
 """
 工作區服務單元測試
 """
-import json
 import os
 import shutil
 import sys
