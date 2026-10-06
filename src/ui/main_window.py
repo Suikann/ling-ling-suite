@@ -5,7 +5,7 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
-from typing import Callable, Iterable, NamedTuple, Optional
+from typing import Iterable, NamedTuple, Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog,
@@ -421,17 +421,18 @@ class MainWindow(QMainWindow):
 
     def _execute_rename(self, verdict: RenameVerdict):
         result = self._history.rename(verdict, project_path=self._project_path or "")
-        if self._apply_move_result(result, str):
+        if self._apply_move_result(result):
             count = len(result.changes)
             self._set_status(t("status.renamed", count=count))
             QMessageBox.information(self, t("dialog.complete"), t("dialog.complete.renamed", count=count))
 
-    def _apply_move_result(self, result: MoveResult, failure: Callable[[Exception], str]) -> bool:
+    def _apply_move_result(self, result: MoveResult, failure_key: Optional[str] = None) -> bool:
         """把搬移歷程的結果交給專案（含搬不回去的殘留、復原的分割）並顯示失敗
 
         Args:
             result: 搬移歷程的動作結果
-            failure: 由失敗原因組出錯誤訊息的函式
+            failure_key: 失敗訊息的字串鍵（以 error 帶入失敗原因）；省略時直接顯示失敗原因，
+                搬移歷程的拒絕與失敗本身就是完整的訊息
 
         Returns:
             動作是否照計畫完成且紀錄已寫入（呼叫端據此顯示完成訊息）
@@ -446,12 +447,13 @@ class MainWindow(QMainWindow):
             self._rebuild_tabs()
             self._tab_widget.setCurrentIndex(current)
         self._pending_applied_to = self.project if result.record_error is not None else None
-        return self._report_move_result(result, failure)
+        return self._report_move_result(result, failure_key)
 
-    def _report_move_result(self, result: MoveResult, failure: Callable[[Exception], str]) -> bool:
+    def _report_move_result(self, result: MoveResult, failure_key: Optional[str] = None) -> bool:
         """顯示搬移歷程動作的失敗；參數與回傳值同 _apply_move_result"""
         if result.error is not None:
-            QMessageBox.critical(self, t("dialog.error"), failure(result.error))
+            message = t(failure_key, error=result.error) if failure_key else str(result.error)
+            QMessageBox.critical(self, t("dialog.error"), message)
         if result.record_error is not None:
             QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=result.record_error))
         return result.error is None and result.record_error is None
@@ -493,7 +495,7 @@ class MainWindow(QMainWindow):
         if choice == "keep":
             return self._keep_pending(pending)
         result = self._history.recover()
-        settled = self._apply_move_result(result, lambda e: t("dialog.pending_move.failed", error=e))
+        settled = self._apply_move_result(result, "dialog.pending_move.failed")
         if pending.moved and settled:
             self._show_recovery(result, t(texts.title))
         return settled
@@ -521,9 +523,9 @@ class MainWindow(QMainWindow):
             if owner == "" and not self.project.references_any(
                     path for m in result.changes for path in (m.original, m.renamed)):
                 QMessageBox.information(self, t("dialog.info"), t("dialog.pending_move.project_unsaved"))
-            return self._apply_move_result(result, str)
+            return self._apply_move_result(result)
         self._pending_applied_to = self.project if result.record_error is not None else None
-        return self._report_move_result(result, str)
+        return self._report_move_result(result)
 
     def _show_recovery(self, result: MoveResult, title: str):
         """中斷還原完成：還原了幾個檔，略過與搬不回去的各列在後"""
@@ -572,7 +574,7 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.Yes:
             return
         result = self._history.undo(project_path=self._project_path or "")
-        if self._apply_move_result(result, lambda e: t("dialog.error.undo_failed", error=e)):
+        if self._apply_move_result(result, "dialog.error.undo_failed"):
             self._set_status(t("status.undone"))
             self._show_skipped(result)
             self._show_not_restored(result)
@@ -591,7 +593,7 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.Yes:
             return
         result = self._history.redo(project_path=self._project_path or "")
-        if self._apply_move_result(result, str):
+        if self._apply_move_result(result):
             self._set_status(t("status.redone"))
             self._show_skipped(result)
 
