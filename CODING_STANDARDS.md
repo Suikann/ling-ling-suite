@@ -1,15 +1,32 @@
 # CODING_STANDARDS.md
 
-## Code Style
+寫或改 `src/`、`tests/` 的程式碼時照這份做：動手前查「動手前」兩項，改完逐項核對「完成條件」，全部成立才算改完。
 
-- 遵循 SOLID 原則（SRP、OCP、LSP、ISP、DIP）
-- 遵循 DRY 原則：避免重複邏輯，將共用邏輯抽取為可重用的函數或模組
-- Use LF line endings
-- 函式與方法內不留連續空行；頂層定義之間依 PEP 8 留兩行
+## 分層
 
-### Docstring 格式規範
+`src/` 分三層，每件事放哪一層、怎麼跨層以這張表為準：
 
-**模組層級 docstring**：
+| 層 | 放什麼 | 界線 |
+|----|--------|------|
+| `ui/` | 使用者互動與顯示：讀取使用者的意圖，交給 `Project` 的編輯操作或 services，再顯示結果 | 判斷規則（能不能做、算出什麼、怎麼搬）放 `core/` 或 `services/`；檔案存取經過 services |
+| `services/` | 碰磁碟與外部 API 的動作：搬移與重新命名、分割、PDF、匯入、專案檔、工作區、Google | 不匯入 `ui/` 與 PySide6；檔案系統操作經過建構時注入的 `FileService` |
+| `core/` | 純邏輯與資料：資料模型、命名、偵測、路徑比對、常數、介面字串 | 不匯入 `ui/`、`services/` 與 PySide6（`tests/test_project.py` 驗證 `core.models`），不做檔案 I/O |
+
+- **注入**：services 用到的 `FileService`、其他服務與檔案位置都由建構子傳入，預設值取自 `core/constants.py`。測試傳入替身（例如 `tests/failing_writes.py`）或臨時目錄，全域常數與私有成員維持原樣
+- 可以直接呼叫作業系統檔案 API 與 PDF 程式庫的，只有 `services/file_service.py` 本身、PDF 內容的讀寫（`services/pdf_service.py`）與單一實例鎖（`services/instance_lock.py`）
+
+## 常數與資料
+
+- 跨模組共用的常數放 `core/constants.py`，譜庫的放 `core/catalog_constants.py`，以 `from core.constants import X` 匯入；只屬於一個模組（含它對外介面）的常數留在該模組頂端，例如 `core/naming.py` 的 `SCORE_SLOT` 與模組私用、`_` 開頭的常數
+- 同一個值只定義一次
+- 會增加的清單與對照寫成常數資料，程式從常數讀取，函式裡不另列一份：變數選單、命名與語言轉換都讀 `TEMPLATE_VARIABLES`；重新命名問題（`RenameProblem`）的阻擋與訊息都查 `RENAME_PROBLEM_RULES`
+
+## 格式與 docstring
+
+- 換行用 LF（repo 沒有 .gitattributes 代為轉換）
+- 函式與方法內，敘述之間最多空一行
+- docstring 一律用繁體中文，格式照下例（方法與函式用 Google Style）：
+
 ```python
 # -*- coding: utf-8 -*-
 """
@@ -21,161 +38,43 @@
     from xxx import xxx
     result = xxx.method()
 """
-```
 
-**類別 docstring**：
-```python
+
 class ClassName:
     """類別簡短描述"""
+
+    def method_name(self, param1: str, param2: int) -> Dict:
+        """簡短描述
+
+        Args:
+            param1: 參數描述
+            param2: 參數描述
+
+        Returns:
+            返回值描述
+        """
 ```
 
-**方法/函數 docstring**（Google Style）：
-```python
-def method_name(param1: str, param2: int) -> Dict:
-    """簡短描述
+- 複雜的方法與函式寫 `Args:`、`Returns:` 區塊；簡單的（例如 getter、setter）寫單行
+- 模組 docstring 是該檔用途的唯一說明（`docs/architecture/modules.md` 不逐檔列出）
 
-    Args:
-        param1: 參數描述
-        param2: 參數描述
+## 動手前
 
-    Returns:
-        返回值描述
-    """
-```
+1. 找已有的入口：先看 [`docs/architecture/modules.md`](docs/architecture/modules.md) 的唯一入口，再以要做的事的關鍵字 `grep -rn` `src/core/`、`src/services/` 與 `core/constants.py`；已有的就沿用
+2. 依「分層」表決定新程式碼放哪一層
 
-**重要規則**：
-- 簡單方法（如 getter/setter）使用單行 docstring
-- 複雜方法必須包含 Args 和 Returns 區塊
-- 描述使用繁體中文
-- 不使用 :param: 或 :return: 風格（使用 Google Style）
+## 完成條件
 
----
+1. **測試**：`python -m pytest tests/ -v` 全數通過；新增或改變的行為有測試釘住
+2. **分層**：以下三條指令都沒有輸出：
+   - `grep -rln PySide6 src/core src/services`
+   - `grep -rnE "^\s*(from|import) (ui|services)\b" src/core`
+   - `grep -rnE "^\s*(from|import) ui\b" src/services`
 
-## SOLID Principles and DRY Principle
-
-**CRITICAL: You MUST read this section before modifying ANY code.**
-
-### SRP (Single Responsibility Principle)
-
-One class = One responsibility. Split when mixing concerns.
-
-**Bad Example** - UI 類別混入檔案操作：
-```python
-class MainWindow:
-    def rename_files(self):  # WRONG: 業務邏輯不應出現在 UI
-        for f in self.files:
-            new_name = self._build_name(f)
-            os.rename(f.path, new_name)
-```
-
-**Good Example** - 分離至 service：
-```python
-class MainWindow:
-    def __init__(self):
-        self.renamer = FileRenamer()
-
-    def on_rename_click(self):
-        self.renamer.rename_files(self.files, self.template)
-```
-
----
-
-### OCP (Open/Closed Principle)
-
-Open for extension, closed for modification. **NEVER hardcode data.**
-
-**Bad Example** - 寫死變數清單：
-```python
-def get_template_variables(self):
-    return ['序號', '曲名', '樂器']  # 新增變數需要改程式碼
-```
-
-**Good Example** - 資料放在常數檔：
-```python
-# core/constants.py
-TEMPLATE_VARIABLES = ['序號', '曲名', '樂器', '樂章編號', '樂章名稱']
-
-# core/template_engine.py
-from core.constants import TEMPLATE_VARIABLES
-```
-
----
-
-### DIP (Dependency Inversion Principle)
-
-Depend on abstractions, not concrete implementations.
-
-**Bad Example** - UI 直接呼叫檔案系統：
-```python
-class TemplateEditor:
-    def apply(self):
-        os.rename(old_path, new_path)  # 與 OS 緊密耦合
-```
-
-**Good Example** - 透過 service 層：
-```python
-class TemplateEditor:
-    def __init__(self, file_service: FileService):
-        self.file_service = file_service
-
-    def apply(self):
-        self.file_service.rename(old_path, new_path)
-```
-
----
-
-### Layer Responsibilities
-
-| Layer | Allowed | FORBIDDEN |
-|-------|---------|-----------|
-| **ui/** | 使用者互動、顯示資料、呼叫 services | 業務邏輯、直接檔案操作 |
-| **core/** | 模板解析、常數定義、資料模型 | UI 操作、直接檔案操作 |
-| **services/** | 檔案操作、匯入、重新命名、專案管理 | UI 操作 |
-
-### Data Flow
-
-```
-使用者操作 UI
-    ↓ (匯入檔案/資料夾、設定模板、排序檔案)
-ui/ 層
-    ↓ (呼叫 services)
-services/ 層
-    ↓ (使用 core/ 的模板引擎解析模板)
-core/ 模板引擎
-    ↓ (產生新檔名)
-services/ 層
-    ↓ (執行檔案重新命名、建立子資料夾)
-檔案系統
-```
-
----
-
-### Pre-Implementation Checklist
-
-Before writing ANY code, answer these questions:
-
-1. **Where does this logic belong?**
-   - [ ] Is this UI interaction? → `ui/` only
-   - [ ] Is this template processing? → `core/` only
-   - [ ] Is this file I/O or PDF processing? → `services/` only
-
-2. **Does this already exist?**
-   - [ ] Search `core/` for existing utilities
-   - [ ] Search `services/` for existing methods
-   - [ ] Check `core/constants.py` for constants
-
-3. **Am I duplicating logic?**
-   - [ ] Will UI compute something that services should provide?
-   - [ ] Am I defining constants in multiple places?
-
----
-
-### Post-Implementation Review Checklist
-
-After completing code changes, verify:
-
-1. [ ] **No hardcoded data** - All data in constants files (OCP)
-2. [ ] **Single responsibility** - Each class/function does one thing (SRP)
-3. [ ] **No duplicate logic** - Search for similar code (DRY)
-4. [ ] **UI 層不含業務邏輯** - UI 只負責顯示與使用者互動
-5. [ ] **Constants in one place** - 常數統一定義於 `core/constants.py`
+   而且 `git diff HEAD -- src` 新增的行裡，直接碰檔案系統的呼叫（`open(`、`os.remove`、`os.rename`、`os.replace`、`os.makedirs`、`os.path.isfile`、`os.path.isdir`、`shutil.`）只落在「分層」列出的三個檔；`ui/` 新增的程式碼只讀取畫面、呼叫編輯操作或 services、顯示結果
+3. **常數**：新常數照「常數與資料」放置；`grep -rnE "^_?<名稱>\s*=" src` 只有一筆定義
+4. **唯一入口**：新程式碼經過 `modules.md` 列的唯一入口；以新函式的關鍵呼叫 `grep -rn` `src/`，沒有另一處做同一件事
+5. **介面字串**：新的 `t("…")` 鍵在 `core/locale.py` 的 zh_TW 與 en 都有。`tests/test_locale.py` 只掃得到字面值的鍵，以 f-string 或變數組出的鍵要自己對照
+6. **Docstring**：新增或改動的模組、類別、方法與函式都有照上方格式的 docstring；首行一句話說得完它做的事（說不完就拆）；模組的職責改了，模組 docstring 跟著改
+7. **文件**：改了 `docs/architecture/*.md` 描述的行為，在同一個 commit 更新那份文件（哪份文件管哪些程式碼，見 `CLAUDE.md` 的 Reference docs）；新增或搬動唯一入口時更新 `modules.md`；用詞照 `GLOSSARY.md`
+8. **換行**：`git diff HEAD --name-only | xargs grep -l $'\r'` 沒有輸出
