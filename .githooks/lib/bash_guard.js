@@ -33,15 +33,34 @@ const ESCAPE_ROUTE = '真的要做，請使用者在提示列用 `! <指令>` �
 // PR/MR 發佈崗哨：git hook 看不到 GitHub/GitLab 的 PR/MR 內文（那是 API metadata、不經
 // commit-msg/pre-commit），故在此補洞——命令位置上是 gh/glab 的發佈命令時，擋整條指令裡的
 // (1) 自動簽名行（署名字樣定義在 text_util.js，與 commit-msg 共用，不分位置一律擋）、(2) 任何
-// emoji。內文檔（BODY_FILE）另外讀進來、用同一套比對，讀不到就擋（ADR-0038）。
+// emoji。內容旗標（content）的值裡有 hook 展不開的 shell 展開就擋：展開後的內容不在指令字串裡
+// （heredocOnly 的窄形狀除外，內文就寫在指令裡）。內文檔（bodyFile）另外讀進來、用同一套比對，
+// 讀不到就擋（ADR-0038）。內容旗標的 role 決定擋下時的下一步；editor 的值是 `-` 時開編輯器。
+const GH_BODY = { long: '--body', short: '-b', role: 'body' };
+const GLAB_DESCRIPTION = { long: '--description', short: '-d', role: 'body', editor: true };
+const TITLE = { long: '--title', short: '-t', role: 'title' };
+// gh 的 -c 只在 close／reopen 是留言，在 pr review 是布林的 --comment。
+const GH_CLOSE_COMMENT = { long: '--comment', short: '-c', role: 'comment' };
+// glab 的 -m 只在 note 是留言內文，在 create／update 是 milestone。
+const GLAB_MESSAGE = { long: '--message', short: '-m', role: 'message' };
+// 內文檔的旗標；兩者的值是 `-` 時從 stdin 讀。
+const GH_BODY_FILE = { long: '--body-file', short: '-F' };
+const GLAB_DESCRIPTION_FILE = { long: '--description-file', short: null };
+const GH_EDIT = { content: [GH_BODY, TITLE], bodyFile: GH_BODY_FILE };
+const GH_COMMENT = { content: [GH_BODY], bodyFile: GH_BODY_FILE };
+const GH_CLOSE = { content: [GH_CLOSE_COMMENT], bodyFile: null };
+const GLAB_EDIT = { content: [GLAB_DESCRIPTION, TITLE], bodyFile: GLAB_DESCRIPTION_FILE };
+const GLAB_NOTE = { content: [GLAB_MESSAGE], bodyFile: null };
+// tool → noun → verb → { content, bodyFile }。
 const PUBLISH = {
-  gh: { pr: ['create', 'edit', 'comment'], issue: ['create', 'edit', 'comment'] },
-  glab: { mr: ['create', 'update', 'note'], issue: ['create', 'update', 'note'] },
-};
-// 內文檔的旗標；兩者的值是 `-` 時從 stdin 讀。不拆 `-dF file` 這類合併短旗標。
-const BODY_FILE = {
-  gh: { long: '--body-file', short: '-F' },
-  glab: { long: '--description-file', short: null },
+  gh: {
+    pr: { create: GH_EDIT, edit: GH_EDIT, comment: GH_COMMENT, review: GH_COMMENT, close: GH_CLOSE, reopen: GH_CLOSE },
+    issue: { create: GH_EDIT, edit: GH_EDIT, comment: GH_COMMENT, close: GH_CLOSE, reopen: GH_CLOSE },
+  },
+  glab: {
+    mr: { create: GLAB_EDIT, update: GLAB_EDIT, note: GLAB_NOTE },
+    issue: { create: GLAB_EDIT, update: GLAB_EDIT, note: GLAB_NOTE },
+  },
 };
 const CD_COMMANDS = new Set(['cd', 'pushd', 'popd']);
 // emoji 範圍：主要 emoji 平面 + 雜項符號/dingbats + 技術符號 + 區域指示(旗) + 變體選擇子。
@@ -165,32 +184,82 @@ function resetTarget(args) {
 // 合併一律經 plugin 的 `bin/lingling-merge <n>`（ADR-0036）：它先驗 PR 分支跟上 base、分支內沒有 merge commit、CI 全綠
 // 才合。`gh pr merge` 兩樣都不驗，故命令位置上的 `gh pr merge` 不論帶什麼旗標與前綴一律擋；
 // `lingling-merge` 不是受管的詞，照常放行。
+/** target 是編號就回它，否則回預留字 placeholder。 */
+function numberOr(target, placeholder) {
+  return target && /^[1-9][0-9]*$/.test(target) ? target : placeholder;
+}
+
 function mergeNext(target) {
-  const n = target && /^[1-9][0-9]*$/.test(target) ? target : '<PR 編號>';
+  const n = numberOr(target, '<PR 編號>');
   return `使用者說「合」之後，改跑 \`lingling-merge ${n}\`；它拒絕時，照它印出的下一步做。`;
 }
 
-// ── PR／MR 內文檔 ───────────────────────────────────────────────
+// ── PR／MR 內文旗標與內文檔 ─────────────────────────────────────
+
+/** 發佈命令的 { content, bodyFile }；不是發佈命令回 null。 */
+function publishSpec(tool, noun, verb) {
+  const verbs = Object.hasOwn(PUBLISH[tool], noun) ? PUBLISH[tool][noun] : {};
+  return Object.hasOwn(verbs, verb) ? verbs[verb] : null;
+}
 
 /**
- * 發佈命令參數裡的內文檔（原樣、未展開）。`--` 之後不算旗標。旗標後面沒有值（值是被 parser
- * 拆走的 `<(…)` 等）記成 null。
+ * 參數裡 flags 各旗標的值，依出現順序：{ flag, name, value, word }。name 是寫出來的旗標（長或短），
+ * value 是值的字面（原樣、未展開），word 是值所在的詞（看展開片段用）。三種寫法都認：分開的值、
+ * `--long=值`、黏著的短旗標（`-b值`、`-b=值`）；不拆 `-dF file` 這類合併短旗標。分開寫的值不論
+ * 長得像不像旗標都吃掉（gh／glab 也是）。`--` 之後不算旗標。旗標後面沒有值（到了結尾，或夾著
+ * process substitution `<(…)`）時 value、word 是 null。
+ * args 是參數的詞，procBefore(k) 回答第 k 個參數前面有沒有夾著 process substitution。
  */
-function bodyFileArgs(tool, args) {
-  const { long, short } = BODY_FILE[tool];
+function flagValues(args, flags, procBefore) {
   const out = [];
   for (let k = 0; k < args.length; k++) {
-    const a = args[k];
+    const a = args[k].value;
     if (a === '--') break;
-    if (a === long || a === short) {
-      out.push(k + 1 < args.length ? args[++k] : null);
-    } else if (a.startsWith(`${long}=`)) {
-      out.push(a.slice(long.length + 1));
-    } else if (short && a.startsWith(short)) {
-      out.push(a.slice(short.length).replace(/^=/, ''));
+    for (const flag of flags) {
+      const { long, short } = flag;
+      if (a === long || a === short) {
+        const word = k + 1 < args.length && !procBefore(k + 1) ? args[++k] : null;
+        out.push({ flag, name: a, value: word && word.value, word });
+        break;
+      }
+      if (a.startsWith(`${long}=`)) {
+        out.push({ flag, name: long, value: a.slice(long.length + 1), word: args[k] });
+        break;
+      }
+      if (short && a.startsWith(short)) {
+        out.push({ flag, name: short, value: a.slice(short.length).replace(/^=/, ''), word: args[k] });
+        break;
+      }
     }
   }
   return out;
+}
+
+/**
+ * 命令替換裡只有一個不帶參數的 `cat`，唯一的重導向是定界符加了引號的 heredoc：內文就寫在指令
+ * 裡、不展開，整條指令的署名行與 emoji 比對看得到。差一點都不算。
+ */
+function heredocOnly(e) {
+  if (e.kind !== 'command' || e.items.length !== 1) return false;
+  const [{ words, redirects }] = e.items;
+  return (
+    words.length === 1 && words[0].raw === 'cat' && redirects.length === 1 &&
+    ['<<', '<<-'].includes(redirects[0].op) && redirects[0].quoted
+  );
+}
+
+/** 內容旗標的值 hook 看不到的原因；看得到回 null。 */
+function contentProblem({ flag, value, word }) {
+  if (word === null) return '旗標後面看不到值（例如 process substitution `<(…)`）';
+  if (flag.editor && value === '-') return '值是 `-` 會開編輯器，內容在編輯器裡打';
+  const e = word.expansions.find((x) => !heredocOnly(x));
+  if (!e) return null;
+  const raw = e.raw.replace(/\s+/g, ' ');
+  return `\`${raw.length > 40 ? `${raw.slice(0, 40)}…` : raw}\` 展開後的內容不在指令字串裡`;
+}
+
+function bodyFileNext(flag) {
+  return `先用 Write 把內文寫成檔，再以 \`${flag.long} <絕對路徑>\` 單獨送出（寫檔、清檔放在別次 Bash 呼叫）。`;
 }
 
 /**
@@ -265,7 +334,7 @@ function evaluate(command, { cwd = process.cwd() } = {}) {
         return checkGit(sc);
       case 'gh':
       case 'glab':
-        return checkGhGlab(sc);
+        return checkGhGlab(sc, item);
       default:
         return null;
     }
@@ -354,7 +423,7 @@ function evaluate(command, { cwd = process.cwd() } = {}) {
     return null;
   }
 
-  function checkGhGlab(sc) {
+  function checkGhGlab(sc, item) {
     const tool = sc.name;
     const args = sc.argv.slice(1);
     const positional = [];
@@ -365,8 +434,8 @@ function evaluate(command, { cwd = process.cwd() } = {}) {
     }
     const [noun, verb, target] = positional;
 
-    const publish = Object.hasOwn(PUBLISH[tool], noun) ? PUBLISH[tool][noun] : [];
-    if (publish.includes(verb)) {
+    const publish = publishSpec(tool, noun, verb);
+    if (publish) {
       if (SIGNATURE.test(command)) {
         return new Deny(
           'publish-signature',
@@ -378,8 +447,19 @@ function evaluate(command, { cwd = process.cwd() } = {}) {
       if (EMOJI.test(command)) {
         return new Deny('publish-emoji', 'PR／MR 內文含 emoji', '全域禁 emoji。', '移除 emoji 後重打。');
       }
-      for (const spec of bodyFileArgs(tool, args)) {
-        const d = checkBodyFile(tool, spec);
+      const first = sc.start + 1; // 第一個參數在 item.words 裡的位置
+      const procBefore = (k) =>
+        item.redirects.some((r) => (r.op === '<(' || r.op === '>(') && r.at === first + k);
+      const flags = publish.bodyFile ? [...publish.content, publish.bodyFile] : publish.content;
+      const found = flagValues(item.words.slice(first), flags, procBefore);
+      for (const f of found) {
+        if (f.flag === publish.bodyFile) continue;
+        const problem = contentProblem(f);
+        if (problem) return contentDeny(publish, f, problem, { noun, verb, target });
+      }
+      for (const f of found) {
+        if (f.flag !== publish.bodyFile) continue;
+        const d = checkBodyFile(publish.bodyFile, f.value);
         if (d) return d;
       }
       return null;
@@ -404,7 +484,26 @@ function evaluate(command, { cwd = process.cwd() } = {}) {
     return null;
   }
 
-  function checkBodyFile(tool, spec) {
+  function contentDeny(publish, { flag, name }, problem, { noun, verb, target }) {
+    const label = { body: '內文', title: '標題', comment: '留言', message: '留言' }[flag.role];
+    const n = numberOr(target, '<編號>');
+    const next = {
+      body: () => bodyFileNext(publish.bodyFile),
+      title: () => '把標題直接寫在指令裡，不經變數或命令替換。',
+      comment: () =>
+        `拿掉 \`${name}\`，先用 \`gh ${noun} comment ${n} --body-file <絕對路徑>\` 留言，再${verb === 'close' ? '關閉' : '重開'}（\`gh ${noun} ${verb} ${n}\`）。`,
+      message: () =>
+        `把內容直接寫在指令裡；要多行就用定界符加了引號的 heredoc：\`${name} "$(cat <<'EOF'\`、內容、\`EOF\`、\`)"\` 各占一行。`,
+    }[flag.role]();
+    return new Deny(
+      'publish-body-unexpandable',
+      `PR／MR 的${label}（\`${name}\`）hook 看不到實際內容`,
+      `hook 要先看到實際送出的${label}，才知道有沒有 emoji 或署名行，看不到就不讓它送出（ADR-0038）：${problem}。`,
+      next
+    );
+  }
+
+  function checkBodyFile(flag, spec) {
     const hasCd = parsed.items.some((it) => CD_COMMANDS.has(simpleCommand(it.words).name));
     const loc = locateBodyFile(spec, { cwd, command, hasCd });
     const body = loc.problem ? loc : readBodyFile(loc.file);
@@ -413,7 +512,7 @@ function evaluate(command, { cwd = process.cwd() } = {}) {
         'publish-body-file-unreadable',
         `讀不到 PR／MR 內文檔 \`${spec ?? ''}\``,
         `hook 要先讀過內文才知道有沒有 emoji 或署名行，讀不到就不讓它送出（ADR-0038）：${body.problem}。`,
-        `先用 Write 把內文寫成檔，再以 \`${BODY_FILE[tool].long} <絕對路徑>\` 單獨送出（寫檔、清檔放在別次 Bash 呼叫）。`
+        bodyFileNext(flag)
       );
     }
     const signature = lineOf(body.text, SIGNATURE);

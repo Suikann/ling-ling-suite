@@ -168,3 +168,14 @@ fleet	叢刊	名詞：/sync-upstream 一體盤點的那一套 skill，即 engine
 substitution	諱改	名詞：provenance 異文的一種錨型，一條規則把某個詞在全檔統一換成另一個詞，如 /code-review 換成 /lingling:diff-review、拿掉 emoji。取古籍避諱改字之義：凡遇某字，通篇改作他字。一般的字串替換不在此條
 pin	錨定	動詞，可作定語（錨定版）：把參照固定在某一筆確切的提交上，不隨上游最新版走，要跟上再有意識地挪過去；名詞指那筆提交，如 provenance 的 pin-commit，「自錨定版 3cca18b 到 d81f3a1」「重新錨定到上游 HEAD」。與 permalink「錨定連結」同義相承。異文的錨（定位用的錨點）不在此條，一般的「把某值固定住」也不在此條
 blast radius	殃及範圍	名詞：一次改動合併後可能波及的範圍，如版面跑位、消費端壞掉；pr 範本的欄位名。取「殃及池魚」之義
+effort	推理強度	名詞：Claude 的 effort 等級（low／medium／high／xhigh／max），決定每一步想多深、呼叫多少工具；/effort、frontmatter 的 effort 欄位照抄
+fast mode	快速模式	名詞：同一個 Opus 模型換成較快的 API 設定，單價加倍；/fast 照抄
+cache read	快取讀取	名詞：從 prompt 快取取回已存的前段 context，按較低單價計費
+cache write	快取寫入	名詞：把前段 context 存進 prompt 快取，按較高單價計費；快取過期後下一回合要整段重寫
+compaction	壓縮	名詞：把對話歷史摘要成較短的版本以騰出 context；/compact、autoCompact 照抄
+handoff	交接	名詞：把一件工作的現況寫成文件，交給下一個 session 接續；skill 名 /handoff 照抄
+acceptance criteria	驗收條件	名詞：工單上逐條可勾的完成判準
+context pointer	索引號	名詞：委派訊息裡指向資料所在的簡短參照（路徑、issue 編號、章節），代替把內容抄過去；按號去查，不把整份搬來
+prefactor	清道	動詞，亦作名詞：動手改之前先重構，讓接下來的改動變容易（make the change easy, then make the easy change）。取舊時出巡前先清道之義
+vertical slice	小成品	名詞：一小份本身就完整、能單獨交付驗收的工作，從頭到尾每一層都做到；to-tickets 要工單切成這種。相對的 horizontal slice 譯「半成品」
+horizontal slice	半成品	名詞：只做好其中一層、單獨拿出來不能用、要等其他層補上才成形的工作；to-tickets 要避免的切法。相對的 vertical slice 譯「小成品」
