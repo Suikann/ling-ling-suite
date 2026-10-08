@@ -6,14 +6,20 @@
 //
 // 介面：
 //   parse(src) → { ok: true, items } | { ok: false, reason }
-//     items 依執行順序排列，每個是一個簡單命令 { words, pipeline }：子 shell（`( )`、`$( )`、
-//     反引號、`<( )`）裡的命令也各自一個 item，排在包住它的命令之前；pipeline 相同的是同一條
-//     管線的各段。
-//     word = { value, raw }：value 是去掉引號後的字面（`$X`、`$(…)` 原樣保留、不展開），
-//     raw 是原文。
-//   simpleCommand(words) → { argv, name }：跳過開頭的 `VAR=值`、
+//     items 依執行順序排列，每個是一個簡單命令 { words, pipeline, redirects }：子 shell（`( )`、
+//     `$( )`、反引號、`<( )`）裡的命令也各自一個 item，排在包住它的命令之前；pipeline 相同的是
+//     同一條管線的各段。
+//     word = { value, raw, expansions }：value 是去掉引號後的字面（`$X`、`$(…)` 原樣保留、不
+//     展開），raw 是原文。expansions 是詞裡 bash 會展開的片段 { kind, raw }，依出現順序；kind 是
+//     param（`$X`、`$1`、`$@`、`${…}`）、command（`$(…)`）、backtick、arith（`$((…))`、`$[…]`）、
+//     ansi-c（`$'…'`）、locale（`$"…"`）。command 與 backtick 另帶 items：替換裡的簡單命令（含
+//     更深一層的）。單引號裡的 `$` 與反引號、跳脫的 `\$`、後面接不成展開的 `$` 都不算。
+//     redirect = { op, at }：at 是它前面有幾個詞。op 是 `<<`／`<<-` 的另帶 quoted（定界符有任何
+//     一部分加了引號或反斜線，內文就不展開）；process substitution 記成 op `<(`／`>(`，bash 把它
+//     當一個詞，只是不進 words。
+//   simpleCommand(words) → { argv, name, start }：跳過開頭的 `VAR=值`、
 //     sudo／env／command／time／nohup（再加 exec／timeout／nice）與 `!` `{` `if` 等保留字
-//     後的真正命令。
+//     後的真正命令；start 是 argv[0] 在 words 裡的位置。
 //
 // 不是完整的 bash parser：只求把命令位置找對。引號不成對、`$(`／反引號沒收尾是 shell 語法
 // 錯誤（bash 不會執行它），回 ok: false，由呼叫端放行。反過來，看不懂但 bash 照跑的寫法
@@ -26,6 +32,8 @@ class ShellSyntaxError extends Error {}
 const BLANK = new Set([' ', '\t']);
 // 在引號外會結束一個詞的字元。
 const META = new Set([' ', '\t', '\n', ';', '&', '|', '(', ')', '<', '>']);
+// `$` 之後接得成參數展開的（名稱、位置參數、特殊參數）；sticky，從 lastIndex 起比。
+const PARAM = /\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])/y;
 
 class Parser {
   constructor(src) {
@@ -47,12 +55,14 @@ class Parser {
   // 一串命令，直到 term（null＝輸入結尾、')'、'`'）。
   parseList(term) {
     let words = [];
+    let redirects = [];
     // pipeline 編號在每一層各自配：命令替換裡的命令不會跟外層的 pipeline 混在一起。
     let pipeline = this.nextPipeline++;
     const finish = (sep) => {
-      if (words.length > 0) this.items.push({ words, pipeline });
+      if (words.length > 0) this.items.push({ words, pipeline, redirects });
       if (sep !== '|') pipeline = this.nextPipeline++;
       words = [];
+      redirects = [];
     };
 
     for (;;) {
@@ -102,8 +112,10 @@ class Parser {
           this.i += 2;
           finish('&&');
         } else if (this.peek(1) === '>') {
-          this.i += this.peek(2) === '>' ? 3 : 2;
+          const op = this.peek(2) === '>' ? '&>>' : '&>';
+          this.i += op.length;
           this.readRedirectTarget(term);
+          redirects.push({ op, at: words.length });
         } else {
           this.i += 1;
           finish('&');
@@ -136,7 +148,7 @@ class Parser {
         continue;
       }
       if (c === '<' || c === '>') {
-        this.readRedirect(term);
+        redirects.push({ ...this.readRedirect(term), at: words.length });
         continue;
       }
 
@@ -151,17 +163,19 @@ class Parser {
     }
   }
 
+  // 回 { op }，heredoc 另帶 quoted。
   readRedirect(term) {
     if (this.startsWith('<(') || this.startsWith('>(')) {
       // process substitution 裡也是命令。
+      const op = this.src.slice(this.i, this.i + 2);
       this.i += 2;
       this.parseList(')');
-      return;
+      return { op };
     }
     if (this.startsWith('<<<')) {
       this.i += 3;
       this.readRedirectTarget(term);
-      return;
+      return { op: '<<<' };
     }
     if (this.startsWith('<<')) {
       this.i += 2;
@@ -171,15 +185,18 @@ class Parser {
       const delim = this.readWord(term);
       if (delim.raw === '') throw new ShellSyntaxError('heredoc without delimiter');
       this.heredocs.push({ delim: delim.value, stripTabs });
-      return;
+      return { op: stripTabs ? '<<-' : '<<', quoted: /['"\\]/.test(delim.raw) };
     }
-    for (const op of ['>>', '>|', '>&', '<>', '<&', '>', '<']) {
-      if (this.startsWith(op)) {
-        this.i += op.length;
+    let op = '';
+    for (const o of ['>>', '>|', '>&', '<>', '<&', '>', '<']) {
+      if (this.startsWith(o)) {
+        op = o;
+        this.i += o.length;
         break;
       }
     }
     this.readRedirectTarget(term);
+    return { op };
   }
 
   readRedirectTarget(term) {
@@ -212,17 +229,25 @@ class Parser {
     }
   }
 
+  // 命令替換：從開頭的 `$(` 或反引號（長 open）吃到收尾，回展開片段。
+  readSubstitution(kind, open, term) {
+    const start = this.i;
+    const first = this.items.length;
+    this.i += open;
+    this.parseList(term);
+    return { kind, raw: this.src.slice(start, this.i), items: this.items.slice(first) };
+  }
+
   readWord(term) {
     const start = this.i;
-    const w = { value: '', raw: '' };
+    const w = { value: '', raw: '', expansions: [] };
 
     for (;;) {
       const c = this.peek();
       if (c === undefined || META.has(c)) break;
       if (c === '`') {
         if (term === '`') break;
-        this.i += 1;
-        this.parseList('`');
+        w.expansions.push(this.readSubstitution('backtick', 1, '`'));
         w.value += '`…`';
         continue;
       }
@@ -287,8 +312,7 @@ class Parser {
         continue;
       }
       if (c === '`') {
-        this.i += 1;
-        this.parseList('`');
+        w.expansions.push(this.readSubstitution('backtick', 1, '`'));
         w.value += '`…`';
         continue;
       }
@@ -303,8 +327,8 @@ class Parser {
 
   readDollar(w, inDouble) {
     const n = this.peek(1);
+    const start = this.i;
     if (n === '(' && this.peek(2) === '(') {
-      const start = this.i;
       this.i += 3;
       let depth = 2;
       while (depth > 0) {
@@ -315,16 +339,15 @@ class Parser {
         this.i += 1;
       }
       w.value += this.src.slice(start, this.i);
+      w.expansions.push({ kind: 'arith', raw: this.src.slice(start, this.i) });
       return;
     }
     if (n === '(') {
-      this.i += 2;
-      this.parseList(')');
+      w.expansions.push(this.readSubstitution('command', 2, ')'));
       w.value += '$(…)';
       return;
     }
     if (n === '{') {
-      const start = this.i;
       this.i += 2;
       let depth = 1;
       while (depth > 0) {
@@ -336,10 +359,13 @@ class Parser {
         this.i += 1;
       }
       w.value += this.src.slice(start, this.i);
+      w.expansions.push({ kind: 'param', raw: this.src.slice(start, this.i) });
       return;
     }
     if (!inDouble && n === "'") {
       // $'…'：ANSI-C 引號，反斜線跳脫下一個字元。
+      const e = { kind: 'ansi-c', raw: '' };
+      w.expansions.push(e);
       this.i += 2;
       for (;;) {
         const c = this.peek();
@@ -356,12 +382,24 @@ class Parser {
         w.value += c;
         this.i += 1;
       }
+      e.raw = this.src.slice(start, this.i);
       return;
     }
     if (!inDouble && n === '"') {
+      const e = { kind: 'locale', raw: '' };
+      w.expansions.push(e);
       this.i += 2;
       this.readDouble(w);
+      e.raw = this.src.slice(start, this.i);
       return;
+    }
+    // `$X`、`$1`、`$@` 等與舊式算術 `$[…]`：照字面留在 value 裡。後面接不成展開的 `$` 是字面。
+    PARAM.lastIndex = this.i;
+    const param = PARAM.exec(this.src);
+    if (param) w.expansions.push({ kind: 'param', raw: param[0] });
+    if (n === '[') {
+      const end = this.src.indexOf(']', this.i);
+      w.expansions.push({ kind: 'arith', raw: this.src.slice(this.i, end < 0 ? this.i + 2 : end + 1) });
     }
     w.value += '$';
     this.i += 1;
@@ -421,7 +459,7 @@ function simpleCommand(words) {
     k += prefix.operands;
   }
   const argv = words.slice(k).map((w) => w.value);
-  return { argv, name: argv.length > 0 ? basename(argv[0]) : '' };
+  return { argv, name: argv.length > 0 ? basename(argv[0]) : '', start: k };
 }
 
 module.exports = { parse, simpleCommand };

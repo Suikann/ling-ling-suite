@@ -44,3 +44,5 @@ master lane	代表車道	CS2 MasterLane：車道群組合成出來的那條代�
 slave lane	成員車道	CS2 SlaveLane：車道群組裡的實體車道，車真的開在上面、在成員之間變換車道；只有 navigation 看得見，尋路圖不含它
 Semi-linear history	串珠歷史	主幹嫡系一條直線、每張 PR 像掛在線上一顆不交叉的珠：每顆 merge commit 的第一父即兩父的分岔點。形狀條件靠只留 merge commit、時序條件靠合併前嫁接到主幹尖端；珠內也是直線，分支只以嫁接跟上主幹、不併入任何分支（ADR-0037）。不作「半線性」（字面直譯）
 Governance checks	治理三檢	抄本 pre-commit 與 CI 的 governance 差事對全部 tracked 檔跑的三支靜態檢查：中文品質（chinese_quality，內部再分簡繁／編碼／異體字三項，稱「中文三檢」）、billing discipline、hook 引用存在。消費端自己的 pre-commit.local 不在其內
+smart zone	一鼓之氣	模型還能清楚推理的那段 context，目前的模型約 150k；一張工單的實作 session 連起步負擔要裝得進一段。典出《曹劌論戰》「一鼓作氣，再而衰，三而竭」：開頭最銳，越往後越鈍。模型 context 上限（如 1M）不在此條
+Spec branch	案卷分支	一份案卷的工單依序做在上面的那一條分支，一張一場 session，每張做完就關票，最後整條以一個合併請求併回主幹並關掉案卷；分支名記在案卷的留言。implement-spec 用的是匯流分支，不是此條
