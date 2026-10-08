@@ -124,6 +124,32 @@ class TemplateEditor:
 
 ---
 
+### Layer Responsibilities
+
+| Layer | Allowed | FORBIDDEN |
+|-------|---------|-----------|
+| **ui/** | 使用者互動、顯示資料、呼叫 services | 業務邏輯、直接檔案操作 |
+| **core/** | 模板解析、常數定義、資料模型 | UI 操作、直接檔案操作 |
+| **services/** | 檔案操作、匯入、重新命名、專案管理 | UI 操作 |
+
+### Data Flow
+
+```
+使用者操作 UI
+    ↓ (匯入檔案/資料夾、設定模板、排序檔案)
+ui/ 層
+    ↓ (呼叫 services)
+services/ 層
+    ↓ (使用 core/ 的模板引擎解析模板)
+core/ 模板引擎
+    ↓ (產生新檔名)
+services/ 層
+    ↓ (執行檔案重新命名、建立子資料夾)
+檔案系統
+```
+
+---
+
 ### Pre-Implementation Checklist
 
 Before writing ANY code, answer these questions:
