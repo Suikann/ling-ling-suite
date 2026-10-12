@@ -64,7 +64,7 @@
 ## 開發者指南
 
 **環境需求：**
-- Python 3.11+
+- Python 3.12+
 - PySide6、PyPDF2、PyMuPDF、send2trash
 
 **從原始碼執行：**
@@ -88,7 +88,7 @@ build.bat
 
 ## CI/CD
 
-- **CI：**每次 push/PR 自動執行測試（Python 3.11 + 3.12，Windows）
+- **CI：**每次 push/PR 自動執行測試（Python 3.12，Windows）
 - **CD：**推送 `v*` 標籤自動打包可攜式 EXE 並建立 GitHub Release
 
 ## 授權

@@ -65,7 +65,7 @@ Download the latest portable EXE from the **[Releases](../../releases)** page. N
 ## Development
 
 **Requirements:**
-- Python 3.11+
+- Python 3.12+
 - PySide6, PyPDF2, PyMuPDF, send2trash
 
 **Run from source:**
@@ -89,7 +89,7 @@ build.bat
 
 ## CI/CD
 
-- **CI:** Automated testing on push/PR (Python 3.11 + 3.12, Windows)
+- **CI:** Automated testing on push/PR (Python 3.12, Windows)
 - **CD:** Push a `v*` tag to trigger portable EXE build and GitHub Release
 
 ## License
