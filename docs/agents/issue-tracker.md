@@ -6,14 +6,11 @@
 
 <!-- lingling:issue-tracker -->
 
-- **內文**：issue／PR 的本文與留言一律先用 Write 寫成 repo 外的暫存檔，再單獨一次 Bash 呼叫以 `--body-file <檔的絕對路徑>` 送出。`deny-dangerous-bash` hook 會讀這個檔：含 emoji 或署名行的字樣就擋，說明規則時也一樣，改用文字描述、不寫出那兩個字串；hook 讀不到這個檔也擋。
-- **建 issue**：`gh issue create --title "..." --body-file <檔>`
+- **內文**：issue／PR 的本文、留言與關票說明一律先用 Write 寫成 repo 外的暫存檔，再單獨一次 Bash 呼叫以 `--body-file <檔的絕對路徑>` 送出（關票要附說明時先 `gh issue comment <number> --body-file <檔>`，再 `gh issue close <number>`）。`deny-dangerous-bash` hook 會讀這個檔：含 emoji 或署名行的字樣就擋，說明規則時也一樣，改用文字描述、不寫出那兩個字串；hook 讀不到這個檔也擋。
 - **讀 issue**：`gh issue view <number> --json title,body,labels,updatedAt,comments`，本文與留言一次取齊（`--comments` 在非互動模式只印留言、看不到本文）。本文與留言（例如 triage brief）說法衝突時，以時間較新者為準
 - **列 issue**：`gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'`，搭配 `--label`／`--state` 過濾
-- **留言**：`gh issue comment <number> --body-file <檔>`
-- **加／移除 label**：`gh issue edit <number> --add-label "..."` ／ `--remove-label "..."`
-- **關閉**：要附說明時先 `gh issue comment <number> --body-file <檔>`，再 `gh issue close <number>`
-- **建工單（拆自案卷）**：`gh issue create --parent <spec> --title "..." --body-file <檔>`，票就掛成 spec 的原生 sub-issue，GitHub 會在 spec 上顯示 completed／total 進度。發完票對一次有沒有漏掛（上游 `to-tickets` 已知常漏，mattpocock/skills#554）；補掛用 `gh issue edit <spec> --add-sub-issue <n>,<n>` 或 `gh issue edit <n> --parent <spec>`
+- **建工單（拆自案卷）**：`gh issue create --parent <spec> --title "..." --body-file <檔>`，票就掛成 spec 的原生 sub-issue。發完票跑 `/lingling:spec-closeout`：上游 `to-tickets` 已知常漏掛（mattpocock/skills#554）
+- **工單的 `## Parent` 段**：沒掛原生連結時的退路，`/lingling:spec-closeout` 靠它找案卷。第一個非空行以「無」／「None」開頭＝沒有案卷；否則該行的第一個 `#N` 就是案卷，別的票號放別段
 
 <!-- /lingling:issue-tracker -->
 

@@ -191,7 +191,7 @@ function numberOr(target, placeholder) {
 
 function mergeNext(target) {
   const n = numberOr(target, '<PR 編號>');
-  return `使用者說「合」之後，改跑 \`lingling-merge ${n}\`；它拒絕時，照它印出的下一步做。`;
+  return `使用者說「合」之後，改跑 \`lingling-merge ${n}\`，照它印出的下一步做（拒絕時與合併後都會印）。`;
 }
 
 // ── PR／MR 內文旗標與內文檔 ─────────────────────────────────────
@@ -469,7 +469,7 @@ function evaluate(command, { cwd = process.cwd() } = {}) {
       return new Deny(
         'merge-guard',
         '`gh pr merge` 直接合併',
-        '合併一律經 `lingling-merge`：它先驗 PR 分支已跟上 base、分支裡沒有 merge commit、CI 全綠才合，並統一合併主旨；`gh pr merge` 一樣都不驗，free private repo 也沒有 branch protection 替你擋。',
+        '合併一律經 `lingling-merge`：它先驗 PR 分支已跟上 base、分支裡沒有 merge commit、CI 全綠，會意關卡講回或跳過了才合，並統一合併主旨；`gh pr merge` 一樣都不驗，free private repo 也沒有 branch protection 替你擋。',
         mergeNext(target)
       );
     }

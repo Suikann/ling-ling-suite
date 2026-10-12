@@ -179,3 +179,4 @@ context pointer	索引號	名詞：委派訊息裡指向資料所在的簡短參
 prefactor	清道	動詞，亦作名詞：動手改之前先重構，讓接下來的改動變容易（make the change easy, then make the easy change）。取舊時出巡前先清道之義
 vertical slice	小成品	名詞：一小份本身就完整、能單獨交付驗收的工作，從頭到尾每一層都做到；to-tickets 要工單切成這種。相對的 horizontal slice 譯「半成品」
 horizontal slice	半成品	名詞：只做好其中一層、單獨拿出來不能用、要等其他層補上才成形的工作；to-tickets 要避免的切法。相對的 vertical slice 譯「小成品」
+no-op	虛令	名詞：寫進給 agent 讀的文件、卻不改變其行為的一句指令——模型本來就會這樣做，它只佔 context、不起作用；writing-for-agents 的用語。本意出自機器指令 NOP：照常執行、佔一個週期，卻不改任何狀態。取「形同虛設」之義：令下了，什麼都沒發生
