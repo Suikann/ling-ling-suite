@@ -55,20 +55,12 @@ python -m pytest tests/ -v      # 執行測試
 
 <!-- lingling:git-workflow trunk=develop guarded=main -->
 
+<!-- Git 流程的其餘規則在動作當下提示，不常駐在這裡（ADR-0043）：在 Guarded branch 上提交或推送由 git 機關擋下並印下一步；合併一律經 `lingling-merge <n>`（`gh pr merge` 被 deny-dangerous-bash 擋下時指過去），它驗跟上 develop、沒有 merge commit、CI 全綠與會意關卡，拒絕時第二行是下一步，合併後印刪分支的指令。起端標記給 git 機關讀 Trunk 與 Guarded branch。重跑 /lingling:setup-lingling 第 2 步會原地重寫這一段。 -->
+
 ## Git workflow
 
-Merge a PR only when the user says to, and only with `lingling-merge <n>`, which ships in the `lingling` plugin's `bin/` and is on `PATH` while the plugin is enabled. When it refuses, its second line is the next step: do that, then run it again. When that line hands the merge to the user, stop and tell them; don't merge any other way.
+Name branches without digits: the pre-commit hook refuses commits on a branch whose name has one.
 
-Before running it, if the user has not yet explained the PR in their own words in this session (what changed, why, and how it was verified), ask them to, once. If they say to skip it, merge. When they explain, check what they said against the diff and name anything wrong or missing, then let them choose: explain again, ask for a re-explanation (`/wait-what`, `/teach`, `/show-me`), or merge. Never refuse to merge over it.
-
-After merging a feature branch into `develop`, delete that branch as part of the same workflow — both local (`git branch -d`) and remote. GitHub deletes the remote branch on merge where `delete_branch_on_merge` is on, so run `git push origin --delete <branch>` only when `git ls-remote --exit-code --heads origin <branch>` still finds it, then `git fetch --prune origin` to drop the stale `origin/<branch>`. Don't leave merged branches around and don't ask first; cleanup is the final step of any commit → push → merge request.
-
-After merging a ticket's PR, in the same workflow as the branch cleanup, run `/lingling:spec-closeout`: it finds the ticket's spec and tells the user when every ticket under that spec is closed. It never closes the spec; close it only when the user says so. A PR that delivers a whole spec, opened by `/implement-spec` or at the end of a spec branch, is the exception: it closes the spec when it merges, and merging it is the user's call. A ticket with no parent needs nothing here.
-
-Before any commit — including at the start of `/implement` — if the current branch is `develop`, first branch off the latest `develop` (`git fetch origin develop && git switch -c <name> origin/develop`, so the branch starts from `origin/develop`, not from a possibly stale local `develop`) and work there; never commit on `develop` directly. The agent picks the branch name, and the name must not contain digits. Upstream `implement` only says "commit to the current branch" and never opens a branch itself; this rule fills that gap.
-
-A ticket cut from a spec (a sub-issue) is built on the spec's branch and gets no PR of its own. Before the first commit, read the spec's comments for a line `Spec branch: <name>`: if one exists, switch to that branch; if none does, branch off as above and post that line as a comment on the spec. Once the ticket's work is committed and pushed, comment on the ticket naming the branch and its commits, then close the ticket. Open the PR only when every ticket under the spec is closed: one PR for the whole spec, with `Closes #<spec>` in its body.
-
-No merge commit may land inside a branch, and `lingling-merge` refuses a branch that holds one. A branch catches up with `develop` only by rebasing onto it (`git fetch origin && git rebase origin/develop`, then `git push --force-with-lease`), resolving any conflict during the rebase; one branch takes another's commits only by fast-forward (`git merge --ff-only`).
+A ticket cut from a spec (a sub-issue) is built on the spec's branch and gets no PR of its own. Before the first commit, read the spec's comments for a line `Spec branch: <name>`: switch to that branch, or when none exists, create it with `git fetch origin develop && git switch -c <name> origin/develop` and post that line as a comment on the spec. Once the ticket's work is committed and pushed, comment on the ticket naming the branch and its commits, then close the ticket. When every ticket under the spec is closed, open one PR for the whole spec with `Closes #<spec>` in its body.
 
 <!-- /lingling:git-workflow -->

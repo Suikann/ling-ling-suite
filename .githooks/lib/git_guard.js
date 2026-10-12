@@ -110,9 +110,9 @@ function evaluateRefTransaction(lines, repo) {
     }
 
     const trunk = repo.trunk || name;
-    let next = `先 \`git fetch origin ${trunk} && git switch -c <name> origin/${trunk}\`，在新分支上重做這一步（未提交的改動會跟著過去）。`;
+    let next = `先 \`git fetch origin ${trunk} && git switch -c <不含數字的名字> origin/${trunk}\`，在新分支上重做這一步（未提交的改動會跟著過去）。`;
     if (name !== trunk) {
-      next += `若這是 \`${name}\` 的 hotfix，改從 \`origin/${name}\` 開：\`git fetch origin ${name} && git switch -c <name> origin/${name}\`。`;
+      next += `若這是 \`${name}\` 的 hotfix，改從 \`origin/${name}\` 開：\`git fetch origin ${name} && git switch -c <不含數字的名字> origin/${name}\`。`;
     }
     return new Deny(
       'commit-on-guarded',

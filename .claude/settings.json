@@ -1,0 +1,8 @@
+{
+  "worktree": {
+    "baseRef": "head"
+  },
+  "enabledPlugins": {
+    "lingling@lingling-local": true
+  }
+}

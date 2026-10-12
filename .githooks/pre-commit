@@ -47,6 +47,8 @@ if [[ -n "$BRANCH" ]]; then
                 echo "ERROR: pre-commit hook 阻擋：" >&2
                 echo "  - branch 名 '$BRANCH' 含編號（完全無編號原則）" >&2
                 echo "" >&2
+                echo "下一步：git branch -m <不含數字的新名字>，再重新提交。" >&2
+                echo "" >&2
                 echo "規範依據：lingling 的 docs/adr/0039-governance-check-rules-and-subscription-boundary.md" >&2
                 exit 1
             fi
