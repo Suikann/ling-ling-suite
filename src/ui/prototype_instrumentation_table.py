@@ -1166,6 +1166,283 @@ def link_c():
     return dialog_page(LINK_TITLE, [LINK_INTRO, body], [btn("取消"), btn("確定", primary=True)], width=1000)
 
 
+# --- 第二輪：1A 的版面＋1C 的欄位（主視窗 D、開啟專案 D）------------------------------
+#
+# 第一輪拷問後的決定（#60）：分譜跟著聲部名稱走（Q1）；對不到聲部的分譜移到未分組（Q2）；
+# 「維持」改成「用專案的（存檔時寫回）」（Q3、Q10）；提示列在群組頂端、標色畫在編制表（Q5）；
+# 聲部組可在群組裡改、存檔時寫入、寫出影響範圍（Q6、Q14）；拖聲部時分譜跟著走，分譜也能單獨拖（Q11）。
+
+SECTION_USES = {n: c for n, _s, c in SECTION_MAP["國樂團"]}
+
+
+class EnsembleD:
+    """左欄編制表（1A 的位置、1C 的欄位）＋右邊的分譜清單；可操作，狀態只在記憶體"""
+
+    def __init__(self, reopen=False):
+        self.reopen = reopen
+        self.extras = []         # 對不到聲部、移到未分組的分譜
+        self.writeback = False   # 選了「用專案的（存檔時寫回）」
+        if reopen:
+            counts = {"二胡 I": (6, 10)}
+            self.voices = []
+            for name in REOPEN_NOW:
+                kind = reopen_mark(name)
+                if kind == "added":
+                    self.voices.append(self._voice(name, 1, 1, "打擊", has=False, mark="added"))
+                    continue
+                lo, hi, sec = next((v[1], v[2], v[3]) for v in VOICES if v[0] == name)
+                lo, hi = counts.get(name, (lo, hi))
+                self.voices.append(self._voice(name, lo, hi, sec, mark=kind))
+                if name == "高音嗩吶":
+                    self.voices.append(self._voice("中音嗩吶", 1, 1, "吹管", mark="removed"))
+        else:
+            self.voices = [self._voice(n, *UNSYNCED.get(n, (lo, hi)), sec) for n, lo, hi, sec in VOICES]
+        self.page = self._build()
+        self.render()
+
+    @staticmethod
+    def _voice(name, lo, hi, sec, has=None, mark=None):
+        has = name not in ABSENT if has is None else has
+        return {"name": name, "lo": lo, "hi": hi, "sec": sec, "has": has,
+                "file": file_for(name) if has else None, "mark": mark}
+
+    # --- 版面 ---
+
+    def _build(self):
+        left = QWidget()
+        left.setMinimumWidth(420)
+        lay = QVBoxLayout(left)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.addWidget(label("編制表", bold=True))
+        box = QGroupBox("連到譜庫")
+        bl = QVBoxLayout(box)
+        bl.addLayout(hbox(label(link_text(), bold=True), None, btn("改連…")))
+        mins, secs = QSpinBox(), QSpinBox()
+        mins.setValue(7)
+        secs.setRange(0, 59)
+        secs.setValue(45 if not self.reopen else 30)
+        row = ["時長", mins, "分", secs, "秒"]
+        if not self.reopen:
+            for s in (mins, secs):
+                s.setStyleSheet(f"background: {AMBER_BG}; color: {AMBER_FG};")
+            row.append(label("未同步：譜庫現在是 07:30", color=AMBER_FG))
+        bl.addLayout(hbox(*row, None))
+        lay.addWidget(box)
+        self.table = QTableWidget()
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        lay.addWidget(self.table, 1)
+        self.summary = label("", color=GRAY)
+        lay.addWidget(self.summary)
+        self.section_warning = label("", color=AMBER_FG, wrap=True)
+        self.section_warning.hide()
+        lay.addWidget(self.section_warning)
+        lay.addLayout(hbox(btn("↑ 上移", slot=lambda: self.move(-1)), btn("↓ 下移", slot=lambda: self.move(1)),
+                           label("（正式版用拖拉；分譜跟著聲部走）", color=GRAY), None))
+        lay.addLayout(hbox(line(placeholder="輸入聲部名稱..."), btn(t("instrument.add"))))
+        lay.addLayout(hbox(btn(t("instrument.auto_extract")), btn(t("instrument.remove")), btn(t("instrument.export"))))
+
+        tab = QWidget()
+        tl = QVBoxLayout(tab)
+        tl.setContentsMargins(4, 4, 4, 4)
+        self.top_banner = QVBoxLayout()
+        tl.addLayout(self.top_banner)
+        group_fields(tl)
+        self.file_summary = label("", color="#2ecc71")
+        tl.addWidget(self.file_summary)
+        tl.addWidget(label("檔案清單（拖拉分譜＝只改配對，聲部不動）", color=GRAY))
+        self.files = QListWidget()
+        self.files.setDragDropMode(QAbstractItemView.InternalMove)
+        self.files.model().rowsMoved.connect(self.files_reordered)
+        tl.addWidget(self.files, 1)
+        tl.addLayout(hbox(btn(t("group.add_files")), btn("← " + t("group.ungrouped")),
+                          btn(t("file.delete_from_disk"), danger=True), None))
+        title = "烽火操（譜庫有變動）" if self.reopen else "烽火操（未同步）"
+        page = main_shell(left, tab, title)
+        splitter = page.findChild(QSplitter)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([580, 700])
+        return page
+
+    # --- 畫出狀態 ---
+
+    def render(self):
+        self._render_banner()
+        self._render_table()
+        self._render_files()
+
+    def _render_banner(self):
+        while self.top_banner.count():
+            w = self.top_banner.takeAt(0).widget()
+            w.setParent(None)
+        if not self.reopen:
+            self.top_banner.addWidget(banner(
+                "這個群組有 2 項改動還沒寫進譜庫（二胡 II 的人數、時長；存檔時斷網）。下次存檔或開啟專案時會自動重試。",
+                [btn("現在重試")]))
+            return
+        if any(v["mark"] for v in self.voices):
+            self.top_banner.addWidget(banner(
+                "譜庫的聲部清單變了：新增 1、移除 1、移動 1（編制表裡標色的列）。人數的變動已套用。"
+                "還沒選之前，分譜照專案裡的清單配對與命名。",
+                [btn("套用譜庫的", primary=True, slot=self.apply_catalog), btn("用專案的（存檔時寫回）", slot=self.keep_project)],
+                color=BLUE_FG, bg=BLUE_BG))
+        elif self.writeback:
+            self.top_banner.addWidget(banner(
+                "存檔時會把這份聲部清單寫回譜庫；寫入前會列出蓋掉譜庫的哪些變動，請你確認。",
+                [btn("改回套用譜庫的", slot=self.undo_keep)], color=BLUE_FG, bg=BLUE_BG))
+        if self.extras:
+            self.top_banner.addWidget(banner(
+                f"{'、'.join(self.extras)} 對不到聲部，已移到未分組。", [btn("到未分組")]))
+
+    def _render_table(self):
+        rows = []
+        for i, v in enumerate(self.voices):
+            mark = v["mark"]
+            bg = {"added": GREEN_BG, "removed": RED_BG, "moved": BLUE_BG}.get(mark)
+            fg = {"added": GREEN_FG, "removed": RED_FG, "moved": BLUE_FG}.get(mark)
+            if mark is None and not v["has"]:
+                fg = GRAY
+            note = {"added": "（譜庫新增）", "removed": "（譜庫已移除）"}.get(mark, "")
+            if mark == "moved":
+                note = f"（原本第 {REOPEN_BEFORE.index(v['name']) + 1} 個）"
+            has = QCheckBox()
+            has.setChecked(v["has"])
+            has.setToolTip("取消勾選＝本專案沒有這份分譜，配對時跳過；只存在專案")
+            has.toggled.connect(lambda on, i=i: self.toggle_has(i, on))
+            lo_w, hi_w = QSpinBox(), QSpinBox()
+            lo_w.setValue(v["lo"])
+            hi_w.setValue(v["hi"] or 0)
+            hi_w.setEnabled(v["hi"] is not None)
+            plus = QCheckBox()
+            plus.setChecked(v["hi"] is None)
+            plus.toggled.connect(lambda on, w=hi_w: w.setEnabled(not on))
+            sec_w = QComboBox()
+            sec_w.addItems(SECTIONS_CN)
+            sec_w.setCurrentText(v["sec"])
+            sec_w.currentTextChanged.connect(lambda s, i=i: self.section_changed(i, s))
+            if v["name"] in UNSYNCED and not self.reopen:
+                for w in (lo_w, hi_w):
+                    w.setStyleSheet(f"background: {AMBER_BG}; color: {AMBER_FG};")
+                    w.setToolTip(f"未同步：譜庫現在是 {fmt_count(6, 8)}")
+            if mark == "removed":
+                for w in (has, lo_w, hi_w, plus, sec_w):
+                    w.setEnabled(False)
+            rows.append([centered(has), cell(v["name"] + note, fg=fg, bg=bg, strike=mark == "removed",
+                                             italic=fg == GRAY, editable=mark is None), lo_w, hi_w, centered(plus), sec_w])
+        selected = self.table.currentRow()
+        self.table.clear()
+        self.table.setRowCount(len(rows))
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["本專案有", "聲部", "最少", "最多", "以上", "聲部組"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(38)
+        for r, row in enumerate(rows):
+            for c, val in enumerate(row):
+                if isinstance(val, QWidget):
+                    self.table.setCellWidget(r, c, val)
+                else:
+                    self.table.setItem(r, c, val)
+        hdr = self.table.horizontalHeader()
+        for c in range(6):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        if selected >= 0:
+            self.table.selectRow(min(selected, len(rows) - 1))
+        live = [v for v in self.voices if v["mark"] != "removed"]
+        present = [(v["name"], v["lo"], v["hi"], v["sec"]) for v in live if v["has"]]
+        self.summary.setText(f"{len(live)} 個聲部，本專案用 {len(present)} 個．{total_text(present)}")
+
+    def _pairing(self):
+        """目前生效的配對：還沒選之前照專案的快照（譜庫新增的不算、已移除的還在）"""
+        live = [v for v in self.voices if v["mark"] != "added"]
+        if self.reopen and any(v["mark"] for v in self.voices):
+            live.sort(key=lambda v: REOPEN_BEFORE.index(v["name"]))
+        return [v for v in live if v["has"]]
+
+    def _render_files(self):
+        self.files.blockSignals(True)
+        self.files.clear()
+        paired = self._pairing()
+        for v in paired:
+            it = QListWidgetItem(f"{v['name']}  |  {v['file'] or '（缺分譜）'}")
+            it.setData(Qt.UserRole, v["file"])
+            if v["file"] is None:
+                it.setForeground(QColor(AMBER_FG))
+            self.files.addItem(it)
+        self.files.blockSignals(False)
+        self.file_summary.setText(f"{len(paired)} 個聲部有分譜 = {sum(1 for v in paired if v['file'])} 個檔案")
+
+    # --- 操作 ---
+
+    def move(self, delta):
+        r = self.table.currentRow()
+        if r < 0 or not 0 <= r + delta < len(self.voices):
+            return
+        self.voices[r], self.voices[r + delta] = self.voices[r + delta], self.voices[r]
+        self.render()
+        self.table.selectRow(r + delta)
+
+    def files_reordered(self, *_):
+        order = [self.files.item(i).data(Qt.UserRole) for i in range(self.files.count())]
+        for v, f in zip(self._pairing(), order):
+            v["file"] = f
+        self._render_files()
+
+    def toggle_has(self, i, on):
+        v = self.voices[i]
+        v["has"] = on
+        if not on and v["file"]:
+            self.extras.append(v["file"])
+            v["file"] = None
+        self.render()
+
+    def section_changed(self, i, sec):
+        name = self.voices[i]["name"]
+        others = max(SECTION_USES.get(name, 1) - 1, 0)
+        self.voices[i]["sec"] = sec
+        self.section_warning.setText(
+            f"聲部組是全社團共用的對照：存檔時寫入譜庫，其他 {others} 首的「{name}」也會跟著改成「{sec}」。")
+        self.section_warning.show()
+
+    def apply_catalog(self):
+        for v in [v for v in self.voices if v["mark"] == "removed"]:
+            if v["file"]:
+                self.extras.append(v["file"])
+            self.voices.remove(v)
+        for v in self.voices:
+            if v["mark"] == "added":
+                v["has"] = False   # 這個群組沒有它的分譜：自動標「本專案沒有」，後面的分譜才不會錯位
+            v["mark"] = None
+        self.render()
+
+    def keep_project(self):
+        self._snapshot = [dict(v) for v in self.voices]
+        self.voices = [v for v in self.voices if v["mark"] != "added"]
+        self.voices.sort(key=lambda v: REOPEN_BEFORE.index(v["name"]))
+        for v in self.voices:
+            v["mark"] = None
+        self.writeback = True
+        self.render()
+
+    def undo_keep(self):
+        self.voices = self._snapshot
+        self.writeback = False
+        self.render()
+
+
+def _keep(ensemble):
+    ensemble.page.ensemble = ensemble   # 讓物件跟著頁面活著，訊號才接得到
+    return ensemble.page
+
+
+def main_d():
+    return _keep(EnsembleD())
+
+
+def reopen_d():
+    return _keep(EnsembleD(reopen=True))
+
+
 # --- 畫面清單與切換列 -----------------------------------------------------------
 
 SCREENS = [
@@ -1173,6 +1450,7 @@ SCREENS = [
         ("A", "左欄編制表：取代樂器表，分譜清單不變", main_a),
         ("B", "配對一張表：聲部、人數與分譜同一列", main_b),
         ("C", "群組裡的「編制」分頁：樂器表留在左欄", main_c),
+        ("D", "第二輪：A 的左欄＋C 的欄位，一份清單；上下移聲部、拖分譜、改聲部組都可以試", main_d),
     ]),
     ("catalog", "譜庫視窗的版本頁", "人民音樂出版社 × 烽火操：三個聲部缺檔，資料夾裡有四個沒登記的檔（揚琴已登記，指定給它會提示覆蓋）", [
         ("A", "兩欄：編制表＋沒登記的檔，按鈕指定", catalog_a),
@@ -1187,6 +1465,7 @@ SCREENS = [
         ("A", "兩欄對照：專案裡的｜譜庫現在", reopen_a),
         ("B", "變動清單＋套用後的配對", reopen_b),
         ("C", "不跳對話框：群組裡的提示列，表格內標色", reopen_c),
+        ("D", "第二輪：主視窗 D＋群組頂端提示列；試按「套用譜庫的」與「用專案的」", reopen_d),
     ]),
     ("conflict", "存檔：譜庫已被別人改過", "七項改動裡三項衝突：二胡 II 的人數、時長、你刪掉的打擊 2 被別人改了人數", [
         ("A", "衝突表：每列選用我的或用譜庫的", conflict_a),
