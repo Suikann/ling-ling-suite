@@ -1476,6 +1476,153 @@ def withdraw_c():
         hbox(None, btn("撤回這次", danger=True))))
 
 
+# --- 撤回第二輪：操作流程畫出來，影響逐聲部寫出撤回前後 ------------------------------
+
+# 撤回 10/05 那次「烽火操 → 豫北敘事曲」，豫北敘事曲每個聲部的下場：
+# 聲部、現在 HuaXia 上、撤回後、原因、結果分類
+YUBEI_NOSCORE = ["梆笛", "曲笛", "高音笙", "中音笙", "高音嗩吶", "定音鼓", "打擊 1", "打擊 2", "柳琴", "琵琶",
+                 "中阮", "大阮", "古箏", "二胡 II", "中胡", "大提琴", "低音提琴"]
+OUTCOMES = [
+    ("noscore", "撤回後沒有譜", RED_FG, RED_BG),
+    ("delete", "刪掉聲部", RED_FG, RED_BG),
+    ("keep_noscore", "聲部留著、沒有譜", AMBER_FG, AMBER_BG),
+    ("partial", "只撤這次的，別人放的留著", BLUE_FG, BLUE_BG),
+    ("untouched", "不動", GRAY, None),
+]
+
+
+def _yubei_rows():
+    rows = []
+    for v in YUBEI_NOSCORE:
+        now, after = f"{file_name('烽火操', v)}（10/05）", "沒有譜"
+        why = f"9/28 的「豫北敘事曲_{v.replace(' ', '')}.pdf」被這次取代，不會回來"
+        if v == "中胡":
+            now += "・人數 4–8"
+            after += "・人數仍是 4–8"
+            why += "；人數不改回（原本 4–6）"
+        if v == "大提琴":
+            now += "・低音"
+            after += "・聲部組仍是低音"
+            why += "；聲部組不改回（原本拉弦）"
+        rows.append((v, now, after, why, "noscore"))
+    rows.append(("總譜", "烽火操_總譜.pdf（10/05）", "沒有總譜", "9/28 的總譜被這次取代，不會回來", "noscore"))
+    rows += [
+        ("排鼓", "這次新建、沒排人；烽火操_排鼓.pdf", "刪掉聲部與這份檔", "這次新建、還沒排人", "delete"),
+        ("二胡獨奏", "這次新建、沒排人；烽火操_二胡獨奏.pdf", "刪掉聲部與這份檔", "這次新建、還沒排人", "delete"),
+        ("高胡", "這次新建、已排 2 人；烽火操_高胡.pdf", "聲部留著（2 人）、沒有譜", "已經排人的聲部不刪", "keep_noscore"),
+        ("二胡1", "烽火操_二胡I.pdf（10/05）＋二胡1_弓法.pdf（林詠晴）", "只剩二胡1_弓法.pdf",
+         "只撤這次放的，別人放的不動", "partial"),
+        ("揚琴", "10/05 的檔已不在（10/07 有人在網頁刪除）", "不動", "沒有東西可撤", "untouched"),
+    ]
+    for v in ("雲鑼", "新笛", "低音笙"):
+        rows.append((v, f"豫北敘事曲_{v}.pdf（9/28）", "不動", "這次沒動到這個聲部", "untouched"))
+    return rows
+
+
+YUBEI_ROWS = _yubei_rows()
+YUBEI_PIECE = [("場次", "10/05 掛上校慶音樂會 2026-11-21", "仍掛著", "撤回不動場次")]
+
+
+def outcome_count(key):
+    return sum(1 for r in YUBEI_ROWS if r[4] == key)
+
+
+def withdraw_effect_d():
+    """逐聲部對照表：現在 → 撤回後 → 原因，依結果分類排、上色"""
+    chips = QHBoxLayout()
+    for key, title, fg, bg in OUTCOMES:
+        chips.addWidget(label(f"{title} {outcome_count(key)}", color=fg, bg=bg or "#24262f"))
+    chips.addStretch()
+    order = [o[0] for o in OUTCOMES]
+    rows = []
+    for v, now, after, why, key in sorted(YUBEI_ROWS, key=lambda r: order.index(r[4])):
+        _k, _t, fg, bg = next(o for o in OUTCOMES if o[0] == key)
+        rows.append([cell(v, bold=True), cell(now, fg=GRAY if key == "untouched" else None),
+                     cell(after, fg=fg, bg=bg, bold=key != "untouched"), cell(why, fg=GRAY)])
+    for what, now, after, why in YUBEI_PIECE:
+        rows.append([cell(what, bold=True), cell(now), cell(after, fg=GRAY), cell(why, fg=GRAY)])
+    tbl = table(["聲部", "現在 HuaXia 上", "撤回後", "原因"], rows, stretch=3)
+    return vbox_widget(chips, tbl)
+
+
+def withdraw_effect_e():
+    """依結果分段：每段一句白話標題，下面列聲部"""
+    body = QWidget()
+    v = QVBoxLayout(body)
+    v.setContentsMargins(0, 0, 8, 0)
+    sections = [
+        ("noscore", f"這 {len(YUBEI_NOSCORE)} 個聲部與總譜撤回後會沒有譜",
+         "9/28 放的舊檔被這次取代，撤回不會回來。撤回後要重新發譜豫北敘事曲補回來。"),
+        ("delete", f"刪掉 {outcome_count('delete')} 個聲部", "這次新建、還沒排人的聲部，連同這次放的檔一起刪掉。"),
+        ("keep_noscore", "這個聲部留著，但沒有譜", "這次新建，但已經排了人，不刪聲部，只撤掉這次的檔。"),
+        ("partial", "只撤這次放的，別人放的留著", ""),
+        ("untouched", "不動", ""),
+    ]
+    for key, head, note in sections:
+        _k, _t, fg, bg = next(o for o in OUTCOMES if o[0] == key)
+        v.addWidget(label(head, bold=True, color=fg, size=15))
+        if note:
+            v.addWidget(label(note, color=GRAY, wrap=True))
+        names = [r for r in YUBEI_ROWS if r[4] == key]
+        if key == "noscore":
+            v.addWidget(label("、".join(r[0] for r in names), wrap=True))
+            v.addWidget(label("另外：中胡的人數（4–8）、大提琴的聲部組（低音）不改回。", color=GRAY, wrap=True))
+        else:
+            for r in names:
+                v.addWidget(label(f"{r[0]}：{r[2]}（{r[3]}）", wrap=True))
+        v.addSpacing(8)
+    v.addWidget(label("不改回", bold=True, color=GRAY, size=15))
+    v.addWidget(label("場次：豫北敘事曲仍掛在校慶音樂會 2026-11-21。", wrap=True))
+    v.addStretch()
+    return scroll(body)
+
+
+class WithdrawFlow(QStackedWidget):
+    """第 1 頁是譜庫的發譜紀錄，選一次發譜按「撤回…」；第 2 頁是撤回對話框"""
+
+    def __init__(self, effect_builder):
+        super().__init__()
+        steps = label("① 在發譜紀錄選一次發譜　→　② 按「撤回…」　→　③ 勾要撤回的群組、看撤回後的樣子　→　④ 按「撤回」",
+                      color=BLUE_FG, bg=BLUE_BG)
+        log = log_list()
+        go = btn("撤回…", slot=lambda: self.setCurrentIndex(1))
+        log.itemSelectionChanged.connect(
+            lambda: go.setEnabled(bool(log.selectedItems()) and log.item(log.currentRow(), 2).text() == "發譜"))
+        page1 = catalog_log_shell(vbox_widget(
+            steps, log,
+            hbox(label("選了：2026-10-05 22:10 suikann 的發譜", color=GRAY), None, btn("收回…"), go)))
+        self.addWidget(page1)
+
+        groups = QListWidget()
+        groups.setMaximumWidth(300)
+        for text, checked in (("烽火操 → 豫北敘事曲\n連錯的那個", True), ("茉莉花 → 茉莉花\n不撤", False)):
+            it = QListWidgetItem(text)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+            groups.addItem(it)
+        groups.setCurrentRow(0)
+        split = QSplitter(Qt.Horizontal)
+        split.addWidget(vbox_widget(label("這次發譜的群組", bold=True), groups,
+                                    label("勾要撤回的群組；點群組看它撤回後的樣子。", color=GRAY, wrap=True)))
+        split.addWidget(vbox_widget(label("烽火操 → 豫北敘事曲：撤回後的豫北敘事曲", bold=True), effect_builder()))
+        split.setStretchFactor(1, 1)
+        page2 = dialog_page(
+            "撤回：2026-10-05 22:10 suikann 的發譜",
+            [label("撤掉這次放上去的分譜與總譜，連同這次新建、還沒排人的聲部。被取代的舊檔不會回來，人數、聲部組與場次不改回。",
+                   color=GRAY, wrap=True), split,
+             banner(f"撤回後豫北敘事曲有 {len(YUBEI_NOSCORE) + 1} 個聲部（含高胡）與總譜沒有譜，要從它的專案或譜庫重新發譜。")],
+            [btn("取消", slot=lambda: self.setCurrentIndex(0)), btn("撤回 1 個群組", danger=True)], width=1400)
+        self.addWidget(page2)
+
+
+def withdraw_d():
+    return WithdrawFlow(withdraw_effect_d)
+
+
+def withdraw_e():
+    return WithdrawFlow(withdraw_effect_e)
+
+
 # --- 畫面五：收回 ---------------------------------------------------------------
 
 # 可收回的曲目：曲目、公演、檔（檔名、放的人、聲部）、還掛在未結束公演
@@ -1584,6 +1731,43 @@ def recall_c():
         tw, hbox(label("已勾 2 首、37 份", color=AMBER_FG), None, btn("收回", danger=True))))
 
 
+def recall_d():
+    """第二輪：C 的依公演分組，還要演的曲目直接寫哪場還要演、預設不勾，勾了才跳紅色警告"""
+    tw = tree(["公演 › 曲目 › 樂譜", "放的人", "說明"])
+    ended = titem(tw, ["期末公演 2026-06-14（已結束）", "", "3 首"], bold=True)
+    warn = banner("茉莉花在 11/21 校慶音樂會還要演。收回會刪掉團員那場要用的 14 份譜，演完再收比較安全。",
+                  color=RED_FG, bg=RED_BG)
+    warn.hide()
+    total = label("", color=AMBER_FG)
+    pieces = []
+    for p in RECALL:
+        name, concert, files, still = p
+        mine, others = recall_rows(p)
+        desc = f"{len(files)} 份（其他人放的 {others}）"
+        it = titem(ended, [name, "", desc])
+        if still:
+            it.setText(2, f"{len(files)} 份・還要演：校慶音樂會 2026-11-21（40 天後）")
+            it.setForeground(0, QColor(AMBER_FG))
+            it.setForeground(2, QColor(AMBER_FG))
+        it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+        it.setCheckState(0, Qt.Unchecked if still else Qt.Checked)
+        for f, who, v in others_first(files)[:6] + ([("…", "", "")] if len(files) > 6 else []):
+            titem(it, [f, who, ""], fg=AMBER_FG if "網頁" in who else GRAY if f == "…" else None)
+        it.setExpanded(name.startswith("長城"))
+        pieces.append((it, len(files), bool(still)))
+    ended.setExpanded(True)
+
+    def update(*_):
+        chosen = [(n, s) for it, n, s in pieces if it.checkState(0) == Qt.Checked]
+        total.setText(f"已勾 {len(chosen)} 首、{sum(n for n, _s in chosen)} 份")
+        warn.setVisible(any(s for _n, s in chosen))
+    tw.itemChanged.connect(update)
+    update()
+    return catalog_log_shell(vbox_widget(
+        hbox(label("勾選要收回的曲目", color=GRAY), None, check("只看還沒收回的", True)),
+        tw, warn, hbox(total, None, btn("收回", danger=True))))
+
+
 # --- 畫面六：收回提醒 -------------------------------------------------------------
 
 REMIND = [("長城隨想－烽火操", "期末公演 2026-06-14 結束", 22), ("春節序曲", "期末公演 2026-06-14 結束", 15),
@@ -1653,11 +1837,14 @@ SCREENS = [
         ("A", "兩欄：發譜紀錄挑一次，右邊勾群組看影響", withdraw_a),
         ("B", "一棵樹：發譜紀錄 › 群組 › 影響", withdraw_b),
         ("C", "從曲目出發：挑曲目，看它歷次發譜", withdraw_c),
+        ("D", "第二輪：發譜紀錄 → 撤回對話框；逐聲部「現在 → 撤回後 → 原因」對照表", withdraw_d),
+        ("E", "第二輪：發譜紀錄 → 撤回對話框；依結果分段，每段一句白話標題", withdraw_e),
     ]),
     ("recall", "收回", "上學期期末公演的 3 首；茉莉花還掛在 11/21 的校慶音樂會", [
         ("A", "曲目勾選＋一張檔案表", recall_a),
         ("B", "一首一頁，逐首決定", recall_b),
         ("C", "依公演分組：已結束 › 曲目 › 樂譜", recall_c),
+        ("D", "第二輪：C 加上「還要演：哪場、幾天後」，預設不勾，勾了才跳紅色警告", recall_d),
     ]),
     ("reminder", "收回提醒", "開泠靈時讀發譜紀錄：3 首曲目的公演都已結束、還沒收回（開泠靈時不連 HuaXia）", [
         ("A", "跳對話框：每首各自決定", reminder_a),
