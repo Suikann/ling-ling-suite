@@ -47,6 +47,8 @@ FOLDER_MIME = "application/vnd.google-apps.folder"
 SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 PDF_MIME = "application/pdf"
 LOGIN_TIMEOUT_SECONDS = 300
+# 瀏覽器同時登入多個 Google 帳號時，預先帶入譜庫帳號；由 --login-hint 設定
+LOGIN_HINT = ""
 PACKAGES = ["google-auth", "google-auth-oauthlib", "google-api-python-client", "oauthlib"]
 
 # 最小的合法單頁 PDF，寫入測試上傳用
@@ -140,6 +142,8 @@ def browser_login(client_secret: str, scopes: list, extra_params: dict) -> tuple
     redirect_uri = f"http://127.0.0.1:{server.server_port}/"
     flow = Flow.from_client_secrets_file(client_secret, scopes, redirect_uri=redirect_uri)
     state = secrets.token_urlsafe(16)
+    if LOGIN_HINT:
+        extra_params = {**extra_params, "login_hint": LOGIN_HINT}
     auth_url, _ = flow.authorization_url(state=state, access_type="offline", **extra_params)
 
     print("在瀏覽器完成授權；沒有自動開啟時，手動開這個網址：")
@@ -485,6 +489,7 @@ def main():
         help="權杖與紀錄檔放的地方（測完整個刪掉）",
     )
     parser.add_argument("--step", default="", help="寫進紀錄的步驟名稱，例如 1、2、3a")
+    parser.add_argument("--login-hint", default="", help="預先帶入的 Google 帳號 email")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("login")
     p = sub.add_parser("pick")
@@ -503,6 +508,8 @@ def main():
     sub.add_parser("old-sheet")
     sub.add_parser("report")
     args = parser.parse_args()
+    global LOGIN_HINT
+    LOGIN_HINT = args.login_hint
 
     if args.command in ("login", "pick", "old-sheet") and not os.path.isfile(args.client_secret):
         sys.exit(
