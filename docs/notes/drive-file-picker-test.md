@@ -59,4 +59,18 @@
 
 ## 結果
 
-（實測後填寫：日期、套件版本、各項結果、最後選 C 還是 A）
+2026-10-13 15:14 至 15:39（UTC+8），Python 3.13.13、google-auth 2.58.0、google-auth-oauthlib 1.4.1、google-api-python-client 2.200.0、oauthlib 3.3.1。Cloud 專案 `ling-ling-suite` 處於「測試中」。每一步的範圍檢查都只有 `drive.file`。
+
+**結論：第 1 項沒過，退回 A（保留 `drive`）。**
+
+| 項目 | 結果 |
+| --- | --- |
+| 1 | 沒過。譜庫帳號 `hxsheetmusic` 在 15:19 從網頁建了 `泠靈實測 Picker/朱雲嵩`、`泠靈實測 Picker/顧冠仁`；15:23 用 Picker 只選根資料夾，`picked_file_ids` 帶回根資料夾的 ID。之後 `files.get` 根資料夾成功，但 `'<根ID>' in parents` 的 `files.list` 回 0 筆；15:39 換新的 access token 重跑仍是 0 筆，排除授權生效延遲。選資料夾只授權那個資料夾本身，不及於選取前已在裡面的子項目 |
+| 2 | 未測：退回 A 後 `drive` 看得到全部檔案，不影響決定 |
+| 3 | 過（附帶）。以舊範圍（`spreadsheets`、`drive`）經 Sheets API 建立的試算表，換成只有 `drive.file` 的權杖後不經 Picker 就能 `files.get`、`spreadsheets.get`、`values.get`、新增並刪除工作表。測試帳號是 `nccucmusic`（測試使用者，不是譜庫帳號）；推論帳號不影響結論，未以譜庫帳號重測 |
+| 4 | 存取被拒：`files.get` 回 **404 `notFound`**，不是 403；`files.list` 不報錯，只回 0 筆。這次基準線是用 `nccucmusic` 測的，它對該資料夾本來就沒有權限，所以 404 分不出是 `drive.file` 擋下還是一般的無權限；選取後的 `files.list` 回 0 筆（不報錯）則是 `hxsheetmusic` 自己的資料夾。同意畫面：測試中、只要求 `drive.file` 時，不在測試使用者名單的帳號被擋（403 `access_denied`，「已封鎖存取權：『泠靈小工具』未完成 Google 驗證程序」）；在名單上的帳號**沒有**「Google 尚未驗證」警告頁，直接進同意畫面，顯示名稱「泠靈小工具」、範圍文字「查看、編輯、建立及刪除您透過這個應用程式使用的特定 Google 雲端硬碟檔案」，並提示看不到隱私權政策與服務條款連結。未經驗證的正式版的畫面要等切換正式版才看得到 |
+
+其他觀察：
+
+- 桌面 Picker 的重新導向帶回 `code`、`iss`、`picked_file_ids`、`scope`、`state`；沒經過 Picker 時沒有 `picked_file_ids`。
+- 瀏覽器同時登入多個 Google 帳號時，授權容易落到別的帳號（本次步驟 A、B、C 落在 `nccucmusic`）。泠靈的登入應帶 `login_hint` 或在登入後顯示帳號。
