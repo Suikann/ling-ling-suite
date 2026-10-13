@@ -504,6 +504,12 @@ def main():
     sub.add_parser("report")
     args = parser.parse_args()
 
+    if args.command in ("login", "pick", "old-sheet") and not os.path.isfile(args.client_secret):
+        sys.exit(
+            f"找不到用戶端 JSON：{os.path.abspath(args.client_secret)}\n"
+            "到 Cloud Console → API 和服務 → 憑證，在泠靈用的「電腦版應用程式」OAuth 用戶端"
+            "按下載 JSON，存成上面這個路徑，或用 --client-secret 指定。"
+        )
     os.makedirs(args.state_dir, mode=0o700, exist_ok=True)
     log = Log(args.state_dir, args.step or args.command)
     handlers = {
