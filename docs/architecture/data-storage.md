@@ -4,7 +4,7 @@
 
 | 項目 | 位置（`<使用者資料目錄>/` 之下） | 說明 |
 |------|------|------|
-| 偏好設定 | `preferences.json`（`PREFERENCES_FILE`） | 語言、最近專案清單、譜庫設定、上次登入的 Google 帳號 email（`GOOGLE_ACCOUNT_EMAIL_KEY`，不是祕密，不放安全儲存）等；鍵與預設值見 `DEFAULT_PREFERENCES`。另記住譜庫的社團設定裡啟用的發譜平台（`CLUB_PUBLISHING_PLATFORM_KEY`，`PublishingPlatform` 的值；沒有或從沒讀到過為空字串，發譜功能隱藏）：連上譜庫時在背景讀社團設定並寫入，讀不到時沿用原值；譜庫設定換了譜庫試算表時先清成空字串，再讀新譜庫的；啟動時只看這個鍵，不連網、不讀安全儲存。登入在背景執行緒記下 email，`PreferencesService` 的讀、改、存經同一把鎖，與主執行緒同時存檔不會蓋掉彼此的改動 |
+| 偏好設定 | `preferences.json`（`PREFERENCES_FILE`） | 語言、最近專案清單、譜庫設定、上次登入的 Google 帳號 email（`GOOGLE_ACCOUNT_EMAIL_KEY`，不是祕密，不放安全儲存）等；鍵與預設值見 `DEFAULT_PREFERENCES`。另記住譜庫的社團設定裡啟用的發譜平台（`CLUB_PUBLISHING_PLATFORM_KEY`，`PublishingPlatform` 的值；沒有或從沒讀到過為空字串，發譜功能隱藏）：連上譜庫時在背景讀社團設定並寫入，讀不到時沿用原值、失敗寫進紀錄檔；譜庫設定換了譜庫試算表時先清成空字串，再讀新譜庫的；啟動時只看這個鍵，不連網、不讀安全儲存。登入在背景執行緒記下 email，`PreferencesService` 的讀、改、存經同一把鎖，與主執行緒同時存檔不會蓋掉彼此的改動 |
 | 復原／重做紀錄 | `undo/`、`redo/`（`UNDO_DIR`、`REDO_DIR`） | 每筆紀錄一個 JSON 檔，檔名規則見 [move-history.md](move-history.md) |
 | 批次搬移的進行中紀錄 | `pending_move.json`（`MOVE_JOURNAL_FILE`） | 重新命名、復原、重做或中斷還原進行中存在；整批搬完但正式紀錄寫不進去時也留著。啟動時仍在就提示（內容見 [move-history.md](move-history.md)） |
 | 單一實例鎖 | `instance.lock`（`INSTANCE_LOCK_FILE`） | 執行期間由作業系統鎖住，結束或當機時自動解除，檔案留著不刪 |

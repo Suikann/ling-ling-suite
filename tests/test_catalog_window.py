@@ -258,6 +258,13 @@ class TestRemembersClubSettings(CatalogWindowTestCase):
         self.assertTrue(self.bar(window).isHidden())
         self.assertIs(self.remembered(), PublishingPlatform.HUAXIA)
 
+    def test_unreadable_club_settings_are_written_to_the_log(self):
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"]])
+        self.google.fail_at(3, CatalogErrorKind.OFFLINE, "club settings unreachable")
+        self.open_window()
+        wait_until(lambda: "club settings unreachable" in self.log_text())
+        self.assertIn("讀取社團設定", self.log_text())
+
     def test_nothing_is_read_when_the_catalog_is_unreadable(self):
         self.preferences.set(CLUB_PUBLISHING_PLATFORM_KEY, PublishingPlatform.HUAXIA.value)
         self.google.fail_at(1, CatalogErrorKind.OFFLINE)

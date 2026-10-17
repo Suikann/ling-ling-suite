@@ -18,8 +18,10 @@ from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.constants import CLUB_PUBLISHING_PLATFORM_KEY
 from failing_writes import FailingWrites
 from fake_google_catalog import FakeGoogle
+from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.club_settings_service import ClubSettingsService
+from services.file_service import FileService
 from services.preferences_service import PreferencesService
 from test_catalog_service import empty_catalog
 
@@ -121,3 +123,53 @@ class TestForget(ClubSettingsTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestRefresh(ClubSettingsTestCase):
+    """連上譜庫時重讀：讀不到不丟出例外，記住的不變，失敗寫進紀錄檔"""
+
+    def setUp(self):
+        super().setUp()
+        self.log_dir = os.path.join(self.temp_dir, "logs")
+        self.club = ClubSettingsService(PreferencesService(self.path), ActivityLog(FileService(), self.log_dir))
+
+    def log_text(self) -> str:
+        """紀錄檔資料夾裡所有檔的內容"""
+        if not os.path.isdir(self.log_dir):
+            return ""
+        texts = []
+        for name in sorted(os.listdir(self.log_dir)):
+            with open(os.path.join(self.log_dir, name), encoding="utf-8") as f:
+                texts.append(f.read())
+        return "".join(texts)
+
+    def test_remembers_what_it_read_and_writes_nothing_to_the_log(self):
+        self.club_settings(["發譜平台", "華夏國樂社"])
+        self.club.refresh(lambda: self.catalog)
+        self.assertIs(self.restarted().remembered(), PublishingPlatform.HUAXIA)
+        self.assertEqual(self.log_text(), "")
+
+    def test_unreadable_keeps_the_remembered_result_and_writes_the_failure_to_the_log(self):
+        self.club_settings(["發譜平台", "華夏國樂社"])
+        self.club.read(self.catalog)
+        self.google.fail_next(CatalogErrorKind.OFFLINE)
+        self.club.refresh(lambda: self.catalog)
+        self.assertIs(self.restarted().remembered(), PublishingPlatform.HUAXIA)
+        self.assertIn("讀取社團設定", self.log_text())
+        self.assertIn("連不上網路", self.log_text())
+
+    def test_failing_to_connect_is_written_to_the_log(self):
+        def connect():
+            """拿不到憑證"""
+            raise CatalogError(CatalogErrorKind.SIGN_IN, "no Google credentials")
+        self.club.refresh(connect)
+        self.assertIsNone(self.club.remembered())
+        self.assertIn("no Google credentials", self.log_text())
+
+    def test_a_program_error_is_written_to_the_log_as_other(self):
+        def connect():
+            """程式的錯"""
+            raise ValueError("bad value")
+        self.club.refresh(connect)
+        self.assertIn("ValueError: bad value", self.log_text())
+        self.assertIn("譜庫讀寫失敗", self.log_text())

@@ -105,8 +105,8 @@ class CatalogSettingsDialog(QDialog):
         self._auth = auth_service
         self._prefs = preferences
         self._catalog_factory = catalog_factory or self._open_google
-        self._club_settings = ClubSettingsService(preferences)
         self._log = log or ActivityLog()
+        self._club_settings = ClubSettingsService(preferences, self._log)
         self._tasks = CatalogTasks(self)
         self._retry: Optional[Callable[[], None]] = None
         self.setWindowTitle(t("catalog.settings.title"))
@@ -287,14 +287,15 @@ class CatalogSettingsDialog(QDialog):
         self._show_folder_status(t("catalog.settings.catalog_found", name=sheet.name), "#2ecc71")
 
     def _connect_catalog(self, spreadsheet_id: str):
-        """記下譜庫試算表；換了試算表時忘掉記住的發譜平台，在背景改讀新譜庫的社團設定（讀不到時就是沒有）"""
+        """記下譜庫試算表；換了試算表時忘掉記住的發譜平台，在背景改讀新譜庫的社團設定（讀不到時就是沒有，寫進紀錄檔）"""
         if spreadsheet_id == self._prefs.get(CATALOG_SPREADSHEET_ID_KEY):
             return
         self._prefs.set(CATALOG_SPREADSHEET_ID_KEY, spreadsheet_id)
         self._club_settings.forget()
+        # refresh 不丟出例外：讀不到時自己寫進紀錄檔，交回時沒有要顯示的
         self._tasks.run(
-            lambda: self._club_settings.read(self._catalog_factory(spreadsheet_id)),
-            lambda platform: None, lambda error: None,
+            lambda: self._club_settings.refresh(lambda: self._catalog_factory(spreadsheet_id)),
+            lambda _: None, lambda _: None,
         )
 
     def _pick_catalog(self, sheets: List[DriveFile]):

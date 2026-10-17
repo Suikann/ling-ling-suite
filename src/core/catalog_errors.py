@@ -89,6 +89,18 @@ class CatalogError(Exception):
         self.message = message
 
 
+def exception_message(error: BaseException) -> str:
+    """例外寫進「詳細資料」的原始訊息：例外類別名稱加內容"""
+    return f"{type(error).__name__}: {error}"
+
+
+def as_catalog_error(error: BaseException) -> CatalogError:
+    """把例外當成譜庫錯誤：CatalogError 照原樣，其他（程式的錯）歸為其他"""
+    if isinstance(error, CatalogError):
+        return error
+    return CatalogError(CatalogErrorKind.OTHER, exception_message(error))
+
+
 def _now() -> datetime.datetime:
     """現在的本機時間，精確到秒"""
     return datetime.datetime.now().replace(microsecond=0)

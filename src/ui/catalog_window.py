@@ -66,9 +66,9 @@ class CatalogWindow(QMainWindow):
         self._prefs = preferences
         self._catalog_factory = catalog_factory or self._open_google_catalog
         self._catalog: Optional[CatalogService] = None
-        self._club_settings = ClubSettingsService(preferences)
         self._catalog_lock = threading.Lock()
         self._log = log or ActivityLog()
+        self._club_settings = ClubSettingsService(preferences, self._log)
         self._pieces: List[Piece] = []
         self._piece_by_folder: Dict[str, Piece] = {}
         self._current_detail: Optional[PieceDetail] = None
@@ -326,12 +326,11 @@ class CatalogWindow(QMainWindow):
         self._read(lambda catalog: catalog.overview(root_id), on_done, unreadable, self._refresh_all)
 
     def _remember_club_settings(self):
-        """連上譜庫後在背景讀社團設定並記住；讀不到時沿用記住的結果，不另外顯示提示列（按下發譜時才說明原因）"""
+        """連上譜庫後在背景讀社團設定並記住；讀不到時沿用記住的結果、寫進紀錄檔，不另外顯示提示列（按下發譜時才說明原因）"""
         if self._club_tasks.busy:
             return
-        self._club_tasks.run(
-            lambda: self._club_settings.read(self._connected()), lambda platform: None, lambda error: None,
-        )
+        # refresh 不丟出例外：讀不到時自己寫進紀錄檔，交回時沒有要顯示的
+        self._club_tasks.run(lambda: self._club_settings.refresh(self._connected), lambda _: None, lambda _: None)
 
     # --- Drive 樹狀結構 ---
 
