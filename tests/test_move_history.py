@@ -355,9 +355,17 @@ class TestWorkspaceMeta(WorkspaceMetaTestCase):
         self.file_service.write_json_atomic = failing_write
         result = self.history.undo()
         self.assertIsNone(result.error)
+        self.assertIsNone(result.record_error)
+        self.assertEqual(list(result.meta_errors), [folder])
         self.assertTrue(os.path.isfile(part))
         self.assertIsNone(self.workspace.read_meta(folder))
         self.assertIsNotNone(self.history.latest_redo())
+
+    def test_undo_reports_no_meta_errors_when_meta_is_written_back(self):
+        folder, part = self._part_in_workspace()
+        self.history.rename(self._to_scores((part, self.path("01-高笙.pdf"))))
+        self.workspace.purge_empty_folders()
+        self.assertEqual(self.history.undo().meta_errors, {})
 
     def test_undo_writes_meta_back_even_when_rollback_strands_a_file_in_workspace(self):
         folder, first = self._part_in_workspace("高笙.pdf")
@@ -1082,6 +1090,26 @@ class TestRecoveryWorkspaceMeta(WorkspaceMetaTestCase):
         self.history.recover()
         self.assertTrue(os.path.isfile(first))
         self.assertEqual(self._scanned_sources(), [(folder, "合併譜.pdf")])
+
+    def test_restoring_reports_folders_whose_meta_cannot_be_written_back(self):
+        folder, first = self._part_in_workspace("高笙.pdf")
+        _, second = self._part_in_workspace("揚琴.pdf")
+        verdict = self._to_scores((first, self.path("01-高笙.pdf")), (second, self.path("02-揚琴.pdf")))
+        self.interrupt(lambda: self.history.rename(verdict), n2=_Crash())
+        os.remove(os.path.join(folder, "meta.json"))
+        real_write = FileService.write_json_atomic
+
+        def failing_write(path, data):
+            if os.path.basename(path) == "meta.json":
+                raise OSError("locked")
+            real_write(self.file_service, path, data)
+
+        self.file_service.write_json_atomic = failing_write
+        result = self.history.recover()
+        self.assertEqual((result.error, result.record_error), (None, None))
+        self.assertEqual(list(result.meta_errors), [folder])
+        self.assertTrue(os.path.isfile(first))
+        self.assertIsNone(self.history.pending())
 
     def test_crash_while_undo_writes_meta_back_leaves_the_journal(self):
         folder, part = self._part_in_workspace()

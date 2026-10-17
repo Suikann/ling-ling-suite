@@ -32,7 +32,7 @@
 ## 動作與結果
 
 - 重新命名 `rename`、復原 `undo`、重做 `redo`、中斷還原（「還原」`recover`、「保留結果」`keep_result`）四個動作都回傳 `MoveResult`；沒有可復原或可重做的紀錄時，`undo`、`redo` 回傳 `None`
-- `MoveResult`：`changes`（照計畫搬好的檔，動作前位置 → 目前位置）、`skipped`（已不在預期位置而略過的檔）、`residual`（搬不回原位的檔）、`operation`（操作種類，`core/constants.py` 的 `OperationKind`）、`error`（失敗原因）、`record_error`（檔案已搬好但紀錄寫不進去的原因）；復原分割時另有 `split`（該次分割的 `SplitRecord`）
+- `MoveResult`：`changes`（照計畫搬好的檔，動作前位置 → 目前位置）、`skipped`（已不在預期位置而略過的檔）、`residual`（搬不回原位的檔）、`operation`（操作種類，`core/constants.py` 的 `OperationKind`）、`error`（失敗原因）、`record_error`（檔案已搬好但紀錄寫不進去的原因）、`meta_errors`（工作區 meta 寫不回去的子資料夾 → 原因，見[工作區 meta 快照](#工作區-meta-快照)）；復原分割時另有 `split`（該次分割的 `SplitRecord`）
 - 主視窗把 `changes + residual` 交給 `Project.replace_paths`、`split` 交給 `Project.revert_split` 套用
 
 ## 兩階段搬移引擎
@@ -64,7 +64,7 @@
 - 每完成一步就把該步加進清單、下一步記為 `pending` 重寫；回滾與還原每逆轉一步就從清單移除並存檔，開始逆轉時也取消 `complete`。紀錄隨時反映每個檔案的實際位置
 - 整批搬完先標記 `complete`，由搬移歷程寫正式紀錄（重新命名寫復原紀錄並清空重做堆疊；復原寫回工作區 meta、轉入重做堆疊；重做轉回復原堆疊），寫完才刪除進行中紀錄，兩者之間沒有空窗
 - 正式紀錄寫不進去（例如磁碟已滿）時，結果仍帶 `changes`，專案路徑照樣更新到檔案的實際位置，`record_error` 只提示；進行中紀錄保留，下次依操作種類提示「上次…已完成」，可選保留結果或還原
-- 還原與保留結果也照這個順序：紀錄寫不進去就保留進行中紀錄，下次再處理。工作區 meta 寫回失敗不在此列，只略過（見[工作區 meta 快照](#工作區-meta-快照)）
+- 還原與保留結果也照這個順序：紀錄寫不進去就保留進行中紀錄，下次再處理。工作區 meta 寫回失敗不在此列，不保留進行中紀錄，只帶進結果的 `meta_errors`（見[工作區 meta 快照](#工作區-meta-快照)）
 - 紀錄仍在時，引擎以 `PendingMoveError` 拒絕執行新批次（否則會蓋掉唯一的紀錄），訊息請使用者先處理中斷提示
 - `load_pending` 對照磁碟判定 `pending` 那一步（來源已不在、目標已出現＝已完成），補上「搬完、來不及記就當機」的那一步；比對用 `file_exists_exact`（目錄列表的實際名稱），只改大小寫的那一步在不分大小寫的檔案系統上才判得出
 
@@ -122,5 +122,5 @@
 復原重新命名會把分譜搬回工作區，需要子資料夾的 `meta.json` 辨識來源，所以復原紀錄帶著工作區 meta 的快照（`UndoRecord.workspace_meta`；`MoveHistory` 因此注入 `WorkspaceService`）：
 
 - 拍快照：重新命名在搬移前、殘留紀錄在寫入時，對來源位於工作區的項目記下其子資料夾的 meta（同一資料夾的不同寫法只記一份）；重做前先以子資料夾目前的 meta 更新快照
-- 寫回：復原整批搬完、復原回滾、中斷還原、保留結果的復原，子資料夾若已沒有可讀的 meta 就用快照寫回（`WorkspaceService.restore_meta`），都在刪除進行中紀錄之前；寫回失敗只略過，不影響檔案復原
+- 寫回：復原整批搬完、復原回滾、中斷還原、保留結果的復原，子資料夾若已沒有可讀的 meta 就用快照寫回（`WorkspaceService.restore_meta`），都在刪除進行中紀錄之前。寫回失敗不影響檔案復原，`error`、`record_error` 不變；寫不回去的子資料夾與原因記在結果的 `meta_errors`，主視窗比照 `record_error` 以警告列出這些子資料夾（它們之後在清理工作區顯示為來源不明）
 - 舊紀錄沒有此欄照常載入

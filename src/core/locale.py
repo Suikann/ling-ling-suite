@@ -249,6 +249,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "history.residual.undo": "復原失敗後留下的 {count} 個檔案",
         "history.residual.redo": "重做失敗後留下的 {count} 個檔案",
         "history.record_not_saved": "操作已完成，但紀錄無法寫入：\n{error}",
+        "history.meta_not_restored": "下列工作區子資料夾的來源資訊寫不回去：\n{folders}",
         "history.split_replaced": "分割時被取代的檔案沒有找回，仍在資源回收桶：\n{files}",
         # PDF 分割
         "split.title": "PDF 分割",
@@ -734,6 +735,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "history.residual.undo": "{count} file(s) left by a failed undo",
         "history.residual.redo": "{count} file(s) left by a failed redo",
         "history.record_not_saved": "The operation finished, but its record could not be written:\n{error}",
+        "history.meta_not_restored": "Source info could not be written back for these workspace folders:\n{folders}",
         "history.split_replaced": "Files replaced by the split were not restored; they are still in the recycle bin:\n{files}",
         # PDF 分割
         "split.title": "PDF Split",

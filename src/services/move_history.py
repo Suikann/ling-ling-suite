@@ -68,6 +68,8 @@ class MoveResult:
             中斷還原，或回滾後殘留紀錄寫不進去時，進行中紀錄保留，下次再處理
         split: 復原了一次分割時為該次分割，交給 Project.revert_split 退回分割前的專案；
             其中被取代的檔案（replaced_files）不找回，仍在資源回收桶
+        meta_errors: 用快照寫回工作區 meta 時寫不進去的子資料夾 → 原因；不影響檔案復原，
+            這些子資料夾之後在清理工作區顯示為來源不明
     """
     operation: OperationKind
     changes: List[UndoMapping] = field(default_factory=list)
@@ -76,6 +78,7 @@ class MoveResult:
     error: Optional[Exception] = None
     record_error: Optional[Exception] = None
     split: Optional[SplitRecord] = None
+    meta_errors: Dict[str, OSError] = field(default_factory=dict)
 
 
 @dataclass
@@ -425,7 +428,7 @@ class MoveHistory:
             result.skipped = [m.renamed for m in outcome.skipped]
             result.residual = outcome.residual
             if interrupted.record is not None:
-                self._restore_workspace_meta(interrupted.record)
+                self._restore_workspace_meta(interrupted.record, result.meta_errors)
             self._put_back(interrupted)
             if outcome.residual:
                 error = self._save_residual(interrupted.kind, outcome.residual)
@@ -465,7 +468,7 @@ class MoveHistory:
             changes=[UndoMapping(origins[i], locations[i]) for i in journal.moved_indices()],
         )
         try:
-            self._finish_kept(interrupted)
+            self._finish_kept(interrupted, result.meta_errors)
             self._engine.discard_pending()
         except OSError as e:
             result.record_error = e
@@ -526,17 +529,19 @@ class MoveHistory:
     def _undo_moves(self, record: UndoRecord, project_path: Optional[str]) -> MoveResult:
         """把整批搬移類紀錄的檔案搬回原位；project_path 同 undo"""
         present, skipped = self._partition(record.mappings, lambda m: m.renamed)
+        meta_errors: Dict[str, OSError] = {}
 
         def finish(_created_dirs: List[str]) -> None:
-            self._finish_undo(record, present)
+            self._finish_undo(record, present, meta_errors)
 
         moves = [(m.renamed, m.original) for m in present]
         result = self._execute(
             OperationKind.UNDO, record, moves, finish,
-            on_rollback=lambda: self._restore_workspace_meta(record), project_path=project_path,
+            on_rollback=lambda: self._restore_workspace_meta(record, meta_errors), project_path=project_path,
         )
         result.operation = record.operation_type
         result.skipped = [m.renamed for m in skipped]
+        result.meta_errors = meta_errors
         return result
 
     def _undo_file_effects(self, record: UndoRecord) -> MoveResult:
@@ -638,9 +643,17 @@ class MoveHistory:
         self._undo.push(record)
         self._redo.clear()
 
-    def _finish_undo(self, record: UndoRecord, present: List[UndoMapping]) -> None:
-        """復原整批搬完：寫回工作區 meta、紀錄轉入重做堆疊、移除重新命名新建且已空的目錄"""
-        self._restore_workspace_meta(record)
+    def _finish_undo(
+        self, record: UndoRecord, present: List[UndoMapping], meta_errors: Dict[str, OSError],
+    ) -> None:
+        """復原整批搬完：寫回工作區 meta、紀錄轉入重做堆疊、移除重新命名新建且已空的目錄
+
+        Args:
+            record: 復原的紀錄
+            present: 實際搬回原位的對照（只有它們轉入重做堆疊）
+            meta_errors: meta 寫不回去的子資料夾記到這裡（子資料夾 → 原因）
+        """
+        self._restore_workspace_meta(record, meta_errors)
         self._transfer(record, present, self._undo, self._redo)
         for directory in sorted(record.created_directories, reverse=True):
             self.file_service.remove_empty_directory(directory)
@@ -702,8 +715,13 @@ class MoveHistory:
         record = UndoRecord.from_data(context.record, context.record_id) if context.record else None
         return _Interrupted(journal, record)
 
-    def _finish_kept(self, interrupted: _Interrupted) -> None:
-        """保留結果：補做被中斷的那批搬移整批搬完後該寫的紀錄（已寫過的不重寫）"""
+    def _finish_kept(self, interrupted: _Interrupted, meta_errors: Dict[str, OSError]) -> None:
+        """保留結果：補做被中斷的那批搬移整批搬完後該寫的紀錄（已寫過的不重寫）
+
+        Args:
+            interrupted: 讀回的進行中紀錄
+            meta_errors: 被中斷的是復原時，meta 寫不回去的子資料夾記到這裡（子資料夾 → 原因）
+        """
         record, journal = interrupted.record, interrupted.journal
         if interrupted.kind == OperationKind.RENAME:
             self._redo.clear()
@@ -712,7 +730,7 @@ class MoveHistory:
             return
         moved = {path_key(path) for path in journal.origins().values()}
         if interrupted.kind == OperationKind.UNDO:
-            self._finish_undo(record, [m for m in record.mappings if path_key(m.renamed) in moved])
+            self._finish_undo(record, [m for m in record.mappings if path_key(m.renamed) in moved], meta_errors)
         else:
             present = [m for m in record.mappings if path_key(m.original) in moved]
             self._finish_redo(record, present, sorted(journal.created_directories))
@@ -786,10 +804,17 @@ class MoveHistory:
             if meta is not None:
                 record.workspace_meta[folder] = meta
 
-    def _restore_workspace_meta(self, record: UndoRecord) -> None:
-        """檔案搬回後，用快照補回被清掉的 meta.json；寫回失敗不影響已完成的檔案復原"""
+    def _restore_workspace_meta(self, record: UndoRecord, meta_errors: Dict[str, OSError]) -> None:
+        """檔案搬回後，用快照補回被清掉的 meta.json
+
+        寫回失敗不影響已完成的檔案復原，只記下哪個子資料夾寫不回去，由呼叫端帶進結果。
+
+        Args:
+            record: 帶著工作區 meta 快照的復原紀錄
+            meta_errors: 寫不回去的子資料夾記到這裡（子資料夾 → 原因）
+        """
         for folder, meta in record.workspace_meta.items():
             try:
                 self.workspace_service.restore_meta(folder, meta)
-            except OSError:
-                continue
+            except OSError as e:
+                meta_errors[folder] = e

@@ -778,6 +778,32 @@ class TestMainWindowMoveHistory(MoveHistoryWindowTestCase):
         self.assertIn((t("dialog.info"), t("history.skipped", files=new_b)), shown)
         self.assertEqual(self._shown_file_names(), ["a.pdf", "02-Oboe.pdf"])
 
+    def test_undo_warns_about_workspace_folders_whose_meta_cannot_be_written_back(self):
+        workspace = WorkspaceService(self.history_files, os.path.join(self.temp_dir, "workspace"))
+        source, = self.create_files("merged.pdf")
+        folder = os.path.join(workspace.workspace_dir, "a1b2c3d4")
+        workspace.write_meta(folder, source.original_path, "")
+        part = os.path.join(folder, "flute.pdf")
+        with open(part, "w") as f:
+            f.write("part")
+        renamed = self._path("01-Flute.pdf")
+        self.history.rename(RenameVerdict([RenameEntry(part, renamed, output_directory=self.temp_dir)]))
+        workspace.purge_empty_folders()
+        self._open_group_of(renamed)
+        real_write = FileService.write_json_atomic
+
+        def failing_write(path, data):
+            if os.path.basename(path) == "meta.json":
+                raise OSError("locked")
+            real_write(self.history_files, path, data)
+
+        self.history_files.write_json_atomic = failing_write
+        with answering_prompts(QMessageBox.Yes) as shown:
+            self.trigger_menu(t("menu.edit.undo"))
+        self.assertTrue(os.path.isfile(part))
+        self.assertIn((t("dialog.warning"), t("history.meta_not_restored", folders=folder)), shown)
+        self.assertEqual(self._shown_file_names(), ["flute.pdf"])
+
     def test_residual_record_is_described_by_the_operation_that_left_it(self):
         a, b = self.create_files("a.pdf", "b.pdf")
         new_a, new_b = self._path("01-Flute.pdf"), self._path("02-Oboe.pdf")
