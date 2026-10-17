@@ -3,28 +3,36 @@
 譜庫瀏覽器視窗
 
 以 Drive 資料夾內容為主體，使用者可為資料夾加上元資料（曲目資訊、演出紀錄等）。
+讀取（曲目清單、作曲家、版本、資料夾與版本資料夾的檔）都經譜庫服務（services/catalog_service.py）在背景執行；
+讀不到時頂端顯示錯誤提示列（ui/catalog_error_bar.py），內容區寫「讀不到」，不顯示成空清單。
 """
+import threading
 from dataclasses import replace
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QStackedWidget,
     QTreeWidget, QTreeWidgetItem, QLabel, QLineEdit, QPushButton,
     QToolBar, QStatusBar, QMessageBox, QComboBox, QFormLayout,
     QGroupBox, QTabWidget, QTableWidget, QTableWidgetItem,
     QTextEdit, QDialog, QDialogButtonBox, QInputDialog,
-    QListWidget, QListWidgetItem,
+    QListWidget,
 )
-from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject
-from PySide6.QtGui import QColor, QBrush, QCursor
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor, QCursor
 from core.locale import t
 from core.catalog_constants import PartStatus, PerformanceStatus
+from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import (
-    Composer, Piece, Edition, Movement, Part, Performance, PieceDetail,
+    Composer, DriveFile, EditionFiles, Piece, Edition, Movement, Part, Performance, PieceDetail,
 )
+from services.catalog_service import CatalogService
 from services.sheets_service import SheetsService
 from services.drive_service import DriveService
 from services.google_auth_service import GoogleAuthService
+from services.google_catalog import open_google_catalog
 from services.preferences_service import PreferencesService
+from ui.catalog_error_bar import CatalogErrorBar
+from ui.catalog_tasks import CatalogTasks
 
 
 _STATUS_COLORS = {
@@ -38,73 +46,121 @@ _FOLDER_ICON = "\U0001f4c1 "
 _PDF_ICON = "\U0001f4c4 "
 
 
-class _Worker(QThread):
-    """在背景執行緒執行工作並回傳結果"""
-    finished = Signal(object)
-    error = Signal(str)
-
-    def __init__(self, fn, parent=None):
-        super().__init__(parent)
-        self._fn = fn
-
-    def run(self):
-        try:
-            result = self._fn()
-            self.finished.emit(result)
-        except Exception as e:
-            self.error.emit(str(e))
-
-
 class CatalogWindow(QMainWindow):
     """譜庫管理主視窗"""
-
-    _FOLDER_MIME = "application/vnd.google-apps.folder"
-    _PDF_MIME = "application/pdf"
 
     def __init__(
         self, auth_service: GoogleAuthService,
         preferences: PreferencesService, parent=None,
+        catalog_factory: Optional[Callable[[], CatalogService]] = None,
     ):
+        """
+        Args:
+            auth_service: Google 登入服務
+            preferences: 偏好設定（譜庫試算表 ID、根資料夾 ID）
+            parent: 父元件
+            catalog_factory: 在背景執行緒建立譜庫服務的函式，拿不到時丟出 CatalogError；
+                省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
+        """
         super().__init__(parent)
         self._auth = auth_service
         self._prefs = preferences
+        self._catalog_factory = catalog_factory or self._open_google_catalog
+        self._catalog: Optional[CatalogService] = None
+        self._catalog_lock = threading.Lock()
         self._sheets: Optional[SheetsService] = None
         self._drive: Optional[DriveService] = None
         self._pieces: List[Piece] = []
         self._piece_by_folder: Dict[str, Piece] = {}
         self._current_detail: Optional[PieceDetail] = None
         self._composers: List[Composer] = []
+        self._tasks = CatalogTasks(self)
+        self._retry: Optional[Callable[[], None]] = None
+        # 樹狀清單與詳細面板每換一次內容就加一：背景讀取交回時內容已經換掉的，就不再填回
+        self._tree_version = 0
+        self._detail_version = 0
         self.setWindowTitle(t("catalog.title"))
         self.resize(1200, 750)
-        self._workers = []
         self._build_ui()
         QTimer.singleShot(100, self._init_services)
 
-    def _run_async(self, fn, on_done, on_error=None):
-        """在背景執行緒執行 fn，完成後在主執行緒呼叫 on_done"""
+    def closeEvent(self, event):
+        """關閉視窗：放棄還在跑的背景讀取，之後它們不再碰這個視窗"""
+        self._tasks.abandon_all()
+        super().closeEvent(event)
+
+    # --- 經譜庫服務的背景讀取 ---
+
+    def _open_google_catalog(self) -> CatalogService:
+        """以登入服務的憑證接 Google（背景執行緒呼叫）"""
+        return open_google_catalog(self._auth, self._prefs.get("catalog_spreadsheet_id") or "")
+
+    def _connected(self) -> CatalogService:
+        """譜庫服務，第一次用到時才建立（背景執行緒呼叫，同時有幾件讀取也只建一次；拿不到時丟出 CatalogError）"""
+        with self._catalog_lock:
+            if self._catalog is None:
+                self._catalog = self._catalog_factory()
+            return self._catalog
+
+    def _read(
+        self, read: Callable[[CatalogService], object], done: Callable[[object], None],
+        unreadable: Callable[[], None], retry: Callable[[], None],
+    ):
+        """在背景經譜庫服務讀取，完成時在主執行緒呼叫 done；失敗時呼叫 unreadable 並顯示提示列
+
+        Args:
+            read: 以譜庫服務讀取的函式（背景執行緒呼叫）
+            done: 讀到時以結果呼叫
+            unreadable: 讀不到時呼叫，在內容區寫「讀不到」
+            retry: 提示列按「重試」時呼叫
+        """
         self.setCursor(QCursor(Qt.WaitCursor))
         self._status_bar.showMessage(t("catalog.loading"))
-        worker = _Worker(fn, self)
-        worker.finished.connect(lambda result: self._on_worker_done(worker, on_done, result))
-        worker.error.connect(lambda msg: self._on_worker_error(worker, on_error, msg))
-        self._workers.append(worker)
-        worker.start()
 
-    def _on_worker_done(self, worker, callback, result):
-        """背景工作完成"""
-        self.unsetCursor()
-        self._status_bar.clearMessage()
-        self._workers = [w for w in self._workers if w is not worker]
-        callback(result)
+        def finished(result):
+            """讀到了"""
+            self._settle_loading()
+            done(result)
 
-    def _on_worker_error(self, worker, callback, msg):
-        """背景工作失敗"""
-        self.unsetCursor()
-        self._workers = [w for w in self._workers if w is not worker]
-        if callback:
-            callback(msg)
-        else:
-            self._status_bar.showMessage(t("catalog.error", error=msg))
+        def failed(error: CatalogError):
+            """讀不到：內容區寫讀不到，頂端顯示提示列"""
+            self._settle_loading()
+            unreadable()
+            self._retry = retry
+            self._error_bar.show_failure(
+                t("catalog.error.cannot_read"), CatalogFailure.from_error(error, t("catalog.action.read")),
+            )
+        self._tasks.run(lambda: read(self._connected()), finished, failed)
+
+    def _settle_loading(self):
+        """沒有背景讀取在跑時恢復游標、清掉狀態列的載入中"""
+        if not self._tasks.busy:
+            self.unsetCursor()
+            self._status_bar.clearMessage()
+
+    def _retry_failed(self):
+        """提示列的「重試」：收起提示列，重做失敗的那次讀取"""
+        self._error_bar.clear()
+        if self._retry is not None:
+            self._retry()
+
+    def _sign_in_again(self):
+        """提示列的「重新登入 Google」：登入成功就重新連上譜庫、重做失敗的讀取"""
+        from ui.catalog_settings_dialog import sign_in_google
+        if sign_in_google(self, self._auth):
+            self._reconnect()
+
+    def _open_settings(self):
+        """提示列的「開啟譜庫設定」：存了設定就重新連上譜庫、重做失敗的讀取"""
+        from ui.catalog_settings_dialog import CatalogSettingsDialog
+        if CatalogSettingsDialog(self._auth, self._prefs, self).exec() == QDialog.Accepted:
+            self._reconnect()
+
+    def _reconnect(self):
+        """登入或設定改了：下次讀取時重新建立譜庫服務，並重做失敗的讀取"""
+        self._catalog = None
+        self._connect_legacy_services()
+        self._retry_failed()
 
     def _build_ui(self):
         self._toolbar = QToolBar()
@@ -125,15 +181,23 @@ class CatalogWindow(QMainWindow):
         self._toolbar.addWidget(self._search_entry)
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QHBoxLayout(central)
+        layout = QVBoxLayout(central)
         layout.setContentsMargins(4, 4, 4, 4)
+        self._error_bar = CatalogErrorBar()
+        self._error_bar.retry_requested.connect(self._retry_failed)
+        self._error_bar.sign_in_requested.connect(self._sign_in_again)
+        self._error_bar.settings_requested.connect(self._open_settings)
+        layout.addWidget(self._error_bar)
         splitter = QSplitter(Qt.Horizontal)
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
         self._tree.setMinimumWidth(280)
         self._tree.itemExpanded.connect(self._on_expand)
         self._tree.currentItemChanged.connect(self._on_tree_select)
-        splitter.addWidget(self._tree)
+        self._tree_pane = QStackedWidget()
+        self._tree_pane.addWidget(self._tree)
+        self._tree_pane.addWidget(self._unreadable_label())
+        splitter.addWidget(self._tree_pane)
         self._detail_area = QWidget()
         self._detail_layout = QVBoxLayout(self._detail_area)
         self._detail_layout.setContentsMargins(4, 4, 4, 4)
@@ -144,77 +208,78 @@ class CatalogWindow(QMainWindow):
         splitter.addWidget(self._detail_area)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
-        layout.addWidget(splitter)
+        layout.addWidget(splitter, stretch=1)
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
 
+    @staticmethod
+    def _unreadable_label() -> QLabel:
+        """內容區的「讀不到」（灰字置中）"""
+        label = QLabel(t("catalog.error.unreadable"))
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet("color: gray; font-size: 14px;")
+        return label
+
     def _init_services(self):
-        """初始化 Google API 服務"""
-        creds = self._auth.get_credentials()
-        if not creds:
-            self._status_bar.showMessage(t("catalog.no_connection"))
-            return
+        """連上譜庫並讀取總覽；還沒改走譜庫服務的寫入用服務在主執行緒以登入服務的憑證建立"""
+        self._connect_legacy_services()
+        self._refresh_all()
+
+    def _connect_legacy_services(self):
+        """以登入服務的憑證建立還沒改走譜庫服務的寫入用服務；拿不到憑證或沒設定試算表時不建立"""
+        self._sheets = None
+        self._drive = None
         spreadsheet_id = self._prefs.get("catalog_spreadsheet_id") or ""
         if not spreadsheet_id:
-            self._status_bar.showMessage(t("catalog.no_connection"))
             return
-        try:
-            self._sheets = SheetsService(creds, spreadsheet_id)
-            self._drive = DriveService(creds)
-            self._refresh_all()
-        except Exception as e:
-            self._status_bar.showMessage(t("catalog.error", error=str(e)))
+        creds = self._auth.get_credentials()
+        if not creds:
+            return
+        self._sheets = SheetsService(creds, spreadsheet_id)
+        self._drive = DriveService(creds)
 
     def _refresh_all(self):
-        """重新載入 Drive 資料夾與元資料"""
-        if not self._drive or not self._sheets:
-            return
+        """經譜庫服務重新讀取曲目、作曲家與譜庫根資料夾的內容"""
         root_id = self._prefs.get("catalog_root_folder_id") or ""
-        if not root_id:
-            self._status_bar.showMessage(t("catalog.no_connection"))
-            return
 
-        def load():
-            pieces = self._sheets.list_pieces()
-            composers = self._sheets.list_composers()
-            folder_map = {}
-            for p in pieces:
-                if p.active_edition_id:
-                    folder_map[p.active_edition_id] = p
-                editions = self._sheets.list_editions(p.id)
-                for e in editions:
-                    if e.drive_folder_id:
-                        folder_map[e.drive_folder_id] = p
-            folders = self._drive.list_subfolders(root_id)
-            pdfs = self._drive.list_pdfs_in_folder(root_id)
-            return pieces, composers, folder_map, folders, pdfs
-
-        def on_done(result):
-            pieces, composers, folder_map, folders, pdfs = result
-            self._pieces = pieces
-            self._composers = composers
-            self._piece_by_folder = folder_map
-            self._tree.clear()
-            self._populate_tree(None, folders, pdfs)
+        def on_done(overview):
+            """讀到了：填進樹狀清單，收起提示列"""
+            self._error_bar.clear()
+            self._tree_pane.setCurrentIndex(0)
+            self._pieces = overview.pieces
+            self._composers = overview.composers
+            self._piece_by_folder = overview.folder_pieces
+            self._clear_tree()
+            self._populate_tree(None, overview.root.folders, overview.root.pdfs)
             self._status_bar.showMessage(
                 t("catalog.status.stats",
                   composers=len(self._composers),
                   pieces=len(self._pieces)),
             )
 
-        self._run_async(load, on_done)
+        def unreadable():
+            """讀不到：樹狀清單換成「讀不到」"""
+            self._clear_tree()
+            self._tree_pane.setCurrentIndex(1)
+
+        self._read(lambda catalog: catalog.overview(root_id), on_done, unreadable, self._refresh_all)
 
     # --- Drive 樹狀結構 ---
 
-    def _populate_tree(self, parent_node, folders, pdfs):
+    def _clear_tree(self):
+        """清空樹狀清單；還在讀的展開結果不再填回"""
+        self._tree_version += 1
+        self._tree.clear()
+
+    def _populate_tree(self, parent_node, folders: List[DriveFile], pdfs: List[DriveFile]):
         """將資料夾與 PDF 清單填入樹狀結構（在主執行緒呼叫）"""
         for folder in folders:
-            has_meta = folder["id"] in self._piece_by_folder
-            label = folder["name"]
+            has_meta = folder.id in self._piece_by_folder
+            label = folder.name
             if has_meta:
                 label += "  *"
             node = QTreeWidgetItem([label])
-            node.setData(0, Qt.UserRole, ("folder", folder["id"], folder["name"]))
+            node.setData(0, Qt.UserRole, ("folder", folder.id, folder.name))
             node.setData(0, Qt.UserRole + 1, False)
             placeholder = QTreeWidgetItem([t("catalog.loading")])
             node.addChild(placeholder)
@@ -223,8 +288,8 @@ class CatalogWindow(QMainWindow):
             else:
                 parent_node.addChild(node)
         for pdf in pdfs:
-            node = QTreeWidgetItem([pdf["name"]])
-            node.setData(0, Qt.UserRole, ("file", pdf["id"], pdf["name"]))
+            node = QTreeWidgetItem([pdf.name])
+            node.setData(0, Qt.UserRole, ("file", pdf.id, pdf.name))
             if parent_node is None:
                 self._tree.addTopLevelItem(node)
             else:
@@ -237,21 +302,25 @@ class CatalogWindow(QMainWindow):
             return
         item.setData(0, Qt.UserRole + 1, True)
         data = item.data(0, Qt.UserRole)
-        if not data or data[0] != "folder" or not self._drive:
+        if not data or data[0] != "folder":
             return
         folder_id = data[1]
+        version = self._tree_version
 
-        def load():
-            folders = self._drive.list_subfolders(folder_id)
-            pdfs = self._drive.list_pdfs_in_folder(folder_id)
-            return folders, pdfs
+        def on_done(contents):
+            """讀到了：換掉「載入中」"""
+            if version == self._tree_version:
+                item.takeChildren()
+                self._populate_tree(item, contents.folders, contents.pdfs)
 
-        def on_done(result):
-            item.takeChildren()
-            folders, pdfs = result
-            self._populate_tree(item, folders, pdfs)
+        def unreadable():
+            """讀不到：子項目寫「讀不到」，下次展開時再讀"""
+            if version == self._tree_version:
+                item.takeChildren()
+                item.addChild(QTreeWidgetItem([t("catalog.error.unreadable")]))
+                item.setData(0, Qt.UserRole + 1, False)
 
-        self._run_async(load, on_done)
+        self._read(lambda catalog: catalog.folder_contents(folder_id), on_done, unreadable, self._refresh_all)
 
     def _on_search(self, text: str):
         """搜尋時篩選樹狀結構"""
@@ -289,7 +358,8 @@ class CatalogWindow(QMainWindow):
     # --- 清除右側面板 ---
 
     def _clear_detail(self):
-        """清除右側面板內容"""
+        """清除右側面板內容；還在讀的詳細資料不再填回"""
+        self._detail_version += 1
         while self._detail_layout.count():
             child = self._detail_layout.takeAt(0)
             if child.widget():
@@ -358,26 +428,42 @@ class CatalogWindow(QMainWindow):
         collect_row.addWidget(collect_desc, stretch=1)
         actions_layout.addLayout(collect_row)
         self._detail_layout.addWidget(actions_group)
-        if self._drive:
-            try:
-                pdfs = self._drive.list_pdfs_in_folder(folder_id)
-                if pdfs:
-                    files_label = QLabel(
-                        t("catalog.drive.files_in_folder", count=len(pdfs)),
-                    )
-                    files_label.setStyleSheet("font-weight: bold; padding: 4px 0;")
-                    self._detail_layout.addWidget(files_label)
-                    file_list = QListWidget()
-                    for pdf in pdfs:
-                        file_list.addItem(pdf["name"])
-                    self._detail_layout.addWidget(file_list, stretch=1)
-                else:
-                    empty = QLabel(t("catalog.drive.folder_empty"))
-                    empty.setStyleSheet("color: gray; padding: 8px;")
-                    self._detail_layout.addWidget(empty)
-                    self._detail_layout.addStretch()
-            except Exception:
-                self._detail_layout.addStretch()
+        files_area = QWidget()
+        files_layout = QVBoxLayout(files_area)
+        files_layout.setContentsMargins(0, 0, 0, 0)
+        self._detail_layout.addWidget(files_area, stretch=1)
+        version = self._detail_version
+
+        def on_done(contents):
+            """讀到了：列出資料夾裡的 PDF"""
+            if version != self._detail_version:
+                return
+            pdfs = contents.pdfs
+            if pdfs:
+                files_label = QLabel(
+                    t("catalog.drive.files_in_folder", count=len(pdfs)),
+                )
+                files_label.setStyleSheet("font-weight: bold; padding: 4px 0;")
+                files_layout.addWidget(files_label)
+                file_list = QListWidget()
+                for pdf in pdfs:
+                    file_list.addItem(pdf.name)
+                files_layout.addWidget(file_list, stretch=1)
+            else:
+                empty = QLabel(t("catalog.drive.folder_empty"))
+                empty.setStyleSheet("color: gray; padding: 8px;")
+                files_layout.addWidget(empty)
+                files_layout.addStretch()
+
+        def unreadable():
+            """讀不到：檔案區寫「讀不到」"""
+            if version == self._detail_version:
+                files_layout.addWidget(self._unreadable_label(), stretch=1)
+
+        self._read(
+            lambda catalog: catalog.folder_contents(folder_id), on_done, unreadable,
+            lambda: self._show_folder_detail(folder_id, folder_name),
+        )
 
     def _show_file_detail(self, file_id: str, file_name: str):
         """顯示檔案資訊"""
@@ -440,20 +526,60 @@ class CatalogWindow(QMainWindow):
     # --- 曲目詳細（含元資料頁籤） ---
 
     def _show_piece_detail(self, piece_id: str):
-        """顯示曲目完整資訊"""
-        if not self._sheets:
-            return
-        detail = self._sheets.get_piece_detail(piece_id)
-        if not detail:
+        """經譜庫服務讀取曲目完整資訊與使用中版本資料夾的檔，讀到後顯示"""
+        self._clear_detail()
+        loading = QLabel(t("catalog.loading"))
+        loading.setAlignment(Qt.AlignCenter)
+        self._detail_layout.addWidget(loading)
+        version = self._detail_version
+
+        def read(catalog: CatalogService):
+            """曲目完整資訊，以及使用中版本資料夾的檔（沒有資料夾時為 None）"""
+            detail = catalog.piece_detail(piece_id)
+            if detail is None:
+                return None, None
+            edition = self._active_edition(detail)
+            folder_id = edition.drive_folder_id if edition else ""
+            return detail, (catalog.edition_files(folder_id) if folder_id else None)
+
+        def on_done(result):
+            """讀到了：換成曲目的各頁籤"""
+            if version == self._detail_version:
+                detail, files = result
+                self._show_piece_tabs(detail, files)
+
+        def unreadable():
+            """讀不到：詳細面板寫「讀不到」"""
+            if version == self._detail_version:
+                self._clear_detail()
+                self._detail_layout.addWidget(self._unreadable_label())
+
+        self._read(read, on_done, unreadable, lambda: self._show_piece_detail(piece_id))
+
+    @staticmethod
+    def _active_edition(detail: PieceDetail) -> Optional[Edition]:
+        """曲目使用中的版本；沒設定時為第一個版本，沒有版本時為 None"""
+        for edition in detail.editions:
+            if edition.id == detail.piece.active_edition_id:
+                return edition
+        return detail.editions[0] if detail.editions else None
+
+    def _show_piece_tabs(self, detail: Optional[PieceDetail], files: Optional[EditionFiles]):
+        """顯示曲目的各頁籤；譜庫裡已經沒有這首曲目時回到選取提示"""
+        self._clear_detail()
+        if detail is None:
+            self._current_detail = None
+            hint = QLabel(t("catalog.drive.select_hint"))
+            hint.setAlignment(Qt.AlignCenter)
+            self._detail_layout.addWidget(hint)
             return
         self._current_detail = detail
-        self._clear_detail()
         tabs = QTabWidget()
         tabs.addTab(
             self._build_piece_info_tab(detail), t("catalog.piece.title"),
         )
         tabs.addTab(
-            self._build_parts_tab(detail), t("catalog.part.title"),
+            self._build_parts_tab(detail, files), t("catalog.part.title"),
         )
         tabs.addTab(
             self._build_performances_tab(detail), t("catalog.performance.title"),
@@ -762,26 +888,24 @@ class CatalogWindow(QMainWindow):
 
     # --- 分譜狀態頁籤 ---
 
-    def _build_parts_tab(self, detail: PieceDetail) -> QWidget:
+    def _build_parts_tab(self, detail: PieceDetail, files: Optional[EditionFiles]) -> QWidget:
         """建立分譜狀態頁籤
 
-        自動偵測資料夾結構：
+        依版本資料夾的結構：
         - 有子資料夾 → 每個子資料夾視為一個樂章，分段顯示
         - 無子資料夾 → 直接列出 PDF 檔案
+
+        Args:
+            detail: 曲目完整資訊
+            files: 使用中版本資料夾的檔；版本沒有資料夾時為 None
         """
         widget = QWidget()
         layout = QVBoxLayout(widget)
         if not detail.editions:
             layout.addWidget(QLabel(t("catalog.tree.no_items")))
             return widget
-        active_edition = None
-        for e in detail.editions:
-            if e.id == detail.piece.active_edition_id:
-                active_edition = e
-                break
-        if not active_edition:
-            active_edition = detail.editions[0]
-        if not active_edition.drive_folder_id or not self._drive:
+        active_edition = self._active_edition(detail)
+        if files is None:
             layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
             return widget
         rename_btn = QPushButton(t("catalog.drive.apply_template"))
@@ -789,24 +913,15 @@ class CatalogWindow(QMainWindow):
             lambda: self._open_drive_rename(active_edition, detail),
         )
         layout.addWidget(rename_btn)
-        try:
-            subfolders = self._drive.list_subfolders(active_edition.drive_folder_id)
-            root_pdfs = self._drive.list_pdfs_in_folder(active_edition.drive_folder_id)
-        except Exception:
-            subfolders = []
-            root_pdfs = []
+        root_pdfs = files.root_pdfs
         part_map = {p.drive_file_id: p for p in detail.parts if p.drive_file_id}
         name_map = {p.file_name: p for p in detail.parts if p.file_name}
-        if subfolders:
+        if files.subfolders:
             scroll_content = QWidget()
             scroll_layout = QVBoxLayout(scroll_content)
             scroll_layout.setContentsMargins(0, 0, 0, 0)
-            for sf in subfolders:
-                try:
-                    sf_pdfs = self._drive.list_pdfs_in_folder(sf["id"])
-                except Exception:
-                    sf_pdfs = []
-                group = QGroupBox(f"{sf['name']}  ({len(sf_pdfs)} {t('catalog.part.file')})")
+            for sf, sf_pdfs in files.subfolders:
+                group = QGroupBox(f"{sf.name}  ({len(sf_pdfs)} {t('catalog.part.file')})")
                 group_layout = QVBoxLayout(group)
                 if sf_pdfs:
                     table = self._build_file_status_table(
@@ -855,10 +970,10 @@ class CatalogWindow(QMainWindow):
         table.setColumnWidth(0, 350)
         status_options = [s.value for s in PartStatus]
         for row, pdf in enumerate(pdfs):
-            name_item = QTableWidgetItem(pdf["name"])
+            name_item = QTableWidgetItem(pdf.name)
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             table.setItem(row, 0, name_item)
-            existing = part_map.get(pdf["id"]) or name_map.get(pdf["name"])
+            existing = part_map.get(pdf.id) or name_map.get(pdf.name)
             current_status = existing.status if existing else PartStatus.UNKNOWN.value
             combo = QComboBox()
             for s in status_options:
@@ -898,11 +1013,13 @@ class CatalogWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, t("catalog.error", error=""), str(e))
 
-    def _on_part_status_changed(self, combo, pdf_info, edition, detail, existing):
+    def _on_part_status_changed(self, combo, pdf_info: DriveFile, edition, detail, existing):
         """分譜狀態下拉選單變更"""
         new_status = combo.currentData()
         color = _STATUS_COLORS.get(new_status, _STATUS_COLORS[PartStatus.UNKNOWN.value])
         combo.setStyleSheet(f"background-color: {color.name()};")
+        if not self._sheets:
+            return
         try:
             if existing and existing.id:
                 self._sheets.update_part(replace(existing, status=new_status))
@@ -910,11 +1027,11 @@ class CatalogWindow(QMainWindow):
                 self._sheets.create_part(Part(
                     edition_id=edition.id,
                     movement_id="",
-                    instrument_name=pdf_info["name"].replace(".pdf", "").replace(".PDF", ""),
+                    instrument_name=pdf_info.name.replace(".pdf", "").replace(".PDF", ""),
                     sort_order="0",
                     status=new_status,
-                    drive_file_id=pdf_info["id"],
-                    file_name=pdf_info["name"],
+                    drive_file_id=pdf_info.id,
+                    file_name=pdf_info.name,
                 ))
         except Exception as e:
             self._status_bar.showMessage(t("catalog.error", error=str(e)))

@@ -9,7 +9,7 @@ import re
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QMessageBox, QGroupBox,
-    QTreeWidget, QTreeWidgetItem, QDialogButtonBox,
+    QTreeWidget, QTreeWidgetItem, QDialogButtonBox, QWidget,
 )
 from PySide6.QtCore import Qt
 from core.locale import t
@@ -42,6 +42,31 @@ def _extract_folder_id(text: str) -> str:
     if match:
         return match.group(1)
     return text
+
+
+def sign_in_google(parent: QWidget, auth: GoogleAuthService) -> bool:
+    """開瀏覽器登入 Google，期間顯示可取消的等待視窗；沒有完成時提示原因（取消不提示）
+
+    譜庫設定的「登入」與錯誤提示列的「重新登入 Google」共用。
+
+    Args:
+        parent: 等待視窗與提示的父元件
+        auth: Google 登入服務
+
+    Returns:
+        是否登入成功
+    """
+    try:
+        run_while_waiting(
+            parent, t("catalog.auth.title"), t("catalog.auth.waiting"), auth.authenticate, auth.cancel_login,
+        )
+    except LoginFailed as e:
+        if e.failure is not LoginFailure.CANCELLED:
+            key = _LOGIN_FAILURE_KEYS.get(e.failure)
+            message = t(key) if key else t("catalog.auth.failed", error=str(e))
+            QMessageBox.warning(parent, t("catalog.auth.title"), message)
+        return False
+    return True
 
 
 class CatalogSettingsDialog(QDialog):
@@ -134,21 +159,10 @@ class CatalogSettingsDialog(QDialog):
             self._auth.logout()
             self._update_auth_display()
             return
-        try:
-            run_while_waiting(
-                self, t("catalog.auth.title"), t("catalog.auth.waiting"),
-                self._auth.authenticate, self._auth.cancel_login,
-            )
-        except LoginFailed as e:
-            self._update_auth_display()
-            if e.failure is LoginFailure.CANCELLED:
-                return
-            key = _LOGIN_FAILURE_KEYS.get(e.failure)
-            message = t(key) if key else t("catalog.auth.failed", error=str(e))
-            QMessageBox.warning(self, t("catalog.auth.title"), message)
-            return
+        signed_in = sign_in_google(self, self._auth)
         self._update_auth_display()
-        QMessageBox.information(self, t("catalog.auth.title"), t("catalog.auth.success"))
+        if signed_in:
+            QMessageBox.information(self, t("catalog.auth.title"), t("catalog.auth.success"))
 
     def _browse_folder(self):
         """以階層式樹狀結構瀏覽 Drive 資料夾"""
