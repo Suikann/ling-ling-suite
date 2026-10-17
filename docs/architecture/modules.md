@@ -18,7 +18,7 @@
 | 兩階段批次搬移 | `services/move_service.py`，只有 `services/move_history.py` 使用（見 [move-history.md](move-history.md)） |
 | 以預設程式開啟網址或本機的檔案、資料夾（瀏覽器、PDF 閱讀器、檔案管理員） | `services/external_opener.py` 的 `ExternalOpener.open`；Linux 打包版替外部程式還原 `LD_LIBRARY_PATH`（`core/launch_env.py`）。不直接呼叫 `QDesktopServices.openUrl` 或 `xdg-open` |
 | PDF 壓縮：級數、三層檢查、暫存的壓縮檔 | `services/compression_service.py` 的 `CompressionService`；PDF 內容的讀寫在 `services/pdf_service.py`（`save_lossless`、`save_downsampled`、`check_compressed`） |
-| 壓縮結果的另存位置規則（預設位置、擋下原檔的資料夾）與交出 | `services/compression_output_service.py` 的 `CompressionOutputService` |
+| 壓縮的批次（多選檔、整個資料夾、另存單一檔）、輸出位置規則（預設位置、擋下輸入的資料夾、會被覆蓋的檔）、整批壓縮與交出 | `services/compression_output_service.py` 的 `CompressionOutputService`；單一檔是只有一份的一批。主視窗整批壓完後由 `MainWindow._deliver_compressed` 交出 |
 | 在背景執行可取消的長工作：進度與取消鈕、期間鎖住重新命名、分割、旋轉、復原、重做，關閉時詢問要不要取消 | `MainWindow._run_in_background`，背景執行緒由 `ui/background_task.py` 的 `BackgroundTask` 管 |
 | OAuth 登入時開瀏覽器、在 `127.0.0.1` 的隨機埠等回呼（Google 與 Discord 共用） | `services/local_callback.py` 的 `LocalCallback`：回傳回呼的 query 參數，逾時、取消都關掉本機伺服器；兌換權杖與檢查 `state` 由各登入服務做 |
 | 內附 Google 用戶端檔的位置 | `core/launch_env.py` 的 `bundled_client_secrets_path`：打包版讀資源目錄（`sys._MEIPASS`），從原始碼執行讀 repo 根目錄 |

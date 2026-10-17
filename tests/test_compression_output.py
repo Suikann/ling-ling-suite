@@ -14,11 +14,11 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from core.constants import CompressionStatus
-from services.compression_output_service import CompressionOutputService
+from services.compression_output_service import CompressionBatch, CompressionJob, CompressionOutputService
 from services.compression_service import CompressionService
 from services.file_service import FileService
 from tests.path_spellings import spellings
-from tests.synthetic_pdfs import file_digest, scanned_pdf
+from tests.synthetic_pdfs import encrypted_pdf, file_digest, scanned_pdf
 
 KB = 1000
 
@@ -32,7 +32,7 @@ class TestCompressionOutput(unittest.TestCase):
         self.parts = os.path.join(self.temp_dir, "Symphony")
         os.makedirs(self.parts)
         self.source = scanned_pdf(os.path.join(self.parts, "Flute.pdf"), dpi=600)
-        self.output = CompressionOutputService(FileService())
+        self.output = CompressionOutputService(FileService(), self.compressor(size_limit=10 ** 9))
 
     def compressor(self, size_limit: int) -> CompressionService:
         return CompressionService(FileService(), os.path.join(self.temp_dir, "scratch"), size_limit=size_limit)
@@ -43,6 +43,9 @@ class TestCompressionOutput(unittest.TestCase):
             os.path.join(self.temp_dir, "Symphony（壓縮）", "Flute.pdf"),
         )
 
+    def root(self) -> str:
+        return self.output.input_root([self.source])
+
     def test_original_file_and_anywhere_inside_its_folder_are_blocked(self):
         for target in (
             self.source,
@@ -51,7 +54,9 @@ class TestCompressionOutput(unittest.TestCase):
             *spellings(self.source).values(),
         ):
             with self.subTest(target=target):
-                self.assertTrue(self.output.is_blocked(self.source, target))
+                self.assertTrue(self.output.is_blocked(self.root(), target))
+                with self.assertRaises(ValueError):
+                    self.output.plan_single(self.source, target)
 
     def test_default_target_and_a_similarly_named_sibling_folder_are_allowed(self):
         for target in (
@@ -60,32 +65,148 @@ class TestCompressionOutput(unittest.TestCase):
             os.path.join(self.temp_dir, "Flute.pdf"),
         ):
             with self.subTest(target=target):
-                self.assertFalse(self.output.is_blocked(self.source, target))
+                self.assertFalse(self.output.is_blocked(self.root(), target))
+
+    def test_single_file_is_a_batch_of_one_saved_under_the_chosen_name(self):
+        target = os.path.join(self.temp_dir, "out", "Flute small.pdf")
+        batch = self.output.plan_single(self.source, target)
+        self.assertEqual([(job.source, job.target, job.name) for job in batch.jobs],
+                         [(self.source, target, "Flute small.pdf")])
 
     def test_file_under_the_limit_is_copied_as_is(self):
-        result = self.compressor(size_limit=os.path.getsize(self.source)).compress(self.source)
-        self.assertEqual(result.status, CompressionStatus.SMALL_ENOUGH)
-        target = self.output.default_target(self.source)
-        self.output.deliver(result, target)
-        self.assertEqual(file_digest(target), file_digest(self.source))
+        batch = self.output.plan_single(self.source, self.output.default_target(self.source))
+        results = self.output.compress(batch)
+        self.assertEqual([r.status for r in results], [CompressionStatus.SMALL_ENOUGH])
+        self.assertEqual(self.output.deliver(batch, results), {})
+        self.assertEqual(file_digest(batch.jobs[0].target), file_digest(self.source))
 
     def test_compressed_file_is_delivered_from_the_temp_folder(self):
-        compressor = self.compressor(size_limit=500 * KB)
-        result = compressor.compress(self.source)
-        self.assertEqual(result.status, CompressionStatus.COMPRESSED)
+        output = CompressionOutputService(FileService(), self.compressor(size_limit=500 * KB))
         target = os.path.join(self.temp_dir, "elsewhere", "Flute.pdf")
-        self.output.deliver(result, target)
-        self.assertEqual(file_digest(target), file_digest(result.output_path))
-        compressor.discard(result)
-        self.assertFalse(os.path.exists(result.output_path))
+        batch = output.plan_single(self.source, target)
+        results = output.compress(batch)
+        self.assertEqual([r.status for r in results], [CompressionStatus.COMPRESSED])
+        output.deliver(batch, results)
+        self.assertEqual(file_digest(target), file_digest(results[0].output_path))
+        output.discard(results)
+        self.assertFalse(os.path.exists(results[0].output_path))
         self.assertTrue(os.path.isfile(target))
 
     def test_delivering_to_a_blocked_target_is_refused(self):
-        result = self.compressor(size_limit=500 * KB).compress(self.source)
+        output = CompressionOutputService(FileService(), self.compressor(size_limit=500 * KB))
+        batch = CompressionBatch(self.parts, self.source, (CompressionJob(self.source, self.source, "Flute.pdf"),))
+        results = output.compress(batch)
         digest = file_digest(self.source)
         with self.assertRaises(ValueError):
-            self.output.deliver(result, self.source)
+            output.deliver(batch, results)
+        output.discard(results)
         self.assertEqual(file_digest(self.source), digest)
+
+
+class TestCompressionBatch(unittest.TestCase):
+    """一整批：選整個資料夾或多選檔，輸出照原本的子資料夾結構"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, True)
+        self.root = os.path.join(self.temp_dir, "Symphony")
+        os.makedirs(os.path.join(self.root, "Strings"))
+        self.flute = scanned_pdf(os.path.join(self.root, "Flute.pdf"), dpi=300)
+        self.violin = scanned_pdf(os.path.join(self.root, "Strings", "Violin.pdf"), dpi=300)
+        with open(os.path.join(self.root, "notes.txt"), "w") as f:
+            f.write("not a pdf")
+        self.scratch = os.path.join(self.temp_dir, "scratch")
+        self.output = self.service(size_limit=10 ** 9)
+
+    def service(self, size_limit: int) -> CompressionOutputService:
+        files = FileService()
+        return CompressionOutputService(files, CompressionService(files, self.scratch, size_limit=size_limit))
+
+    def test_folder_includes_pdfs_in_subfolders(self):
+        self.assertEqual(self.output.collect_folder(self.root), [self.flute, self.violin])
+
+    def test_default_output_is_beside_the_input_folder(self):
+        self.assertEqual(self.output.default_output(self.root), os.path.join(self.temp_dir, "Symphony（壓縮）"))
+
+    def test_targets_keep_the_subfolder_structure_and_file_names(self):
+        out = os.path.join(self.temp_dir, "out")
+        batch = self.output.plan(self.root, self.output.collect_folder(self.root), out)
+        self.assertEqual(
+            [(job.source, job.target, job.name) for job in batch.jobs],
+            [
+                (self.flute, os.path.join(out, "Flute.pdf"), "Flute.pdf"),
+                (self.violin, os.path.join(out, "Strings", "Violin.pdf"), os.path.join("Strings", "Violin.pdf")),
+            ],
+        )
+
+    def test_input_folder_and_anywhere_inside_it_are_blocked(self):
+        for output in (self.root, os.path.join(self.root, "Strings"), os.path.join(self.root, "new"),
+                       *spellings(self.root).values()):
+            with self.subTest(output=output):
+                self.assertTrue(self.output.is_blocked(self.root, output))
+                with self.assertRaises(ValueError):
+                    self.output.plan(self.root, [self.flute], output)
+
+    def test_default_output_and_the_parent_folder_are_allowed(self):
+        for output in (self.output.default_output(self.root), self.temp_dir):
+            with self.subTest(output=output):
+                self.assertFalse(self.output.is_blocked(self.root, output))
+
+    def test_lists_the_files_an_earlier_output_would_have_overwritten(self):
+        out = self.output.default_output(self.root)
+        os.makedirs(os.path.join(out, "Strings"))
+        for name in (os.path.join("Strings", "Violin.pdf"), "Oboe.pdf"):
+            with open(os.path.join(out, name), "wb") as f:
+                f.write(b"earlier output")
+        batch = self.output.plan(self.root, self.output.collect_folder(self.root), out)
+        self.assertEqual([job.name for job in self.output.overwritten(batch)], [os.path.join("Strings", "Violin.pdf")])
+
+    def test_whole_batch_is_delivered_with_small_files_copied_as_is(self):
+        out = os.path.join(self.temp_dir, "out")
+        batch = self.output.plan(self.root, self.output.collect_folder(self.root), out)
+        self.assertEqual(self.output.deliver(batch, self.output.compress(batch)), {})
+        self.assertEqual(file_digest(os.path.join(out, "Flute.pdf")), file_digest(self.flute))
+        self.assertEqual(file_digest(os.path.join(out, "Strings", "Violin.pdf")), file_digest(self.violin))
+
+    def test_multiselected_files_must_share_a_folder(self):
+        self.assertEqual(self.output.input_root([self.flute, os.path.join(self.root, "Oboe.pdf")]), self.root)
+        with self.assertRaises(ValueError):
+            self.output.input_root([self.flute, self.violin])
+
+    def scratch_files(self):
+        return [name for _, _, names in os.walk(self.scratch) for name in names]
+
+    def test_progress_reports_which_file_of_how_many(self):
+        batch = self.output.plan(self.root, self.output.collect_folder(self.root), os.path.join(self.temp_dir, "out"))
+        reported = []
+        self.output.compress(batch, on_progress=reported.append)
+        self.assertEqual([(p.index, p.total, p.source) for p in reported], [(1, 2, self.flute), (2, 2, self.violin)])
+
+    def test_cancelling_after_a_compressed_file_discards_it_and_delivers_nothing(self):
+        output = self.service(size_limit=100 * KB)
+        batch = output.plan(self.root, output.collect_folder(self.root), os.path.join(self.temp_dir, "out"))
+        reported = []
+        results = output.compress(
+            batch, should_cancel=lambda: any(p.index == 2 for p in reported), on_progress=reported.append,
+        )
+        self.assertIsNone(results)
+        self.assertTrue(any(p.index == 1 and p.step is not None and p.step.checking for p in reported))
+        self.assertEqual(self.scratch_files(), [])
+        self.assertFalse(os.path.exists(batch.output))
+
+    def test_files_that_cannot_be_compressed_are_not_delivered(self):
+        encrypted_pdf(os.path.join(self.root, "Oboe.pdf"), dpi=300)
+        output = self.service(size_limit=100 * KB)
+        out = os.path.join(self.temp_dir, "out")
+        batch = output.plan(self.root, output.collect_folder(self.root), out)
+        results = output.compress(batch)
+        self.assertEqual([r.status for r in results], [
+            CompressionStatus.COMPRESSED, CompressionStatus.UNCOMPRESSIBLE, CompressionStatus.COMPRESSED,
+        ])
+        output.deliver(batch, results)
+        output.discard(results)
+        self.assertEqual(sorted(name for _, _, names in os.walk(out) for name in names), ["Flute.pdf", "Violin.pdf"])
+        self.assertEqual(self.scratch_files(), [])
 
 
 if __name__ == '__main__':

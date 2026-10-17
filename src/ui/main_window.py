@@ -5,7 +5,7 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
-from typing import Any, Callable, Iterable, List, NamedTuple, Optional
+from typing import Any, Callable, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog,
@@ -16,13 +16,13 @@ from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
-    LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, CompressionStatus, OperationKind,
+    LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind,
 )
 from core.locale import t, get_locale, is_english, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
-from services.compression_output_service import CompressionOutputService
-from services.compression_service import CompressionProgress, CompressionResult, CompressionService
+from services.compression_output_service import CompressionBatch, CompressionOutputService
+from services.compression_service import CompressionResult, CompressionService
 from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
@@ -105,7 +105,7 @@ class MainWindow(QMainWindow):
         self._login_not_saved.connect(self._warn_login_not_saved)
         self._auth_service.subscribe_not_saved(self._login_not_saved.emit)
         self._compressor = compressor or CompressionService(self.file_service)
-        self._compression_output = CompressionOutputService(self.file_service)
+        self._compression_output = CompressionOutputService(self.file_service, self._compressor)
         # 背景工作（一次一件）與它進行中時的狀態列文字、關閉時的詢問
         self._task: Optional[BackgroundTask] = None
         self._task_status = ""
@@ -148,7 +148,8 @@ class MainWindow(QMainWindow):
         self._file_actions.append(self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf))
         tools_menu.addSeparator()
         self._file_actions.append(self._add_action(tools_menu, t("menu.tools.rotate_pdf"), self._open_rotate_pdf))
-        self._file_actions.append(self._add_action(tools_menu, t("menu.tools.compress_pdf"), self._compress_pdf))
+        self._file_actions.append(self._add_action(tools_menu, t("menu.tools.compress_pdf"), self._compress_files))
+        self._file_actions.append(self._add_action(tools_menu, t("menu.tools.compress_folder"), self._compress_folder))
         tools_menu.addSeparator()
         self._add_action(tools_menu, t("menu.tools.open_workspace"), self._open_workspace_folder)
         self._add_action(tools_menu, t("menu.tools.cleanup_workspace"), self._open_workspace_cleanup)
@@ -699,35 +700,61 @@ class MainWindow(QMainWindow):
 
     # --- 壓縮 PDF ---
 
-    def _compress_pdf(self):
-        """選一份 PDF 與另存位置，在背景壓縮；壓完交到另存位置並告訴使用者結果"""
+    def _compress_files(self):
+        """多選同一資料夾裡的 PDF（或另存單一檔）並在背景壓縮"""
         from ui import compress_pdf
-        paths = compress_pdf.ask_paths(self, self._compression_output, self.file_service)
-        if paths is None:
+        self._compress(compress_pdf.ask_files(self, self._compression_output, self.file_service))
+
+    def _compress_folder(self):
+        """選一個資料夾，連同子資料夾裡的 PDF 在背景壓縮"""
+        from ui import compress_pdf
+        self._compress(compress_pdf.ask_folder(self, self._compression_output))
+
+    def _compress(self, batch: Optional[CompressionBatch]):
+        """在背景一次一份壓完整批，再交給 _deliver_compressed；取消時已壓好的全部丟掉、什麼都不輸出
+
+        Args:
+            batch: 這一批；使用者在選檔或輸出位置時取消了就是 None，什麼都不做
+        """
+        if batch is None:
             return
-        source, target = paths
-        name = os.path.basename(source)
-        compressor = self._compressor
+        from ui import compress_pdf
+        output = self._compression_output
 
-        def work(should_cancel, report) -> CompressionResult:
-            return compressor.compress(source, should_cancel, report)
+        def work(should_cancel, report) -> Optional[Tuple[CompressionResult, ...]]:
+            return output.compress(batch, should_cancel, report)
 
-        def describe(progress: CompressionProgress):
-            return compress_pdf.describe_progress(name, progress), progress.page, progress.page_count
+        def finished(results: Optional[Tuple[CompressionResult, ...]], cancelled: bool):
+            if cancelled or results is None:
+                output.discard(results or ())
+                self._set_status(t("compress.cancelled"))
+                return
+            self._deliver_compressed(batch, results)
 
-        def finished(result: CompressionResult, cancelled: bool):
+        self._run_in_background(
+            work, compress_pdf.describe_progress, finished, "compress.error", "compress.close.message",
+        )
+
+    def _deliver_compressed(self, batch: CompressionBatch, results: Sequence[CompressionResult]):
+        """把整批壓完、檢查完的結果交到輸出位置，逐份告訴使用者結果，最後丟掉暫存的壓縮檔
+
+        Args:
+            batch: 這一批
+            results: 各份的壓縮結果，壓縮檔還在暫存資料夾
+        """
+        from ui import compress_pdf
+        output = self._compression_output
+        try:
             try:
-                if cancelled or result.status is CompressionStatus.CANCELLED:
-                    self._set_status(t("compress.cancelled"))
-                    return
-                delivered = compress_pdf.deliver_and_report(
-                    self, self._compression_output, result, target, compressor.size_limit,
-                )
-                self._set_status(t("compress.status.done", name=name) if delivered else t("status.ready"))
-            finally:
-                compressor.discard(result)
-
-        self._run_in_background(work, describe, finished, "compress.error", "compress.close.message")
+                errors = output.deliver(batch, results)
+            except ValueError as e:
+                self._set_status(t("status.ready"))
+                QMessageBox.critical(self, t("dialog.error"), t("compress.deliver_failed", error=e))
+                return
+            compress_pdf.report(self, batch, results, errors, self._compressor.size_limit)
+            self._set_status(t("compress.status.done", name=os.path.basename(batch.output)))
+        finally:
+            output.discard(results)
 
     # --- 背景工作 ---
 

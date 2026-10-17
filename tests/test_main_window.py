@@ -1180,9 +1180,9 @@ class MainWindowCompressTestCase(MainWindowTestCase):
         self.target = os.path.join(self.temp_dir, "Symphony（壓縮）", "Flute.pdf")
 
     def start_compressing(self, *targets: str) -> mock.MagicMock:
-        """從工具選單選原檔，另存對話框依序回答 targets，回傳另存對話框的替身"""
+        """從工具選單只選一份原檔，另存對話框依序回答 targets，回傳另存對話框的替身"""
         answers = [(target, "") for target in targets]
-        with mock.patch.object(QFileDialog, "getOpenFileName", return_value=(self.source, "")), \
+        with mock.patch.object(QFileDialog, "getOpenFileNames", return_value=([self.source], "")), \
                 mock.patch.object(QFileDialog, "getSaveFileName", side_effect=answers) as save:
             self.trigger_menu(t("menu.tools.compress_pdf"))
         return save
@@ -1278,7 +1278,7 @@ class TestMainWindowCompressPdfCancel(MainWindowCompressTestCase):
         self.click_button(t("compress.cancel"))
         with answering_prompts():
             self.finish()
-        self.assertEqual(self.gated.results[0].status, CompressionStatus.CANCELLED)
+        self.assertTrue(all(r.status is CompressionStatus.CANCELLED for r in self.gated.results))
         self.assertFalse(os.path.exists(self.target))
         self.assertEqual(self.scratch_files(), [])
         self.assertTrue(self.status_shows(t("compress.cancelled")))
@@ -1287,9 +1287,125 @@ class TestMainWindowCompressPdfCancel(MainWindowCompressTestCase):
         self.start_compressing(self.target)
         with answering_prompts(QMessageBox.Yes):
             self.assertTrue(self.window.close())
-        self.assertEqual(self.gated.results[0].status, CompressionStatus.CANCELLED)
+        self.assertTrue(all(r.status is CompressionStatus.CANCELLED for r in self.gated.results))
         self.assertFalse(os.path.exists(self.target))
         self.assertEqual(self.scratch_files(), [])
+
+
+class MainWindowCompressBatchTestCase(MainWindowCompressTestCase):
+    """一整批壓縮的共用骨架：Symphony 資料夾裡有 Flute.pdf 與 Strings/Violin.pdf，預設輸出到旁邊的「Symphony（壓縮）」"""
+
+    def setUp(self):
+        super().setUp()
+        self.root = os.path.dirname(self.source)
+        os.makedirs(os.path.join(self.root, "Strings"))
+        self.violin = scanned_pdf(os.path.join(self.root, "Strings", "Violin.pdf"), dpi=300)
+        self.output_dir = os.path.join(self.temp_dir, "Symphony（壓縮）")
+
+    def start_folder(self, *answers, folders=()) -> list:
+        """從工具選單選整個 Symphony 資料夾；提示框依序回答 answers，選輸出位置的對話框依序回答 folders
+
+        Returns:
+            跳出過的提示框（標題，訊息）
+        """
+        with mock.patch.object(QFileDialog, "getExistingDirectory", side_effect=[self.root, *folders]), \
+                answering_prompts(*answers) as shown:
+            self.trigger_menu(t("menu.tools.compress_folder"))
+        return shown
+
+    def output_files(self) -> List[str]:
+        """預設輸出位置裡的檔案（相對路徑）"""
+        return sorted(
+            os.path.relpath(os.path.join(folder, name), self.output_dir)
+            for folder, _, names in os.walk(self.output_dir) for name in names
+        )
+
+
+class TestMainWindowCompressBatch(MainWindowCompressBatchTestCase):
+    """壓縮一整批：整個資料夾或多選檔，輸出照原本的子資料夾結構"""
+
+    def test_folder_is_compressed_into_the_folder_beside_it_keeping_subfolders(self):
+        shown = self.start_folder(t("compress.output.start"))
+        self.assertEqual(shown, [(t("compress.title"), t("compress.output.message", path=self.output_dir))])
+        with answering_prompts() as shown:
+            self.finish()
+        self.assertEqual(self.output_files(), ["Flute.pdf", os.path.join("Strings", "Violin.pdf")])
+        self.assertEqual(file_digest(os.path.join(self.output_dir, "Strings", "Violin.pdf")), file_digest(self.violin))
+        self.assertEqual(len(shown), 1)
+        self.assertIn(os.path.join("Strings", "Violin.pdf"), shown[0][1])
+
+    def test_multiselected_files_go_into_the_folder_beside_them(self):
+        oboe = scanned_pdf(os.path.join(self.root, "Oboe.pdf"), dpi=300)
+        with mock.patch.object(QFileDialog, "getOpenFileNames", return_value=([self.source, oboe], "")), \
+                answering_prompts(t("compress.output.start")):
+            self.trigger_menu(t("menu.tools.compress_pdf"))
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(self.output_files(), ["Flute.pdf", "Oboe.pdf"])
+
+    def test_progress_shows_which_file_of_how_many(self):
+        self.start_folder(t("compress.output.start"))
+        wait_until(lambda: self.status_shows(t("compress.progress.starting", index=1, total=2, name="Flute.pdf")))
+        with answering_prompts():
+            self.finish()
+
+    def test_output_inside_the_input_folder_is_refused(self):
+        inside = os.path.join(self.root, "Strings")
+        shown = self.start_folder(t("compress.output.change"), t("compress.output.cancel"), folders=[inside])
+        self.assertIn((t("dialog.warning"), t("compress.output.blocked")), shown)
+        self.assertTrue(self.compress_action().isEnabled())
+        self.assertEqual(self.gated.results, [])
+
+    def test_changed_output_location_is_used(self):
+        elsewhere = os.path.join(self.temp_dir, "elsewhere")
+        os.makedirs(elsewhere)
+        self.start_folder(t("compress.output.change"), folders=[elsewhere])
+        with answering_prompts():
+            self.finish()
+        self.assertTrue(os.path.isfile(os.path.join(elsewhere, "Strings", "Violin.pdf")))
+
+    def test_files_that_would_be_overwritten_are_listed_and_confirmed_once(self):
+        earlier = os.path.join(self.output_dir, "Strings", "Violin.pdf")
+        os.makedirs(os.path.dirname(earlier))
+        with open(earlier, "wb") as f:
+            f.write(b"earlier output")
+        shown = self.start_folder(t("compress.output.start"), QMessageBox.Yes)
+        self.assertEqual(shown[1][1], t("compress.overwrite.message", names=os.path.join("Strings", "Violin.pdf")))
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(file_digest(earlier), file_digest(self.violin))
+
+    def test_declining_to_overwrite_starts_nothing(self):
+        earlier = os.path.join(self.output_dir, "Flute.pdf")
+        os.makedirs(self.output_dir)
+        with open(earlier, "wb") as f:
+            f.write(b"earlier output")
+        self.start_folder(t("compress.output.start"), QMessageBox.No)
+        self.assertTrue(self.compress_action().isEnabled())
+        self.assertEqual(self.output_files(), ["Flute.pdf"])
+
+    def test_folder_without_pdfs_is_reported(self):
+        empty = os.path.join(self.temp_dir, "Empty")
+        os.makedirs(empty)
+        with mock.patch.object(QFileDialog, "getExistingDirectory", return_value=empty), \
+                answering_prompts() as shown:
+            self.trigger_menu(t("menu.tools.compress_folder"))
+        self.assertEqual(shown, [(t("dialog.info"), t("compress.no_pdfs"))])
+
+
+class TestMainWindowCompressBatchCancel(MainWindowCompressBatchTestCase):
+    """取消整批：已壓好的也丟掉，輸出位置沒有任何新檔"""
+
+    size_limit = 1000
+
+    def test_cancelling_a_batch_delivers_nothing(self):
+        self.start_folder(t("compress.output.start"))
+        self.click_button(t("compress.cancel"))
+        with answering_prompts():
+            self.finish()
+        self.assertFalse(os.path.exists(self.output_dir))
+        self.assertEqual(self.scratch_files(), [])
+        self.assertTrue(self.status_shows(t("compress.cancelled")))
 
 
 class TestSingleInstanceLaunch(unittest.TestCase):
