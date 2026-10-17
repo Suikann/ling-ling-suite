@@ -31,6 +31,8 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# 唯一一份打包定義，要進 git
+!LingLingSuite.spec
 
 # Installer logs
 pip-log.txt
