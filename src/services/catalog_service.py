@@ -62,6 +62,16 @@ def _random_id() -> str:
     return uuid.uuid4().hex[:8]
 
 
+def _column_letter(index: int) -> str:
+    """從 0 起算的欄號轉成欄位字母（0 → A、26 → AA）"""
+    letters = ""
+    index += 1
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
+
+
 def _whole_sheet(sheet: str) -> str:
     """整張工作表的範圍"""
     return sheet_range(sheet, "A:ZZ")
@@ -81,6 +91,15 @@ def _models(rows: List[List[str]], sheet: str, model_class: Type[T]) -> List[T]:
         }
         result.append(model_class(**values))
     return result
+
+
+def _records(rows: List[List[str]], sheet: str) -> List[Dict[str, str]]:
+    """把工作表讀到的列（含標題列）轉成欄位名稱對值；標題列與空列略過"""
+    headers = SHEET_HEADERS[sheet]
+    return [
+        {header: (row[i] if i < len(row) else "") for i, header in enumerate(headers)}
+        for row in rows[1:] if any(row)
+    ]
 
 
 class PendingRows:
@@ -344,6 +363,96 @@ class CatalogService:
             CatalogError: 寫不進去，沒有任何一格被寫入
         """
         self._call(lambda: self._sheets.write_cells(data))
+
+    def update_record(self, sheet: str, record_id: str, values: Mapping[str, str]) -> None:
+        """改一筆紀錄的幾個欄位：寫入前一刻才讀 ID 欄找列號，只寫給的欄位（一次寫入）
+
+        Args:
+            sheet: 工作表名稱
+            record_id: 紀錄的 ID
+            values: 要改的欄位與新值（欄位名稱見 SHEET_HEADERS）
+
+        Raises:
+            CatalogError: 寫不進去；工作表裡已經沒有這筆紀錄時為其他
+        """
+        headers = SHEET_HEADERS[sheet]
+
+        def send() -> None:
+            """找列號後寫入"""
+            column = self._sheets.read_ranges([sheet_range(sheet, "A:A")])[0]
+            row = next((i + 1 for i, line in enumerate(column) if i > 0 and line and line[0] == record_id), None)
+            if row is None:
+                raise CatalogError(CatalogErrorKind.OTHER, f"{record_id} is no longer in sheet {sheet}")
+            self._sheets.write_cells([
+                (sheet_range(sheet, f"{_column_letter(headers.index(name))}{row}"), [[str(value)]])
+                for name, value in values.items()
+            ])
+        self._call(send)
+
+    def delete_record(self, sheet: str, record_id: str) -> None:
+        """刪掉一筆紀錄（同一個 ID 有幾列就刪幾列）；請求數固定
+
+        Raises:
+            CatalogError: 刪不掉，沒有任何一列被刪掉；以同樣的參數再呼叫一次即可
+        """
+        self._delete([sheet], lambda records: {sheet: {record_id}})
+
+    def delete_piece(self, piece_id: str) -> None:
+        """刪掉一首曲目的紀錄，連同它的版本、樂章、版本的分譜與演出紀錄（不動 Drive 上的檔）；請求數固定
+
+        Raises:
+            CatalogError: 刪不掉，沒有任何一列被刪掉；以同樣的參數再呼叫一次即可
+        """
+        def doomed(records: Dict[str, List[Dict[str, str]]]) -> Dict[str, Set[str]]:
+            """曲目與連帶的紀錄"""
+            editions = {r["id"] for r in records[SHEET_EDITIONS] if r["piece_id"] == piece_id}
+            return {
+                SHEET_PIECES: {piece_id},
+                SHEET_EDITIONS: editions,
+                SHEET_MOVEMENTS: {r["id"] for r in records[SHEET_MOVEMENTS] if r["piece_id"] == piece_id},
+                SHEET_PARTS: {r["id"] for r in records[SHEET_PARTS] if r["edition_id"] in editions},
+                SHEET_PERFORMANCES: {r["id"] for r in records[SHEET_PERFORMANCES] if r["piece_id"] == piece_id},
+            }
+        self._delete(
+            [SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES], doomed,
+        )
+
+    def delete_movement(self, movement_id: str) -> None:
+        """刪掉一個樂章，連同它的分譜；請求數固定
+
+        Raises:
+            CatalogError: 刪不掉，沒有任何一列被刪掉；以同樣的參數再呼叫一次即可
+        """
+        self._delete([SHEET_MOVEMENTS, SHEET_PARTS], lambda records: {
+            SHEET_MOVEMENTS: {movement_id},
+            SHEET_PARTS: {r["id"] for r in records[SHEET_PARTS] if r["movement_id"] == movement_id},
+        })
+
+    def _delete(
+        self, sheets: Sequence[str], doomed: Callable[[Dict[str, List[Dict[str, str]]]], Dict[str, Set[str]]],
+    ) -> None:
+        """寫入前一刻才讀 sheets 的全部列，刪掉 doomed 選出的 ID 所在的列（讀、查 sheetId、刪各一次請求）
+
+        Args:
+            sheets: 要讀的工作表
+            doomed: 以各工作表的紀錄選出各工作表要刪的 ID
+        """
+        def send() -> None:
+            """找列號後刪除"""
+            tables = dict(zip(sheets, self._sheets.read_ranges([_whole_sheet(sheet) for sheet in sheets])))
+            ids = doomed({sheet: _records(rows, sheet) for sheet, rows in tables.items()})
+            targets = [
+                (sheet, index) for sheet in sheets for index, line in enumerate(tables[sheet])
+                if index > 0 and line and line[0] in ids.get(sheet, set())
+            ]
+            if not targets:
+                return
+            sheet_ids = self._sheets.sheet_ids()
+            missing = {sheet for sheet, _ in targets} - set(sheet_ids)
+            if missing:
+                raise CatalogError(CatalogErrorKind.OTHER, f"no sheet named {sorted(missing)}")
+            self._sheets.delete_rows([(sheet_ids[sheet], index) for sheet, index in targets])
+        self._call(send)
 
     def _draw_ids(self, taken: Set[str], count: int) -> List[str]:
         """抽 count 個不在 taken 裡、彼此也不重複的 ID"""

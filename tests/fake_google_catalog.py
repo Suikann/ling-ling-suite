@@ -138,12 +138,15 @@ class FakeSheets:
     def __init__(self, google: FakeGoogle):
         self._google = google
         self._tabs: Dict[str, List[List[str]]] = {}
+        self._sheet_ids: Dict[str, int] = {}
+        self._next_sheet_id = itertools.count(1)
 
     # --- 測試直接操作（不算請求）---
 
     def create_tab(self, title: str, rows: Sequence[Sequence[str]] = ()) -> None:
-        """建立一張工作表並放進 rows（第一列通常是標題列）"""
+        """建立一張工作表並放進 rows（第一列通常是標題列）；已有這張時換掉內容"""
         self._tabs[title] = [[str(value) for value in row] for row in rows]
+        self._sheet_ids.setdefault(title, next(self._next_sheet_id))
 
     def rows(self, title: str) -> List[List[str]]:
         """工作表目前的內容（含標題列；去掉結尾的空格與空列）"""
@@ -189,6 +192,24 @@ class FakeSheets:
             if title in self._tabs:
                 raise CatalogError(CatalogErrorKind.OTHER, f"A sheet with the name \"{title}\" already exists.")
             self._tabs[title] = []
+            self._sheet_ids[title] = next(self._next_sheet_id)
+        self._google.request(handle)
+
+    def sheet_ids(self) -> Dict[str, int]:
+        """每張工作表的 sheetId"""
+        return self._google.request(lambda: dict(self._sheet_ids))
+
+    def delete_rows(self, rows: Sequence[Tuple[int, int]]) -> None:
+        """刪掉多列（sheetId、從 0 起算的列號，都以刪除前為準），全成或全不成"""
+        def handle():
+            titles = {sheet_id: title for title, sheet_id in self._sheet_ids.items()}
+            for sheet_id, _row in rows:
+                if sheet_id not in titles:
+                    raise CatalogError(CatalogErrorKind.OTHER, f"No grid with id: {sheet_id}")
+            for sheet_id, row in sorted(set(rows), key=lambda target: -target[1]):
+                tab = self._tabs[titles[sheet_id]]
+                if row < len(tab):
+                    del tab[row]
         self._google.request(handle)
 
     def sheet_titles(self) -> List[str]:

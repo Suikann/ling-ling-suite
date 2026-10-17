@@ -139,6 +139,24 @@ class TestSheetsRequests(unittest.TestCase):
         self.assertIn("/spreadsheets/sheet-1?", http.request_sequence[0][0])
         self.assertEqual(sent_query(http, 0)["fields"], ["sheets.properties.title"])
 
+    def test_lists_sheet_ids(self):
+        http = HttpMockSequence([ok({"sheets": [
+            {"properties": {"sheetId": 0, "title": "曲目"}}, {"properties": {"sheetId": 7, "title": "版本"}},
+        ]})])
+        self.assertEqual(GoogleSheets("sheet-1", http=http).sheet_ids(), {"曲目": 0, "版本": 7})
+        self.assertEqual(sent_query(http, 0)["fields"], ["sheets.properties(sheetId,title)"])
+
+    def test_deletes_rows_bottom_up_in_one_batch_update(self):
+        http = HttpMockSequence([ok({})])
+        GoogleSheets("sheet-1", http=http).delete_rows([(0, 2), (7, 1), (0, 5)])
+        starts = [
+            (r["deleteDimension"]["range"]["sheetId"], r["deleteDimension"]["range"]["startIndex"],
+             r["deleteDimension"]["range"]["endIndex"])
+            for r in sent_body(http, 0)["requests"]
+        ]
+        self.assertEqual(starts, [(0, 5, 6), (0, 2, 3), (7, 1, 2)])
+        self.assertEqual(len(http.request_sequence), 1)
+
     def test_google_errors_become_catalog_errors(self):
         http = HttpMockSequence([({"status": "404"}, json.dumps({"error": {"code": 404, "message": "not found"}}))])
         with self.assertRaises(CatalogError) as raised:

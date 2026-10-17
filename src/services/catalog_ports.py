@@ -14,7 +14,7 @@
     values = sheets.read_ranges([sheet_range("曲目", "A:ZZ")])[0]
     listing = drive.list_files("'root' in parents and trashed = false")
 """
-from typing import List, Protocol, Sequence, Tuple
+from typing import Dict, List, Protocol, Sequence, Tuple
 
 from core.catalog_models import DriveListing
 
@@ -83,6 +83,23 @@ class SheetsPort(Protocol):
 
         Raises:
             CatalogError: 讀取失敗
+        """
+
+    def sheet_ids(self) -> Dict[str, int]:
+        """每張工作表的名稱與 sheetId（spreadsheets.get）
+
+        Raises:
+            CatalogError: 讀取失敗
+        """
+
+    def delete_rows(self, rows: Sequence[Tuple[int, int]]) -> None:
+        """一次刪掉多列（一個 batchUpdate，全成或全不成）
+
+        Args:
+            rows: （sheetId，從 0 起算的列號）；列號都以這次刪除之前的為準
+
+        Raises:
+            CatalogError: 刪除失敗，沒有任何一列被刪掉
         """
 
 

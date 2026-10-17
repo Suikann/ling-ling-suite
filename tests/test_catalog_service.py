@@ -291,6 +291,86 @@ class TestPublishingPlatform(CatalogTestCase):
         self.assertEqual(raised.exception.kind, CatalogErrorKind.OFFLINE)
 
 
+class TestUpdateRecord(CatalogTestCase):
+    """改一筆紀錄：寫入前一刻才找列號，只寫給的欄位，一次寫入"""
+
+    def test_writes_only_the_given_fields_of_the_row_found_just_before_writing(self):
+        add_row(self.google, SHEET_PIECES, id="p1", title="甲", genre="國樂", active_edition_id="e1")
+        add_row(self.google, SHEET_PIECES, id="p2", title="乙")
+        # 另一台電腦在第 1 次請求之前刪掉了 p1，p2 往上移了一列
+        self.google.before_request(1, lambda: self.google.sheets.create_tab(
+            SHEET_PIECES, [SHEET_HEADERS[SHEET_PIECES], self.google.sheets.rows(SHEET_PIECES)[2]]))
+        self.catalog.update_record(SHEET_PIECES, "p2", {"title": "=乙改", "genre": "絲竹"})
+        row = self.google.sheets.rows(SHEET_PIECES)[1]
+        self.assertEqual((row[0], row[2], row[6]), ("p2", "=乙改", "絲竹"))
+        self.assertEqual(self.google.requests, 2)
+
+    def test_leaves_other_fields_alone(self):
+        add_row(self.google, SHEET_PIECES, id="p1", title="甲", active_edition_id="e1")
+        self.catalog.update_record(SHEET_PIECES, "p1", {"title": "乙"})
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[1][11], "e1")
+
+    def test_a_record_no_longer_in_the_sheet_raises_instead_of_writing(self):
+        with self.assertRaises(CatalogError) as raised:
+            self.catalog.update_record(SHEET_PIECES, "gone", {"title": "乙"})
+        self.assertEqual(raised.exception.kind, CatalogErrorKind.OTHER)
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES), [SHEET_HEADERS[SHEET_PIECES]])
+
+
+class TestDelete(CatalogTestCase):
+    """刪除：寫入前一刻才讀列號，連帶的列一起刪，請求數固定"""
+
+    def setUp(self):
+        super().setUp()
+        add_row(self.google, SHEET_PIECES, id="p1", title="春江花月夜")
+        add_row(self.google, SHEET_PIECES, id="p2", title="別首")
+        for n in range(3):
+            add_row(self.google, SHEET_EDITIONS, id=f"e{n}", piece_id="p1")
+            add_row(self.google, SHEET_PARTS, id=f"t{n}", edition_id=f"e{n}", movement_id="m1")
+            add_row(self.google, SHEET_PERFORMANCES, id=f"r{n}", piece_id="p1")
+        add_row(self.google, SHEET_EDITIONS, id="e9", piece_id="p2")
+        add_row(self.google, SHEET_PARTS, id="t9", edition_id="e9")
+        add_row(self.google, SHEET_MOVEMENTS, id="m1", piece_id="p1")
+        add_row(self.google, SHEET_MOVEMENTS, id="m2", piece_id="p1")
+
+    def ids(self, sheet: str) -> list:
+        """工作表裡剩下的 ID"""
+        return [row[0] for row in self.google.sheets.rows(sheet)[1:]]
+
+    def test_deleting_a_piece_deletes_its_editions_movements_parts_and_performances(self):
+        self.catalog.delete_piece("p1")
+        self.assertEqual(self.ids(SHEET_PIECES), ["p2"])
+        self.assertEqual(self.ids(SHEET_EDITIONS), ["e9"])
+        self.assertEqual(self.ids(SHEET_PARTS), ["t9"])
+        self.assertEqual(self.ids(SHEET_PERFORMANCES), [])
+        self.assertEqual(self.ids(SHEET_MOVEMENTS), [])
+        self.assertEqual(self.google.requests, 3)
+
+    def test_deleting_a_movement_deletes_its_parts(self):
+        self.catalog.delete_movement("m1")
+        self.assertEqual(self.ids(SHEET_MOVEMENTS), ["m2"])
+        self.assertEqual(self.ids(SHEET_PARTS), ["t9"])
+
+    def test_deletes_one_record(self):
+        self.catalog.delete_record(SHEET_PERFORMANCES, "r1")
+        self.assertEqual(self.ids(SHEET_PERFORMANCES), ["r0", "r2"])
+
+    def test_finds_rows_just_before_deleting(self):
+        # 另一台電腦在第 1 次請求之前在最上面新增了一首曲目
+        self.google.before_request(1, lambda: self.google.sheets.create_tab(SHEET_PIECES, [
+            SHEET_HEADERS[SHEET_PIECES], ["p0"], *self.google.sheets.rows(SHEET_PIECES)[1:]]))
+        self.catalog.delete_record(SHEET_PIECES, "p1")
+        self.assertEqual(self.ids(SHEET_PIECES), ["p0", "p2"])
+
+    def test_deleting_again_after_a_lost_response_deletes_nothing_more(self):
+        self.google.fail_at(3, CatalogErrorKind.OFFLINE, applied=True)
+        with self.assertRaises(CatalogError):
+            self.catalog.delete_piece("p1")
+        self.catalog.delete_piece("p1")
+        self.assertEqual(self.ids(SHEET_PIECES), ["p2"])
+        self.assertEqual(self.ids(SHEET_EDITIONS), ["e9"])
+
+
 class TestWithoutGoogleClient(unittest.TestCase):
     """譜庫服務、關口與錯誤類別不載入 Google 程式庫（只有通事會，而且是用到時才載入）"""
 

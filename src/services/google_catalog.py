@@ -15,7 +15,7 @@
 """
 import json
 import threading
-from typing import TYPE_CHECKING, Any, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.catalog_models import DriveFile, DriveListing
@@ -139,6 +139,27 @@ class GoogleSheets(_Gateway):
             spreadsheetId=self._spreadsheet_id, fields="sheets.properties.title",
         ))
         return [sheet.get("properties", {}).get("title", "") for sheet in response.get("sheets", [])]
+
+    def sheet_ids(self) -> Dict[str, int]:
+        """每張工作表的名稱與 sheetId（spreadsheets.get）"""
+        response = self._execute(self._api.spreadsheets().get(
+            spreadsheetId=self._spreadsheet_id, fields="sheets.properties(sheetId,title)",
+        ))
+        return {
+            sheet["properties"]["title"]: sheet["properties"]["sheetId"] for sheet in response.get("sheets", [])
+        }
+
+    def delete_rows(self, rows: Sequence[Tuple[int, int]]) -> None:
+        """一次刪掉多列（batchUpdate）：由下往上刪，列號都以刪除之前的為準"""
+        self._execute(self._api.spreadsheets().batchUpdate(
+            spreadsheetId=self._spreadsheet_id,
+            body={"requests": [
+                {"deleteDimension": {"range": {
+                    "sheetId": sheet_id, "dimension": "ROWS", "startIndex": row, "endIndex": row + 1,
+                }}}
+                for sheet_id, row in sorted(set(rows), key=lambda target: -target[1])
+            ]},
+        ))
 
 
 class GoogleDrive(_Gateway):
