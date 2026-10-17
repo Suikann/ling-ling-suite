@@ -17,6 +17,9 @@
 | 讀寫系統的安全儲存（keyring） | `services/secure_storage.py` 的 `SecureStorage`；backend 依平台明確指定，不用 keyring 的自動選擇 |
 | 兩階段批次搬移 | `services/move_service.py`，只有 `services/move_history.py` 使用（見 [move-history.md](move-history.md)） |
 | 以預設程式開啟網址或本機的檔案、資料夾（瀏覽器、PDF 閱讀器、檔案管理員） | `services/external_opener.py` 的 `ExternalOpener.open`；Linux 打包版替外部程式還原 `LD_LIBRARY_PATH`（`core/launch_env.py`）。不直接呼叫 `QDesktopServices.openUrl` 或 `xdg-open` |
+| PDF 壓縮：級數、三層檢查、暫存的壓縮檔 | `services/compression_service.py` 的 `CompressionService`；PDF 內容的讀寫在 `services/pdf_service.py`（`save_lossless`、`save_downsampled`、`check_compressed`） |
+| 壓縮結果的另存位置規則（預設位置、擋下原檔的資料夾）與交出 | `services/compression_output_service.py` 的 `CompressionOutputService` |
+| 在背景執行可取消的長工作：進度與取消鈕、期間鎖住重新命名、分割、旋轉、復原、重做，關閉時詢問要不要取消 | `MainWindow._run_in_background`，背景執行緒由 `ui/background_task.py` 的 `BackgroundTask` 管 |
 | 分割與旋轉對話框共用的 UI 輔助 | `ui/widgets.py`：`ThumbnailLoader` 在背景載入縮圖，只交出最近一次載入的結果；`ensure_file_exists` 提示找不到檔案 |
 | 存檔對話框：沒打副檔名時補上，補上後的檔名已有檔案時先確認取代 | `ui/widgets.py` 的 `ask_save_path` |
 
@@ -32,6 +35,7 @@
   - `tests/other_instance.py`：以子行程扮演另一個持有單一實例鎖的程式
   - `tests/memory_keyring.py`：記憶體裡的 keyring backend，注入給 `SecureStorage`；可設成沒有安全儲存、被鎖住、寫入或刪除失敗。測試一律注入它，不碰系統的安全儲存
   - `tests/fake_google.py`：Google 權杖端點（回傳指定權杖、拒絕續期、連不上）與瀏覽器登入的替身，以及寫出測試用用戶端檔的 `write_client_secrets`
+  - `tests/synthetic_pdfs.py`：以 PyMuPDF 產生的合成掃描分譜（8-bit 灰階、JPEG、1-bit、未壓縮的串流、加密、宣告錯誤的 JPEG），測壓縮服務與壓縮檢查；壓縮服務的測試不接替身，以注入的大小上限代替 20MB
 
 ## 文件
 

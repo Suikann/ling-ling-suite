@@ -27,6 +27,12 @@ Rotate pages with per-section angle control:
 - Assign different angles (0/90/180/270) to each segment
 - Backup before overwrite with undo support
 
+### PDF Compression
+Shrink oversized scanned parts below 20MB (Tools > Compress PDF):
+- Lossless first, then downsample to 300 and 200 dpi only as needed; black-and-white (1-bit) images are left alone
+- Each result is checked for structure, image data and appearance; a broken result is discarded
+- Saved beside the original folder as "<folder> (compressed)"; the original is never modified
+
 ### Instrument Presets
 Built-in instrument lists for common ensembles:
 - Orchestra, Concert Band, String Orchestra

@@ -86,6 +86,11 @@ class CompressionService:
         self._temp_dir = temp_dir
         self._size_limit = size_limit
 
+    @property
+    def size_limit(self) -> int:
+        """大小上限（位元組）"""
+        return self._size_limit
+
     def compress(
         self, source: str, should_cancel: Callable[[], bool] = lambda: False,
         on_progress: Callable[[CompressionProgress], None] = lambda progress: None,

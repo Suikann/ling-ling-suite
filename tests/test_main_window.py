@@ -10,6 +10,8 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import contextmanager
 from typing import Callable, List
@@ -26,9 +28,10 @@ from PySide6.QtWidgets import (
     QPushButton, QRadioButton, QTabWidget, QWidget,
 )
 
-from core.constants import PartsOutputMode
+from core.constants import CompressionStatus, PartsOutputMode
 from core.locale import get_locale, set_locale, t
 from core.models import FileInfo, Group, Project, RenameEntry
+from services.compression_service import CompressionService
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
 from services.secure_storage import SecureStorage
@@ -44,6 +47,7 @@ from tests.failing_writes import FailingWrites
 from tests.fake_google import FakeBrowserLogin, FakeTokenEndpoint, write_client_secrets
 from tests.memory_keyring import MemoryKeyring
 from tests.other_instance import OtherInstance
+from tests.synthetic_pdfs import file_digest, scanned_pdf
 
 
 @contextmanager
@@ -224,7 +228,14 @@ class MainWindowTestCase(unittest.TestCase):
             client_secrets_path=write_client_secrets(os.path.join(self.temp_dir, "client_secret.json")),
             legacy_token_path=self.legacy_token,
         )
-        self.window = MainWindow(self.preferences, history=self.history, opener=self.opener, auth_service=self.auth)
+        self.window = MainWindow(
+            self.preferences, history=self.history, opener=self.opener, auth_service=self.auth,
+            compressor=self.compressor(),
+        )
+
+    def compressor(self) -> CompressionService:
+        """主視窗用的壓縮服務；暫存資料夾在臨時目錄下"""
+        return CompressionService(FileService(), os.path.join(self.temp_dir, "temp"))
 
     def preferences_file_service(self) -> FileService:
         """偏好設定寫入用的檔案服務；要模擬最近清單寫不進去的測試換成寫不進去的"""
@@ -1111,6 +1122,157 @@ class TestMainWindowGoogleLogin(MainWindowTestCase):
         self.assertIn((t("catalog.auth.title"), t("catalog.auth.reason.not_saved")), shown)
 
 
+def wait_until(condition: Callable[[], bool], timeout: float = 20) -> None:
+    """處理事件直到 condition 成立（背景工作的結果經事件迴圈回到主執行緒）；逾時判定失敗"""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError("等待逾時")
+        QApplication.processEvents()
+        time.sleep(0.01)
+
+
+class GatedCompressor(CompressionService):
+    """測試放行（或要求取消）才開始壓縮的壓縮服務，讓測試在壓縮進行中操作主視窗"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gate = threading.Event()
+        self.results = []
+
+    def compress(self, source, should_cancel=lambda: False, on_progress=lambda progress: None):
+        deadline = time.monotonic() + 20
+        while not self.gate.wait(0.01) and not should_cancel() and time.monotonic() < deadline:
+            pass
+        result = super().compress(source, should_cancel, on_progress)
+        self.results.append(result)
+        return result
+
+
+class MainWindowCompressTestCase(MainWindowTestCase):
+    """壓縮 PDF 測試的共用骨架：原檔在臨時目錄的 Symphony 資料夾，另存到旁邊的「Symphony（壓縮）」"""
+
+    size_limit = 10 ** 9
+
+    def compressor(self) -> CompressionService:
+        self.scratch_dir = os.path.join(self.temp_dir, "temp")
+        self.gated = GatedCompressor(FileService(), self.scratch_dir, size_limit=self.size_limit)
+        return self.gated
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.gated.gate.set)
+        parts = os.path.join(self.temp_dir, "Symphony")
+        os.makedirs(parts)
+        self.source = scanned_pdf(os.path.join(parts, "Flute.pdf"), dpi=300)
+        self.target = os.path.join(self.temp_dir, "Symphony（壓縮）", "Flute.pdf")
+
+    def start_compressing(self, *targets: str) -> mock.MagicMock:
+        """從工具選單選原檔，另存對話框依序回答 targets，回傳另存對話框的替身"""
+        answers = [(target, "") for target in targets]
+        with mock.patch.object(QFileDialog, "getOpenFileName", return_value=(self.source, "")), \
+                mock.patch.object(QFileDialog, "getSaveFileName", side_effect=answers) as save:
+            self.trigger_menu(t("menu.tools.compress_pdf"))
+        return save
+
+    def finish(self):
+        """放行壓縮並等結果回到主視窗"""
+        self.gated.gate.set()
+        wait_until(lambda: self.compress_action().isEnabled())
+
+    def action(self, text: str) -> QAction:
+        return next(a for a in self.window.findChildren(QAction) if a.text() == text)
+
+    def compress_action(self) -> QAction:
+        return self.action(t("menu.tools.compress_pdf"))
+
+    def file_operations_enabled(self) -> List[bool]:
+        """重新命名、分割、旋轉、復原、重做是否可用"""
+        rename = button_in(self.window, QPushButton, t("panel.preview_rename"))
+        actions = [self.action(t(key)) for key in (
+            "menu.tools.split_pdf", "menu.tools.rotate_pdf", "menu.edit.undo", "menu.edit.redo",
+        )]
+        return [rename.isEnabled()] + [a.isEnabled() for a in actions]
+
+    def scratch_files(self) -> List[str]:
+        """暫存資料夾裡留下的檔案"""
+        return [name for _, _, names in os.walk(self.scratch_dir) for name in names]
+
+
+class TestMainWindowCompressPdf(MainWindowCompressTestCase):
+    """工具選單的壓縮 PDF：選檔、另存位置、背景執行時鎖住會動到檔案的操作"""
+
+    def test_file_operations_are_locked_while_compressing_and_unlocked_after(self):
+        self.start_compressing(self.target)
+        self.assertEqual(self.file_operations_enabled(), [False] * 5)
+        self.assertFalse(self.compress_action().isEnabled())
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(self.file_operations_enabled(), [True] * 5)
+
+    def test_file_operations_stay_locked_after_switching_language_while_compressing(self):
+        self.addCleanup(set_locale, get_locale())
+        self.start_compressing(self.target)
+        self.trigger_menu(t("menu.view.language.en"))
+        self.assertEqual(self.file_operations_enabled(), [False] * 5)
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(self.file_operations_enabled(), [True] * 5)
+
+    def test_suggests_the_folder_beside_the_original_and_saves_the_result_there(self):
+        save = self.start_compressing(self.target)
+        with answering_prompts() as shown:
+            self.finish()
+        self.assertEqual(save.call_args.args[2], self.target)
+        self.assertEqual(self.gated.results[0].status, CompressionStatus.SMALL_ENOUGH)
+        self.assertEqual(file_digest(self.target), file_digest(self.source))
+        self.assertEqual(len(shown), 1)
+        self.assertIn(self.target, shown[0][1])
+
+    def test_target_inside_the_original_folder_is_refused_and_asked_again(self):
+        inside = os.path.join(os.path.dirname(self.source), "Flute small.pdf")
+        with answering_prompts() as shown:
+            save = self.start_compressing(inside, "")
+        self.assertEqual(save.call_count, 2)
+        self.assertEqual(shown, [(t("dialog.warning"), t("compress.target_blocked"))])
+        self.assertTrue(self.compress_action().isEnabled())
+        self.assertFalse(os.path.exists(inside))
+
+    def test_closing_while_compressing_asks_and_staying_keeps_it_running(self):
+        self.start_compressing(self.target)
+        with answering_prompts(QMessageBox.No) as shown:
+            self.assertFalse(self.window.close())
+        self.assertEqual(shown, [(t("dialog.close"), t("compress.close.message"))])
+        self.assertFalse(self.compress_action().isEnabled())
+        with answering_prompts():
+            self.finish()
+        self.assertTrue(os.path.isfile(self.target))
+
+
+class TestMainWindowCompressPdfCancel(MainWindowCompressTestCase):
+    """取消壓縮：在頁與頁之間停下，什麼都不輸出"""
+
+    size_limit = 1000
+
+    def test_cancel_button_stops_compressing_without_output(self):
+        self.start_compressing(self.target)
+        self.click_button(t("compress.cancel"))
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(self.gated.results[0].status, CompressionStatus.CANCELLED)
+        self.assertFalse(os.path.exists(self.target))
+        self.assertEqual(self.scratch_files(), [])
+        self.assertTrue(self.status_shows(t("compress.cancelled")))
+
+    def test_closing_and_choosing_to_cancel_stops_compressing_without_output(self):
+        self.start_compressing(self.target)
+        with answering_prompts(QMessageBox.Yes):
+            self.assertTrue(self.window.close())
+        self.assertEqual(self.gated.results[0].status, CompressionStatus.CANCELLED)
+        self.assertFalse(os.path.exists(self.target))
+        self.assertEqual(self.scratch_files(), [])
+
+
 class TestSingleInstanceLaunch(unittest.TestCase):
     """啟動：第一個程式執行中時，第二個只提示已在執行中，不開主視窗、不檢查進行中紀錄"""
 
@@ -1122,6 +1284,11 @@ class TestSingleInstanceLaunch(unittest.TestCase):
         temp_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, temp_dir, True)
         self.preferences_path = os.path.join(temp_dir, "preferences.json")
+        self.scratch_dir = os.path.join(temp_dir, "temp")
+        self.leftover = os.path.join(self.scratch_dir, "0123abcd", "Flute.pdf")
+        os.makedirs(os.path.dirname(self.leftover))
+        with open(self.leftover, "wb") as f:
+            f.write(b"left by a crash")
         self.lock = InstanceLock(os.path.join(temp_dir, "instance.lock"))
         self.addCleanup(self.lock.release)
 
@@ -1132,7 +1299,7 @@ class TestSingleInstanceLaunch(unittest.TestCase):
         """啟動並處理完排定的事件，回傳（主視窗或 None，跳出過的提示框，新開的主視窗）"""
         before = self._main_windows()
         with answering_prompts() as shown:
-            window = launch(PreferencesService(self.preferences_path), self.lock)
+            window = launch(PreferencesService(self.preferences_path), self.lock, self.scratch_dir)
             QApplication.processEvents()
         if window is not None:
             self.addCleanup(window.close)
@@ -1145,6 +1312,17 @@ class TestSingleInstanceLaunch(unittest.TestCase):
         self.assertIsNone(window)
         self.assertEqual(shown, [(t("app.title"), t("app.already_running"))])
         self.assertEqual(opened, set())
+
+    def test_second_instance_leaves_the_temp_folder_of_the_first_alone(self):
+        first = OtherInstance(self.lock.lock_path)
+        self.addCleanup(first.kill)
+        self._launch()
+        self.assertTrue(os.path.isfile(self.leftover))
+
+    def test_leftovers_in_the_temp_folder_are_cleared_at_startup(self):
+        window, shown, opened = self._launch()
+        self.assertIsNotNone(window)
+        self.assertFalse(os.path.exists(self.leftover))
 
     def test_opens_main_window_after_first_instance_exits(self):
         OtherInstance(self.lock.lock_path).exit()

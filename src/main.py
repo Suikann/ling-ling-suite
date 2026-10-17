@@ -13,10 +13,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QProxyStyle, QStyleFactory
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication
-from core.constants import APP_ID, INSTANCE_LOCK_FILE, LOCALE_ZH_TW, PREFERENCES_FILE
+from core.constants import APP_ID, INSTANCE_LOCK_FILE, LOCALE_ZH_TW, PREFERENCES_FILE, TEMP_DIR
 from core.launch_env import qt_environment_defaults
 from core.locale import t, set_locale
 from core.models import Project
+from services.compression_service import CompressionService
+from services.file_service import FileService
 from services.instance_lock import InstanceLock
 from services.preferences_service import PreferencesService
 
@@ -64,15 +66,16 @@ def prepare_application() -> None:
     QGuiApplication.setDesktopFileName(APP_ID)
 
 
-def launch(prefs: PreferencesService, lock: InstanceLock) -> Optional[QMainWindow]:
-    """取得單一實例鎖後開啟主視窗，並排定檢查上次中斷的重新命名
+def launch(prefs: PreferencesService, lock: InstanceLock, temp_dir: str = TEMP_DIR) -> Optional[QMainWindow]:
+    """取得單一實例鎖後清掉暫存資料夾的殘檔、開啟主視窗，並排定檢查上次中斷的重新命名
 
-    鎖要在檢查進行中紀錄之前取得：另一個程式執行中時，它的進行中紀錄不是上次中斷留下的。
-    所以鎖檔建不起來或開不了時也不繼續，顯示錯誤後結束。
+    鎖要在檢查進行中紀錄與清暫存資料夾之前取得：另一個程式執行中時，它的進行中紀錄不是上次中斷留下的，
+    暫存資料夾裡的檔也還在用。所以鎖檔建不起來或開不了時也不繼續，顯示錯誤後結束。
 
     Args:
         prefs: 已載入的使用者偏好
         lock: 單一實例鎖
+        temp_dir: 暫存資料夾
 
     Returns:
         主視窗；已有另一個程式在執行，或鎖檔建不起來、開不了時，提示後回傳 None
@@ -86,7 +89,9 @@ def launch(prefs: PreferencesService, lock: InstanceLock) -> Optional[QMainWindo
         QMessageBox.information(None, t("app.title"), t("app.already_running"))
         return None
     from ui.main_window import MainWindow
-    window = MainWindow(prefs)
+    compressor = CompressionService(FileService(), temp_dir)
+    compressor.clear_leftovers()
+    window = MainWindow(prefs, compressor=compressor)
     window.setWindowTitle(t("app.title"))
     window.resize(1200, 800)
     window.setMinimumSize(900, 600)

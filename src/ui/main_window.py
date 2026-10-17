@@ -5,22 +5,24 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
-from typing import Iterable, NamedTuple, Optional
+from typing import Any, Callable, Iterable, List, NamedTuple, Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog,
-    QMessageBox, QTabWidget, QMenu,
+    QMessageBox, QTabWidget, QMenu, QProgressBar,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
-    LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind,
+    LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, CompressionStatus, OperationKind,
 )
 from core.locale import t, get_locale, is_english, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
+from services.compression_output_service import CompressionOutputService
+from services.compression_service import CompressionProgress, CompressionResult, CompressionService
 from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
@@ -31,8 +33,13 @@ from services.preferences_service import PreferencesService
 from services.project_access import AccessResult, ProjectAccess
 from services.rename_service import assign_default_sections
 from services.split_service import SplitService
+from ui.background_task import BackgroundTask, Work
 from ui.instrument_list import InstrumentListEditor
 from ui.widgets import ask_save_path
+
+
+# 關閉程式時選了取消背景工作，最多等它停下幾秒（停在頁與頁之間，通常不到一秒）；逾時就直接關閉，暫存檔留待下次啟動清掉
+_CLOSE_WAIT_SECONDS = 10
 
 
 class _PendingMoveTexts(NamedTuple):
@@ -65,6 +72,7 @@ class MainWindow(QMainWindow):
         self, preferences: PreferencesService, parent=None, history: Optional[MoveHistory] = None,
         opener: Optional[ExternalOpener] = None,
         auth_service: Optional[GoogleAuthService] = None,
+        compressor: Optional[CompressionService] = None,
     ):
         """建立主視窗；刪掉舊版的明文權杖檔，不碰安全儲存
 
@@ -74,6 +82,7 @@ class MainWindow(QMainWindow):
             history: 搬移歷程；省略時以使用者資料目錄建立
             opener: 以預設程式開啟網址或檔案；省略時依目前的平台建立
             auth_service: Google 登入服務；省略時以系統的安全儲存建立
+            compressor: PDF 壓縮服務；省略時以使用者資料目錄下的暫存資料夾建立
         """
         super().__init__(parent)
         self.project = self._blank_project()
@@ -89,12 +98,19 @@ class MainWindow(QMainWindow):
         self._auth_service = auth_service or GoogleAuthService(self.file_service)
         self._auth_service.remove_legacy_token()
         self._auth_service.subscribe_not_saved(self._warn_login_not_saved)
+        self._compressor = compressor or CompressionService(self.file_service)
+        self._compression_output = CompressionOutputService(self.file_service)
+        # 背景工作（一次一件）與它進行中時的狀態列文字、關閉時的詢問
+        self._task: Optional[BackgroundTask] = None
+        self._task_status = ""
+        self._task_close_message = ""
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
         # 紀錄寫不進去而留下進行中紀錄的那批搬移，其路徑變動已套用到的專案（之後保留結果時不再套用一次）
         self._pending_applied_to: Optional[Project] = None
         self._create_menu()
         self._create_ui()
+        self._show_background_state()
         self._update_title()
 
     # --- 選單 ---
@@ -111,9 +127,11 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         self._add_action(file_menu, t("menu.file.save"), self._save_project, "Ctrl+S")
         self._add_action(file_menu, t("menu.file.save_as"), self._save_project_as)
+        # 背景工作進行中停用的動作：會動到檔案的操作，以及另開一件背景工作
+        self._file_actions: List[QAction] = []
         edit_menu = mb.addMenu(t("menu.edit"))
-        self._add_action(edit_menu, t("menu.edit.undo"), self._undo_last, "Ctrl+Z")
-        self._add_action(edit_menu, t("menu.edit.redo"), self._redo_last, "Ctrl+Y")
+        self._file_actions.append(self._add_action(edit_menu, t("menu.edit.undo"), self._undo_last, "Ctrl+Z"))
+        self._file_actions.append(self._add_action(edit_menu, t("menu.edit.redo"), self._redo_last, "Ctrl+Y"))
         import_menu = mb.addMenu(t("menu.import"))
         self._add_action(import_menu, t("menu.import.files"), self._import_files)
         self._add_action(import_menu, t("menu.import.folder"), self._import_folder)
@@ -121,9 +139,10 @@ class MainWindow(QMainWindow):
         self._add_action(catalog_menu, t("menu.catalog.open"), self._open_catalog)
         self._add_action(catalog_menu, t("menu.catalog.settings"), self._open_catalog_settings)
         tools_menu = mb.addMenu(t("menu.tools"))
-        self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf)
+        self._file_actions.append(self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf))
         tools_menu.addSeparator()
-        self._add_action(tools_menu, t("menu.tools.rotate_pdf"), self._open_rotate_pdf)
+        self._file_actions.append(self._add_action(tools_menu, t("menu.tools.rotate_pdf"), self._open_rotate_pdf))
+        self._file_actions.append(self._add_action(tools_menu, t("menu.tools.compress_pdf"), self._compress_pdf))
         tools_menu.addSeparator()
         self._add_action(tools_menu, t("menu.tools.open_workspace"), self._open_workspace_folder)
         self._add_action(tools_menu, t("menu.tools.cleanup_workspace"), self._open_workspace_cleanup)
@@ -134,12 +153,13 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, c=code: self._set_language(c))
             lang_menu.addAction(action)
 
-    def _add_action(self, menu, text, callback, shortcut=None):
+    def _add_action(self, menu, text, callback, shortcut=None) -> QAction:
         action = QAction(text, self)
         if shortcut:
             action.setShortcut(QKeySequence(shortcut))
         action.triggered.connect(callback)
         menu.addAction(action)
+        return action
 
     # --- UI 建構 ---
 
@@ -194,10 +214,17 @@ class MainWindow(QMainWindow):
         action_row = QHBoxLayout()
         self._status_label = QLabel(t("status.ready"))
         action_row.addWidget(self._status_label, stretch=1)
-        preview_btn = QPushButton(t("panel.preview_rename"))
-        preview_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 8px 24px;")
-        preview_btn.clicked.connect(self._preview_and_rename)
-        action_row.addWidget(preview_btn)
+        self._task_progress = QProgressBar()
+        self._task_progress.setFixedWidth(160)
+        self._task_progress.setTextVisible(False)
+        action_row.addWidget(self._task_progress)
+        self._task_cancel_btn = QPushButton(t("compress.cancel"))
+        self._task_cancel_btn.clicked.connect(self._cancel_background)
+        action_row.addWidget(self._task_cancel_btn)
+        self._rename_btn = QPushButton(t("panel.preview_rename"))
+        self._rename_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 8px 24px;")
+        self._rename_btn.clicked.connect(self._preview_and_rename)
+        action_row.addWidget(self._rename_btn)
         bl.addLayout(action_row)
         parent_layout.addWidget(bottom)
 
@@ -664,6 +691,125 @@ class MainWindow(QMainWindow):
         dialog = RotatePdfDialog(self.project, self._history, self._current_group(), self, self.file_service)
         dialog.exec()
 
+    # --- 壓縮 PDF ---
+
+    def _compress_pdf(self):
+        """選一份 PDF 與另存位置，在背景壓縮；壓完交到另存位置並告訴使用者結果"""
+        from ui import compress_pdf
+        paths = compress_pdf.ask_paths(self, self._compression_output)
+        if paths is None:
+            return
+        source, target = paths
+        name = os.path.basename(source)
+        compressor = self._compressor
+
+        def work(should_cancel, report) -> CompressionResult:
+            return compressor.compress(source, should_cancel, report)
+
+        def describe(progress: CompressionProgress):
+            return compress_pdf.describe_progress(name, progress), progress.page, progress.page_count
+
+        def finished(result: CompressionResult, cancelled: bool):
+            try:
+                if cancelled or result.status is CompressionStatus.CANCELLED:
+                    self._set_status(t("compress.cancelled"))
+                    return
+                delivered = compress_pdf.deliver_and_report(
+                    self, self._compression_output, result, target, compressor.size_limit,
+                )
+                self._set_status(t("compress.status.done", name=name) if delivered else t("status.ready"))
+            finally:
+                compressor.discard(result)
+
+        self._run_in_background(work, describe, finished, "compress.error", "compress.close.message")
+
+    # --- 背景工作 ---
+
+    def _run_in_background(
+        self, work: Work, describe: Callable[[Any], tuple], finished: Callable[[Any, bool], None],
+        failure_key: str, close_message_key: str,
+    ):
+        """在背景執行一件可取消的工作；期間停用會動到檔案的操作，狀態列顯示進度與取消鈕
+
+        一次只執行一件：進行中時另開背景工作的動作也停用。
+
+        Args:
+            work: 在背景執行緒呼叫的工作（見 BackgroundTask）
+            describe: 把工作回報的進度轉成（狀態列文字，已完成數，總數）
+            finished: 工作交回結果時在主執行緒呼叫，參數為結果與使用者是否要求過取消
+            failure_key: 工作拋出例外時錯誤訊息的字串鍵（以 error 帶入）
+            close_message_key: 進行中關閉程式時詢問要不要取消的字串鍵
+        """
+        task = BackgroundTask(work, self)
+        self._task = task
+        self._task_status = ""
+        self._task_close_message = t(close_message_key)
+
+        def progressed(progress):
+            text, done, total = describe(progress)
+            self._task_status = text
+            self._task_progress.setRange(0, max(total, 1))
+            self._task_progress.setValue(done)
+            if not task.cancel_requested:
+                self._set_status(text)
+
+        def settle():
+            self._task = None
+            self._show_background_state()
+
+        def on_finished(result):
+            settle()
+            finished(result, task.cancel_requested)
+
+        def on_failed(message: str):
+            settle()
+            self._set_status(t("status.ready"))
+            QMessageBox.critical(self, t("dialog.error"), t(failure_key, error=message))
+
+        task.progressed.connect(progressed)
+        task.finished.connect(on_finished)
+        task.failed.connect(on_failed)
+        task.start()
+        self._show_background_state()
+
+    def _cancel_background(self):
+        """要求取消進行中的背景工作；工作在下一個停頓點停下後照常交回結果"""
+        if self._task is not None:
+            self._task.cancel()
+            self._set_status(t("compress.cancelling"))
+            self._show_background_state()
+
+    def _show_background_state(self):
+        """依有沒有背景工作，停用或恢復會動到檔案的操作，顯示或隱藏進度與取消鈕"""
+        busy = self._task is not None
+        for action in self._file_actions:
+            action.setEnabled(not busy)
+        self._rename_btn.setEnabled(not busy)
+        self._task_progress.setVisible(busy)
+        self._task_cancel_btn.setVisible(busy)
+        self._task_cancel_btn.setEnabled(busy and not self._task.cancel_requested)
+        if busy and self._task_status and not self._task.cancel_requested:
+            self._set_status(self._task_status)
+
+    def _confirm_cancel_background(self) -> bool:
+        """關閉程式時有背景工作就詢問要不要取消；選取消就要求取消並等它停下
+
+        Returns:
+            可以關閉時為 True（沒有背景工作，或選了取消）
+        """
+        task = self._task
+        if task is None:
+            return True
+        answer = QMessageBox.question(self, t("dialog.close"), self._task_close_message)
+        if answer != QMessageBox.Yes:
+            return False
+        task.finished.disconnect()
+        task.failed.disconnect()
+        task.cancel()
+        task.wait(_CLOSE_WAIT_SECONDS)
+        self._task = None
+        return True
+
     def _set_language(self, lang_code: str):
         if lang_code == get_locale():
             return
@@ -674,6 +820,7 @@ class MainWindow(QMainWindow):
         self.menuBar().clear()
         self._create_menu()
         self._create_ui()
+        self._show_background_state()
         self._sync_ui_from_project()
         self._update_title()
 
@@ -836,9 +983,12 @@ class MainWindow(QMainWindow):
         self._do_open_project(path)
 
     def closeEvent(self, event):
-        """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次；任一不同就詢問是否儲存"""
+        """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次，任一不同就詢問是否儲存；有背景工作時再問要不要取消"""
         unsaved = self.project.is_modified() or self._differs_from_project_file()
         if unsaved and not self._ask_to_save(t("dialog.close"), t("dialog.close.message")):
+            event.ignore()
+            return
+        if not self._confirm_cancel_background():
             event.ignore()
             return
         event.accept()
