@@ -12,7 +12,6 @@
     workspace = WorkspaceService(file_service)
     failed = workspace.update_project_path(project, project_path)
 """
-import json
 import os
 import time
 from typing import Callable, Dict, Iterable, List, Optional, Set
@@ -54,7 +53,7 @@ class WorkspaceService:
 
     def _list_outputs(self, folder: str) -> List[str]:
         """列出子資料夾內的分割輸出（PDF）"""
-        if not os.path.isdir(folder):
+        if not self.file_service.directory_exists(folder):
             return []
         return self.file_service.list_pdf_files(folder)
 
@@ -128,10 +127,8 @@ class WorkspaceService:
 
     def read_meta(self, folder: str) -> Optional[Dict]:
         """讀取子資料夾的 meta.json；不存在或損毀時回傳 None"""
-        meta_path = os.path.join(folder, WORKSPACE_META_FILE)
         try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = self.file_service.read_json(os.path.join(folder, WORKSPACE_META_FILE))
             return data if isinstance(data, dict) else None
         except (OSError, ValueError):
             return None
@@ -166,7 +163,7 @@ class WorkspaceService:
             folder: 子資料夾路徑
             meta: 先前快照的 meta.json 內容
         """
-        if not os.path.isdir(folder) or self.read_meta(folder) is not None:
+        if not self.file_service.directory_exists(folder) or self.read_meta(folder) is not None:
             return
         self._write_meta(folder, meta)
 
@@ -225,7 +222,7 @@ class WorkspaceService:
         owned: Dict[str, str] = {}
         unreadable: Set[str] = set()
         for path in known_projects:
-            if not os.path.isfile(path):
+            if not self.file_service.file_exists(path):
                 scan.missing_projects.append(path)
                 continue
             try:
@@ -266,7 +263,7 @@ class WorkspaceService:
         """
         count = 0
         for entry in entries:
-            if os.path.isdir(entry.folder):
+            if self.file_service.directory_exists(entry.folder):
                 self.file_service.delete_directory(entry.folder)
                 count += 1
         return count
@@ -275,7 +272,7 @@ class WorkspaceService:
 
     def _list_folders(self) -> List[str]:
         """列出工作區內所有子資料夾；工作區尚未建立時回傳空清單"""
-        if not os.path.isdir(self.workspace_dir):
+        if not self.file_service.directory_exists(self.workspace_dir):
             return []
         return self.file_service.list_subdirectories(self.workspace_dir)
 

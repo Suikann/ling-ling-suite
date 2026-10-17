@@ -27,7 +27,7 @@ class ImportService:
         """
         result = []
         for path in paths:
-            if path.lower().endswith('.pdf') and os.path.isfile(path):
+            if path.lower().endswith('.pdf') and self.file_service.file_exists(path):
                 result.append(FileInfo(
                     original_path=path,
                     display_name=os.path.basename(path),

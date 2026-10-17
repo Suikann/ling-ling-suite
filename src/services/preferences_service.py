@@ -14,7 +14,6 @@
     prefs.save()
 """
 import copy
-import json
 from typing import Any, Dict, Optional
 from core.constants import DEFAULT_PREFERENCES
 from services.file_service import FileService
@@ -31,8 +30,7 @@ class PreferencesService:
     def load(self):
         """從檔案載入偏好設定；檔案不存在或格式錯誤時保留預設值，不認得的鍵略過"""
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
+            loaded = self.file_service.read_json(self.path)
         except (OSError, ValueError):
             return
         if isinstance(loaded, dict):

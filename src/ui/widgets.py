@@ -2,7 +2,6 @@
 """
 共用增強元件與 UI 輔助函式
 """
-import os
 import threading
 from typing import Callable, List, Optional, Tuple
 from PySide6.QtWidgets import QListWidget, QAbstractItemView, QMessageBox, QWidget
@@ -11,6 +10,7 @@ from PySide6.QtCore import Qt, QRect, QObject, Signal
 from core.constants import PDF_EXTENSION
 from core.locale import t
 from core.models import Group, Project
+from services.file_service import FileService
 
 
 def ensure_file_exists(parent: QWidget, path: str) -> bool:
@@ -23,7 +23,7 @@ def ensure_file_exists(parent: QWidget, path: str) -> bool:
     Returns:
         檔案存在時為 True
     """
-    if os.path.isfile(path):
+    if FileService().file_exists(path):
         return True
     QMessageBox.critical(parent, t("dialog.error"), t("dialog.error.file_not_found", path=path))
     return False
