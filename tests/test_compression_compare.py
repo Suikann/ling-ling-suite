@@ -10,18 +10,19 @@ import sys
 import tempfile
 import unittest
 from typing import List
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QPushButton
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QListWidget, QMessageBox, QPushButton
 
 from core.constants import CompressionProblem, CompressionStatus
 from core.locale import t
 from services.compression_service import CompressionResult, CompressionService
 from services.file_service import FileService
 from tests.synthetic_pdfs import scanned_pdf
-from tests.test_main_window import button_in
+from tests.test_main_window import button_in, wait_until
 from ui.compression_compare import CompressionCompareDialog
 
 KB = 1000
@@ -97,6 +98,48 @@ class TestCompareDecisions(CompareTestCase):
         self.assertEqual(dialog.result(), QDialog.Accepted)
         self.assertEqual(dialog.kept(), [self.flute, self.oboe])
 
+    def test_cancelling_returns_rejected(self):
+        dialog = self.open_dialog([self.flute])
+        self.button(dialog, "compare.cancel").click()
+        self.assertEqual(dialog.result(), QDialog.Rejected)
+
+
+class TestCompareOpen(CompareTestCase):
+    """開啟：以預設的 PDF 閱讀器開啟目前這份的壓縮檔"""
+
+    def test_open_shows_the_selected_compressed_file_in_the_default_reader(self):
+        dialog = self.open_dialog([self.flute, self.violin])
+        self.select(dialog, 1)
+        self.button(dialog, "compare.open").click()
+        self.assertEqual(self.opener.opened, [self.violin.output_path])
+
+    def test_reader_that_does_not_start_is_reported(self):
+        self.opener.opens = False
+        dialog = self.open_dialog([self.flute])
+        with mock.patch.object(QMessageBox, "warning") as warning:
+            self.button(dialog, "compare.open").click()
+        self.assertEqual(warning.call_args.args[2], t("compare.open_failed"))
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestComparePages(CompareTestCase):
+    """翻頁：載入後顯示第幾頁、共幾頁，換一份從第一頁開始"""
+
+    def shows(self, dialog: QDialog, text: str) -> bool:
+        return any(label.text() == text for label in dialog.findChildren(QLabel))
+
+    def test_pages_turn_within_the_file_and_restart_for_another_file(self):
+        score = self.compressed("Score.pdf", pages=3)
+        dialog = self.open_dialog([score, self.flute])
+        wait_until(lambda: self.shows(dialog, t("compare.page", page=1, count=3)))
+        self.assertFalse(self.button(dialog, "compare.prev").isEnabled())
+        self.button(dialog, "compare.next").click()
+        wait_until(lambda: self.shows(dialog, t("compare.page", page=2, count=3)))
+        self.button(dialog, "compare.next").click()
+        wait_until(lambda: self.shows(dialog, t("compare.page", page=3, count=3)))
+        self.assertFalse(self.button(dialog, "compare.next").isEnabled())
+        self.select(dialog, 1)
+        wait_until(lambda: self.shows(dialog, t("compare.page", page=1, count=1)))

@@ -84,22 +84,22 @@ def pdf_file_choices(
 
 
 class ThumbnailLoader(QObject):
-    """在背景執行緒算繪 PDF 縮圖，完成時回到主執行緒通知
+    """在背景執行緒算繪 PDF 頁面（縮圖、比較畫面的頁面），完成時回到主執行緒通知
 
-    只通知最近一次 load 的結果：換選其他檔案後，前一個檔案晚到的縮圖或錯誤直接捨棄；
+    只通知最近一次 load 的結果：換選其他檔案或頁面後，前一次晚到的結果或錯誤直接捨棄；
     cancel 之後（對話框關閉時）也不再通知。
     """
 
-    _rendered = Signal(int, list)
+    _rendered = Signal(int, object)
     _failed = Signal(int, str)
 
-    def __init__(self, render: Callable[[str], list], on_ready: Callable[[list], None],
+    def __init__(self, render: Callable[..., object], on_ready: Callable[[object], None],
                  on_error: Callable[[str], None]):
         """建立縮圖載入器
 
         Args:
-            render: 在背景執行緒呼叫的算繪函式，接收 PDF 路徑、回傳各頁縮圖
-            on_ready: 縮圖算繪完成時在主執行緒呼叫，參數為各頁縮圖
+            render: 在背景執行緒呼叫的算繪函式，接收 load 的參數（例如 PDF 路徑）、回傳算繪結果（例如各頁縮圖）
+            on_ready: 算繪完成時在主執行緒呼叫，參數為算繪結果
             on_error: 算繪失敗時在主執行緒呼叫，參數為錯誤訊息
         """
         super().__init__()
@@ -110,26 +110,26 @@ class ThumbnailLoader(QObject):
         self._rendered.connect(self._deliver_ready)
         self._failed.connect(self._deliver_error)
 
-    def load(self, path: str):
-        """開始在背景算繪 path 的縮圖；先前還沒完成的載入作廢"""
+    def load(self, *args):
+        """開始在背景以 args 呼叫算繪函式；先前還沒完成的載入作廢"""
         self._latest += 1
-        threading.Thread(target=self._run, args=(self._latest, path), daemon=True).start()
+        threading.Thread(target=self._run, args=(self._latest, args), daemon=True).start()
 
     def cancel(self):
         """作廢還沒完成的載入"""
         self._latest += 1
 
-    def _run(self, ticket: int, path: str):
+    def _run(self, ticket: int, args: tuple):
         try:
-            images = self._render(path)
+            result = self._render(*args)
         except Exception as e:
             self._failed.emit(ticket, str(e))
             return
-        self._rendered.emit(ticket, images)
+        self._rendered.emit(ticket, result)
 
-    def _deliver_ready(self, ticket: int, images: list):
+    def _deliver_ready(self, ticket: int, result: object):
         if ticket == self._latest:
-            self._on_ready(images)
+            self._on_ready(result)
 
     def _deliver_error(self, ticket: int, message: str):
         if ticket == self._latest:

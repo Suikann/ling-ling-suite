@@ -2,13 +2,18 @@
 """
 PDF 工具服務
 
-提供 PDF 的頁數查詢、頁面擷取（分割模組用來寫出分譜）、分段旋轉與縮圖算繪，
+提供 PDF 的頁數查詢、頁面擷取（分割模組用來寫出分譜）、分段旋轉、縮圖與比較畫面的頁面算繪，
 以及壓縮服務用的 PDF 內容讀寫：能否開啟、無損壓縮、降解析度與壓縮檢查。
+
+PyMuPDF 不能在多個執行緒同時使用，MuPDF 的警告（壓縮檢查會讀它）也是全程式共用一份，
+所以用到 PyMuPDF 的函式都經過同一把鎖，一次只有一個在執行；在背景執行緒呼叫時要等前一個做完。
 """
+import functools
 import io
 import math
 import os
 import re
+import threading
 from typing import Callable, List, NamedTuple, Optional, Tuple
 
 from PyPDF2 import PdfReader, PdfWriter
@@ -17,6 +22,19 @@ from core.constants import CompressionProblem
 from core.paths import same_path
 
 POINTS_PER_INCH = 72
+# 比較畫面算繪一頁的像素上限：A4 以 600 dpi 算繪約 3500 萬像素
+RENDER_MAX_PIXELS = 40_000_000
+
+_PYMUPDF_LOCK = threading.RLock()
+
+
+def _exclusive(function):
+    """讓用到 PyMuPDF 的函式在 _PYMUPDF_LOCK 之下執行，一次只有一個"""
+    @functools.wraps(function)
+    def locked(*args, **kwargs):
+        with _PYMUPDF_LOCK:
+            return function(*args, **kwargs)
+    return locked
 
 
 class PdfDefect(NamedTuple):
@@ -72,6 +90,7 @@ def extract_pages(
     return output_path
 
 
+@_exclusive
 def render_page_thumbnails(pdf_path: str, max_width: int = 160) -> List:
     """將 PDF 各頁面算繪為 PIL Image 縮圖
 
@@ -102,6 +121,7 @@ def render_page_thumbnails(pdf_path: str, max_width: int = 160) -> List:
     return thumbnails
 
 
+@_exclusive
 def render_single_page(pdf_path: str, page_index: int, max_width: int = 600):
     """算繪單一頁面為較大的 PIL Image
 
@@ -131,6 +151,45 @@ def render_single_page(pdf_path: str, page_index: int, max_width: int = 600):
     return img
 
 
+class RenderedPage(NamedTuple):
+    """算繪出的一頁與整份的頁數
+
+    Attributes:
+        image: 頁面的 PIL Image
+        page_count: 整份 PDF 的頁數
+    """
+    image: object
+    page_count: int
+
+
+@_exclusive
+def render_page_gray(
+    pdf_path: str, page_index: int, dpi: int, max_pixels: int = RENDER_MAX_PIXELS,
+) -> RenderedPage:
+    """以 dpi 把一頁算繪成灰階（比較畫面看指法小字用），像素數超過上限時等比縮小
+
+    Args:
+        pdf_path: PDF 檔案路徑
+        page_index: 頁面索引（從 0 開始）
+        dpi: 算繪的 dpi
+        max_pixels: 像素數上限
+
+    Returns:
+        灰階（mode L）的頁面與整份的頁數
+    """
+    import pymupdf
+    from PIL import Image
+    with pymupdf.open(pdf_path) as doc:
+        page = doc[page_index]
+        scale = dpi / POINTS_PER_INCH
+        pixels = page.rect.width * page.rect.height * scale * scale
+        if pixels > max_pixels:
+            scale *= math.sqrt(max_pixels / pixels)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), colorspace=pymupdf.csGRAY, alpha=False)
+        image = Image.frombytes("L", (pix.width, pix.height), pix.samples)
+        return RenderedPage(image, doc.page_count)
+
+
 class PdfProbe(NamedTuple):
     """PDF 打不打得開，與它的頁數
 
@@ -142,6 +201,7 @@ class PdfProbe(NamedTuple):
     defect: Optional[PdfDefect] = None
 
 
+@_exclusive
 def probe_pdf(pdf_path: str) -> PdfProbe:
     """確認 PDF 能不能拿來壓縮：要密碼才打得開、或本身就壞到打不開時回報原因
 
@@ -163,6 +223,7 @@ def probe_pdf(pdf_path: str) -> PdfProbe:
         return PdfProbe(0, PdfDefect(CompressionProblem.UNREADABLE, str(e)))
 
 
+@_exclusive
 def save_lossless(pdf_path: str, output_path: str) -> None:
     """無損壓縮：清掉沒用到的物件、壓縮沒有壓過的串流、物件收進 object stream，另存到 output_path
 
@@ -178,6 +239,7 @@ def save_lossless(pdf_path: str, output_path: str) -> None:
         doc.save(output_path, garbage=3, deflate=True, use_objstms=1)
 
 
+@_exclusive
 def save_downsampled(
     pdf_path: str, output_path: str, dpi: int, jpeg_quality: int, on_page: Optional[Callable[[int], None]] = None,
 ) -> None:
@@ -270,6 +332,7 @@ def _downsampled_jpeg(doc, xref: int, placed_points: float, dpi: int, jpeg_quali
     return buffer.getvalue()
 
 
+@_exclusive
 def check_compressed(
     original_path: str, compressed_path: str, psnr_threshold: float, render_dpi: int,
     on_page: Optional[Callable[[int], None]] = None,
