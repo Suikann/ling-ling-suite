@@ -181,6 +181,13 @@ class TestSheetsRequests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, CatalogErrorKind.NOT_FOUND)
         self.assertEqual(http.request_sequence, [])
 
+    def test_without_a_spreadsheet_id_listing_sheet_titles_is_not_found_without_a_request(self):
+        http = HttpMockSequence([])
+        with self.assertRaises(CatalogError) as raised:
+            GoogleSheets("", http=http).sheet_titles()
+        self.assertEqual(raised.exception.kind, CatalogErrorKind.NOT_FOUND)
+        self.assertEqual(http.request_sequence, [])
+
     def test_google_errors_become_catalog_errors(self):
         http = HttpMockSequence([({"status": "404"}, json.dumps({"error": {"code": 404, "message": "not found"}}))])
         with self.assertRaises(CatalogError) as raised:
