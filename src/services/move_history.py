@@ -64,8 +64,8 @@ class MoveResult:
         skipped: 已不在預期位置而略過的檔案（預期的位置）
         residual: 中途失敗、搬不回原位的檔案；已另寫一筆殘留紀錄放上復原堆疊
         error: 動作失敗的原因；為 None 表示照計畫完成
-        record_error: 檔案已搬好（或殘留已確定）、但復原或重做紀錄寫不進去的原因；
-            中斷還原時發生則進行中紀錄保留，下次再處理
+        record_error: 檔案已搬好（或殘留已確定）、但復原、重做或殘留紀錄寫不進去的原因；
+            中斷還原，或回滾後殘留紀錄寫不進去時，進行中紀錄保留，下次再處理
         split: 復原了一次分割時為該次分割，交給 Project.revert_split 退回分割前的專案；
             其中被取代的檔案（replaced_files）不找回，仍在資源回收桶
     """
@@ -574,7 +574,8 @@ class MoveHistory:
     ) -> MoveResult:
         """交給引擎整批搬移，整批搬完後（刪除進行中紀錄前）呼叫 finish 寫紀錄
 
-        中途失敗回滾時，先呼叫 on_rollback，再把搬不回去的檔案寫成殘留紀錄，都在刪除進行中紀錄之前。
+        中途失敗回滾時，先呼叫 on_rollback，再把搬不回去的檔案寫成殘留紀錄，都在刪除進行中紀錄之前；
+        殘留紀錄寫不進去時保留進行中紀錄（只剩搬不回去的步驟），下次以中斷還原再試著搬回。
 
         Args:
             kind: 執行這批搬移的操作種類（記進進行中紀錄；失敗留下的殘留紀錄也標示它）
@@ -595,12 +596,13 @@ class MoveHistory:
             finished.append(True)
             finish(created_dirs)
 
-        def rolled_back(residual: List[UndoMapping]) -> None:
+        def rolled_back(residual: List[UndoMapping]) -> bool:
             if on_rollback:
                 on_rollback()
             if residual:
                 result.residual = residual
                 result.record_error = self._save_residual(kind, residual)
+            return result.record_error is None
 
         try:
             self._engine.execute(

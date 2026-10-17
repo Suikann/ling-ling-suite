@@ -485,6 +485,39 @@ class TestResidual(MoveHistoryTestCase):
         self.assertEqual([(m.original, m.renamed) for m in residual.mappings], [(a, new_a)])
         self.assertEqual(self.history.latest_redo().id, redo_id)
 
+    def test_journal_is_removed_once_the_residual_record_is_written(self):
+        a, b = self.create("a.pdf"), self.create("b.pdf")
+        self.fail_moves_when(lambda old, new: old == b or new == a)
+        result = self.history.rename(RenameVerdict([RenameEntry(a, self.path("A1.pdf")), RenameEntry(b, self.path("B1.pdf"))]))
+        self.assertIsNone(result.record_error)
+        self.assertIsNone(self.history.pending())
+        self.assertFalse(os.path.exists(os.path.join(self.data_dir, "pending_move.json")))
+
+    def test_journal_is_kept_when_the_residual_record_cannot_be_written(self):
+        blocked = os.path.join(self.data_dir, "not-a-directory")
+        os.makedirs(self.data_dir, exist_ok=True)
+        with open(blocked, "w") as f:
+            f.write("")
+        history = self.new_history(undo_dir=blocked)
+        a, b = self.create("a.pdf"), self.create("b.pdf")
+        new_a = self.path("A1.pdf")
+        # 第二筆搬移失敗觸發回滾；回滾時第一筆搬不回原位
+        self.fail_moves_when(lambda old, new: old == b or new == a)
+        result = history.rename(RenameVerdict([RenameEntry(a, new_a), RenameEntry(b, self.path("B1.pdf"))]))
+        self.stop_failing()
+        self.assertIsNotNone(result.error)
+        self.assertIsNotNone(result.record_error)
+        self.assertEqual([(m.original, m.renamed) for m in result.residual], [(a, new_a)])
+        with open(os.path.join(self.data_dir, "pending_move.json"), encoding="utf-8") as f:
+            journal = json.load(f)
+        self.assertEqual([(s["source"], s["target"]) for s in journal["steps"]], [(a, new_a)])
+        pending = history.pending()
+        self.assertEqual((pending.operation, pending.moved, pending.complete), ("rename", 1, False))
+        recovered = history.recover()
+        self.assertEqual([(m.original, m.renamed) for m in recovered.changes], [(new_a, a)])
+        self.assertEqual(self.files(), ["a.pdf", "b.pdf"])
+        self.assertIsNone(history.pending())
+
     def test_undo_residual_is_recorded_as_undo_above_the_record_that_failed(self):
         a, b = self.create("a.pdf"), self.create("b.pdf")
         new_a, new_b = self.path("A1.pdf"), self.path("B1.pdf")
