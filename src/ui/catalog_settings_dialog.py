@@ -12,8 +12,17 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from core.locale import t
-from services.google_auth_service import GoogleAuthService
+from services.google_auth_service import GoogleAuthService, LoginReason
 from services.preferences_service import PreferencesService
+
+# 登入狀態旁的原因對應的介面字串
+_LOGIN_REASON_KEYS = {
+    LoginReason.NO_SECURE_STORAGE: "catalog.auth.reason.no_secure_storage",
+    LoginReason.STORAGE_LOCKED: "catalog.auth.reason.storage_locked",
+    LoginReason.NOT_SAVED: "catalog.auth.reason.not_saved",
+    LoginReason.TOKEN_REJECTED: "catalog.auth.reason.token_rejected",
+    LoginReason.UNREACHABLE: "catalog.auth.reason.unreachable",
+}
 
 
 def _extract_folder_id(text: str) -> str:
@@ -43,13 +52,19 @@ class CatalogSettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         # --- 步驟 1：登入 ---
         step1 = QGroupBox(t("catalog.settings.step1"))
-        step1_layout = QHBoxLayout(step1)
+        step1_layout = QVBoxLayout(step1)
+        status_row = QHBoxLayout()
         self._auth_status = QLabel()
-        step1_layout.addWidget(self._auth_status)
-        step1_layout.addStretch()
+        status_row.addWidget(self._auth_status)
+        status_row.addStretch()
         self._login_btn = QPushButton()
         self._login_btn.clicked.connect(self._toggle_auth)
-        step1_layout.addWidget(self._login_btn)
+        status_row.addWidget(self._login_btn)
+        step1_layout.addLayout(status_row)
+        self._auth_reason = QLabel()
+        self._auth_reason.setWordWrap(True)
+        self._auth_reason.setStyleSheet("color: #f39c12;")
+        step1_layout.addWidget(self._auth_reason)
         layout.addWidget(step1)
         # --- 步驟 2：選擇資料夾 ---
         step2 = QGroupBox(t("catalog.settings.step2"))
@@ -85,8 +100,11 @@ class CatalogSettingsDialog(QDialog):
             self._check_catalog_in_folder()
 
     def _update_auth_display(self):
-        """更新認證狀態顯示"""
-        if self._auth.is_authenticated:
+        """更新登入狀態與旁邊的原因"""
+        status = self._auth.status()
+        self._auth_reason.setText(t(_LOGIN_REASON_KEYS[status.reason]) if status.reason else "")
+        self._auth_reason.setVisible(status.reason is not None)
+        if status.signed_in:
             self._auth_status.setText(t("catalog.auth.connected"))
             self._auth_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
             self._login_btn.setText(t("catalog.auth.disconnect"))
@@ -97,13 +115,10 @@ class CatalogSettingsDialog(QDialog):
 
     def _toggle_auth(self):
         """登入或登出"""
-        try:
-            if self._auth.is_authenticated:
-                self._auth.logout()
-                self._update_auth_display()
-                return
-        except Exception:
-            pass
+        if self._auth.status().signed_in:
+            self._auth.logout()
+            self._update_auth_display()
+            return
         try:
             self._auth.authenticate()
             self._update_auth_display()

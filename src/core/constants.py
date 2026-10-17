@@ -51,6 +51,11 @@ RENAME_STAGING_SUFFIX = ".moving"
 MOVE_JOURNAL_FILE = os.path.join(APPDATA_DIR, "pending_move.json")
 # 單一實例鎖：程式執行期間由作業系統鎖住，程式結束（含當機、強制結束）時自動解除；檔案本身留著不刪
 INSTANCE_LOCK_FILE = os.path.join(APPDATA_DIR, "instance.lock")
+# 系統安全儲存裡的服務名稱：Google 與 HuaXia 的續期權杖各存一筆
+GOOGLE_KEYRING_SERVICE = "LingLingSuite Google"
+HUAXIA_KEYRING_SERVICE = "LingLingSuite HuaXia"
+# 舊版以明文存 Google 權杖的檔案：新版每次啟動都刪掉，任何情況都不讀它
+LEGACY_TOKEN_FILE = os.path.join(APPDATA_DIR, "google_token.json")
 
 # 介面語言代碼：繁體中文（預設）與英文
 LOCALE_ZH_TW = "zh_TW"

@@ -10,9 +10,10 @@
 | 單一實例鎖 | `instance.lock`（`INSTANCE_LOCK_FILE`） | 執行期間由作業系統鎖住，結束或當機時自動解除，檔案留著不刪 |
 | 工作區 | `workspace/<hash8>/`（`WORKSPACE_DIR`） | 分割輸出與 `meta.json`（見 [workspace.md](workspace.md)） |
 | PDF 旋轉備份 | `backups/`（`BACKUP_DIR`） | |
-| Google 授權權杖 | `google_token.json`（`TOKEN_FILE`，在 `core/catalog_constants.py`） | |
 
 專案檔（`.llproj`）放在使用者自選的位置。
+
+Google 的登入狀態不在使用者資料目錄：只有續期權杖存在系統的安全儲存（Windows 認證管理員、Linux 的 Secret Service），服務名稱為 `GOOGLE_KEYRING_SERVICE`（HuaXia 那筆用 `HUAXIA_KEYRING_SERVICE`）。backend 依平台明確指定，不受 `keyrings.alt`、`PYTHON_KEYRING_BACKEND`、`keyringrc.cfg` 影響；啟動時不讀，第一次用到 Google 時才讀。這台電腦沒有安全儲存或寫不進去時就不保存，社團設定的登入狀態旁寫出原因。內容不備份，遺失就重新登入。舊版以明文存的 `google_token.json`（`LEGACY_TOKEN_FILE`）每次啟動都刪；刪不掉就等下次啟動再刪，任何情況都不讀它，也不搬進安全儲存。
 
 - 啟動時先取得單一實例鎖，取不到就提示「已在執行中」後結束，不開主視窗、不檢查進行中紀錄；鎖檔建不起來或開不了（例如使用者資料目錄沒有寫入權限）時同樣不繼續，顯示錯誤原因後結束
 - 復原、重做、進行中紀錄與旋轉備份的位置在建構 `MoveHistory` 時注入，預設為上表的常數

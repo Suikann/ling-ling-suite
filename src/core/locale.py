@@ -369,6 +369,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.auth.credentials_missing": "程式缺少 OAuth 用戶端憑證檔（{path}），請聯絡開發者。",
         "catalog.auth.success": "Google 帳號登入成功",
         "catalog.auth.failed": "登入失敗：{error}",
+        "catalog.auth.reason.no_secure_storage": "這次登入不會被記住：這台電腦沒有安全儲存",
+        "catalog.auth.reason.storage_locked": "安全儲存沒有解鎖",
+        "catalog.auth.reason.not_saved": "下次啟動需要重新登入",
+        "catalog.auth.reason.token_rejected": "Google 不認這個登入，請重新登入",
+        "catalog.auth.reason.unreachable": "連不上 Google",
         # 譜庫 - 設定
         "catalog.settings.title": "譜庫設定",
         "catalog.settings.step1": "步驟 1：登入 Google 帳號",
@@ -857,6 +862,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.auth.credentials_missing": "OAuth client secrets file missing ({path}). Please contact the developer.",
         "catalog.auth.success": "Google account signed in successfully",
         "catalog.auth.failed": "Sign in failed: {error}",
+        "catalog.auth.reason.no_secure_storage": "This sign-in won't be remembered: no secure storage on this computer",
+        "catalog.auth.reason.storage_locked": "Secure storage is locked",
+        "catalog.auth.reason.not_saved": "You'll need to sign in again next time",
+        "catalog.auth.reason.token_rejected": "Google no longer accepts this sign-in. Please sign in again",
+        "catalog.auth.reason.unreachable": "Can't reach Google",
         # Catalog - Settings
         "catalog.settings.title": "Catalog Settings",
         "catalog.settings.step1": "Step 1: Sign in to Google",

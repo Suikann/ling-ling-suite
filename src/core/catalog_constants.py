@@ -80,5 +80,4 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-TOKEN_FILE = "google_token.json"
 CLIENT_SECRETS_FILE = "client_secret.json"

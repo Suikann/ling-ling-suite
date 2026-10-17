@@ -23,6 +23,7 @@ from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
 from services.external_opener import ExternalOpener
 from services.file_service import FileService
+from services.google_auth_service import GoogleAuthService
 from services.import_service import ImportService
 from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVerdict
 from services.workspace_service import WorkspaceService
@@ -63,13 +64,16 @@ class MainWindow(QMainWindow):
     def __init__(
         self, preferences: PreferencesService, parent=None, history: Optional[MoveHistory] = None,
         opener: Optional[ExternalOpener] = None,
+        auth_service: Optional[GoogleAuthService] = None,
     ):
-        """
+        """建立主視窗；刪掉舊版的明文權杖檔，不碰安全儲存
+
         Args:
             preferences: 使用者偏好
             parent: 父元件
             history: 搬移歷程；省略時以使用者資料目錄建立
             opener: 以預設程式開啟網址或檔案；省略時依目前的平台建立
+            auth_service: Google 登入服務；省略時以系統的安全儲存建立
         """
         super().__init__(parent)
         self.project = self._blank_project()
@@ -82,6 +86,9 @@ class MainWindow(QMainWindow):
         self._history = history or MoveHistory(self.file_service, self.workspace_service)
         self._splitter = SplitService(self.file_service, self.workspace_service)
         self._opener = opener or ExternalOpener()
+        self._auth_service = auth_service or GoogleAuthService(self.file_service)
+        self._auth_service.remove_legacy_token()
+        self._auth_service.subscribe_not_saved(self._warn_login_not_saved)
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
         # 紀錄寫不進去而留下進行中紀錄的那批搬移，其路徑變動已套用到的專案（之後保留結果時不再套用一次）
@@ -672,18 +679,15 @@ class MainWindow(QMainWindow):
 
     # --- 譜庫 ---
 
-    def _get_auth_service(self):
-        """取得或建立 Google 認證服務"""
-        if not hasattr(self, "_auth_service"):
-            from services.google_auth_service import GoogleAuthService
-            self._auth_service = GoogleAuthService(self.file_service)
-        return self._auth_service
+    def _warn_login_not_saved(self):
+        """登入或換發的續期權杖沒寫進安全儲存：提示下次啟動需要重新登入"""
+        QMessageBox.warning(self, t("catalog.auth.title"), t("catalog.auth.reason.not_saved"))
 
     def _open_catalog(self):
         """開啟譜庫瀏覽器，尚未設定時先引導設定"""
-        auth = self._get_auth_service()
+        auth = self._auth_service
         spreadsheet_id = self._preferences.get("catalog_spreadsheet_id")
-        if not auth.is_authenticated or not spreadsheet_id:
+        if auth.get_credentials() is None or not spreadsheet_id:
             if not self._open_catalog_settings():
                 return
         from ui.catalog_window import CatalogWindow
@@ -693,8 +697,7 @@ class MainWindow(QMainWindow):
     def _open_catalog_settings(self) -> bool:
         """開啟譜庫設定，回傳是否設定完成"""
         from ui.catalog_settings_dialog import CatalogSettingsDialog
-        auth = self._get_auth_service()
-        dialog = CatalogSettingsDialog(auth, self._preferences, self)
+        dialog = CatalogSettingsDialog(self._auth_service, self._preferences, self)
         return dialog.exec() == CatalogSettingsDialog.Accepted
 
     # --- 輔助 ---

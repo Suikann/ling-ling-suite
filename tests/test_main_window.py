@@ -30,6 +30,8 @@ from core.constants import PartsOutputMode
 from core.locale import get_locale, set_locale, t
 from core.models import FileInfo, Group, Project, RenameEntry
 from services.file_service import FileService
+from services.google_auth_service import GoogleAuthService
+from services.secure_storage import SecureStorage
 from main import launch, prepare_application
 from services.instance_lock import InstanceLock
 from services.move_history import MoveHistory, RenameVerdict
@@ -39,6 +41,8 @@ from services.workspace_service import WorkspaceService
 from ui.main_window import MainWindow
 from ui.preview_dialog import PreviewDialog
 from tests.failing_writes import FailingWrites
+from tests.fake_google import FakeBrowserLogin, FakeTokenEndpoint, write_client_secrets
+from tests.memory_keyring import MemoryKeyring
 from tests.other_instance import OtherInstance
 
 
@@ -211,7 +215,16 @@ class MainWindowTestCase(unittest.TestCase):
             backup_dir=os.path.join(self.temp_dir, "backups"),
         )
         self.opener = RecordingOpener()
-        self.window = MainWindow(self.preferences, history=self.history, opener=self.opener)
+        self.keyring = MemoryKeyring()
+        self.legacy_token = os.path.join(self.temp_dir, "google_token.json")
+        self.auth = GoogleAuthService(
+            storage=SecureStorage("test-google", backend=self.keyring),
+            request=FakeTokenEndpoint(),
+            browser_login=FakeBrowserLogin(),
+            client_secrets_path=write_client_secrets(os.path.join(self.temp_dir, "client_secret.json")),
+            legacy_token_path=self.legacy_token,
+        )
+        self.window = MainWindow(self.preferences, history=self.history, opener=self.opener, auth_service=self.auth)
 
     def preferences_file_service(self) -> FileService:
         """偏好設定寫入用的檔案服務；要模擬最近清單寫不進去的測試換成寫不進去的"""
@@ -1078,6 +1091,24 @@ class TestPrepareApplication(unittest.TestCase):
                 mock.patch.object(sys, "platform", "linux"):
             prepare_application()
             self.assertEqual(os.environ.get("QT_IM_MODULES"), "ibus")
+
+
+class TestMainWindowGoogleLogin(MainWindowTestCase):
+    """啟動時只刪舊的明文權杖檔、不碰安全儲存；登入沒存進安全儲存時當下提示"""
+
+    def test_startup_deletes_legacy_token_without_touching_secure_storage(self):
+        with open(self.legacy_token, "w", encoding="utf-8") as f:
+            f.write('{"refresh_token": "legacy"}')
+        window = MainWindow(self.preferences, history=self.history, auth_service=self.auth)
+        self.addCleanup(window.deleteLater)
+        self.assertFalse(os.path.exists(self.legacy_token))
+        self.assertEqual(self.keyring.calls, [])
+
+    def test_login_that_cannot_be_saved_warns_to_sign_in_again_next_time(self):
+        self.keyring.failing_writes = True
+        with answering_prompts() as shown:
+            self.auth.authenticate()
+        self.assertIn((t("catalog.auth.title"), t("catalog.auth.reason.not_saved")), shown)
 
 
 class TestSingleInstanceLaunch(unittest.TestCase):
