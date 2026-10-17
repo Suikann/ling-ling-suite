@@ -8,7 +8,7 @@ import io
 import math
 import os
 import re
-from typing import List, NamedTuple, Optional, Tuple
+from typing import Callable, List, NamedTuple, Optional, Tuple
 
 from PyPDF2 import PdfReader, PdfWriter
 
@@ -130,25 +130,36 @@ def render_single_page(pdf_path: str, page_index: int, max_width: int = 600):
     return img
 
 
-def open_defect(pdf_path: str) -> Optional[PdfDefect]:
-    """PDF 能不能拿來壓縮：要密碼才打得開、或本身就壞到打不開時回報原因
+class PdfProbe(NamedTuple):
+    """PDF 打不打得開，與它的頁數
+
+    Attributes:
+        page_count: 頁數；打不開時為 0
+        defect: 打不開的原因；打得開時為 None
+    """
+    page_count: int
+    defect: Optional[PdfDefect] = None
+
+
+def probe_pdf(pdf_path: str) -> PdfProbe:
+    """確認 PDF 能不能拿來壓縮：要密碼才打得開、或本身就壞到打不開時回報原因
 
     Args:
         pdf_path: PDF 檔案路徑
 
     Returns:
-        打不開的原因；打得開時為 None
+        頁數與打不開的原因
     """
     import pymupdf
     try:
         with pymupdf.open(pdf_path, filetype="pdf") as doc:
             if doc.needs_pass:
-                return PdfDefect(CompressionProblem.ENCRYPTED)
+                return PdfProbe(0, PdfDefect(CompressionProblem.ENCRYPTED))
             if doc.page_count == 0:
-                return PdfDefect(CompressionProblem.UNREADABLE, "0 pages")
+                return PdfProbe(0, PdfDefect(CompressionProblem.UNREADABLE, "0 pages"))
+            return PdfProbe(doc.page_count)
     except Exception as e:
-        return PdfDefect(CompressionProblem.UNREADABLE, str(e))
-    return None
+        return PdfProbe(0, PdfDefect(CompressionProblem.UNREADABLE, str(e)))
 
 
 def save_lossless(pdf_path: str, output_path: str) -> None:
@@ -166,7 +177,9 @@ def save_lossless(pdf_path: str, output_path: str) -> None:
         doc.save(output_path, garbage=3, deflate=True, use_objstms=1)
 
 
-def save_downsampled(pdf_path: str, output_path: str, dpi: int, jpeg_quality: int) -> None:
+def save_downsampled(
+    pdf_path: str, output_path: str, dpi: int, jpeg_quality: int, on_page: Optional[Callable[[int], None]] = None,
+) -> None:
     """把 8-bit 影像降到 dpi（以 Lanczos 重取樣、存成 JPEG），另存到 output_path
 
     1-bit、ImageMask 與帶 SMask 的影像不動；有效 dpi 已不高於目標的影像不重新編碼。
@@ -177,13 +190,14 @@ def save_downsampled(pdf_path: str, output_path: str, dpi: int, jpeg_quality: in
         output_path: 輸出檔案路徑，不能是來源
         dpi: 目標 dpi
         jpeg_quality: JPEG 品質（1 到 95）
+        on_page: 每處理完一頁呼叫一次，參數為已處理的頁數；它拋出的例外會中止處理、不寫出輸出
     """
     import pymupdf
     _refuse_source(pdf_path, output_path)
     with pymupdf.open(pdf_path) as doc:
         placements = _largest_placements(doc)
         done = set()
-        for page in doc:
+        for index, page in enumerate(doc):
             for xref in _page_image_xrefs(page):
                 if xref in done or xref not in placements:
                     continue
@@ -191,6 +205,8 @@ def save_downsampled(pdf_path: str, output_path: str, dpi: int, jpeg_quality: in
                 jpeg = _downsampled_jpeg(doc, xref, placements[xref], dpi, jpeg_quality)
                 if jpeg is not None:
                     page.replace_image(xref, stream=jpeg)
+            if on_page:
+                on_page(index + 1)
         doc.save(output_path, garbage=4, deflate=True, use_objstms=1)
 
 
@@ -255,6 +271,7 @@ def _downsampled_jpeg(doc, xref: int, placed_points: float, dpi: int, jpeg_quali
 
 def check_compressed(
     original_path: str, compressed_path: str, psnr_threshold: float, render_dpi: int,
+    on_page: Optional[Callable[[int], None]] = None,
 ) -> Optional[PdfDefect]:
     """檢查壓縮檔有沒有壞：結構、影像通道、畫面三層依序檢查，回報第一個沒通過的
 
@@ -267,6 +284,7 @@ def check_compressed(
         compressed_path: 壓縮檔路徑
         psnr_threshold: PSNR 門檻（dB）
         render_dpi: 比較畫面時算繪的 dpi
+        on_page: 每比對完一頁呼叫一次，參數為已比對的頁數；它拋出的例外會中止檢查並往外拋
 
     Returns:
         第一個沒通過的原因；全部通過時為 None
@@ -295,6 +313,8 @@ def check_compressed(
             pymupdf.TOOLS.mupdf_warnings(reset=True)
             if worst is None or psnr < worst[1]:
                 worst = (index + 1, psnr)
+            if on_page:
+                on_page(index + 1)
         mismatch = _jpeg_channel_mismatch(doc)
         if mismatch:
             return PdfDefect(CompressionProblem.CHANNELS, mismatch)

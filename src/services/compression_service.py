@@ -16,7 +16,7 @@ PDF 內容的讀寫在 pdf_service，這裡只決定級數與結果，檔案存�
 import os
 import uuid
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, NamedTuple, Optional
 
 from core.constants import (
     COMPRESS_SIZE_LIMIT, TEMP_DIR, CompressionLevel, CompressionProblem, CompressionStatus,
@@ -29,6 +29,21 @@ JPEG_QUALITY = 75
 # 壓縮檢查：與原檔各以這個 dpi 算繪比較，每頁 PSNR 不得低於門檻（dB，暫訂，待以真實的分譜掃描檔校正）
 CHECK_RENDER_DPI = 150
 PSNR_THRESHOLD = 30
+
+
+class CompressionProgress(NamedTuple):
+    """壓縮進度：正在試哪一級、是壓縮還是檢查，已完成幾頁
+
+    每一級開始壓縮、開始檢查時各回報一次 page 為 0，之後每完成一頁回報一次（無損一次存完，不逐頁回報）。
+    """
+    level: CompressionLevel
+    checking: bool
+    page: int
+    page_count: int
+
+
+class _Cancelled(Exception):
+    """使用者取消壓縮；在頁與頁之間拋出，中止 PDF 的處理"""
 
 
 @dataclass(frozen=True)
@@ -71,11 +86,18 @@ class CompressionService:
         self._temp_dir = temp_dir
         self._size_limit = size_limit
 
-    def compress(self, source: str) -> CompressionResult:
+    def compress(
+        self, source: str, should_cancel: Callable[[], bool] = lambda: False,
+        on_progress: Callable[[CompressionProgress], None] = lambda progress: None,
+    ) -> CompressionResult:
         """壓縮一份 PDF
+
+        可以在背景執行緒呼叫；取消在頁與頁之間生效，取消後暫存資料夾裡什麼都不留。
 
         Args:
             source: 原檔路徑（不改動）
+            should_cancel: 頁與頁之間呼叫，回傳 True 就取消
+            on_progress: 回報進度（見 CompressionProgress），在呼叫 compress 的執行緒上呼叫
 
         Returns:
             壓縮結果
@@ -83,14 +105,17 @@ class CompressionService:
         original_size = self._files.file_size(source)
         if original_size <= self._size_limit:
             return CompressionResult(source, CompressionStatus.SMALL_ENOUGH, original_size)
-        defect = pdf_service.open_defect(source)
+        page_count, defect = pdf_service.probe_pdf(source)
         if defect is not None:
             return CompressionResult(
                 source, CompressionStatus.UNCOMPRESSIBLE, original_size, problem=defect.problem, detail=defect.detail,
             )
         folder = os.path.join(self._temp_dir, uuid.uuid4().hex)
         try:
-            result = self._compress_into(source, original_size, folder)
+            result = self._compress_into(source, original_size, folder, page_count, should_cancel, on_progress)
+        except _Cancelled:
+            self._files.discard_directory(folder)
+            return CompressionResult(source, CompressionStatus.CANCELLED, original_size)
         except BaseException:
             self._files.discard_directory(folder)
             raise
@@ -98,13 +123,32 @@ class CompressionService:
             self._files.discard_directory(folder)
         return result
 
-    def _compress_into(self, source: str, original_size: int, folder: str) -> CompressionResult:
-        """在 folder 裡依序試各級，最後一個候選檢查通過才留下（folder 由呼叫端清掉）"""
+    def _compress_into(
+        self, source: str, original_size: int, folder: str, page_count: int,
+        should_cancel: Callable[[], bool], on_progress: Callable[[CompressionProgress], None],
+    ) -> CompressionResult:
+        """在 folder 裡依序試各級，最後一個候選檢查通過才留下（folder 由呼叫端清掉）
+
+        Raises:
+            _Cancelled: 使用者取消
+        """
+        def stepper(level: CompressionLevel, checking: bool) -> Callable[[int], None]:
+            """回報這一階段開始，並回傳逐頁回報進度、檢查取消的函式"""
+            def step(page: int):
+                on_progress(CompressionProgress(level, checking, page, page_count))
+                if should_cancel():
+                    raise _Cancelled()
+            step(0)
+            return step
+
         self._files.create_directory(folder)
         output = os.path.join(folder, os.path.basename(source))
         for level in CompressionLevel:
+            step = stepper(level, checking=False)
             try:
-                self._write_level(source, output, level)
+                self._write_level(source, output, level, step)
+            except _Cancelled:
+                raise
             except Exception as e:
                 return CompressionResult(
                     source, CompressionStatus.FAILED, original_size, level=level,
@@ -113,7 +157,9 @@ class CompressionService:
             size = self._files.file_size(output)
             if size <= self._size_limit:
                 break
-        defect = pdf_service.check_compressed(source, output, PSNR_THRESHOLD, CHECK_RENDER_DPI)
+        defect = pdf_service.check_compressed(
+            source, output, PSNR_THRESHOLD, CHECK_RENDER_DPI, stepper(level, checking=True),
+        )
         if defect is not None:
             return CompressionResult(
                 source, CompressionStatus.FAILED, original_size, level=level,
@@ -125,9 +171,9 @@ class CompressionService:
         )
 
     @staticmethod
-    def _write_level(source: str, output: str, level: CompressionLevel) -> None:
-        """以 level 這一級壓縮 source，寫到 output（覆蓋前一級的嘗試）"""
+    def _write_level(source: str, output: str, level: CompressionLevel, on_page: Callable[[int], None]) -> None:
+        """以 level 這一級壓縮 source，寫到 output（覆蓋前一級的嘗試）；降解析度時每完成一頁呼叫 on_page"""
         if level is CompressionLevel.LOSSLESS:
             pdf_service.save_lossless(source, output)
         else:
-            pdf_service.save_downsampled(source, output, level.value, JPEG_QUALITY)
+            pdf_service.save_downsampled(source, output, level.value, JPEG_QUALITY, on_page)

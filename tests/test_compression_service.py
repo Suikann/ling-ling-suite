@@ -14,7 +14,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from core.constants import CompressionLevel, CompressionProblem, CompressionStatus
-from services.compression_service import CompressionService
+from services.compression_service import CompressionProgress, CompressionService
 from services.file_service import FileService
 from tests.synthetic_pdfs import (
     bilevel_pdf, encrypted_pdf, file_digest, image_dpis, image_pixels, mislabeled_jpeg_pdf, scanned_pdf,
@@ -125,6 +125,47 @@ class TestUncompressible(CompressionTestCase):
         self.assertEqual(result.status, CompressionStatus.UNCOMPRESSIBLE)
         self.assertEqual(result.problem, CompressionProblem.UNREADABLE)
         self.assertTrue(result.detail)
+        self.assertEqual(scratch_files(self.scratch_dir), [])
+
+
+class TestProgressAndCancel(CompressionTestCase):
+    """進度逐頁回報；取消時在頁與頁之間停下，什麼都不留"""
+
+    def test_progress_reports_each_page_of_each_level_tried_and_of_the_check(self):
+        source = self.source(scanned_pdf, dpi=600, pages=2)
+        events = []
+        self.service(size_limit=500 * KB).compress(source, on_progress=events.append)
+        lossless, dpi_300 = CompressionLevel.LOSSLESS, CompressionLevel.DPI_300
+        self.assertEqual(events, [
+            CompressionProgress(lossless, False, 0, 2),
+            CompressionProgress(dpi_300, False, 0, 2),
+            CompressionProgress(dpi_300, False, 1, 2),
+            CompressionProgress(dpi_300, False, 2, 2),
+            CompressionProgress(dpi_300, True, 0, 2),
+            CompressionProgress(dpi_300, True, 1, 2),
+            CompressionProgress(dpi_300, True, 2, 2),
+        ])
+
+    def test_cancelling_while_downsampling_leaves_no_output(self):
+        source = self.source(scanned_pdf, dpi=600, pages=3)
+        events = []
+        first_page_done = CompressionProgress(CompressionLevel.DPI_300, False, 1, 3)
+        result = self.service(size_limit=50 * KB).compress(
+            source, should_cancel=lambda: first_page_done in events, on_progress=events.append,
+        )
+        self.assertEqual(result.status, CompressionStatus.CANCELLED)
+        self.assertIsNone(result.output_path)
+        self.assertEqual(scratch_files(self.scratch_dir), [])
+        self.assertEqual(events[-1], first_page_done)
+
+    def test_cancelling_while_checking_leaves_no_output(self):
+        source = self.source(scanned_pdf, dpi=600, pages=2)
+        events = []
+        result = self.service(size_limit=500 * KB).compress(
+            source, should_cancel=lambda: any(e.checking for e in events), on_progress=events.append,
+        )
+        self.assertEqual(result.status, CompressionStatus.CANCELLED)
+        self.assertIsNone(result.output_path)
         self.assertEqual(scratch_files(self.scratch_dir), [])
 
 
