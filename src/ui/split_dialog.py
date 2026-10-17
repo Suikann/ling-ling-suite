@@ -194,7 +194,7 @@ class SplitPdfDialog(QDialog):
     # --- PDF loading ---
 
     def _load_pdf(self, path):
-        if not ensure_file_exists(self, path):
+        if not ensure_file_exists(self, path, self._splitter.file_service):
             return
         try:
             self._pdf_path = path

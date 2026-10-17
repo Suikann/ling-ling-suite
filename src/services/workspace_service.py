@@ -70,7 +70,7 @@ class WorkspaceService:
         Returns:
             資料夾是否已移除
         """
-        if not self._is_empty(folder):
+        if not self._holds_only_meta(folder):
             return False
         meta_path = os.path.join(folder, WORKSPACE_META_FILE)
         if self.file_service.file_exists(meta_path):
@@ -79,7 +79,7 @@ class WorkspaceService:
         self.file_service.remove_empty_directory(folder)
         return not self.file_service.directory_exists(folder)
 
-    def _is_empty(self, folder: str) -> bool:
+    def _holds_only_meta(self, folder: str) -> bool:
         """子資料夾存在，且裡面除了 meta.json 與它的原子寫入殘留之外沒有任何東西"""
         if not self.file_service.directory_exists(folder):
             return False

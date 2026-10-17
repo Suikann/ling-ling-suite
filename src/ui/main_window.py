@@ -649,7 +649,7 @@ class MainWindow(QMainWindow):
 
     def _open_rotate_pdf(self):
         from ui.rotate_dialog import RotatePdfDialog
-        dialog = RotatePdfDialog(self.project, self._history, self._current_group(), self)
+        dialog = RotatePdfDialog(self.project, self._history, self._current_group(), self, self.file_service)
         dialog.exec()
 
     def _set_language(self, lang_code: str):
