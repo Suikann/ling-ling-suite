@@ -2,14 +2,17 @@
 """
 啟動與平台設定
 
-依環境變數、平台與是否為打包版，判斷啟動時要補的環境變數，以及開啟外部程式時子行程的環境；
-只做判斷，不讀寫 os.environ。
+依環境變數、平台與是否為打包版，判斷啟動時要補的環境變數、開啟外部程式時子行程的環境，
+以及內附 Google 用戶端檔的位置；只做判斷，不讀寫 os.environ、不碰檔案。
 
 使用範例：
     from core.launch_env import qt_environment_defaults
     os.environ.update(qt_environment_defaults(os.environ, sys.platform))
 """
+import os
 from typing import Dict, Mapping
+
+from core.catalog_constants import CLIENT_SECRETS_FILE
 
 # pip 裝的 Qt 沒附 fcitx 輸入法外掛：環境有 QT_IM_MODULE=fcitx 時 Qt 會找不到外掛、打不出中文。
 # QT_IM_MODULES（Qt 6.7 起）優先於 QT_IM_MODULE，依序試 Wayland 原生輸入、fcitx、ibus（XWayland 下接 fcitx5 的 IBus 相容介面）
@@ -65,3 +68,20 @@ def external_process_environment(environ: Mapping[str, str], platform: str, froz
     else:
         env[_LIBRARY_PATH_VAR] = original
     return env
+
+
+def bundled_client_secrets_path(frozen: bool, resource_dir: str, repo_root: str) -> str:
+    """內附 Google 用戶端檔（client_secret.json）的位置
+
+    打包版讀 PyInstaller 的資源目錄（sys._MEIPASS），從原始碼執行讀 repo 根目錄。
+    不讀 exe 旁邊：AppImage 的程式資料夾是唯讀的，放在旁邊覆蓋的做法不保留。
+
+    Args:
+        frozen: 是否為打包版（sys.frozen）
+        resource_dir: 打包版的資源目錄（sys._MEIPASS）；從原始碼執行時不使用
+        repo_root: repo 根目錄（src/ 的上層）
+
+    Returns:
+        用戶端檔的路徑
+    """
+    return os.path.join(resource_dir if frozen else repo_root, CLIENT_SECRETS_FILE)

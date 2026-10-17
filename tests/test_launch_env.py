@@ -2,7 +2,8 @@
 """
 啟動與平台設定單元測試
 
-輸入環境變數、平台與是否為打包版，驗證建立 QApplication 前要補的環境變數，以及外部程式子行程的環境。
+輸入環境變數、平台與是否為打包版，驗證建立 QApplication 前要補的環境變數、外部程式子行程的環境，
+以及內附 Google 用戶端檔的位置。
 """
 import os
 import sys
@@ -10,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from core.launch_env import external_process_environment, qt_environment_defaults
+from core.launch_env import bundled_client_secrets_path, external_process_environment, qt_environment_defaults
 
 
 class TestQtEnvironmentDefaults(unittest.TestCase):
@@ -54,6 +55,21 @@ class TestExternalProcessEnvironment(unittest.TestCase):
         environ = {"LD_LIBRARY_PATH": "/tmp/_MEI/_internal"}
         external_process_environment(environ, "linux", True)
         self.assertEqual(environ, {"LD_LIBRARY_PATH": "/tmp/_MEI/_internal"})
+
+
+class TestBundledClientSecretsPath(unittest.TestCase):
+    """bundled_client_secrets_path：打包版讀資源目錄，從原始碼執行讀 repo 根目錄"""
+
+    def test_table(self):
+        resource_dir = os.path.join("tmp", "_MEI12345")
+        repo_root = os.path.join("home", "u", "ling-ling-suite")
+        cases = [
+            ("打包版讀資源目錄", True, os.path.join("tmp", "_MEI12345", "client_secret.json")),
+            ("從原始碼執行讀 repo 根目錄", False, os.path.join("home", "u", "ling-ling-suite", "client_secret.json")),
+        ]
+        for name, frozen, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(bundled_client_secrets_path(frozen, resource_dir, repo_root), expected)
 
 
 if __name__ == "__main__":
