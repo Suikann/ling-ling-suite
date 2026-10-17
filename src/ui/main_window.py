@@ -22,6 +22,7 @@ from core.launch_env import app_version, current_build
 from core.locale import t, get_locale, is_english, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
+from services.activity_log import ActivityLog
 from services.compression_output_service import CompressionBatch, CompressionOutputService
 from services.compression_service import CompressionResult, CompressionService
 from services.external_opener import ExternalOpener
@@ -89,6 +90,7 @@ class MainWindow(QMainWindow):
         opener: Optional[ExternalOpener] = None,
         auth_service: Optional[GoogleAuthService] = None,
         compressor: Optional[CompressionService] = None,
+        log: Optional[ActivityLog] = None,
     ):
         """建立主視窗；刪掉舊版的明文權杖檔，不碰安全儲存
 
@@ -99,6 +101,7 @@ class MainWindow(QMainWindow):
             opener: 以預設程式開啟網址或檔案；省略時依目前的平台建立
             auth_service: Google 登入服務；省略時以系統的安全儲存建立
             compressor: PDF 壓縮服務；省略時以使用者資料目錄下的暫存資料夾建立
+            log: 紀錄檔；省略時以使用者資料目錄下的紀錄檔資料夾建立
         """
         super().__init__(parent)
         self.project = self._blank_project()
@@ -119,6 +122,7 @@ class MainWindow(QMainWindow):
         self._auth_service.subscribe_not_saved(self._login_not_saved.emit)
         self._compressor = compressor or CompressionService(self.file_service)
         self._compression_output = CompressionOutputService(self.file_service, self._compressor)
+        self._log = log or ActivityLog(self.file_service)
         # 「關於」顯示的版號：打包版讀資源目錄的版號檔，開發版為 None
         build = current_build()
         self._version = app_version(build.frozen, build.resource_dir, self.file_service.read_text)

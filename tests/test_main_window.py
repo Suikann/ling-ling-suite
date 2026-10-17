@@ -5,6 +5,7 @@
 只測主視窗與服務層的接線，不測畫面；以 QT_QPA_PLATFORM=offscreen 執行，不需要顯示器。
 提示框、檔案對話框與預覽對話框以替換的方式模擬使用者的操作，不會跳出真的對話框；文字欄位以 QTest 模擬鍵入（QTest 只能輸入 ASCII 字元，中文會讓 Qt 直接中止）。
 """
+import datetime
 import json
 import os
 import shutil
@@ -1666,6 +1667,13 @@ class TestSingleInstanceLaunch(unittest.TestCase):
             f.write(b"left by a crash")
         self.lock = InstanceLock(os.path.join(temp_dir, "instance.lock"))
         self.addCleanup(self.lock.release)
+        self.log_dir = os.path.join(temp_dir, "logs")
+        os.makedirs(self.log_dir)
+        self.expired_log = os.path.join(self.log_dir, "2000-01-01.log")
+        self.todays_log = os.path.join(self.log_dir, datetime.date.today().isoformat() + ".log")
+        for path in (self.expired_log, self.todays_log):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("x")
 
     def _main_windows(self) -> set:
         return {w for w in QApplication.topLevelWidgets() if isinstance(w, MainWindow)}
@@ -1674,7 +1682,7 @@ class TestSingleInstanceLaunch(unittest.TestCase):
         """啟動並處理完排定的事件，回傳（主視窗或 None，跳出過的提示框，新開的主視窗）"""
         before = self._main_windows()
         with answering_prompts() as shown:
-            window = launch(PreferencesService(self.preferences_path), self.lock, self.scratch_dir)
+            window = launch(PreferencesService(self.preferences_path), self.lock, self.scratch_dir, self.log_dir)
             QApplication.processEvents()
         if window is not None:
             self.addCleanup(window.close)
@@ -1698,6 +1706,18 @@ class TestSingleInstanceLaunch(unittest.TestCase):
         window, shown, opened = self._launch()
         self.assertIsNotNone(window)
         self.assertFalse(os.path.exists(self.leftover))
+
+    def test_expired_logs_are_removed_at_startup(self):
+        window, shown, opened = self._launch()
+        self.assertIsNotNone(window)
+        self.assertFalse(os.path.exists(self.expired_log))
+        self.assertTrue(os.path.exists(self.todays_log))
+
+    def test_second_instance_leaves_the_logs_alone(self):
+        first = OtherInstance(self.lock.lock_path)
+        self.addCleanup(first.kill)
+        self._launch()
+        self.assertTrue(os.path.exists(self.expired_log))
 
     def test_opens_main_window_after_first_instance_exits(self):
         OtherInstance(self.lock.lock_path).exit()
