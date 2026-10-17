@@ -129,6 +129,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "filedialog.save_project": "儲存專案",
         "filedialog.export_instruments": "匯出編制表",
         "filedialog.text_files": "文字檔案",
+        "filedialog.replace": "「{name}」已存在，要取代它嗎？",
         # 狀態列
         "status.ready": "就緒",
         "status.imported_files": "已匯入 {count} 個檔案",
@@ -616,6 +617,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "filedialog.save_project": "Save Project",
         "filedialog.export_instruments": "Export Instrument List",
         "filedialog.text_files": "Text Files",
+        "filedialog.replace": "\"{name}\" already exists. Replace it?",
         # 狀態列
         "status.ready": "Ready",
         "status.imported_files": "Imported {count} file(s)",

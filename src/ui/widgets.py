@@ -2,12 +2,14 @@
 """
 共用增強元件與 UI 輔助函式
 """
+import os
 import threading
 from typing import Callable, List, Optional, Tuple
-from PySide6.QtWidgets import QListWidget, QAbstractItemView, QMessageBox, QWidget
+from PySide6.QtWidgets import QListWidget, QAbstractItemView, QFileDialog, QMessageBox, QWidget
 from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QRect, QObject, Signal
 from core.constants import PDF_EXTENSION
+from core.filename import ensure_extension
 from core.locale import t
 from core.models import Group, Project
 from services.file_service import FileService
@@ -28,6 +30,36 @@ def ensure_file_exists(parent: QWidget, path: str, file_service: FileService) ->
         return True
     QMessageBox.critical(parent, t("dialog.error"), t("dialog.error.file_not_found", path=path))
     return False
+
+
+def ask_save_path(
+    parent: QWidget, title: str, suggested: str, filter_label: str, extension: str, file_service: FileService,
+) -> str:
+    """以存檔對話框詢問存放位置；沒打副檔名時補上
+
+    對話框只確認過使用者打的檔名，補上副檔名後的檔名已有檔案時另外詢問是否取代。
+
+    Args:
+        parent: 對話框的父元件
+        title: 對話框標題
+        suggested: 預設的位置或檔名
+        filter_label: 檔案類型的名稱，例如「PDF 檔案」
+        extension: 副檔名，含開頭的點，例如 ".pdf"
+        file_service: 檔案服務（確認補上副檔名後的檔名是否已有檔案）
+
+    Returns:
+        要存放的路徑；按取消或不取代已有的檔案時為空字串
+    """
+    typed, _ = QFileDialog.getSaveFileName(parent, title, suggested, f"{filter_label} (*{extension})")
+    if not typed:
+        return ""
+    path = ensure_extension(typed, extension)
+    if path == typed or not file_service.file_exists(path):
+        return path
+    answer = QMessageBox.question(
+        parent, t("dialog.warning"), t("filedialog.replace", name=os.path.basename(path)),
+    )
+    return path if answer == QMessageBox.Yes else ""
 
 
 def pdf_file_choices(

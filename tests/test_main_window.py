@@ -387,6 +387,44 @@ class TestMainWindowUnsavedPrompt(MainWindowTestCase):
         self.assertFalse(self.window.isVisible())
 
 
+class TestMainWindowSaveAddsExtension(MainWindowTestCase):
+    """另存專案時沒打副檔名就補上 .llproj；補上後的檔名已有檔案時，確認取代才寫入"""
+
+    def test_project_saved_without_extension_gets_it(self):
+        typed = os.path.join(self.temp_dir, "winter")
+        with answering_prompts(), saving_as(typed):
+            self.trigger_menu(t("menu.file.save"))
+        self.assertTrue(os.path.isfile(typed + ".llproj"))
+        self.assertFalse(os.path.exists(typed))
+        self.assertIn("winter.llproj", self.window.windowTitle())
+
+    def test_extension_typed_in_another_case_is_kept(self):
+        typed = os.path.join(self.temp_dir, "winter.LLPROJ")
+        with answering_prompts(), saving_as(typed):
+            self.trigger_menu(t("menu.file.save"))
+        self.assertEqual(os.listdir(self.temp_dir).count("winter.LLPROJ"), 1)
+        self.assertNotIn("winter.LLPROJ.llproj", os.listdir(self.temp_dir))
+
+    def test_existing_file_under_the_completed_name_is_kept_when_not_confirmed(self):
+        typed = os.path.join(self.temp_dir, "winter")
+        with open(typed + ".llproj", "w", encoding="utf-8") as f:
+            f.write("old")
+        with answering_prompts(QMessageBox.No) as shown, saving_as(typed):
+            self.trigger_menu(t("menu.file.save"))
+        self.assertEqual(shown, [(t("dialog.warning"), t("filedialog.replace", name="winter.llproj"))])
+        with open(typed + ".llproj", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "old")
+
+    def test_existing_file_under_the_completed_name_is_replaced_when_confirmed(self):
+        typed = os.path.join(self.temp_dir, "winter")
+        with open(typed + ".llproj", "w", encoding="utf-8") as f:
+            f.write("old")
+        self.click_button(t("group.add"))
+        with answering_prompts(QMessageBox.Yes), saving_as(typed):
+            self.trigger_menu(t("menu.file.save"))
+        self.assertEqual(len(ProjectService().load_project(typed + ".llproj").groups), 1)
+
+
 class TestMainWindowMarksUserEdits(MainWindowTestCase):
     """標題的未存檔標記跟著專案內容：與上次存檔或開啟時不同才標記，改回原樣就消失"""
 

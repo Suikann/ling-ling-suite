@@ -16,7 +16,7 @@ from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
-    LOCALE_EN, LOCALE_ZH_TW, TEMPLATE_VARIABLES, OperationKind,
+    LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind,
 )
 from core.locale import t, get_locale, is_english, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
@@ -31,6 +31,7 @@ from services.project_access import AccessResult, ProjectAccess
 from services.rename_service import assign_default_sections
 from services.split_service import SplitService
 from ui.instrument_list import InstrumentListEditor
+from ui.widgets import ask_save_path
 
 
 class _PendingMoveTexts(NamedTuple):
@@ -319,7 +320,7 @@ class MainWindow(QMainWindow):
             return
         path, _ = QFileDialog.getOpenFileName(
             self, t("filedialog.open_project"), "",
-            f"{t('filedialog.project_files')} (*.llproj)",
+            f"{t('filedialog.project_files')} (*{PROJECT_EXTENSION})",
         )
         if not path:
             return
@@ -367,9 +368,9 @@ class MainWindow(QMainWindow):
 
     def _save_project_as(self) -> bool:
         """詢問位置後存檔；在對話框按取消也算沒存成，回傳是否存成"""
-        path, _ = QFileDialog.getSaveFileName(
-            self, t("filedialog.save_project"), "",
-            f"{t('filedialog.project_files')} (*.llproj)",
+        path = ask_save_path(
+            self, t("filedialog.save_project"), "", t("filedialog.project_files"), PROJECT_EXTENSION,
+            self.file_service,
         )
         if not path:
             return False
