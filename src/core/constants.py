@@ -77,6 +77,11 @@ SPLIT_FALLBACK_NAME = "Part"
 # 失敗時依此撤回
 SPLIT_STAGING_DIR_SUFFIX = ".splitting"
 SPLIT_REPLACED_DIR_SUFFIX = ".replaced"
+# 分割與旋轉的區段標示色，第 n 段依序循環取用；頁面預覽、分割與旋轉對話框共用
+SECTION_COLORS = (
+    "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
+    "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
+)
 
 
 class OperationKind(str, Enum):

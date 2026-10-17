@@ -15,16 +15,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPixmap, QImage, QColor
 from PySide6.QtCore import Qt
+from core.constants import SECTION_COLORS
 from core.locale import t
 from core.models import WorkspaceOwner
 from services.pdf_service import get_page_count, render_page_thumbnails
 from services.split_service import SplitCheck, SplitRequest, SplitSegment, SplitService
 from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
-
-SECTION_COLORS = [
-    "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
-    "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
-]
 
 _THUMB_WIDTH = 150
 _MAX_COLS = 4

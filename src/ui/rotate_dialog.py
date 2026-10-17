@@ -14,14 +14,11 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt
+from core.constants import SECTION_COLORS
 from core.locale import t
 from services.pdf_service import get_page_count, render_page_thumbnails
 from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
 
-SECTION_COLORS = [
-    "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
-    "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
-]
 ROTATION_ANGLES = [0, 90, 180, 270]
 ROTATION_LABELS = ["0\u00B0", "90\u00B0", "180\u00B0", "270\u00B0"]
 
