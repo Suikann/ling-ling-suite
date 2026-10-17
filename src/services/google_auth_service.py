@@ -357,7 +357,10 @@ class GoogleAuthService:
             return None
 
     def _remember_email(self, email: Optional[str]) -> None:
-        """記下登入帳號的 email；寫不進偏好設定檔時只記在這次執行，不另外告知"""
+        """記下登入帳號的 email；寫不進偏好設定檔時只記在這次執行，不另外告知
+
+        在登入的背景執行緒呼叫；PreferencesService 的讀寫有鎖，與主執行緒同時存檔也不會蓋掉彼此的改動。
+        """
         if self._preferences is None:
             self._email = email
             return
