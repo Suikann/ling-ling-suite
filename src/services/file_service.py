@@ -174,6 +174,14 @@ class FileService:
         """
         return os.path.isfile(path)
 
+    def file_size(self, path: str) -> int:
+        """檔案大小（位元組）
+
+        Raises:
+            OSError: 讀不到檔案資訊（例如檔案不存在）
+        """
+        return os.path.getsize(path)
+
     def file_exists_exact(self, path: str) -> bool:
         """檢查檔案是否存在且檔名大小寫完全相同
 

@@ -56,6 +56,8 @@ GOOGLE_KEYRING_SERVICE = "LingLingSuite Google"
 HUAXIA_KEYRING_SERVICE = "LingLingSuite HuaXia"
 # 舊版以明文存 Google 權杖的檔案：新版每次啟動都刪掉，任何情況都不讀它
 LEGACY_TOKEN_FILE = os.path.join(APPDATA_DIR, "google_token.json")
+# 暫存資料夾：壓縮檔先寫在這裡，檢查通過才交出去；獨立壓縮與發譜共用，啟動時清空上次留下的殘檔
+TEMP_DIR = os.path.join(APPDATA_DIR, "temp")
 
 # 介面語言代碼：繁體中文（預設）與英文
 LOCALE_ZH_TW = "zh_TW"
@@ -131,6 +133,44 @@ class ProblemPath(str, Enum):
     SOURCE = "source"
     TARGET = "target"
     STAGING = "staging"
+
+
+# 壓縮：輸出要壓到這個大小（位元組）以下，即 HuaXia 的單檔上限 20MB
+COMPRESS_SIZE_LIMIT = 20 * 1000 * 1000
+
+
+class CompressionLevel(Enum):
+    """壓縮的級數，依序試到大小上限以下為止；值為降到的 dpi，無損為 0"""
+    LOSSLESS = 0
+    DPI_300 = 300
+    DPI_200 = 200
+
+
+class CompressionStatus(str, Enum):
+    """一份 PDF 壓縮的結果"""
+    SMALL_ENOUGH = "small_enough"
+    COMPRESSED = "compressed"
+    STILL_TOO_LARGE = "still_too_large"
+    FAILED = "failed"
+    UNCOMPRESSIBLE = "uncompressible"
+    CANCELLED = "cancelled"
+
+
+class CompressionProblem(str, Enum):
+    """壓縮失敗或無法壓縮的原因
+
+    前兩種是原檔打不開（無法壓縮）；其餘是壓縮檔沒通過檢查或寫不出來（壓縮失敗）。
+    """
+    ENCRYPTED = "encrypted"
+    UNREADABLE = "unreadable"
+    WRITE_FAILED = "write_failed"
+    OUTPUT_UNREADABLE = "output_unreadable"
+    REPAIRED = "repaired"
+    PAGE_COUNT = "page_count"
+    RENDER_ERROR = "render_error"
+    WARNINGS = "warnings"
+    CHANNELS = "channels"
+    PSNR = "psnr"
 
 
 @dataclass(frozen=True)
