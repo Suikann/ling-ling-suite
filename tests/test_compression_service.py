@@ -182,6 +182,22 @@ class TestFailedCheck(CompressionTestCase):
         self.assertEqual(scratch_files(self.scratch_dir), [])
 
 
+class TestTempFolder(CompressionTestCase):
+    """暫存資料夾的殘檔"""
+
+    def test_clearing_leftovers_removes_everything_in_the_temp_folder(self):
+        leftover = os.path.join(self.scratch_dir, "0123abcd", "Flute.pdf")
+        os.makedirs(os.path.dirname(leftover))
+        with open(leftover, "wb") as f:
+            f.write(b"half written")
+        self.service(size_limit=1 * KB).clear_leftovers()
+        self.assertEqual(scratch_files(self.scratch_dir), [])
+
+    def test_clearing_leftovers_without_a_temp_folder_does_nothing(self):
+        self.service(size_limit=1 * KB).clear_leftovers()
+        self.assertFalse(os.path.exists(self.scratch_dir))
+
+
 def scratch_files(folder: str) -> list:
     """暫存資料夾裡留下的檔案（資料夾不存在時為空）"""
     return [os.path.join(root, name) for root, _, names in os.walk(folder) for name in names]

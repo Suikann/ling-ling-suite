@@ -123,6 +123,15 @@ class CompressionService:
             self._files.discard_directory(folder)
         return result
 
+    def clear_leftovers(self) -> None:
+        """清空暫存資料夾：上次執行留下的壓縮檔（當機、或壓縮中關閉程式）；啟動時取得單一實例鎖後呼叫"""
+        self._files.discard_directory(self._temp_dir)
+
+    def discard(self, result: CompressionResult) -> None:
+        """丟掉結果在暫存資料夾裡的壓縮檔（交出之後、或使用者不要這份時）；沒有壓縮檔時什麼都不做"""
+        if result.output_path is not None:
+            self._files.discard_directory(os.path.dirname(result.output_path))
+
     def _compress_into(
         self, source: str, original_size: int, folder: str, page_count: int,
         should_cancel: Callable[[], bool], on_progress: Callable[[CompressionProgress], None],

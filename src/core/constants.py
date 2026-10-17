@@ -137,6 +137,9 @@ class ProblemPath(str, Enum):
 
 # 壓縮：輸出要壓到這個大小（位元組）以下，即 HuaXia 的單檔上限 20MB
 COMPRESS_SIZE_LIMIT = 20 * 1000 * 1000
+# 壓縮的預設輸出資料夾：原資料夾名加上這個後綴，放在原資料夾旁
+COMPRESSED_FOLDER_SUFFIX = "（壓縮）"
+COMPRESSED_FOLDER_SUFFIX_EN = " (compressed)"
 
 
 class CompressionLevel(Enum):
