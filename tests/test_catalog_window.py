@@ -3,7 +3,7 @@
 譜庫視窗的接線測試
 
 讀取經譜庫服務、對假 Google；只測接線：讀到的東西出現在樹狀清單與詳細面板，
-讀不到時頂端出現提示列（標題與按鈕對應錯誤類別）、內容區寫「讀不到」。不測畫面。
+讀不到時頂端出現提示列（標題與按鈕對應錯誤類別）、內容區寫「讀不到」，紀錄檔寫一筆與詳細資料相同的內容。不測畫面。
 """
 import os
 import shutil
@@ -23,8 +23,10 @@ from core.catalog_errors import CatalogErrorKind
 from core.constants import CLUB_PUBLISHING_PLATFORM_KEY
 from core.locale import t
 from fake_google_catalog import FakeGoogle
+from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.club_settings_service import ClubSettingsService
+from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
 from services.preferences_service import PreferencesService
 from services.secure_storage import SecureStorage
@@ -66,6 +68,7 @@ class CatalogWindowTestCase(unittest.TestCase):
         self.google.drive.add_file("總譜.pdf", self.piece_folder)
         add_row(self.google, SHEET_PIECES, id="p1", title="春江花月夜", active_edition_id="e1")
         add_row(self.google, SHEET_EDITIONS, id="e1", piece_id="p1", drive_folder_id=self.piece_folder)
+        self.log_dir = os.path.join(self.temp_dir, "logs")
         self.preferences = PreferencesService(os.path.join(self.temp_dir, "preferences.json"))
         self.preferences.set("catalog_spreadsheet_id", "sheet-1")
         self.preferences.set("catalog_root_folder_id", self.root)
@@ -83,7 +86,9 @@ class CatalogWindowTestCase(unittest.TestCase):
     def open_window(self, use_fake: bool = True) -> CatalogWindow:
         """開啟譜庫視窗，等第一次讀取交回；use_fake 為 False 時照常以登入服務接 Google"""
         factory = (lambda: CatalogService(self.google.sheets, self.google.drive, sleep=lambda s: None)) if use_fake else None
-        window = CatalogWindow(self.auth, self.preferences, catalog_factory=factory)
+        window = CatalogWindow(
+            self.auth, self.preferences, catalog_factory=factory, log=ActivityLog(FileService(), self.log_dir),
+        )
         self.addCleanup(window.deleteLater)
         self.addCleanup(window.close)
         wait_until(lambda: self.tree(window).topLevelItemCount() > 0 or not self.bar(window).isHidden())
@@ -115,6 +120,20 @@ class CatalogWindowTestCase(unittest.TestCase):
             label.text() == t("catalog.error.unreadable") and label.isVisibleTo(window)
             for label in window.findChildren(QLabel)
         )
+
+    def log_text(self) -> str:
+        """紀錄檔資料夾裡所有檔的內容"""
+        if not os.path.isdir(self.log_dir):
+            return ""
+        texts = []
+        for name in sorted(os.listdir(self.log_dir)):
+            with open(os.path.join(self.log_dir, name), encoding="utf-8") as f:
+                texts.append(f.read())
+        return "".join(texts)
+
+    def details_text(self, window: CatalogWindow) -> str:
+        """提示列「詳細資料」的內容"""
+        return self.bar(window).findChild(QTextEdit).toPlainText()
 
     def tree_names(self, window: CatalogWindow) -> list:
         """樹狀清單最上層的名稱"""
@@ -237,6 +256,30 @@ class TestRemembersClubSettings(CatalogWindowTestCase):
         self.open_window()
         self.assertEqual(self.google.requests, 1)
         self.assertIs(self.remembered(), PublishingPlatform.HUAXIA)
+
+
+class TestFailuresAreLogged(CatalogWindowTestCase):
+    """讀不到時紀錄檔寫一筆，與提示列的詳細資料相同；讀得到時不寫"""
+
+    def test_a_failed_read_writes_the_banner_details_to_the_log(self):
+        self.google.fail_at(1, CatalogErrorKind.NO_PERMISSION, "The caller does not have permission")
+        window = self.open_window()
+        self.assertEqual(self.log_text().strip(), self.details_text(window))
+        self.assertIn("讀取譜庫", self.log_text())
+        self.assertIn("沒有權限", self.log_text())
+        self.assertIn("The caller does not have permission", self.log_text())
+
+    def test_a_failed_piece_detail_logs_the_piece_title(self):
+        window = self.open_window()
+        self.google.fail_next(CatalogErrorKind.OFFLINE)
+        self.tree(window).setCurrentItem(self.tree(window).topLevelItem(0))
+        wait_until(lambda: not self.bar(window).isHidden())
+        self.assertIn("春江花月夜", self.log_text())
+        self.assertIn("連不上網路", self.log_text())
+
+    def test_successful_reads_write_nothing(self):
+        self.open_window()
+        self.assertEqual(self.log_text(), "")
 
 
 if __name__ == '__main__':

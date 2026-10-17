@@ -4,7 +4,7 @@
 
 以 Drive 資料夾內容為主體，使用者可為資料夾加上元資料（曲目資訊、演出紀錄等）。
 讀取（曲目清單、作曲家、版本、資料夾與版本資料夾的檔）都經譜庫服務（services/catalog_service.py）在背景執行；
-讀不到時頂端顯示錯誤提示列（ui/catalog_error_bar.py），內容區寫「讀不到」，不顯示成空清單。
+讀不到時頂端顯示錯誤提示列（ui/catalog_error_bar.py）並寫進紀錄檔，內容區寫「讀不到」，不顯示成空清單。
 讀到總覽（連上譜庫）後另在背景讀社團設定，把啟用的發譜平台記在偏好設定（services/club_settings_service.py）；
 這一項讀不到時沿用記住的結果，不顯示提示列。
 """
@@ -27,6 +27,7 @@ from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import (
     Composer, DriveFile, EditionFiles, Piece, Edition, Movement, Part, Performance, PieceDetail,
 )
+from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.club_settings_service import ClubSettingsService
 from services.sheets_service import SheetsService
@@ -56,6 +57,7 @@ class CatalogWindow(QMainWindow):
         self, auth_service: GoogleAuthService,
         preferences: PreferencesService, parent=None,
         catalog_factory: Optional[Callable[[], CatalogService]] = None,
+        log: Optional[ActivityLog] = None,
     ):
         """
         Args:
@@ -64,6 +66,7 @@ class CatalogWindow(QMainWindow):
             parent: 父元件
             catalog_factory: 在背景執行緒建立譜庫服務的函式，拿不到時丟出 CatalogError；
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
+            log: 紀錄檔，讀寫失敗時寫進去；省略時以使用者資料目錄下的紀錄檔資料夾建立
         """
         super().__init__(parent)
         self._auth = auth_service
@@ -72,6 +75,7 @@ class CatalogWindow(QMainWindow):
         self._catalog: Optional[CatalogService] = None
         self._club_settings = ClubSettingsService(preferences)
         self._catalog_lock = threading.Lock()
+        self._log = log or ActivityLog()
         self._sheets: Optional[SheetsService] = None
         self._drive: Optional[DriveService] = None
         self._pieces: List[Piece] = []
@@ -111,15 +115,16 @@ class CatalogWindow(QMainWindow):
 
     def _read(
         self, read: Callable[[CatalogService], object], done: Callable[[object], None],
-        unreadable: Callable[[], None], retry: Callable[[], None],
+        unreadable: Callable[[], None], retry: Callable[[], None], piece_title: str = "",
     ):
-        """在背景經譜庫服務讀取，完成時在主執行緒呼叫 done；失敗時呼叫 unreadable 並顯示提示列
+        """在背景經譜庫服務讀取，完成時在主執行緒呼叫 done；失敗時呼叫 unreadable、顯示提示列並寫進紀錄檔
 
         Args:
             read: 以譜庫服務讀取的函式（背景執行緒呼叫）
             done: 讀到時以結果呼叫
             unreadable: 讀不到時呼叫，在內容區寫「讀不到」
             retry: 提示列按「重試」時呼叫
+            piece_title: 讀的是哪首曲目，記進詳細資料與紀錄檔；不是讀某首曲目時為空字串
         """
         self.setCursor(QCursor(Qt.WaitCursor))
         self._status_bar.showMessage(t("catalog.loading"))
@@ -135,7 +140,8 @@ class CatalogWindow(QMainWindow):
             unreadable()
             self._retry = retry
             self._error_bar.show_failure(
-                t("catalog.error.cannot_read"), CatalogFailure.from_error(error, t("catalog.action.read")),
+                t("catalog.error.cannot_read"),
+                CatalogFailure.from_error(error, t("catalog.action.read"), piece_title=piece_title),
             )
         self._tasks.run(lambda: read(self._connected()), finished, failed)
 
@@ -190,7 +196,7 @@ class CatalogWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(4, 4, 4, 4)
-        self._error_bar = CatalogErrorBar()
+        self._error_bar = CatalogErrorBar(log=self._log)
         self._error_bar.retry_requested.connect(self._retry_failed)
         self._error_bar.sign_in_requested.connect(self._sign_in_again)
         self._error_bar.settings_requested.connect(self._open_settings)
@@ -570,7 +576,8 @@ class CatalogWindow(QMainWindow):
                 self._clear_detail()
                 self._detail_layout.addWidget(self._unreadable_label())
 
-        self._read(read, on_done, unreadable, lambda: self._show_piece_detail(piece_id))
+        title = next((piece.title for piece in self._pieces if piece.id == piece_id), "")
+        self._read(read, on_done, unreadable, lambda: self._show_piece_detail(piece_id), piece_title=title)
 
     @staticmethod
     def _active_edition(detail: PieceDetail) -> Optional[Edition]:

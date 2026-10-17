@@ -930,7 +930,7 @@ class MainWindow(QMainWindow):
             if not self._open_catalog_settings():
                 return
         from ui.catalog_window import CatalogWindow
-        self._catalog_window = CatalogWindow(auth, self._preferences)
+        self._catalog_window = CatalogWindow(auth, self._preferences, log=self._log)
         self._catalog_window.show()
 
     def _open_catalog_settings(self) -> bool:
