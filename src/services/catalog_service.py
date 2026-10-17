@@ -7,7 +7,7 @@
 
 所有讀寫共用的規則都在這裡：遇到 429（達到用量上限）以指數退避自動重試；以名稱搜尋 Drive 時先跳脫反斜線、
 再跳脫單引號（drive_literal）；新增列時抽的 8 碼 ID 跟同一張工作表既有的撞號就重抽，同一批列重送前先以它們的 ID
-檢查哪些已經寫進去，不產生重複列（new_rows、add_rows）。試算表的值一律以 RAW 寫入由通事負責。
+檢查哪些已經寫進去，不產生重複列（new_rows、add_rows）；建譜庫試算表時建好就記下 ID，搬進資料夾失敗後重送不建第二份（PendingCatalog）。試算表的值一律以 RAW 寫入由通事負責。
 
 網路請求會卡住呼叫的執行緒，UI 要在背景執行緒呼叫。
 
@@ -149,6 +149,20 @@ class PendingRows:
     def mark_sent(self) -> None:
         """記下已經送出過（之後重送時以 ID 認出已寫進去的列）"""
         self._sent = True
+
+
+class PendingCatalog:
+    """要建立的譜庫試算表：建好後記下 ID，CatalogService.create_catalog 重送時沿用，不建第二份"""
+
+    def __init__(self, name: str, folder_id: str):
+        """
+        Args:
+            name: 試算表名稱
+            folder_id: 譜庫資料夾的 Drive ID
+        """
+        self.name = name
+        self.folder_id = folder_id
+        self.spreadsheet_id = ""
 
 
 class CatalogService:
@@ -411,22 +425,26 @@ class CatalogService:
             ])
         self._call(send)
 
-    def create_catalog(self, name: str, folder_id: str) -> str:
-        """在 Drive 資料夾裡建立新的譜庫試算表：每張工作表有標題列並凍結
+    def create_catalog(self, pending: PendingCatalog) -> str:
+        """建立新的譜庫試算表（每張工作表有標題列並凍結）並搬進譜庫資料夾
+
+        試算表建好就記在 pending：之後搬不進資料夾時，以同一個 pending 再呼叫一次只補搬，不再建第二份。
 
         Args:
-            name: 試算表名稱
-            folder_id: 譜庫資料夾的 Drive ID
+            pending: 要建立的譜庫試算表；上一次失敗時傳入同一個
 
         Returns:
             新試算表的 ID
 
         Raises:
-            CatalogError: 建不起來或搬不進資料夾
+            CatalogError: 建不起來或搬不進資料夾；以同一個 pending 再呼叫一次即可補齊
         """
-        spreadsheet_id = self._call(lambda: self._sheets.create_spreadsheet(name, SHEET_HEADERS))
-        self.move_file(self._call(lambda: self._drive.get_file(spreadsheet_id)), folder_id)
-        return spreadsheet_id
+        if not pending.spreadsheet_id:
+            pending.spreadsheet_id = self._call(
+                lambda: self._sheets.create_spreadsheet(pending.name, SHEET_HEADERS),
+            )
+        self.move_file(self._call(lambda: self._drive.get_file(pending.spreadsheet_id)), pending.folder_id)
+        return pending.spreadsheet_id
 
     def create_folder(self, name: str, parent_id: str) -> DriveFile:
         """在 Drive 資料夾裡建立子資料夾

@@ -16,7 +16,7 @@ from core.catalog_constants import (
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from fake_google_catalog import ROOT, FakeGoogle
-from services.catalog_service import CatalogService
+from services.catalog_service import CatalogService, PendingCatalog
 
 
 def empty_catalog(google: FakeGoogle) -> None:
@@ -469,7 +469,7 @@ class TestCreateCatalog(unittest.TestCase):
         self.assertEqual([f.id for f in self.catalog.spreadsheets_in(self.folder)], [sheet])
 
     def test_creates_a_spreadsheet_with_every_sheet_and_a_frozen_header_row_in_the_folder(self):
-        spreadsheet_id = self.catalog.create_catalog("譜庫目錄", self.folder)
+        spreadsheet_id = self.catalog.create_catalog(PendingCatalog("譜庫目錄", self.folder))
         self.assertEqual([f.id for f in self.catalog.spreadsheets_in(self.folder)], [spreadsheet_id])
         self.assertEqual(self.google.drive.file(spreadsheet_id).parents, (self.folder,))
         self.assertEqual(self.google.drive.file(spreadsheet_id).name, "譜庫目錄")
@@ -478,6 +478,17 @@ class TestCreateCatalog(unittest.TestCase):
             self.assertEqual(self.google.sheets.rows(title), [headers])
             self.assertEqual(self.google.sheets.frozen_rows(title), 1)
         self.assertNotIn(ROOT, self.google.drive.file(spreadsheet_id).parents)
+
+    def test_creating_again_after_a_failed_move_reuses_the_created_spreadsheet(self):
+        pending = PendingCatalog("譜庫目錄", self.folder)
+        # 第 1 次請求建試算表、第 2 次取它的中繼資料、第 3 次搬進資料夾
+        self.google.fail_at(3, CatalogErrorKind.OFFLINE)
+        with self.assertRaises(CatalogError):
+            self.catalog.create_catalog(pending)
+        spreadsheet_id = self.catalog.create_catalog(pending)
+        everywhere = self.catalog.spreadsheets_in(ROOT) + self.catalog.spreadsheets_in(self.folder)
+        self.assertEqual([f.id for f in everywhere], [spreadsheet_id])
+        self.assertEqual(self.google.drive.file(spreadsheet_id).parents, (self.folder,))
 
 
 class TestWithoutGoogleClient(unittest.TestCase):

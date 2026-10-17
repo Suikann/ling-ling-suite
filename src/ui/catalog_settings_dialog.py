@@ -21,7 +21,7 @@ from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import DriveFile
 from core.locale import t
 from services.activity_log import ActivityLog
-from services.catalog_service import CatalogService
+from services.catalog_service import CatalogService, PendingCatalog
 from services.club_settings_service import ClubSettingsService
 from services.google_auth_service import GoogleAuthService, LoginFailed, LoginFailure, LoginReason
 from services.google_catalog import open_google_catalog, open_google_drive
@@ -323,7 +323,7 @@ class CatalogSettingsDialog(QDialog):
         if not ok or not name.strip():
             self._show_folder_status(t("catalog.settings.catalog_not_found"), "#f39c12")
             return
-        name = name.strip()
+        pending = PendingCatalog(name.strip(), folder_id)
 
         def created(spreadsheet_id: str):
             """建好了"""
@@ -334,7 +334,7 @@ class CatalogSettingsDialog(QDialog):
             """建立譜庫目錄（重試時再呼叫一次）"""
             self._show_folder_status(t("catalog.loading"), "gray")
             self._run(
-                lambda: self._catalog_factory("").create_catalog(name, folder_id), created,
+                lambda: self._catalog_factory("").create_catalog(pending), created,
                 t("catalog.error.cannot_write"), t("catalog.action.create_catalog"), create,
             )
         create()
