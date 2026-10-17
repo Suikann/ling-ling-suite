@@ -75,6 +75,10 @@ SHEET_HEADERS = {
     ],
 }
 
+# Drive 的資料夾與 PDF 的 mimeType
+DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
+DRIVE_PDF_MIME = "application/pdf"
+
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",

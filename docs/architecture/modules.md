@@ -14,6 +14,7 @@
 | 一格（總譜或第 N 份分譜）的檔名與資料夾 | `core/naming.py`（見 [naming.md](naming.md)） |
 | 走訪專案引用的檔案（總譜＋分譜＋未分組）；依路徑取代、移除引用 | `Project.file_refs()`、`Project.replace_paths`、`Project.remove_paths` |
 | 群組欄位的編輯規則 | `Group.update`；不屬於專案的 Drive 群組也用它 |
+| 讀寫譜庫（Google 試算表與 Drive） | `services/catalog_service.py` 的 `CatalogService`：UI 與其他服務只呼叫它，失敗時丟出帶錯誤類別的 `CatalogError`（`core/catalog_errors.py`），不以空值或空清單代表失敗。它對下只經過試算表與 Drive 兩個關口（`services/catalog_ports.py` 的 `SheetsPort`、`DrivePort`，一次呼叫一次請求）；接 Google 的通事是 `services/google_catalog.py`，全程式只有它匯入 `googleapiclient`、把 Google 的例外轉成錯誤類別。寫入的共用規則（值以 RAW 寫入、Drive 名稱搜尋的跳脫、429 退避重試、ID 撞號重抽、新增列重送不重複）都在服務與通事裡。舊的 `SheetsService`、`DriveService` 還做著譜庫視窗的寫入與 Drive 重新命名，改走譜庫服務後刪除 |
 | 讀寫系統的安全儲存（keyring） | `services/secure_storage.py` 的 `SecureStorage`；backend 依平台明確指定，不用 keyring 的自動選擇 |
 | 兩階段批次搬移 | `services/move_service.py`，只有 `services/move_history.py` 使用（見 [move-history.md](move-history.md)） |
 | 以預設程式開啟網址或本機的檔案、資料夾（瀏覽器、PDF 閱讀器、檔案管理員） | `services/external_opener.py` 的 `ExternalOpener.open`；Linux 打包版替外部程式還原 `LD_LIBRARY_PATH`（`core/launch_env.py`）。不直接呼叫 `QDesktopServices.openUrl` 或 `xdg-open` |
@@ -42,6 +43,7 @@
   - `tests/other_instance.py`：以子行程扮演另一個持有單一實例鎖的程式
   - `tests/memory_keyring.py`：記憶體裡的 keyring backend，注入給 `SecureStorage`；可設成沒有安全儲存、被鎖住、寫入或刪除失敗。測試一律注入它，不碰系統的安全儲存
   - `tests/fake_google.py`：Google 權杖端點的替身（兌換授權碼時回傳指定的續期權杖、範圍與帳號 email；續期時回傳指定權杖、拒絕續期、連不上），以及寫出測試用用戶端檔的 `write_client_secrets`
+  - `tests/fake_google_catalog.py`：假 Google，記憶體裡的譜庫試算表加 Drive，實作兩個關口，注入給 `CatalogService`；每次呼叫計為一次請求，可以設定第 N 次請求丟出某類錯誤（可選擇請求生效之後才丟，扮演回應沒收到），或在第 N 次請求之前讓另一台電腦改動譜庫。譜庫讀寫的測試一律用它，不接真的 Google
   - `tests/fake_browser.py`：開瀏覽器的替身，注入給本機回呼與登入服務；拿到授權網址後在背景真的對其中的 `127.0.0.1` 回呼送 HTTP 請求，帶 `code` 或 `error`，或設成永遠不送
   - `tests/synthetic_pdfs.py`：以 PyMuPDF 產生的合成掃描分譜（8-bit 灰階、JPEG、1-bit、未壓縮的串流、加密、宣告錯誤的 JPEG），測壓縮服務與壓縮檢查；壓縮服務的測試不接替身，以注入的大小上限代替 20MB
 

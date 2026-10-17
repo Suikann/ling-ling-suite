@@ -6,13 +6,25 @@
 把 Google 丟出的例外轉成六種錯誤類別（CatalogError）。全程式只有這裡匯入 googleapiclient，
 而且是在第一次用到時才匯入：只匯入譜庫服務與關口的模組不會載入 Google 程式庫。
 
+同一個通事物件可能被幾個背景執行緒同時使用，而 httplib2 不能多執行緒共用，所以每個通事一次只送一個請求。
+
 使用範例：
-    from services.google_catalog import catalog_error_from
-    error = catalog_error_from(exception)   # CatalogError，kind 為六種類別之一
+    from services.google_catalog import open_google_catalog, catalog_error_from
+    catalog = open_google_catalog(auth, spreadsheet_id)   # 拿不到憑證時丟出 CatalogError（要在背景執行緒呼叫）
+    error = catalog_error_from(exception)                 # CatalogError，kind 為六種類別之一
 """
 import json
+import threading
+from typing import TYPE_CHECKING, Any, List, Optional, Sequence
 
 from core.catalog_errors import CatalogError, CatalogErrorKind
+from core.catalog_models import DriveFile, DriveListing
+from services.catalog_ports import CellWrite, sheet_range
+from services.catalog_service import CatalogService
+from services.google_auth_service import GoogleAuthService, LoginReason
+
+if TYPE_CHECKING:
+    from google.oauth2.credentials import Credentials
 
 # 403 裡算「達到用量上限」的 reason（去掉底線、轉小寫後比對；Sheets 寫成 RATE_LIMIT_EXCEEDED）
 _USAGE_LIMIT_REASONS = {"ratelimitexceeded", "userratelimitexceeded", "quotaexceeded", "dailylimitexceeded"}
@@ -23,6 +35,130 @@ _STATUS_KINDS = {
     404: CatalogErrorKind.NOT_FOUND,
     429: CatalogErrorKind.RATE_LIMITED,
 }
+# Drive 列出檔案時一頁最多幾筆（API 上限 1000）
+_DRIVE_PAGE_SIZE = 1000
+_DRIVE_FILE_FIELDS = "nextPageToken, files(id, name, mimeType, parents, md5Checksum)"
+
+
+def open_google_catalog(auth: GoogleAuthService, spreadsheet_id: str) -> CatalogService:
+    """以登入服務的憑證建立接 Google 的譜庫服務（會續期憑證，要在背景執行緒呼叫）
+
+    Args:
+        auth: Google 登入服務
+        spreadsheet_id: 譜庫試算表的 ID
+
+    Returns:
+        接上 Google 試算表與 Drive 的譜庫服務
+
+    Raises:
+        CatalogError: 沒設定試算表 ID 時為找不到；拿不到憑證時，連不上 Google 為斷網，其餘（沒登入、
+            安全儲存沒解鎖、Google 不認這個權杖）為要重新登入
+    """
+    if not spreadsheet_id:
+        raise CatalogError(CatalogErrorKind.NOT_FOUND, "catalog_spreadsheet_id is empty")
+    credentials = auth.get_credentials()
+    if credentials is None:
+        reason = auth.status().reason
+        kind = CatalogErrorKind.OFFLINE if reason is LoginReason.UNREACHABLE else CatalogErrorKind.SIGN_IN
+        raise CatalogError(kind, f"no Google credentials: {reason.value if reason else 'not signed in'}")
+    return CatalogService(GoogleSheets(spreadsheet_id, credentials), GoogleDrive(credentials))
+
+
+class _Gateway:
+    """通事的共用部分：建出 Google API 的用戶端，一次送一個請求，例外轉成 CatalogError"""
+
+    def __init__(self, api: str, version: str, credentials: Optional["Credentials"], http: Any):
+        """
+        Args:
+            api: API 名稱（"sheets"、"drive"）
+            version: API 版本
+            credentials: Google 憑證；給 http 時省略
+            http: 代替網路的 httplib2.Http（測試用）；省略時以 credentials 建立
+        """
+        from googleapiclient.discovery import build
+        options = {"http": http} if http is not None else {"credentials": credentials}
+        self._api = build(api, version, cache_discovery=False, static_discovery=True, **options)
+        self._lock = threading.Lock()
+
+    def _execute(self, request) -> dict:
+        """送出一個請求，回傳回應內容；失敗時丟出 CatalogError"""
+        with self._lock:
+            try:
+                return request.execute() or {}
+            except Exception as e:
+                raise catalog_error_from(e) from e
+
+
+class GoogleSheets(_Gateway):
+    """試算表關口的通事：一份 Google 試算表"""
+
+    def __init__(self, spreadsheet_id: str, credentials: Optional["Credentials"] = None, http: Any = None):
+        """
+        Args:
+            spreadsheet_id: 譜庫試算表的 ID
+            credentials: Google 憑證
+            http: 代替網路的 httplib2.Http（測試用）
+        """
+        super().__init__("sheets", "v4", credentials, http)
+        self._spreadsheet_id = spreadsheet_id
+
+    def read_ranges(self, ranges: Sequence[str]) -> List[List[List[str]]]:
+        """讀多個範圍（values.batchGet）"""
+        response = self._execute(self._api.spreadsheets().values().batchGet(
+            spreadsheetId=self._spreadsheet_id, ranges=list(ranges),
+        ))
+        return [
+            [[str(value) for value in row] for row in value_range.get("values", [])]
+            for value_range in response.get("valueRanges", [])
+        ]
+
+    def write_cells(self, data: Sequence[CellWrite]) -> None:
+        """一次寫入多個範圍（values.batchUpdate），值以 RAW 寫入"""
+        self._execute(self._api.spreadsheets().values().batchUpdate(
+            spreadsheetId=self._spreadsheet_id,
+            body={"valueInputOption": "RAW", "data": [{"range": r, "values": v} for r, v in data]},
+        ))
+
+    def append_rows(self, sheet: str, rows: Sequence[List[str]]) -> None:
+        """在工作表最後一列之後新增多列（values.append），值以 RAW 寫入"""
+        self._execute(self._api.spreadsheets().values().append(
+            spreadsheetId=self._spreadsheet_id, range=sheet_range(sheet, "A:A"),
+            valueInputOption="RAW", insertDataOption="INSERT_ROWS", body={"values": [list(row) for row in rows]},
+        ))
+
+    def add_sheet(self, title: str) -> None:
+        """建立一張空的工作表"""
+        self._execute(self._api.spreadsheets().batchUpdate(
+            spreadsheetId=self._spreadsheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": title}}}]},
+        ))
+
+
+class GoogleDrive(_Gateway):
+    """Drive 關口的通事"""
+
+    def __init__(self, credentials: Optional["Credentials"] = None, http: Any = None):
+        """
+        Args:
+            credentials: Google 憑證
+            http: 代替網路的 httplib2.Http（測試用）
+        """
+        super().__init__("drive", "v3", credentials, http)
+
+    def list_files(self, query: str, page_token: str = "") -> DriveListing:
+        """以查詢字串列出檔案的一頁（files.list，依名稱排序）"""
+        response = self._execute(self._api.files().list(
+            q=query, fields=_DRIVE_FILE_FIELDS, orderBy="name", pageSize=_DRIVE_PAGE_SIZE,
+            pageToken=page_token or None,
+        ))
+        files = [
+            DriveFile(
+                id=item["id"], name=item.get("name", ""), mime_type=item.get("mimeType", ""),
+                parents=tuple(item.get("parents", [])), md5=item.get("md5Checksum", ""),
+            )
+            for item in response.get("files", [])
+        ]
+        return DriveListing(files, response.get("nextPageToken", ""))
 
 
 def catalog_error_from(error: BaseException) -> CatalogError:

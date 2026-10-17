@@ -2,10 +2,10 @@
 """
 譜庫資料模型
 
-定義譜庫系統的核心資料結構。
+定義譜庫系統的核心資料結構：試算表各工作表的一列，以及 Drive 上的檔案與資料夾內容。
 """
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -100,3 +100,43 @@ class PieceDetail:
     movements: List[Movement] = field(default_factory=list)
     parts: List[Part] = field(default_factory=list)
     performances: List[Performance] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DriveFile:
+    """Drive 上的一個檔案或資料夾"""
+    id: str
+    name: str
+    mime_type: str = ""
+    parents: Tuple[str, ...] = ()
+    md5: str = ""
+
+
+@dataclass(frozen=True)
+class DriveListing:
+    """Drive 列出檔案的一頁結果；next_page_token 為空字串表示沒有下一頁"""
+    files: List[DriveFile] = field(default_factory=list)
+    next_page_token: str = ""
+
+
+@dataclass(frozen=True)
+class FolderContents:
+    """一個 Drive 資料夾裡的子資料夾與 PDF（各依名稱排序）"""
+    folders: List[DriveFile] = field(default_factory=list)
+    pdfs: List[DriveFile] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class EditionFiles:
+    """版本資料夾裡的檔：直接放在資料夾裡的 PDF，以及每個子資料夾與其中的 PDF"""
+    root_pdfs: List[DriveFile] = field(default_factory=list)
+    subfolders: List[Tuple[DriveFile, List[DriveFile]]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CatalogOverview:
+    """譜庫視窗開啟時要的全部：曲目、作曲家、哪個資料夾屬於哪首曲目，以及譜庫根資料夾的內容"""
+    pieces: List[Piece] = field(default_factory=list)
+    composers: List[Composer] = field(default_factory=list)
+    folder_pieces: Dict[str, Piece] = field(default_factory=dict)
+    root: FolderContents = field(default_factory=FolderContents)
