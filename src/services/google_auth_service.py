@@ -5,7 +5,9 @@ Google 登入服務
 以 OAuth2 桌面應用程式流程登入 Google：經本機回呼（services/local_callback.py）開瀏覽器、取得授權碼，
 再向 Google 兌換權杖。用戶端檔（client_secret.json）隨程式內附，位置見 core.launch_env.bundled_client_secrets_path。
 登入後只把續期權杖存進系統的安全儲存（見 services/secure_storage.py），重開泠靈時以它加上
-用戶端的 client_id、client_secret 重建憑證。啟動時不讀安全儲存，第一次用到 Google 時才讀。
+用戶端的 client_id、client_secret 重建憑證。啟動時不讀安全儲存，第一次用到 Google 時才讀；
+安全儲存沒解鎖（使用者取消了解鎖視窗）之後，看狀態（status）不再讀，等下一次要取得憑證（get_credentials）才再讀，
+一次操作最多跳一次解鎖視窗。
 
 對外的狀態（status）分得出：沒被記住的原因（這台電腦沒有安全儲存、沒有解鎖、寫不進去），
 以及續期失敗的原因（Google 不認這個權杖、連不上 Google）。
@@ -170,14 +172,22 @@ class GoogleAuthService:
         self._not_saved_listeners.append(listener)
 
     def status(self) -> LoginStatus:
-        """目前是否已登入與登入狀態旁要說明的原因；還沒讀過安全儲存時會讀"""
-        signed_in = self.get_credentials() is not None
+        """目前是否已登入與登入狀態旁要說明的原因
+
+        記憶體裡沒有憑證時照 get_credentials 讀安全儲存，但上次讀到沒解鎖時直接回報沒登入：
+        看狀態不會再跳解鎖視窗，等下一次 get_credentials 才再讀。
+        """
+        if self._credentials is None and self._storage_reason is LoginReason.STORAGE_LOCKED:
+            signed_in = False
+        else:
+            signed_in = self.get_credentials() is not None
         return LoginStatus(signed_in, self._refresh_reason or self._storage_reason)
 
     def get_credentials(self) -> Optional["Credentials"]:
         """取得有效的憑證（不開瀏覽器）
 
-        記憶體裡沒有憑證時，以安全儲存裡的續期權杖重建；憑證不是有效的就續期。
+        記憶體裡沒有憑證時，以安全儲存裡的續期權杖重建（每次呼叫都重讀，上次沒解鎖時會再跳解鎖視窗）；
+        憑證不是有效的就續期。
 
         Returns:
             Google 憑證；尚未登入、讀不出安全儲存或續期失敗時為 None（原因見 status）

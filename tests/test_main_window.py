@@ -1238,6 +1238,41 @@ class TestMainWindowGoogleLogin(MainWindowTestCase):
         self.assertEqual(warned_on, [threading.main_thread()])
 
 
+class TestMainWindowOpenCatalog(MainWindowTestCase):
+    """開譜庫：安全儲存沒解鎖時，一次操作最多跳一次解鎖視窗；下一次需要時再跳"""
+
+    def setUp(self):
+        super().setUp()
+        self.auth.authenticate()
+        self.auth = GoogleAuthService(
+            storage=SecureStorage("test-google", backend=self.keyring),
+            request=FakeTokenEndpoint(),
+            opener=CallbackBrowser(),
+            client_secrets_path=os.path.join(self.temp_dir, "client_secret.json"),
+            legacy_token_path=self.legacy_token,
+        )
+        self.window.close()
+        self.preferences.set("catalog_root_folder_id", "folder-id")
+        self.window = MainWindow(self.preferences, history=self.history, opener=self.opener, auth_service=self.auth)
+        self.keyring.locked = True
+        self.keyring.calls.clear()
+
+    def open_catalog(self) -> List[str]:
+        """從選單開譜庫；設定對話框一開就按取消，回傳過程中跳出的解鎖視窗（讀安全儲存的次數）"""
+        from ui.catalog_settings_dialog import CatalogSettingsDialog
+        with mock.patch.object(CatalogSettingsDialog, "exec", return_value=QDialog.Rejected):
+            self.trigger_menu(t("menu.catalog.open"))
+        return [call for call in self.keyring.calls if call == "get"]
+
+    def test_cancelled_unlock_is_asked_only_once_per_open(self):
+        self.assertEqual(len(self.open_catalog()), 1)
+
+    def test_next_open_asks_to_unlock_again(self):
+        self.open_catalog()
+        self.keyring.calls.clear()
+        self.assertEqual(len(self.open_catalog()), 1)
+
+
 def wait_until(condition: Callable[[], bool], timeout: float = 20) -> None:
     """處理事件直到 condition 成立（背景工作的結果經事件迴圈回到主執行緒）；逾時判定失敗"""
     deadline = time.monotonic() + timeout

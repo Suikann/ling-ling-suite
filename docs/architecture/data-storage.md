@@ -14,7 +14,7 @@
 
 專案檔（`.llproj`）放在使用者自選的位置。
 
-Google 的登入狀態不在使用者資料目錄：只有續期權杖存在系統的安全儲存（Windows 認證管理員、Linux 的 Secret Service），服務名稱為 `GOOGLE_KEYRING_SERVICE`（HuaXia 那筆用 `HUAXIA_KEYRING_SERVICE`）。backend 依平台明確指定，不受 `keyrings.alt`、`PYTHON_KEYRING_BACKEND`、`keyringrc.cfg` 影響；啟動時不讀，第一次用到 Google 時才讀。這台電腦沒有安全儲存或寫不進去時就不保存，社團設定的登入狀態旁寫出原因。內容不備份，遺失就重新登入。舊版以明文存的 `google_token.json`（`LEGACY_TOKEN_FILE`）每次啟動都刪；刪不掉就等下次啟動再刪，任何情況都不讀它，也不搬進安全儲存。
+Google 的登入狀態不在使用者資料目錄：只有續期權杖存在系統的安全儲存（Windows 認證管理員、Linux 的 Secret Service），服務名稱為 `GOOGLE_KEYRING_SERVICE`（HuaXia 那筆用 `HUAXIA_KEYRING_SERVICE`）。backend 依平台明確指定，不受 `keyrings.alt`、`PYTHON_KEYRING_BACKEND`、`keyringrc.cfg` 影響；啟動時不讀，第一次用到 Google 時才讀；解鎖視窗被取消後，看登入狀態不再讀，等下一次要用到憑證才再讀，一次操作最多跳一次解鎖視窗。這台電腦沒有安全儲存或寫不進去時就不保存，社團設定的登入狀態旁寫出原因。內容不備份，遺失就重新登入。舊版以明文存的 `google_token.json`（`LEGACY_TOKEN_FILE`）每次啟動都刪；刪不掉就等下次啟動再刪，任何情況都不讀它，也不搬進安全儲存。
 
 - 啟動時先取得單一實例鎖，取不到就提示「已在執行中」後結束，不開主視窗、不檢查進行中紀錄、不清暫存資料夾；鎖檔建不起來或開不了（例如使用者資料目錄沒有寫入權限）時同樣不繼續，顯示錯誤原因後結束
 - 取得鎖後清空暫存資料夾：裡面只會是上次當機或壓縮中關閉程式留下的殘檔。暫存資料夾的位置在建構 `CompressionService` 時注入

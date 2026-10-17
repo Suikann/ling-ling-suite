@@ -232,7 +232,18 @@ class TestRememberingLogin(GoogleAuthTestCase):
         later = self.service()
         self.assertEqual(later.status(), LoginStatus(False, LoginReason.STORAGE_LOCKED))
         self.keyring.locked = False
+        self.assertIsNotNone(later.get_credentials())
         self.assertEqual(later.status(), LoginStatus(True))
+
+    def test_status_after_a_cancelled_unlock_does_not_ask_to_unlock_again(self):
+        self.service().authenticate()
+        self.keyring.locked = True
+        later = self.service()
+        self.assertIsNone(later.get_credentials())
+        reads = self.keyring.calls.count("get")
+        self.assertEqual(later.status(), LoginStatus(False, LoginReason.STORAGE_LOCKED))
+        self.assertEqual(later.status(), LoginStatus(False, LoginReason.STORAGE_LOCKED))
+        self.assertEqual(self.keyring.calls.count("get"), reads)
 
     def test_login_that_cannot_be_saved_still_succeeds_and_is_announced(self):
         self.keyring.failing_writes = True

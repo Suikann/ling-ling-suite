@@ -91,6 +91,16 @@ class TestLoginReason(LoginAreaTestCase):
         dialog = self.open_dialog()
         self.assertTrue(self.shows(dialog, t("catalog.auth.reason.storage_locked")))
 
+    def test_cancelled_unlock_is_asked_only_once_when_opening_with_a_folder_set(self):
+        self.auth.authenticate()
+        self.auth = self.login_service()
+        self.preferences.set("catalog_root_folder_id", "folder-id")
+        self.keyring.locked = True
+        self.keyring.calls.clear()
+        dialog = self.open_dialog()
+        self.assertEqual(self.keyring.calls.count("get"), 1)
+        self.assertTrue(self.shows(dialog, t("catalog.auth.reason.storage_locked")))
+
     def test_login_that_cannot_be_saved_says_sign_in_again_next_time(self):
         self.keyring.failing_writes = True
         dialog = self.open_dialog()

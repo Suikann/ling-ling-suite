@@ -107,7 +107,8 @@ class CatalogSettingsDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
         self._update_auth_display()
-        if self._folder_entry.text().strip():
+        # 開啟時只在已登入時自動找譜庫目錄：安全儲存沒解鎖時不為此再跳一次解鎖視窗
+        if self._folder_entry.text().strip() and self._auth.status().signed_in:
             self._check_catalog_in_folder()
 
     def _update_auth_display(self):
