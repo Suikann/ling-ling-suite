@@ -26,6 +26,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "app.title": "泠靈小工具",
         "app.unsaved_project": "未命名",
         "app.already_running": "程式已在執行中。",
+        "app.lock_failed": "無法開啟鎖檔，程式未啟動：\n{error}",
         # 選單 - 檔案
         "menu.file": "檔案",
         "menu.file.new": "新增專案",
@@ -510,6 +511,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "app.title": "Ling Ling Suite",
         "app.unsaved_project": "Untitled",
         "app.already_running": "The application is already running.",
+        "app.lock_failed": "Could not open the lock file; the application did not start:\n{error}",
         # 選單 - 檔案
         "menu.file": "File",
         "menu.file.new": "New Project",

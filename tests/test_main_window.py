@@ -990,6 +990,21 @@ class TestSingleInstanceLaunch(unittest.TestCase):
         self.assertEqual(opened, {window})
         self.assertEqual(shown, [])
 
+    def test_lock_that_cannot_be_created_shows_the_error_without_opening_the_window(self):
+        not_a_directory = os.path.join(os.path.dirname(self.lock.lock_path), "not-a-directory")
+        with open(not_a_directory, "w") as f:
+            f.write("")
+        self.lock = InstanceLock(os.path.join(not_a_directory, "instance.lock"))
+        with mock.patch.object(MainWindow, "prompt_pending_recovery") as prompt:
+            window, shown, opened = self._launch()
+        self.assertIsNone(window)
+        self.assertEqual(opened, set())
+        prompt.assert_not_called()
+        self.assertEqual(len(shown), 1)
+        title, message = shown[0]
+        self.assertEqual(title, t("app.title"))
+        self.assertIn("not-a-directory", message)
+
 
 if __name__ == '__main__':
     unittest.main()

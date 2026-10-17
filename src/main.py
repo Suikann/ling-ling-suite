@@ -55,15 +55,21 @@ def launch(prefs: PreferencesService, lock: InstanceLock) -> Optional[QMainWindo
     """取得單一實例鎖後開啟主視窗，並排定檢查上次中斷的重新命名
 
     鎖要在檢查進行中紀錄之前取得：另一個程式執行中時，它的進行中紀錄不是上次中斷留下的。
+    所以鎖檔建不起來或開不了時也不繼續，顯示錯誤後結束。
 
     Args:
         prefs: 已載入的使用者偏好
         lock: 單一實例鎖
 
     Returns:
-        主視窗；已有另一個程式在執行時提示後回傳 None
+        主視窗；已有另一個程式在執行，或鎖檔建不起來、開不了時，提示後回傳 None
     """
-    if not lock.acquire():
+    try:
+        acquired = lock.acquire()
+    except OSError as e:
+        QMessageBox.critical(None, t("app.title"), t("app.lock_failed", error=e))
+        return None
+    if not acquired:
         QMessageBox.information(None, t("app.title"), t("app.already_running"))
         return None
     from ui.main_window import MainWindow
