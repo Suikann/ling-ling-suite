@@ -3,7 +3,8 @@
 PDF 壓縮服務
 
 把一份 PDF 壓到大小上限以下：先無損，不夠再依序降到 300、200 dpi，到上限以下就停。
-壓縮檔寫在暫存資料夾，原檔永遠不動；交到輸出位置由呼叫端決定（見 compression_output_service）。
+壓縮檔寫在暫存資料夾，最後一個候選經過三層檢查（見 pdf_service.check_compressed）才留下，
+沒通過就判為壓縮失敗、丟掉壓縮檔，不改試下一級；原檔永遠不動。
 PDF 內容的讀寫在 pdf_service，這裡只決定級數與結果，檔案存取經過 FileService。
 
 使用範例：
@@ -25,6 +26,9 @@ from services.file_service import FileService
 
 # 降解析度時重新編碼的 JPEG 品質（暫訂，待以真實的分譜掃描檔校正）
 JPEG_QUALITY = 75
+# 壓縮檢查：與原檔各以這個 dpi 算繪比較，每頁 PSNR 不得低於門檻（dB，暫訂，待以真實的分譜掃描檔校正）
+CHECK_RENDER_DPI = 150
+PSNR_THRESHOLD = 30
 
 
 @dataclass(frozen=True)
@@ -35,7 +39,7 @@ class CompressionResult:
         source: 原檔路徑
         status: 結果
         original_size: 原檔大小（位元組）
-        level: 壓縮檔用了哪一級；沒有壓縮檔時為 None
+        level: 壓縮檔用了哪一級；壓縮失敗時是失敗的那一級；不到上限、無法壓縮或取消時為 None
         compressed_size: 壓縮檔大小（位元組）；沒有壓縮檔時為 None
         output_path: 暫存資料夾裡的壓縮檔；沒有壓縮檔時為 None
         problem: 壓縮失敗或無法壓縮的原因；其他結果為 None
@@ -85,17 +89,39 @@ class CompressionService:
                 source, CompressionStatus.UNCOMPRESSIBLE, original_size, problem=defect.problem, detail=defect.detail,
             )
         folder = os.path.join(self._temp_dir, uuid.uuid4().hex)
+        try:
+            result = self._compress_into(source, original_size, folder)
+        except BaseException:
+            self._files.discard_directory(folder)
+            raise
+        if result.output_path is None:
+            self._files.discard_directory(folder)
+        return result
+
+    def _compress_into(self, source: str, original_size: int, folder: str) -> CompressionResult:
+        """在 folder 裡依序試各級，最後一個候選檢查通過才留下（folder 由呼叫端清掉）"""
         self._files.create_directory(folder)
         output = os.path.join(folder, os.path.basename(source))
         for level in CompressionLevel:
-            self._write_level(source, output, level)
+            try:
+                self._write_level(source, output, level)
+            except Exception as e:
+                return CompressionResult(
+                    source, CompressionStatus.FAILED, original_size, level=level,
+                    problem=CompressionProblem.WRITE_FAILED, detail=str(e),
+                )
             size = self._files.file_size(output)
             if size <= self._size_limit:
                 break
+        defect = pdf_service.check_compressed(source, output, PSNR_THRESHOLD, CHECK_RENDER_DPI)
+        if defect is not None:
+            return CompressionResult(
+                source, CompressionStatus.FAILED, original_size, level=level,
+                problem=defect.problem, detail=defect.detail,
+            )
         status = CompressionStatus.COMPRESSED if size <= self._size_limit else CompressionStatus.STILL_TOO_LARGE
         return CompressionResult(
-            source, status, original_size,
-            level=level, compressed_size=size, output_path=output,
+            source, status, original_size, level=level, compressed_size=size, output_path=output,
         )
 
     @staticmethod

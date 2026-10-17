@@ -5,7 +5,9 @@ PDF 工具服務
 提供 PDF 的頁數查詢、頁面擷取（分割模組用來寫出分譜）、分段旋轉與縮圖算繪。
 """
 import io
+import math
 import os
+import re
 from typing import List, NamedTuple, Optional, Tuple
 
 from PyPDF2 import PdfReader, PdfWriter
@@ -249,6 +251,123 @@ def _downsampled_jpeg(doc, xref: int, placed_points: float, dpi: int, jpeg_quali
     buffer = io.BytesIO()
     image.resize(size, Image.LANCZOS).save(buffer, "JPEG", quality=jpeg_quality)
     return buffer.getvalue()
+
+
+def check_compressed(
+    original_path: str, compressed_path: str, psnr_threshold: float, render_dpi: int,
+) -> Optional[PdfDefect]:
+    """檢查壓縮檔有沒有壞：結構、影像通道、畫面三層依序檢查，回報第一個沒通過的
+
+    1. 結構：開得起來、不需修復、頁數與原檔相同、逐頁算繪不出錯、MuPDF 沒有警告
+    2. 影像通道：每張 /DCTDecode 影像的 JPEG 通道數與 /ColorSpace 宣告的一致
+    3. 畫面：與原檔各以 render_dpi 算繪，每頁的 PSNR 都不低於門檻
+
+    Args:
+        original_path: 原檔路徑
+        compressed_path: 壓縮檔路徑
+        psnr_threshold: PSNR 門檻（dB）
+        render_dpi: 比較畫面時算繪的 dpi
+
+    Returns:
+        第一個沒通過的原因；全部通過時為 None
+    """
+    import pymupdf
+    pymupdf.TOOLS.mupdf_warnings(reset=True)
+    try:
+        doc = pymupdf.open(compressed_path, filetype="pdf")
+    except Exception as e:
+        return PdfDefect(CompressionProblem.OUTPUT_UNREADABLE, str(e))
+    with doc, pymupdf.open(original_path) as original:
+        if doc.is_repaired:
+            return PdfDefect(CompressionProblem.REPAIRED)
+        if doc.page_count != original.page_count:
+            return PdfDefect(CompressionProblem.PAGE_COUNT, f"{original.page_count} → {doc.page_count}")
+        worst = None
+        for index in range(doc.page_count):
+            try:
+                compressed_image = _render_rgb(doc[index], render_dpi)
+            except Exception as e:
+                return PdfDefect(CompressionProblem.RENDER_ERROR, f"{index + 1}: {e}")
+            warnings = pymupdf.TOOLS.mupdf_warnings(reset=True)
+            if warnings:
+                return PdfDefect(CompressionProblem.WARNINGS, f"{index + 1}: {warnings}")
+            psnr = _psnr(_render_rgb(original[index], render_dpi), compressed_image)
+            pymupdf.TOOLS.mupdf_warnings(reset=True)
+            if worst is None or psnr < worst[1]:
+                worst = (index + 1, psnr)
+        mismatch = _jpeg_channel_mismatch(doc)
+        if mismatch:
+            return PdfDefect(CompressionProblem.CHANNELS, mismatch)
+        if worst is not None and worst[1] < psnr_threshold:
+            return PdfDefect(CompressionProblem.PSNR, f"{worst[0]}: {worst[1]:.1f} dB")
+    return None
+
+
+def _render_rgb(page, dpi: int):
+    """以 dpi 把頁面算繪成 RGB 的 PIL Image"""
+    import pymupdf
+    from PIL import Image
+    pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csRGB, alpha=False)
+    return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+
+def _psnr(reference, image) -> float:
+    """兩張同尺寸 RGB 影像的 PSNR（dB）；尺寸不同時為 0，完全相同時為無限大"""
+    from PIL import ImageChops, ImageStat
+    if reference.size != image.size:
+        return 0.0
+    squares = ImageStat.Stat(ImageChops.difference(reference, image)).sum2
+    mse = sum(squares) / (reference.width * reference.height * len(squares))
+    return math.inf if mse == 0 else 10 * math.log10(255 ** 2 / mse)
+
+
+# /ColorSpace 宣告的色版數；ICCBased 讀它的 /N，其他（Indexed、Separation 等）不檢查
+_COLORSPACE_COMPONENTS = {
+    "/DeviceGray": 1, "/CalGray": 1, "/DeviceRGB": 3, "/CalRGB": 3, "/Lab": 3, "/DeviceCMYK": 4,
+}
+
+
+def _jpeg_channel_mismatch(doc) -> str:
+    """找出 JPEG 通道數與 /ColorSpace 宣告不一致的影像
+
+    Returns:
+        第一張不一致的影像說明（xref 與兩邊的通道數）；都一致時為空字串
+    """
+    from PIL import Image
+    for xref in range(1, doc.xref_length()):
+        try:
+            if doc.xref_get_key(xref, "Subtype")[1] != "/Image" or doc.xref_get_key(xref, "Filter")[1] != "/DCTDecode":
+                continue
+        except Exception:
+            continue
+        declared = _declared_components(doc, xref)
+        if declared is None:
+            continue
+        try:
+            actual = len(Image.open(io.BytesIO(doc.xref_stream_raw(xref))).getbands())
+        except Exception as e:
+            return f"xref {xref}: {e}"
+        if actual != declared:
+            return f"xref {xref}: {declared} → {actual}"
+    return ""
+
+
+def _declared_components(doc, xref: int) -> Optional[int]:
+    """影像 /ColorSpace 宣告的色版數；無法判定時為 None"""
+    kind, value = doc.xref_get_key(xref, "ColorSpace")
+    if kind == "xref":
+        value = doc.xref_object(int(value.split()[0]), compressed=True)
+    value = value.strip()
+    if value in _COLORSPACE_COMPONENTS:
+        return _COLORSPACE_COMPONENTS[value]
+    icc = re.match(r"\[\s*/ICCBased\s+(\d+)\s+\d+\s+R", value)
+    if icc:
+        kind, n = doc.xref_get_key(int(icc.group(1)), "N")
+        return int(n) if kind == "int" else None
+    family = re.match(r"\[\s*(/\w+)", value)
+    if family and family.group(1) in ("/CalGray", "/CalRGB", "/Lab"):
+        return _COLORSPACE_COMPONENTS[family.group(1)]
+    return None
 
 
 def _refuse_source(pdf_path: str, output_path: str) -> None:

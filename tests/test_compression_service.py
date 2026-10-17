@@ -16,7 +16,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from core.constants import CompressionLevel, CompressionProblem, CompressionStatus
 from services.compression_service import CompressionService
 from services.file_service import FileService
-from tests.synthetic_pdfs import bilevel_pdf, encrypted_pdf, file_digest, image_dpis, image_pixels, scanned_pdf, uncompressed_pdf
+from tests.synthetic_pdfs import (
+    bilevel_pdf, encrypted_pdf, file_digest, image_dpis, image_pixels, mislabeled_jpeg_pdf, scanned_pdf,
+    uncompressed_pdf,
+)
 
 KB = 1000
 
@@ -122,6 +125,19 @@ class TestUncompressible(CompressionTestCase):
         self.assertEqual(result.status, CompressionStatus.UNCOMPRESSIBLE)
         self.assertEqual(result.problem, CompressionProblem.UNREADABLE)
         self.assertTrue(result.detail)
+        self.assertEqual(scratch_files(self.scratch_dir), [])
+
+
+class TestFailedCheck(CompressionTestCase):
+    """壓縮檔沒通過檢查：壓縮失敗，丟掉壓縮檔，不改試下一級"""
+
+    def test_output_that_fails_the_check_is_discarded_without_trying_the_next_level(self):
+        source = self.source(mislabeled_jpeg_pdf)
+        result = self.service(size_limit=os.path.getsize(source) - 1).compress(source)
+        self.assertEqual(result.status, CompressionStatus.FAILED)
+        self.assertEqual(result.level, CompressionLevel.LOSSLESS)
+        self.assertEqual(result.problem, CompressionProblem.CHANNELS)
+        self.assertIsNone(result.output_path)
         self.assertEqual(scratch_files(self.scratch_dir), [])
 
 

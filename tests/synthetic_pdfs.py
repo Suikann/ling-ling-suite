@@ -77,6 +77,29 @@ def encrypted_pdf(path: str, dpi: int) -> str:
     )
 
 
+def mislabeled_jpeg_pdf(path: str, correct_path: str = "") -> str:
+    """三通道的 JPEG 卻宣告為灰階（PyMuPDF #5164 產出的那種壞檔）
+
+    Args:
+        path: 輸出路徑
+        correct_path: 不是空字串時，另存一份宣告正確的同一個檔到這裡
+
+    Returns:
+        path
+    """
+    image = Image.new("RGB", (400, 400), (250, 240, 230))
+    data = _encode(image, "JPEG")
+    side = SIDE_INCHES * POINTS_PER_INCH
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=side, height=side)
+        page.insert_image(page.rect, stream=data)
+        if correct_path:
+            doc.save(correct_path)
+        doc.xref_set_key(page.get_images(full=True)[0][0], "ColorSpace", "/DeviceGray")
+        doc.save(path)
+    return path
+
+
 def image_pixels(path: str) -> List[tuple]:
     """各頁影像的（寬像素、高像素、每色版位元數），依頁序
 
