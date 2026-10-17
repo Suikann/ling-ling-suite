@@ -131,6 +131,14 @@ class TestSheetsRequests(unittest.TestCase):
         GoogleSheets("sheet-1", http=http).add_sheet("社團設定")
         self.assertEqual(sent_body(http, 0)["requests"], [{"addSheet": {"properties": {"title": "社團設定"}}}])
 
+    def test_lists_sheet_titles_with_one_spreadsheets_get(self):
+        http = HttpMockSequence([ok({"sheets": [{"properties": {"title": "曲目"}}, {"properties": {"title": "社團設定"}}]})])
+        titles = GoogleSheets("sheet-1", http=http).sheet_titles()
+        self.assertEqual(titles, ["曲目", "社團設定"])
+        self.assertEqual(len(http.request_sequence), 1)
+        self.assertIn("/spreadsheets/sheet-1?", http.request_sequence[0][0])
+        self.assertEqual(sent_query(http, 0)["fields"], ["sheets.properties.title"])
+
     def test_google_errors_become_catalog_errors(self):
         http = HttpMockSequence([({"status": "404"}, json.dumps({"error": {"code": 404, "message": "not found"}}))])
         with self.assertRaises(CatalogError) as raised:

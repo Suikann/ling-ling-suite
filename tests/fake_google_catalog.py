@@ -191,6 +191,10 @@ class FakeSheets:
             self._tabs[title] = []
         self._google.request(handle)
 
+    def sheet_titles(self) -> List[str]:
+        """列出所有工作表的名稱"""
+        return self._google.request(lambda: list(self._tabs))
+
     def _tab(self, title: str) -> List[List[str]]:
         """取工作表；不存在時照 Google 回 400"""
         if title not in self._tabs:

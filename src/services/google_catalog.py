@@ -133,6 +133,13 @@ class GoogleSheets(_Gateway):
             body={"requests": [{"addSheet": {"properties": {"title": title}}}]},
         ))
 
+    def sheet_titles(self) -> List[str]:
+        """列出所有工作表的名稱（spreadsheets.get，只取名稱）"""
+        response = self._execute(self._api.spreadsheets().get(
+            spreadsheetId=self._spreadsheet_id, fields="sheets.properties.title",
+        ))
+        return [sheet.get("properties", {}).get("title", "") for sheet in response.get("sheets", [])]
+
 
 class GoogleDrive(_Gateway):
     """Drive 關口的通事"""

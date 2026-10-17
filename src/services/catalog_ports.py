@@ -73,6 +73,18 @@ class SheetsPort(Protocol):
             CatalogError: 建立失敗，例如已有同名的工作表
         """
 
+    def sheet_titles(self) -> List[str]:
+        """列出試算表裡所有工作表的名稱（spreadsheets.get，只取名稱）
+
+        讀不存在的工作表會讓整個讀取請求失敗，可以先以它確認工作表在不在。
+
+        Returns:
+            工作表名稱，依試算表裡的順序
+
+        Raises:
+            CatalogError: 讀取失敗
+        """
+
 
 class DrivePort(Protocol):
     """Drive 關口：一次呼叫一次請求"""
