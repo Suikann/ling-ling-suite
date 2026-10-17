@@ -29,6 +29,7 @@ class CallbackBrowser:
     """開瀏覽器的替身；預設以授權碼 auth-code 回呼"""
 
     def __init__(self):
+        """建立替身：拿到授權網址時送回 code，不偽造 state"""
         self.opens = True
         self.on_open: Optional[Callable[[], None]] = None
         # 設了就以它取代授權網址的 state 回呼，模擬不是這次登入發出的回呼

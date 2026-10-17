@@ -37,6 +37,7 @@ class TestAbandonedTask(unittest.TestCase):
         workers = []
 
         def work(should_cancel, report):
+            """等測試放行才結束的工作"""
             workers.append(threading.current_thread())
             release.wait(5)
             report("late progress")
@@ -59,6 +60,7 @@ class TestAbandonedTask(unittest.TestCase):
         workers = []
 
         def work(should_cancel, report):
+            """等測試放行才結束的工作"""
             workers.append(threading.current_thread())
             release.wait(5)
             raise OSError("disk gone")

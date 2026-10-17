@@ -149,6 +149,7 @@ class CompressionService:
         def stepper(level: CompressionLevel, checking: bool) -> Callable[[int], None]:
             """回報這一階段開始，並回傳逐頁回報進度、檢查取消的函式"""
             def step(page: int):
+                """回報這一階段做到第 page 頁；使用者要求取消時拋出 _Cancelled"""
                 on_progress(CompressionProgress(level, checking, page, page_count))
                 if should_cancel():
                     raise _Cancelled()

@@ -20,6 +20,7 @@ class MemoryKeyring:
     """以字典保存密碼的 keyring backend 替身"""
 
     def __init__(self, viable: bool = True):
+        """建立空的 keyring 替身；viable 為 False 時像這台電腦沒有安全儲存"""
         self.viable = viable
         self.locked = False
         self.failing_writes = False

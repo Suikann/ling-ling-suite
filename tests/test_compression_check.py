@@ -31,9 +31,11 @@ class TestCompressionCheck(unittest.TestCase):
         self.original = scanned_pdf(self.path("original.pdf"), dpi=600, pages=2)
 
     def path(self, name: str) -> str:
+        """臨時目錄裡的檔案路徑"""
         return os.path.join(self.temp_dir, name)
 
     def check(self, compressed: str, original: str = None):
+        """以測試的門檻與 dpi 檢查壓縮檔"""
         return check_compressed(original or self.original, compressed, PSNR_THRESHOLD, RENDER_DPI)
 
     def test_properly_downsampled_file_passes(self):

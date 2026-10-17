@@ -7,7 +7,7 @@
 全部決定後才能按輸出；也可以用電腦預設的 PDF 閱讀器開啟壓縮後的暫存檔。
 原樣複製、壓縮失敗與無法壓縮的只列出狀態，不需要比較。
 
-只接壓縮結果，不管結果從哪裡來、決定之後怎麼交出：工具選單的獨立壓縮與發譜預覽都由這裡開啟。
+只接壓縮結果，不管結果從哪裡來、決定之後怎麼交出：目前由工具選單的獨立壓縮開啟，設計成發譜預覽（spec #82）也能沿用。
 頁面在背景執行緒算繪（services/pdf_service.py 的 render_page_gray），暫存的壓縮檔由呼叫端在對話框關閉後丟掉。
 
 使用範例：
@@ -92,6 +92,7 @@ class _Loupe(QWidget):
     """放大鏡：把頁面上以焦點為中心、寬為頁寬 span 的一小塊放大顯示"""
 
     def __init__(self):
+        """建立放大鏡：還沒有頁面，看的位置在第一行、倍率為預設"""
         super().__init__()
         self.image = QImage()
         self.focus = QPointF(*_START_FOCUS)
@@ -106,6 +107,7 @@ class _Loupe(QWidget):
         return QRectF(self.focus.x() - self.span / 2, self.focus.y() - height / 2, self.span, height)
 
     def paintEvent(self, event):
+        """把頁面上 region 那一塊放大畫滿整個元件；還沒有頁面時只畫白底"""
         painter = QPainter(self)
         painter.fillRect(self.rect(), Qt.white)
         if self.image.isNull():
@@ -121,6 +123,11 @@ class _Overview(QWidget):
     """頁面縮圖：框出放大鏡看的位置，點或拖動換位置"""
 
     def __init__(self, region: Callable[[], QRectF], on_focus: Callable[[QPointF], None]):
+        """
+        Args:
+            region: 取得放大鏡目前看的那一塊（頁寬、頁高的比例）
+            on_focus: 使用者點或拖動到新位置時呼叫，參數為頁寬、頁高的比例
+        """
         super().__init__()
         self.image = QImage()
         self._region = region
@@ -130,11 +137,13 @@ class _Overview(QWidget):
         self.setCursor(Qt.CrossCursor)
 
     def set_image(self, image: QImage):
+        """換成這一頁的縮圖，高度跟著縮圖；沒有縮圖時回到預設高度"""
         self.image = image
         self.setFixedHeight(image.height() if not image.isNull() else int(_OVERVIEW_WIDTH * 1.414))
         self.update()
 
     def paintEvent(self, event):
+        """畫出縮圖，再框出放大鏡看的位置"""
         painter = QPainter(self)
         painter.fillRect(self.rect(), Qt.white)
         if self.image.isNull():
@@ -148,9 +157,11 @@ class _Overview(QWidget):
         ))
 
     def mousePressEvent(self, event):
+        """點一下就把放大鏡移到那裡"""
         self.mouseMoveEvent(event)
 
     def mouseMoveEvent(self, event):
+        """拖動時把放大鏡跟著移過去；位置限制在頁面內"""
         if self.image.isNull():
             return
         x = min(1.0, max(0.0, event.position().x() / self.image.width()))

@@ -35,6 +35,7 @@ class TestCompressionOutput(unittest.TestCase):
         self.output = CompressionOutputService(FileService(), self.compressor(size_limit=10 ** 9))
 
     def compressor(self, size_limit: int) -> CompressionService:
+        """暫存資料夾在臨時目錄、指定大小上限的壓縮服務"""
         return CompressionService(FileService(), os.path.join(self.temp_dir, "scratch"), size_limit=size_limit)
 
     def test_default_target_is_beside_the_original_folder_with_the_same_file_name(self):
@@ -44,6 +45,7 @@ class TestCompressionOutput(unittest.TestCase):
         )
 
     def root(self) -> str:
+        """原檔所在的資料夾"""
         return self.output.input_root([self.source])
 
     def test_only_the_original_file_itself_is_blocked(self):
@@ -135,6 +137,7 @@ class TestCompressionBatch(unittest.TestCase):
         self.output = self.service(size_limit=10 ** 9)
 
     def service(self, size_limit: int) -> CompressionOutputService:
+        """暫存資料夾在臨時目錄、指定大小上限的批次服務"""
         files = FileService()
         return CompressionOutputService(files, CompressionService(files, self.scratch, size_limit=size_limit))
 
@@ -190,6 +193,7 @@ class TestCompressionBatch(unittest.TestCase):
             self.output.input_root([self.flute, self.violin])
 
     def scratch_files(self):
+        """暫存資料夾裡留下的檔案"""
         return [name for _, _, names in os.walk(self.scratch) for name in names]
 
     def test_progress_reports_which_file_of_how_many(self):

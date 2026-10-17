@@ -201,6 +201,7 @@ def comparing(operate: Callable[[QDialog], None] = keep_every_compressed_file):
     errors = []
 
     def fake_exec(dialog):
+        """取代 exec：記下開啟的對話框並操作它，不真的進入事件迴圈"""
         opened.append(dialog)
         try:
             operate(dialog)
@@ -218,10 +219,12 @@ class RecordingOpener:
     """外部開啟的替身：記下要開啟的網址或路徑，不真的啟動外部程式；opens 為 False 時像外部程式啟動不了"""
 
     def __init__(self):
+        """建立替身：開得起來、還沒開過任何東西"""
         self.opens = True
         self.opened: List[str] = []
 
     def open(self, target: str) -> bool:
+        """記下要開啟的目標；opens 為 False 時回報開不了"""
         self.opened.append(target)
         return self.opens
 
@@ -1140,6 +1143,7 @@ class TestMainWindowAbout(MainWindowTestCase):
         opened = []
 
         def fake_exec(dialog):
+            """取代 exec：記下開啟的對話框並操作它，不真的進入事件迴圈"""
             opened.append(dialog)
             return QDialog.Accepted
 
@@ -1288,11 +1292,13 @@ class GatedCompressor(CompressionService):
     """測試放行（或要求取消）才開始壓縮的壓縮服務，讓測試在壓縮進行中操作主視窗"""
 
     def __init__(self, *args, **kwargs):
+        """建立壓縮服務，閘門先關著"""
         super().__init__(*args, **kwargs)
         self.gate = threading.Event()
         self.results = []
 
     def compress(self, source, should_cancel=lambda: False, on_progress=lambda progress: None):
+        """等測試放行（或要求取消、逾時）才照常壓縮，記下結果"""
         deadline = time.monotonic() + 20
         while not self.gate.wait(0.01) and not should_cancel() and time.monotonic() < deadline:
             pass
@@ -1307,6 +1313,7 @@ class MainWindowCompressTestCase(MainWindowTestCase):
     size_limit = 10 ** 9
 
     def compressor(self) -> CompressionService:
+        """會等測試放行的壓縮服務"""
         self.scratch_dir = os.path.join(self.temp_dir, "temp")
         self.gated = GatedCompressor(FileService(), self.scratch_dir, size_limit=self.size_limit)
         return self.gated
@@ -1339,9 +1346,11 @@ class MainWindowCompressTestCase(MainWindowTestCase):
         return opened
 
     def action(self, text: str) -> QAction:
+        """主視窗裡文字相符的選單項目"""
         return next(a for a in self.window.findChildren(QAction) if a.text() == text)
 
     def compress_action(self) -> QAction:
+        """工具選單的「壓縮 PDF」"""
         return self.action(t("menu.tools.compress_pdf"))
 
     def file_operations_enabled(self) -> List[bool]:
@@ -1563,6 +1572,7 @@ class TestMainWindowCompressCompare(MainWindowCompressBatchTestCase):
         seen_before_confirming = []
 
         def keep_flute_discard_violin(dialog: QDialog):
+            """記下確認前輸出位置有沒有東西，留下 Flute、不要 Violin 再輸出"""
             seen_before_confirming.append(os.path.exists(self.output_dir))
             files = dialog.findChild(QListWidget)
             self.assertEqual(
@@ -1596,6 +1606,7 @@ class TestMainWindowCompressCompare(MainWindowCompressBatchTestCase):
 
     def test_discarding_every_file_outputs_nothing_and_says_so(self):
         def discard_all(dialog: QDialog):
+            """兩份都選「不要這份」再輸出"""
             for _ in range(2):
                 button_in(dialog, QPushButton, t("compare.drop")).click()
             button_in(dialog, QPushButton, t("compare.output")).click()
@@ -1610,6 +1621,7 @@ class TestMainWindowCompressCompare(MainWindowCompressBatchTestCase):
 
     def test_compare_view_opens_compressed_files_with_the_shared_opener(self):
         def open_first(dialog: QDialog):
+            """選第一份並按「開啟」"""
             dialog.findChild(QListWidget).setCurrentRow(0)
             button_in(dialog, QPushButton, t("compare.open")).click()
 

@@ -135,6 +135,7 @@ class TestLoginArea(LoginAreaTestCase):
         waiting = []
 
         def press_cancel():
+            """等待視窗出現後按「取消」；還沒出現就稍後再看"""
             box = QApplication.activeModalWidget()
             if box is None or box is dialog:
                 QTimer.singleShot(20, dialog, press_cancel)

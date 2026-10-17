@@ -35,12 +35,14 @@ def _score_image(dpi: int, grain: bool) -> Image.Image:
 
 
 def _encode(image: Image.Image, fmt: str) -> bytes:
+    """把影像編碼成 fmt 格式（JPEG 以品質 90）的位元組"""
     buffer = io.BytesIO()
     image.save(buffer, fmt, **({"quality": 90} if fmt == "JPEG" else {}))
     return buffer.getvalue()
 
 
 def _save_pages(path: str, images: List[bytes], deflate: bool, **save_options) -> str:
+    """把每張影像放成一頁正方形頁面，存成 PDF 並回傳路徑"""
     doc = pymupdf.open()
     side = SIDE_INCHES * POINTS_PER_INCH
     for data in images:

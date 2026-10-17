@@ -115,6 +115,7 @@ def _reader(files):
     """讀檔的替身：files 裡有的路徑回傳內容，沒有的像檔案不存在"""
 
     def read_text(path):
+        """files 裡有的路徑回傳內容，沒有的拋出 FileNotFoundError"""
         if path not in files:
             raise FileNotFoundError(path)
         return files[path]

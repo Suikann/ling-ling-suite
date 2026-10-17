@@ -32,6 +32,7 @@ def _exclusive(function):
     """讓用到 PyMuPDF 的函式在 _PYMUPDF_LOCK 之下執行，一次只有一個"""
     @functools.wraps(function)
     def locked(*args, **kwargs):
+        """持 _PYMUPDF_LOCK 呼叫原函式"""
         with _PYMUPDF_LOCK:
             return function(*args, **kwargs)
     return locked

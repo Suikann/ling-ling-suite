@@ -76,6 +76,11 @@ class LoginFailed(Exception):
     """登入沒有完成"""
 
     def __init__(self, failure: LoginFailure, detail: str = ""):
+        """
+        Args:
+            failure: 登入沒有完成的原因
+            detail: 補充說明（例如錯誤訊息），沒有時為空字串
+        """
         super().__init__(detail or failure.value)
         self.failure = failure
         self.detail = detail
@@ -220,6 +225,7 @@ class GoogleAuthService:
             extra["login_hint"] = self.account_email
 
         def authorization_url(redirect_uri: str) -> str:
+            """以本機回呼的網址組出 Google 的授權網址，並記下 redirect_uri 供兌換時使用"""
             redirect["uri"] = redirect_uri
             return oauth.prepare_request_uri(
                 client["auth_uri"], redirect_uri=redirect_uri, scope=GOOGLE_SCOPES, state=state,

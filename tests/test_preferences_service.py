@@ -22,6 +22,7 @@ class PausingFirstWrite(FileService):
     """第一次寫入文字檔時，在內容已序列化、還沒寫進磁碟前停下，等測試放行"""
 
     def __init__(self):
+        """建立檔案服務，還沒停過"""
         super().__init__()
         self.writing = threading.Event()
         self.release = threading.Event()
@@ -49,10 +50,12 @@ class TestPreferencesAcrossThreads(unittest.TestCase):
         preferences = PreferencesService(self.path, files)
 
         def remember_email():
+            """像登入的背景執行緒：記下 email 並存檔"""
             preferences.set(GOOGLE_ACCOUNT_EMAIL_KEY, "library@example.com")
             preferences.save()
 
         def switch_language():
+            """像主執行緒切換語言：改語言並存檔"""
             preferences.set("language", "en")
             preferences.save()
         background = threading.Thread(target=remember_email)

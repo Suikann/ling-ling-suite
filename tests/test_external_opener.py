@@ -21,16 +21,19 @@ class RecordingLauncher:
     """記下每次啟動的指令與環境；fail 為 True 時像找不到程式一樣拋出 OSError"""
 
     def __init__(self, fail: bool = False):
+        """建立替身；fail 為 True 時像外部程式啟動不了"""
         self.fail = fail
         self.spawned: List[Tuple[List[str], Dict[str, str]]] = []
         self.started: List[str] = []
 
     def spawn(self, argv: List[str], env: Dict[str, str]) -> None:
+        """記下要啟動的指令與環境；設成失敗時像找不到程式"""
         if self.fail:
             raise FileNotFoundError(argv[0])
         self.spawned.append((argv, env))
 
     def startfile(self, target: str) -> None:
+        """記下要開啟的目標；設成失敗時像沒有關聯的程式"""
         if self.fail:
             raise OSError("no association")
         self.started.append(target)
@@ -39,6 +42,7 @@ class RecordingLauncher:
 def make_opener(
     platform: str, environ: Optional[Dict[str, str]] = None, frozen: bool = True, fail: bool = False,
 ) -> Tuple[ExternalOpener, RecordingLauncher]:
+    """建立接上記錄替身的外部開啟服務，回傳服務與替身"""
     launcher = RecordingLauncher(fail)
     opener = ExternalOpener(
         platform=platform, environ=environ or {}, frozen=frozen,
@@ -94,6 +98,7 @@ class TestExternalOpenerLaunchesProgram(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _wait_for_record(self) -> List[str]:
+        """等假的 xdg-open 寫出紀錄，回傳它收到的參數；逾時判定失敗"""
         deadline = time.monotonic() + 5
         while not os.path.exists(self.record):
             if time.monotonic() > deadline:

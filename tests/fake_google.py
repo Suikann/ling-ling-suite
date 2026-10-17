@@ -47,6 +47,7 @@ class _Response:
     """google-auth transport 的回應"""
 
     def __init__(self, status: int, payload: dict):
+        """以狀態碼與 JSON 內容建立回應"""
         self.status = status
         self.headers = {"content-type": "application/json"}
         self.data = json.dumps(payload).encode("utf-8")
@@ -60,6 +61,7 @@ class FakeTokenEndpoint:
     """
 
     def __init__(self):
+        """建立替身：登入時給 refresh-1 與全部權限，續期預設拒絕"""
         self._outcome = "reject"
         self._access_token = ""
         self._refresh_token: Optional[str] = None

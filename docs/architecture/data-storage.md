@@ -10,7 +10,7 @@
 | 單一實例鎖 | `instance.lock`（`INSTANCE_LOCK_FILE`） | 執行期間由作業系統鎖住，結束或當機時自動解除，檔案留著不刪 |
 | 工作區 | `workspace/<hash8>/`（`WORKSPACE_DIR`） | 分割輸出與 `meta.json`（見 [workspace.md](workspace.md)） |
 | PDF 旋轉備份 | `backups/`（`BACKUP_DIR`） | |
-| 暫存資料夾 | `temp/`（`TEMP_DIR`） | 壓縮檔先寫在這裡，每份一個子資料夾；一批壓完、交到輸出位置後一起刪，取消時已壓好的也當場刪。獨立壓縮與發譜共用 |
+| 暫存資料夾 | `temp/`（`TEMP_DIR`） | 壓縮檔先寫在這裡，每份一個子資料夾；一批壓完、交到輸出位置後一起刪，取消時已壓好的也當場刪。目前給獨立壓縮用，設計成發譜（spec #82）也能沿用 |
 
 專案檔（`.llproj`）放在使用者自選的位置。
 

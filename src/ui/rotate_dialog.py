@@ -415,6 +415,7 @@ class RotatePdfDialog(QDialog):
             self._dir_label.setStyleSheet("font-size: 11px;")
 
     def _execute(self):
+        """依各區段的旋轉角度旋轉 PDF；覆蓋原檔時先備份，並記下這次旋轉"""
         if not self._pdf_path:
             return
         sections = self._get_sections()

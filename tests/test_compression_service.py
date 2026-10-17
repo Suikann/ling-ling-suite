@@ -117,6 +117,7 @@ class TestUncompressible(CompressionTestCase):
 
     def test_file_that_is_not_a_pdf_cannot_be_compressed_and_says_why(self):
         def not_a_pdf(path):
+            """寫出一個不是 PDF 的檔案"""
             with open(path, "wb") as f:
                 f.write(b"not a pdf" * 1000)
             return path

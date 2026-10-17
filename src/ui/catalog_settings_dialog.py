@@ -59,6 +59,7 @@ class CatalogSettingsDialog(QDialog):
         self._build_ui()
 
     def _build_ui(self):
+        """排出登入、選擇資料夾兩個步驟與底部按鈕，顯示目前的登入狀態"""
         layout = QVBoxLayout(self)
         # --- 步驟 1：登入 ---
         step1 = QGroupBox(t("catalog.settings.step1"))

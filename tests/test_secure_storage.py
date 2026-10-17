@@ -30,6 +30,7 @@ class EnvironmentKeyring(MemoryKeyring):
     shared_calls = []
 
     def __init__(self):
+        """建立 backend，呼叫記在所有實例共用的清單"""
         super().__init__()
         self.calls = EnvironmentKeyring.shared_calls
 

@@ -120,6 +120,7 @@ class ThumbnailLoader(QObject):
         self._latest += 1
 
     def _run(self, ticket: int, args: tuple):
+        """在背景執行緒算繪，結果或錯誤連同這次載入的序號送回主執行緒"""
         try:
             result = self._render(*args)
         except Exception as e:
@@ -128,6 +129,7 @@ class ThumbnailLoader(QObject):
         self._rendered.emit(ticket, result)
 
     def _deliver_ready(self, ticket: int, result: object):
+        """在主執行緒交回算繪結果；只交最近一次載入的"""
         if ticket == self._latest:
             self._on_ready(result)
 

@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
     # --- 選單 ---
 
     def _create_menu(self):
+        """建立選單列：檔案、編輯、匯入、譜庫、工具、檢視與說明"""
         mb = self.menuBar()
         file_menu = mb.addMenu(t("menu.file"))
         self._add_action(file_menu, t("menu.file.new"), self._new_project, "Ctrl+N")
@@ -179,6 +180,7 @@ class MainWindow(QMainWindow):
         self._add_action(help_menu, t("menu.help.about"), self._show_about)
 
     def _add_action(self, menu, text, callback, shortcut=None) -> QAction:
+        """在 menu 加一個選單項目，觸發時呼叫 callback；有 shortcut 時設快捷鍵"""
         action = QAction(text, self)
         if shortcut:
             action.setShortcut(QKeySequence(shortcut))
@@ -189,6 +191,7 @@ class MainWindow(QMainWindow):
     # --- UI 建構 ---
 
     def _create_ui(self):
+        """排出左邊的編制表、右邊的群組分頁與底部的命名格式、狀態列"""
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
@@ -223,6 +226,7 @@ class MainWindow(QMainWindow):
         self._rebuild_tabs()
 
     def _build_bottom_panel(self, parent_layout):
+        """底部：總譜命名格式、狀態列、背景工作的進度與取消鈕、預覽並重新命名"""
         bottom = QWidget()
         bl = QVBoxLayout(bottom)
         bl.setContentsMargins(8, 4, 8, 8)
@@ -375,6 +379,7 @@ class MainWindow(QMainWindow):
         self._set_project(self._blank_project(), None)
 
     def _open_project(self):
+        """詢問要不要儲存目前的專案，再選一個專案檔開啟"""
         if not self._confirm_unsaved():
             return
         path, _ = QFileDialog.getOpenFileName(
@@ -671,6 +676,7 @@ class MainWindow(QMainWindow):
             self._show_skipped(result)
 
     def _open_split_pdf(self):
+        """開啟分割對話框，預選目前的群組"""
         from ui.split_dialog import SplitPdfDialog
         dialog = SplitPdfDialog(
             self.project, self._on_split_complete, self._current_group(), self,
@@ -712,6 +718,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=e))
 
     def _open_rotate_pdf(self):
+        """開啟旋轉對話框，預選目前的群組"""
         from ui.rotate_dialog import RotatePdfDialog
         dialog = RotatePdfDialog(self.project, self._history, self._current_group(), self, self.file_service)
         dialog.exec()
@@ -740,9 +747,11 @@ class MainWindow(QMainWindow):
         output = self._compression_output
 
         def work(should_cancel, report) -> Optional[Tuple[CompressionResult, ...]]:
+            """在背景執行緒一次一份壓完整批"""
             return output.compress(batch, should_cancel, report)
 
         def finished(results: Optional[Tuple[CompressionResult, ...]], cancelled: bool):
+            """壓完了：取消時丟掉已壓好的，否則交給 _deliver_compressed"""
             if cancelled or results is None:
                 output.discard(results or ())
                 self._set_status(t("compress.cancelled"))
@@ -882,6 +891,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _set_language(self, lang_code: str):
+        """切換介面語言並記進偏好，轉換命名格式的語言後重建選單與畫面"""
         if lang_code == get_locale():
             return
         set_locale(lang_code)

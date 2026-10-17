@@ -60,7 +60,7 @@ GOOGLE_KEYRING_SERVICE = "LingLingSuite Google"
 HUAXIA_KEYRING_SERVICE = "LingLingSuite HuaXia"
 # 舊版以明文存 Google 權杖的檔案：新版每次啟動都刪掉，任何情況都不讀它
 LEGACY_TOKEN_FILE = os.path.join(APPDATA_DIR, "google_token.json")
-# 暫存資料夾：壓縮檔先寫在這裡，檢查通過才交出去；獨立壓縮與發譜共用，啟動時清空上次留下的殘檔
+# 暫存資料夾：壓縮檔先寫在這裡，檢查通過才交出去，啟動時清空上次留下的殘檔；目前給獨立壓縮用，設計成發譜（spec #82）也能沿用
 TEMP_DIR = os.path.join(APPDATA_DIR, "temp")
 
 # 介面語言代碼：繁體中文（預設）與英文

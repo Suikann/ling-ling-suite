@@ -49,12 +49,14 @@ class CompareTestCase(unittest.TestCase):
         self.opener = RecordingOpener()
 
     def compressed(self, name: str, pages: int = 1) -> CompressionResult:
+        """產生一份合成掃描分譜並壓縮，回傳有壓縮檔的結果"""
         source = scanned_pdf(os.path.join(self.temp_dir, name), dpi=300, pages=pages)
         result = self.compressor.compress(source)
         self.assertEqual(result.status, CompressionStatus.COMPRESSED)
         return result
 
     def open_dialog(self, results: List[CompressionResult]) -> CompressionCompareDialog:
+        """以各結果的檔名開啟比較畫面"""
         entries = [(os.path.basename(result.source), result) for result in results]
         dialog = CompressionCompareDialog(entries, self.opener)
         self.addCleanup(dialog.close)
@@ -62,10 +64,12 @@ class CompareTestCase(unittest.TestCase):
 
     @staticmethod
     def select(dialog: QDialog, row: int):
+        """在清單選第 row 份"""
         dialog.findChild(QListWidget).setCurrentRow(row)
 
     @staticmethod
     def button(dialog: QDialog, key: str) -> QPushButton:
+        """對話框裡文字為字串鍵 key 的按鈕"""
         return button_in(dialog, QPushButton, t(key))
 
 
@@ -117,6 +121,7 @@ class TestComparePages(CompareTestCase):
     """翻頁：載入後顯示第幾頁、共幾頁，換一份從第一頁開始"""
 
     def shows(self, dialog: QDialog, text: str) -> bool:
+        """對話框裡是否有一段文字等於 text 的標籤"""
         return any(label.text() == text for label in dialog.findChildren(QLabel))
 
     def test_pages_turn_within_the_file_and_restart_for_another_file(self):

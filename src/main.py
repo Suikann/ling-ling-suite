@@ -37,6 +37,7 @@ class _AppStyle(QProxyStyle):
 
 
 def main():
+    """啟動程式：載入偏好與語言、建立 QApplication，取得單一實例鎖後開主視窗並進入事件迴圈"""
     prepare_application()
     prefs = PreferencesService(PREFERENCES_FILE)
     prefs.load()
