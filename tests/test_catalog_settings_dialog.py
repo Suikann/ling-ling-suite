@@ -127,11 +127,11 @@ class TestLoginArea(LoginAreaTestCase):
         def press_cancel():
             box = QApplication.activeModalWidget()
             if box is None or box is dialog:
-                QTimer.singleShot(20, press_cancel)
+                QTimer.singleShot(20, dialog, press_cancel)
                 return
             waiting.append(box)
             next(b for b in box.findChildren(QPushButton) if b.text() == t("dialog.cancel_btn")).click()
-        QTimer.singleShot(20, press_cancel)
+        QTimer.singleShot(20, dialog, press_cancel)
         shown = self.sign_in(dialog)
         self.assertEqual(len(waiting), 1)
         self.assertEqual(shown, [])
