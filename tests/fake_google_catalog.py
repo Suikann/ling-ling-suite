@@ -48,6 +48,7 @@ class FakeGoogle:
     """記憶體裡的試算表加 Drive：請求計數、排定的錯誤與另一台電腦的改動"""
 
     def __init__(self):
+        """從沒有請求、沒有排定錯誤的狀態開始，建出共用請求計數的試算表與 Drive"""
         self.requests = 0
         self._failures: Dict[int, _Failure] = {}
         self._changes: Dict[int, List[Callable[[], None]]] = {}
@@ -136,6 +137,11 @@ class FakeSheets:
     """記憶體裡的一份試算表：實作試算表關口"""
 
     def __init__(self, google: FakeGoogle):
+        """空的試算表
+
+        Args:
+            google: 計請求與排定錯誤的假 Google
+        """
         self._google = google
         self._tabs: Dict[str, List[List[str]]] = {}
         self._sheet_ids: Dict[str, int] = {}
@@ -175,6 +181,7 @@ class FakeSheets:
     def write_cells(self, data: Sequence[Tuple[str, List[List[str]]]]) -> None:
         """一次寫入多個範圍，全成或全不成"""
         def handle():
+            """寫入：先確認每張工作表都在，才逐格寫"""
             targets = [(_parse_range(text), values) for text, values in data]
             for (sheet, *_), _values in targets:
                 self._tab(sheet)
@@ -187,6 +194,7 @@ class FakeSheets:
     def append_rows(self, sheet: str, rows: Sequence[List[str]]) -> None:
         """在最後一列有內容的列之後新增多列"""
         def handle():
+            """接在最後一列有內容的列之後"""
             tab = self._tab(sheet)
             tab[:] = _trimmed(tab) + [[str(value) for value in row] for row in rows]
         self._google.request(handle)
@@ -194,6 +202,7 @@ class FakeSheets:
     def add_sheet(self, title: str) -> None:
         """建立一張空的工作表；已有同名的時失敗"""
         def handle():
+            """建立工作表"""
             if title in self._tabs:
                 raise CatalogError(CatalogErrorKind.OTHER, f"A sheet with the name \"{title}\" already exists.")
             self._tabs[title] = []
@@ -207,6 +216,7 @@ class FakeSheets:
     def delete_rows(self, rows: Sequence[Tuple[int, int]]) -> None:
         """刪掉多列（sheetId、從 0 起算的列號，都以刪除前為準），全成或全不成"""
         def handle():
+            """確認 sheetId 都在才由下往上刪"""
             titles = {sheet_id: title for title, sheet_id in self._sheet_ids.items()}
             for sheet_id, _row in rows:
                 if sheet_id not in titles:
@@ -224,6 +234,7 @@ class FakeSheets:
     def create_spreadsheet(self, title: str, sheets: Mapping[str, Sequence[str]]) -> str:
         """建立新的試算表（放在 Drive 的根資料夾）：每張工作表有標題列並凍結；假 Google 只有一份試算表，以它為這份"""
         def handle():
+            """換成新試算表的工作表，並在 Drive 根資料夾放一個試算表檔"""
             self._tabs = {name: [[str(h) for h in headers]] for name, headers in sheets.items()}
             self._sheet_ids = {name: next(self._next_sheet_id) for name in sheets}
             self._frozen = {name: 1 for name in sheets}
@@ -279,6 +290,11 @@ class FakeDrive:
     """記憶體裡的 Drive：實作 Drive 關口"""
 
     def __init__(self, google: FakeGoogle):
+        """空的 Drive
+
+        Args:
+            google: 計請求與排定錯誤的假 Google
+        """
         self._google = google
         self._items: Dict[str, _DriveItem] = {}
         self._ids = (f"drive-{n}" for n in itertools.count(1))
@@ -307,6 +323,7 @@ class FakeDrive:
     def list_files(self, query: str, page_token: str = "") -> DriveListing:
         """依查詢字串列出一頁檔案（依名稱排序）"""
         def handle():
+            """篩選、依名稱排序後切出這一頁"""
             matches = _parse_query(query)
             found = sorted(
                 (item for item in self._items.values() if matches(item)), key=lambda item: item.name,
@@ -325,6 +342,7 @@ class FakeDrive:
     def create_folder(self, name: str, parent: str) -> DriveFile:
         """在 parent 裡建立資料夾"""
         def handle():
+            """確認上層資料夾存在後建立"""
             if parent != ROOT:
                 self._item(parent)
             return self._items[self._add(name, DRIVE_FOLDER_MIME, parent, b"")].as_file()
@@ -333,6 +351,7 @@ class FakeDrive:
     def rename_or_move(self, file_id: str, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = ()) -> None:
         """改名、搬到 add_parent 並離開 remove_parents（一次請求）"""
         def handle():
+            """確認檔案與目標資料夾存在後改名、搬移"""
             item = self._item(file_id)
             if add_parent and add_parent != ROOT:
                 self._item(add_parent)

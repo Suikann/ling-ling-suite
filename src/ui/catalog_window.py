@@ -242,6 +242,7 @@ class CatalogWindow(QMainWindow):
             self._catalog = None
 
     def _build_ui(self):
+        """排出工具列（新增資料夾、重新整理、搜尋）、錯誤提示列、左邊的樹狀清單與右邊的詳細面板、狀態列"""
         self._toolbar = QToolBar()
         self._toolbar.setMovable(False)
         self.addToolBar(self._toolbar)
