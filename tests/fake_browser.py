@@ -31,6 +31,8 @@ class CallbackBrowser:
     def __init__(self):
         self.opens = True
         self.on_open: Optional[Callable[[], None]] = None
+        # 設了就以它取代授權網址的 state 回呼，模擬不是這次登入發出的回呼
+        self.forged_state: Optional[str] = None
         self.opened: List[str] = []
         self.pages: List[str] = []
         self._reply: Optional[Dict[str, str]] = {"code": "auth-code"}
@@ -58,7 +60,9 @@ class CallbackBrowser:
         if self._reply is not None:
             query = parse_qs(urlsplit(target).query)
             params = dict(self._reply)
-            if "state" in query:
+            if self.forged_state is not None:
+                params["state"] = self.forged_state
+            elif "state" in query:
                 params["state"] = query["state"][0]
             url = query["redirect_uri"][0] + "?" + urlencode(params)
             thread = threading.Thread(target=self._send, args=(url,), daemon=True)

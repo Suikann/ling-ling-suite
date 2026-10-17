@@ -44,7 +44,8 @@ from services.workspace_service import WorkspaceService
 from ui.main_window import MainWindow
 from ui.preview_dialog import PreviewDialog
 from tests.failing_writes import FailingWrites
-from tests.fake_google import FakeBrowserLogin, FakeTokenEndpoint, write_client_secrets
+from tests.fake_browser import CallbackBrowser
+from tests.fake_google import FakeTokenEndpoint, write_client_secrets
 from tests.memory_keyring import MemoryKeyring
 from tests.other_instance import OtherInstance
 from tests.synthetic_pdfs import file_digest, scanned_pdf
@@ -224,7 +225,7 @@ class MainWindowTestCase(unittest.TestCase):
         self.auth = GoogleAuthService(
             storage=SecureStorage("test-google", backend=self.keyring),
             request=FakeTokenEndpoint(),
-            browser_login=FakeBrowserLogin(),
+            opener=CallbackBrowser(),
             client_secrets_path=write_client_secrets(os.path.join(self.temp_dir, "client_secret.json")),
             legacy_token_path=self.legacy_token,
         )
@@ -1120,6 +1121,17 @@ class TestMainWindowGoogleLogin(MainWindowTestCase):
         with answering_prompts() as shown:
             self.auth.authenticate()
         self.assertIn((t("catalog.auth.title"), t("catalog.auth.reason.not_saved")), shown)
+
+    def test_login_in_background_that_cannot_be_saved_warns_on_main_thread(self):
+        self.keyring.failing_writes = True
+        warned_on = []
+        record = lambda *args, **kwargs: warned_on.append(threading.current_thread())
+        with mock.patch.object(QMessageBox, "warning", side_effect=record):
+            login = threading.Thread(target=self.auth.authenticate)
+            login.start()
+            login.join(10)
+            QApplication.sendPostedEvents()
+        self.assertEqual(warned_on, [threading.main_thread()])
 
 
 def wait_until(condition: Callable[[], bool], timeout: float = 20) -> None:

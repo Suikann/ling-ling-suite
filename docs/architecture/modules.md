@@ -20,6 +20,9 @@
 | PDF 壓縮：級數、三層檢查、暫存的壓縮檔 | `services/compression_service.py` 的 `CompressionService`；PDF 內容的讀寫在 `services/pdf_service.py`（`save_lossless`、`save_downsampled`、`check_compressed`） |
 | 壓縮結果的另存位置規則（預設位置、擋下原檔的資料夾）與交出 | `services/compression_output_service.py` 的 `CompressionOutputService` |
 | 在背景執行可取消的長工作：進度與取消鈕、期間鎖住重新命名、分割、旋轉、復原、重做，關閉時詢問要不要取消 | `MainWindow._run_in_background`，背景執行緒由 `ui/background_task.py` 的 `BackgroundTask` 管 |
+| OAuth 登入時開瀏覽器、在 `127.0.0.1` 的隨機埠等回呼（Google 與 Discord 共用） | `services/local_callback.py` 的 `LocalCallback`：回傳回呼的 query 參數，逾時、取消都關掉本機伺服器；兌換權杖與檢查 `state` 由各登入服務做 |
+| 內附 Google 用戶端檔的位置 | `core/launch_env.py` 的 `bundled_client_secrets_path`：打包版讀資源目錄（`sys._MEIPASS`），從原始碼執行讀 repo 根目錄 |
+| 在背景做會卡住的事時顯示可取消的等待視窗（例如等瀏覽器登入回來） | `ui/waiting_dialog.py` 的 `run_while_waiting`，背景執行緒同樣由 `BackgroundTask` 管 |
 | 分割與旋轉對話框共用的 UI 輔助 | `ui/widgets.py`：`ThumbnailLoader` 在背景載入縮圖，只交出最近一次載入的結果；`ensure_file_exists` 提示找不到檔案 |
 | 存檔對話框：沒打副檔名時補上，補上後的檔名已有檔案時先確認取代 | `ui/widgets.py` 的 `ask_save_path` |
 
@@ -34,7 +37,8 @@
   - `tests/failing_writes.py`：寫到指定檔案就失敗的 `FileService`，注入給要測寫入失敗的服務
   - `tests/other_instance.py`：以子行程扮演另一個持有單一實例鎖的程式
   - `tests/memory_keyring.py`：記憶體裡的 keyring backend，注入給 `SecureStorage`；可設成沒有安全儲存、被鎖住、寫入或刪除失敗。測試一律注入它，不碰系統的安全儲存
-  - `tests/fake_google.py`：Google 權杖端點（回傳指定權杖、拒絕續期、連不上）與瀏覽器登入的替身，以及寫出測試用用戶端檔的 `write_client_secrets`
+  - `tests/fake_google.py`：Google 權杖端點的替身（兌換授權碼時回傳指定的續期權杖、範圍與帳號 email；續期時回傳指定權杖、拒絕續期、連不上），以及寫出測試用用戶端檔的 `write_client_secrets`
+  - `tests/fake_browser.py`：開瀏覽器的替身，注入給本機回呼與登入服務；拿到授權網址後在背景真的對其中的 `127.0.0.1` 回呼送 HTTP 請求，帶 `code` 或 `error`，或設成永遠不送
   - `tests/synthetic_pdfs.py`：以 PyMuPDF 產生的合成掃描分譜（8-bit 灰階、JPEG、1-bit、未壓縮的串流、加密、宣告錯誤的 JPEG），測壓縮服務與壓縮檢查；壓縮服務的測試不接替身，以注入的大小上限代替 20MB
 
 ## 文件

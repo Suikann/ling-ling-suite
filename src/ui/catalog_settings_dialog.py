@@ -3,6 +3,7 @@
 譜庫設定對話框
 
 引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫目錄。
+登入區顯示登入的帳號 email 與帳號提醒；登入時在背景等瀏覽器回來，期間顯示可取消的等待視窗。
 """
 import re
 from PySide6.QtWidgets import (
@@ -12,8 +13,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from core.locale import t
-from services.google_auth_service import GoogleAuthService, LoginReason
+from services.google_auth_service import GoogleAuthService, LoginFailed, LoginFailure, LoginReason
 from services.preferences_service import PreferencesService
+from ui.waiting_dialog import run_while_waiting
 
 # 登入狀態旁的原因對應的介面字串
 _LOGIN_REASON_KEYS = {
@@ -22,6 +24,14 @@ _LOGIN_REASON_KEYS = {
     LoginReason.NOT_SAVED: "catalog.auth.reason.not_saved",
     LoginReason.TOKEN_REJECTED: "catalog.auth.reason.token_rejected",
     LoginReason.UNREACHABLE: "catalog.auth.reason.unreachable",
+}
+# 登入沒有完成時提示的介面字串；取消不提示，FAILED 另帶錯誤內容
+_LOGIN_FAILURE_KEYS = {
+    LoginFailure.CLIENT_MISSING: "catalog.auth.credentials_missing",
+    LoginFailure.BROWSER_NOT_OPENED: "catalog.auth.browser_not_opened",
+    LoginFailure.TIMED_OUT: "catalog.auth.timed_out",
+    LoginFailure.DENIED: "catalog.auth.denied",
+    LoginFailure.SCOPES_MISSING: "catalog.auth.scopes_missing",
 }
 
 
@@ -57,6 +67,7 @@ class CatalogSettingsDialog(QDialog):
         self._auth_status = QLabel()
         status_row.addWidget(self._auth_status)
         status_row.addStretch()
+        status_row.addWidget(QLabel(t("catalog.auth.account_reminder")))
         self._login_btn = QPushButton()
         self._login_btn.clicked.connect(self._toggle_auth)
         status_row.addWidget(self._login_btn)
@@ -105,7 +116,9 @@ class CatalogSettingsDialog(QDialog):
         self._auth_reason.setText(t(_LOGIN_REASON_KEYS[status.reason]) if status.reason else "")
         self._auth_reason.setVisible(status.reason is not None)
         if status.signed_in:
-            self._auth_status.setText(t("catalog.auth.connected"))
+            email = self._auth.account_email
+            text = t("catalog.auth.connected_as", email=email) if email else t("catalog.auth.connected")
+            self._auth_status.setText(text)
             self._auth_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
             self._login_btn.setText(t("catalog.auth.disconnect"))
         else:
@@ -120,23 +133,20 @@ class CatalogSettingsDialog(QDialog):
             self._update_auth_display()
             return
         try:
-            self._auth.authenticate()
+            run_while_waiting(
+                self, t("catalog.auth.title"), t("catalog.auth.waiting"),
+                self._auth.authenticate, self._auth.cancel_login,
+            )
+        except LoginFailed as e:
             self._update_auth_display()
-            QMessageBox.information(
-                self, t("catalog.auth.title"), t("catalog.auth.success"),
-            )
-        except FileNotFoundError:
-            QMessageBox.warning(
-                self, t("catalog.auth.title"),
-                t("catalog.auth.credentials_missing",
-                  path=self._auth.client_secrets_path),
-            )
-        except Exception as e:
-            self._update_auth_display()
-            QMessageBox.critical(
-                self, t("catalog.auth.title"),
-                t("catalog.auth.failed", error=str(e)),
-            )
+            if e.failure is LoginFailure.CANCELLED:
+                return
+            key = _LOGIN_FAILURE_KEYS.get(e.failure)
+            message = t(key) if key else t("catalog.auth.failed", error=str(e))
+            QMessageBox.warning(self, t("catalog.auth.title"), message)
+            return
+        self._update_auth_display()
+        QMessageBox.information(self, t("catalog.auth.title"), t("catalog.auth.success"))
 
     def _browse_folder(self):
         """以階層式樹狀結構瀏覽 Drive 資料夾"""

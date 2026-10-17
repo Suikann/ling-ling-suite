@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog,
     QMessageBox, QTabWidget, QMenu, QProgressBar,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
@@ -68,6 +68,9 @@ _PENDING_MOVE_TEXTS = {
 class MainWindow(QMainWindow):
     """應用程式主視窗"""
 
+    # 登入在背景執行緒進行：「沒存進安全儲存」的通知經這個訊號轉回主執行緒才提示
+    _login_not_saved = Signal()
+
     def __init__(
         self, preferences: PreferencesService, parent=None, history: Optional[MoveHistory] = None,
         opener: Optional[ExternalOpener] = None,
@@ -95,9 +98,12 @@ class MainWindow(QMainWindow):
         self._history = history or MoveHistory(self.file_service, self.workspace_service)
         self._splitter = SplitService(self.file_service, self.workspace_service)
         self._opener = opener or ExternalOpener()
-        self._auth_service = auth_service or GoogleAuthService(self.file_service)
+        self._auth_service = auth_service or GoogleAuthService(
+            self.file_service, opener=self._opener, preferences=preferences,
+        )
         self._auth_service.remove_legacy_token()
-        self._auth_service.subscribe_not_saved(self._warn_login_not_saved)
+        self._login_not_saved.connect(self._warn_login_not_saved)
+        self._auth_service.subscribe_not_saved(self._login_not_saved.emit)
         self._compressor = compressor or CompressionService(self.file_service)
         self._compression_output = CompressionOutputService(self.file_service)
         # 背景工作（一次一件）與它進行中時的狀態列文字、關閉時的詢問
