@@ -12,7 +12,6 @@
     workspace = WorkspaceService(file_service)
     failed = workspace.update_project_path(project, project_path)
 """
-import json
 import os
 import time
 from typing import Callable, Dict, Iterable, List, Optional, Set
@@ -54,25 +53,42 @@ class WorkspaceService:
 
     def _list_outputs(self, folder: str) -> List[str]:
         """列出子資料夾內的分割輸出（PDF）"""
-        if not os.path.isdir(folder):
+        if not self.file_service.directory_exists(folder):
             return []
         return self.file_service.list_pdf_files(folder)
 
-    def remove_folder(self, folder: str) -> None:
-        """移除只剩 meta.json 的空子資料夾；仍有輸出檔時不動
+    def remove_folder(self, folder: str) -> bool:
+        """移除空的子資料夾（只剩 meta.json 與它的原子寫入殘留）；裡面還有任何其他檔案或子目錄時整個不動
 
-        連同 meta.json 原子寫入的殘留一起清掉，否則資料夾清不空、下次掃描會變成來源不明。
+        分割中斷可能在子資料夾裡留下 <代號>.splitting 或 <代號>.replaced（後者裝的是使用者原本被挪開的分譜），
+        這時先刪 meta.json 會讓資料夾移不掉、下次掃描變成來源不明，所以確認沒有別的東西才動手。
+        meta.json 原子寫入的殘留一起清掉，否則資料夾清不空。
+
+        Args:
+            folder: 子資料夾路徑
+
+        Returns:
+            資料夾是否已移除
         """
-        if not os.path.isdir(folder) or self._list_outputs(folder):
-            return
+        if not self._holds_only_meta(folder):
+            return False
         meta_path = os.path.join(folder, WORKSPACE_META_FILE)
-        if os.path.isfile(meta_path):
-            os.remove(meta_path)
+        if self.file_service.file_exists(meta_path):
+            self.file_service.remove_file(meta_path)
         self.file_service.remove_atomic_residue(meta_path)
         self.file_service.remove_empty_directory(folder)
+        return not self.file_service.directory_exists(folder)
+
+    def _holds_only_meta(self, folder: str) -> bool:
+        """子資料夾存在，且裡面除了 meta.json 與它的原子寫入殘留之外沒有任何東西"""
+        if not self.file_service.directory_exists(folder):
+            return False
+        meta_path = os.path.join(folder, WORKSPACE_META_FILE)
+        own = {WORKSPACE_META_FILE, os.path.basename(self.file_service.atomic_residue_path(meta_path))}
+        return all(os.path.basename(p) in own for p in self.file_service.list_entries(folder))
 
     def purge_empty_folders(self, in_use: Optional[Set[str]] = None) -> int:
-        """移除所有已搬空（只剩 meta.json）且未被使用的子資料夾
+        """移除所有空的（只剩 meta.json 與它的原子寫入殘留）且未被使用的子資料夾
 
         搬空是暫態：復原重新命名會把分譜搬回來，需要 meta.json 才能辨識來源，
         所以搬空當下不刪，留到掃描時再一併清除。
@@ -81,15 +97,13 @@ class WorkspaceService:
             in_use: 目前專案引用的子資料夾，這些不移除
 
         Returns:
-            移除的資料夾數
+            實際移除的資料夾數
         """
         keep = {path_key(p) for p in in_use or ()}
         count = 0
         for folder in self._list_folders():
-            if path_key(folder) in keep or self._list_outputs(folder):
-                continue
-            self.remove_folder(folder)
-            count += 1
+            if path_key(folder) not in keep and self.remove_folder(folder):
+                count += 1
         return count
 
     # --- meta.json ---
@@ -113,10 +127,8 @@ class WorkspaceService:
 
     def read_meta(self, folder: str) -> Optional[Dict]:
         """讀取子資料夾的 meta.json；不存在或損毀時回傳 None"""
-        meta_path = os.path.join(folder, WORKSPACE_META_FILE)
         try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = self.file_service.read_json(os.path.join(folder, WORKSPACE_META_FILE))
             return data if isinstance(data, dict) else None
         except (OSError, ValueError):
             return None
@@ -151,7 +163,7 @@ class WorkspaceService:
             folder: 子資料夾路徑
             meta: 先前快照的 meta.json 內容
         """
-        if not os.path.isdir(folder) or self.read_meta(folder) is not None:
+        if not self.file_service.directory_exists(folder) or self.read_meta(folder) is not None:
             return
         self._write_meta(folder, meta)
 
@@ -210,7 +222,7 @@ class WorkspaceService:
         owned: Dict[str, str] = {}
         unreadable: Set[str] = set()
         for path in known_projects:
-            if not os.path.isfile(path):
+            if not self.file_service.file_exists(path):
                 scan.missing_projects.append(path)
                 continue
             try:
@@ -251,7 +263,7 @@ class WorkspaceService:
         """
         count = 0
         for entry in entries:
-            if os.path.isdir(entry.folder):
+            if self.file_service.directory_exists(entry.folder):
                 self.file_service.delete_directory(entry.folder)
                 count += 1
         return count
@@ -260,7 +272,7 @@ class WorkspaceService:
 
     def _list_folders(self) -> List[str]:
         """列出工作區內所有子資料夾；工作區尚未建立時回傳空清單"""
-        if not os.path.isdir(self.workspace_dir):
+        if not self.file_service.directory_exists(self.workspace_dir):
             return []
         return self.file_service.list_subdirectories(self.workspace_dir)
 

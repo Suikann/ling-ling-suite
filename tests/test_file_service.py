@@ -139,5 +139,21 @@ class TestFileServiceExists(unittest.TestCase):
         self.assertFalse(self.file_service.file_exists_exact(os.path.join(self.temp_dir, "nope", "x.pdf")))
 
 
+class TestFileServiceListEntries(unittest.TestCase):
+    """FileService.list_entries 測試"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, True)
+
+    def test_lists_files_and_subdirectories_without_descending(self):
+        os.makedirs(os.path.join(self.temp_dir, "b.splitting", "inner"))
+        for name in ("c.txt", "A.pdf"):
+            with open(os.path.join(self.temp_dir, name), "w") as f:
+                f.write("x")
+        names = [os.path.basename(p) for p in FileService().list_entries(self.temp_dir)]
+        self.assertEqual(names, ["A.pdf", "b.splitting", "c.txt"])
+
+
 if __name__ == '__main__':
     unittest.main()

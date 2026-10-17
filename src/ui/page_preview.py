@@ -12,12 +12,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPixmap, QImage, QKeySequence, QShortcut
 from PySide6.QtCore import Qt, Signal
+from core.constants import SECTION_COLORS
 from core.locale import t
-
-SECTION_COLORS = [
-    "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
-    "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
-]
 
 _NAV_STYLE = (
     "QPushButton { font-size: 22px; font-weight: bold; border-radius: 24px; "

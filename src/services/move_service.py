@@ -327,7 +327,7 @@ class MoveService:
 
     def execute(
         self, moves: List[Move], on_complete: Optional[Callable[[List[str]], None]] = None,
-        on_rollback: Optional[Callable[[List[UndoMapping]], None]] = None,
+        on_rollback: Optional[Callable[[List[UndoMapping]], bool]] = None,
         context: Optional[BatchContext] = None, bounds: Optional[List[str]] = None,
     ) -> List[str]:
         """驗證後以兩階段搬移執行整批
@@ -336,7 +336,7 @@ class MoveService:
         第二階段所有檔案一併就位；目標的父目錄不存在時建立。
         搬第一個檔案前先寫入進行中紀錄，每完成一步更新（下一步先記為 pending）；
         整批搬完先標記 complete、呼叫 on_complete 寫正式紀錄，寫完才刪除進行中紀錄，
-        所以任何時點被關掉都留得下紀錄。回滾結束先呼叫 on_rollback，之後也刪除。
+        所以任何時點被關掉都留得下紀錄。回滾結束先呼叫 on_rollback，它回報記好了才刪除。
         上次的紀錄尚未處理時拒絕執行。
 
         Args:
@@ -344,8 +344,9 @@ class MoveService:
             on_complete: 整批搬完後、刪除進行中紀錄前要做的事（通常是寫正式復原紀錄），
                 參數為本次新建的目錄；它拋出的例外原樣傳出、不回滾，進行中紀錄保留
             on_rollback: 回滾結束後、刪除進行中紀錄前要做的事（替搬不回去的檔案寫紀錄、寫回 meta），
-                參數為搬不回去的項目（同 RenameRollbackError.residual，可能為空）；
-                它拋出的例外原樣傳出，進行中紀錄保留（其中只剩搬不回去的步驟）
+                參數為搬不回去的項目（同 RenameRollbackError.residual，可能為空），回傳是否已記好、
+                可以刪除進行中紀錄；回傳 False 或拋出例外時進行中紀錄保留（其中只剩搬不回去的步驟），
+                例外原樣傳出
             context: 記進進行中紀錄的這批搬移的來歷（中斷後據以整理堆疊、寫回工作區 meta）；省略時視為重新命名
             bounds: 各項目標必須在其中的資料夾（與 moves 一一對應）；None 表示不限制
 
@@ -380,9 +381,8 @@ class MoveService:
         except Exception as e:
             journal.pending = None
             residual = self._rollback(moves, journal)
-            if on_rollback:
-                on_rollback(residual)
-            self._journal.clear()
+            if on_rollback is None or on_rollback(residual):
+                self._journal.clear()
             if residual:
                 raise RenameRollbackError(e, residual) from e
             raise

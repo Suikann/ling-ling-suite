@@ -57,8 +57,8 @@ Download the latest portable EXE from the **[Releases](../../releases)** page. N
 
 1. Launch `LingLingSuite.exe`
 2. **Import** PDF files or folders via the Import menu
-3. **Set up instruments** in the left panel (manual entry or load preset)
-4. **Organize groups** --- each group = one movement/piece
+3. **Organize groups** --- each group = one piece, or one of its movements
+4. **Set up the instrument list** of a group in the left panel while its tab is open (manual entry or load preset)
 5. **Configure naming format** at the bottom (e.g., `{Number}-{PieceName}-{Instrument}.pdf`)
 6. **Preview & Rename** to execute
 

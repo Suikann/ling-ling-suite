@@ -105,7 +105,7 @@ class FileService:
         parent = os.path.dirname(path)
         if parent:
             self.create_directory(parent)
-        temp_path = path + ATOMIC_WRITE_TEMP_SUFFIX
+        temp_path = self.atomic_residue_path(path)
         try:
             with open(temp_path, "w", encoding="utf-8") as f:
                 f.write(text)
@@ -124,7 +124,12 @@ class FileService:
         Args:
             path: 原子寫入的目標檔案路徑
         """
-        self._remove_quietly(path + ATOMIC_WRITE_TEMP_SUFFIX)
+        self._remove_quietly(self.atomic_residue_path(path))
+
+    @staticmethod
+    def atomic_residue_path(path: str) -> str:
+        """原子寫入 path 時先寫的暫名；寫到一半當機時留在目標旁的就是它"""
+        return path + ATOMIC_WRITE_TEMP_SUFFIX
 
     @staticmethod
     def _remove_quietly(path: str) -> None:
@@ -214,6 +219,18 @@ class FileService:
                 files.append(entry.path)
         files.sort(key=lambda p: os.path.basename(p).lower())
         return files
+
+    def list_entries(self, directory: str) -> List[str]:
+        """列出目錄內的所有項目（檔案與子目錄，不遞迴）
+
+        Args:
+            directory: 目錄路徑
+
+        Returns:
+            項目的完整路徑清單，按名稱排序
+        """
+        with os.scandir(directory) as entries:
+            return sorted((entry.path for entry in entries), key=lambda p: os.path.basename(p).lower())
 
     def has_subdirectories(self, directory: str) -> bool:
         """檢查目錄是否包含子目錄

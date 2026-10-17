@@ -450,12 +450,18 @@ class MainWindow(QMainWindow):
         return self._report_move_result(result, failure_key)
 
     def _report_move_result(self, result: MoveResult, failure_key: Optional[str] = None) -> bool:
-        """顯示搬移歷程動作的失敗；參數與回傳值同 _apply_move_result"""
+        """顯示搬移歷程動作的失敗，以及紀錄、工作區 meta 寫不進去的警告；參數與回傳值同 _apply_move_result
+
+        meta 寫不回去只提示，不算失敗：檔案復原本身已完成。
+        """
         if result.error is not None:
             message = t(failure_key, error=result.error) if failure_key else str(result.error)
             QMessageBox.critical(self, t("dialog.error"), message)
         if result.record_error is not None:
             QMessageBox.warning(self, t("dialog.warning"), t("history.record_not_saved", error=result.record_error))
+        if result.meta_errors:
+            folders = "\n".join(result.meta_errors)
+            QMessageBox.warning(self, t("dialog.warning"), t("history.meta_not_restored", folders=folders))
         return result.error is None and result.record_error is None
 
     def _show_skipped(self, result: MoveResult):
@@ -643,7 +649,7 @@ class MainWindow(QMainWindow):
 
     def _open_rotate_pdf(self):
         from ui.rotate_dialog import RotatePdfDialog
-        dialog = RotatePdfDialog(self.project, self._history, self._current_group(), self)
+        dialog = RotatePdfDialog(self.project, self._history, self._current_group(), self, self.file_service)
         dialog.exec()
 
     def _set_language(self, lang_code: str):

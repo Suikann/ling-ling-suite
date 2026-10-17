@@ -4,7 +4,6 @@
 
 提供專案檔案的儲存與載入功能。
 """
-import json
 from typing import Optional
 from core.constants import PROJECT_FILE_VERSION
 from core.locale import t
@@ -38,8 +37,7 @@ class ProjectService:
         Returns:
             還原的 Project 物件，舊版專案檔已完成遷移，並判為已存檔
         """
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        data = self.file_service.read_json(file_path)
         return Project.from_data(data, score_label=t("group.score_label"))
 
     def matches_file(self, project: Project, file_path: str) -> bool:

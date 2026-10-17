@@ -2,7 +2,6 @@
 """
 共用增強元件與 UI 輔助函式
 """
-import os
 import threading
 from typing import Callable, List, Optional, Tuple
 from PySide6.QtWidgets import QListWidget, QAbstractItemView, QMessageBox, QWidget
@@ -11,19 +10,21 @@ from PySide6.QtCore import Qt, QRect, QObject, Signal
 from core.constants import PDF_EXTENSION
 from core.locale import t
 from core.models import Group, Project
+from services.file_service import FileService
 
 
-def ensure_file_exists(parent: QWidget, path: str) -> bool:
+def ensure_file_exists(parent: QWidget, path: str, file_service: FileService) -> bool:
     """確認檔案存在；不存在時顯示「找不到檔案」錯誤訊息
 
     Args:
         parent: 錯誤訊息框的父元件
         path: 要確認的檔案路徑
+        file_service: 檔案服務
 
     Returns:
         檔案存在時為 True
     """
-    if os.path.isfile(path):
+    if file_service.file_exists(path):
         return True
     QMessageBox.critical(parent, t("dialog.error"), t("dialog.error.file_not_found", path=path))
     return False

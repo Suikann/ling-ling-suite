@@ -14,14 +14,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt
+from core.constants import SECTION_COLORS
 from core.locale import t
+from services.file_service import FileService
 from services.pdf_service import get_page_count, render_page_thumbnails
 from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
 
-SECTION_COLORS = [
-    "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
-    "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
-]
 ROTATION_ANGLES = [0, 90, 180, 270]
 ROTATION_LABELS = ["0\u00B0", "90\u00B0", "180\u00B0", "270\u00B0"]
 
@@ -32,13 +30,15 @@ _MAX_COLS = 4
 class RotatePdfDialog(QDialog):
     """PDF 旋轉對話框"""
 
-    def __init__(self, project=None, history=None, initial_group=None, parent=None):
+    def __init__(self, project=None, history=None, initial_group=None, parent=None,
+                 file_service: Optional[FileService] = None):
         """
         Args:
             project: 目前的專案（選檔清單用）
             history: 搬移歷程（覆蓋原檔前的備份與復原紀錄）；None 時不備份也不記錄
             initial_group: 選檔清單預設篩選的群組
             parent: 父元件
+            file_service: 檔案服務（確認選的檔案還在）；None 時自建
         """
         super().__init__(parent)
         self.setWindowTitle(t("rotate.title"))
@@ -46,6 +46,7 @@ class RotatePdfDialog(QDialog):
         self.setMinimumSize(900, 520)
         self._project = project
         self._history = history
+        self._file_service = file_service or FileService()
         self._filter_group = initial_group
         self._pdf_path: Optional[str] = None
         self._page_count = 0
@@ -198,7 +199,7 @@ class RotatePdfDialog(QDialog):
     # --- PDF 載入 ---
 
     def _load_pdf(self, path):
-        if not ensure_file_exists(self, path):
+        if not ensure_file_exists(self, path, self._file_service):
             return
         try:
             self._pdf_path = path

@@ -26,6 +26,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "app.title": "泠靈小工具",
         "app.unsaved_project": "未命名",
         "app.already_running": "程式已在執行中。",
+        "app.lock_failed": "無法開啟鎖檔，程式未啟動：\n{error}",
         # 選單 - 檔案
         "menu.file": "檔案",
         "menu.file.new": "新增專案",
@@ -248,6 +249,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "history.residual.undo": "復原失敗後留下的 {count} 個檔案",
         "history.residual.redo": "重做失敗後留下的 {count} 個檔案",
         "history.record_not_saved": "操作已完成，但紀錄無法寫入：\n{error}",
+        "history.meta_not_restored": "下列工作區子資料夾的來源資訊寫不回去：\n{folders}",
         "history.split_replaced": "分割時被取代的檔案沒有找回，仍在資源回收桶：\n{files}",
         # PDF 分割
         "split.title": "PDF 分割",
@@ -257,7 +259,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "split.output_dir": "輸出資料夾：",
         "split.output_workspace": "工作區",
         "split.output_custom": "指定資料夾",
-        "split.resplit_confirm": "這份合併譜先前已分割過，工作區內有 {count} 個分譜。{owner}\n繼續將先把它們移至資源回收桶，再以這次的分割結果取代。\n\n是否繼續？",
+        "split.resplit_confirm": "這份合併譜先前已分割過，工作區內有 {count} 個分譜。{owner}\n繼續將以這次的分割結果取代它們：新分譜就位後，才把舊分譜移至資源回收桶。\n\n是否繼續？",
         "split.resplit_owner": "這些分譜屬於專案「{project}」{missing}，尚未重新命名。",
         "split.resplit_owner_missing": "（找不到）",
         "split.error.overwrite_source": "分譜「{name}」的輸出路徑與來源合併譜相同，會覆蓋來源。\n請改名或改用其他輸出資料夾。",
@@ -510,6 +512,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "app.title": "Ling Ling Suite",
         "app.unsaved_project": "Untitled",
         "app.already_running": "The application is already running.",
+        "app.lock_failed": "Could not open the lock file; the application did not start:\n{error}",
         # 選單 - 檔案
         "menu.file": "File",
         "menu.file.new": "New Project",
@@ -732,6 +735,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "history.residual.undo": "{count} file(s) left by a failed undo",
         "history.residual.redo": "{count} file(s) left by a failed redo",
         "history.record_not_saved": "The operation finished, but its record could not be written:\n{error}",
+        "history.meta_not_restored": "Source info could not be written back for these workspace folders:\n{folders}",
         "history.split_replaced": "Files replaced by the split were not restored; they are still in the recycle bin:\n{files}",
         # PDF 分割
         "split.title": "PDF Split",
@@ -741,7 +745,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "split.output_dir": "Output folder:",
         "split.output_workspace": "Workspace",
         "split.output_custom": "Custom folder",
-        "split.resplit_confirm": "This PDF was split before; the workspace holds {count} part(s) from it.{owner}\nContinuing will move them to the recycle bin and replace them with this split.\n\nContinue?",
+        "split.resplit_confirm": "This PDF was split before; the workspace holds {count} part(s) from it.{owner}\nContinuing will replace them with this split: the old parts move to the recycle bin once the new ones are in place.\n\nContinue?",
         "split.resplit_owner": "These parts belong to the project \"{project}\"{missing} and have not been renamed yet.",
         "split.resplit_owner_missing": " (not found)",
         "split.error.overwrite_source": "The output path of part \"{name}\" is the source PDF itself and would overwrite it.\nRename the part or choose another output folder.",
