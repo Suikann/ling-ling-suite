@@ -60,6 +60,13 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "menu.view.language": "語言",
         "menu.view.language.zh_TW": "繁體中文",
         "menu.view.language.en": "English",
+        # 選單 - 說明
+        "menu.help": "說明",
+        "menu.help.about": "關於泠靈小工具",
+        "about.version": "版號：{version}",
+        "about.dev_version": "開發版",
+        "about.license": "授權：MIT",
+        "about.close": "關閉",
         # 對話框標題
         "dialog.close": "關閉程式",
         "dialog.close.message": "是否儲存目前的專案？",
@@ -610,6 +617,13 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "menu.view.language": "Language",
         "menu.view.language.zh_TW": "繁體中文",
         "menu.view.language.en": "English",
+        # 選單 - 說明
+        "menu.help": "Help",
+        "menu.help.about": "About Ling Ling Suite",
+        "about.version": "Version: {version}",
+        "about.dev_version": "Development build",
+        "about.license": "License: MIT",
+        "about.close": "Close",
         # 對話框標題
         "dialog.close": "Close",
         "dialog.close.message": "Save current project before closing?",

@@ -83,6 +83,22 @@ class FileService:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    def read_text(self, path: str) -> str:
+        """讀取文字檔（UTF-8）
+
+        Args:
+            path: 檔案路徑
+
+        Returns:
+            檔案內容
+
+        Raises:
+            OSError: 檔案讀不到
+            UnicodeDecodeError: 內容不是 UTF-8
+        """
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
     def write_json_atomic(self, path: str, data: Any) -> None:
         """將資料序列化為 JSON 並原子寫入
 

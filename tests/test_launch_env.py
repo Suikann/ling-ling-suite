@@ -3,7 +3,7 @@
 啟動與平台設定單元測試
 
 輸入環境變數、平台與是否為打包版，驗證建立 QApplication 前要補的環境變數、外部程式子行程的環境，
-以及內附 Google 用戶端檔的位置。
+內附 Google 用戶端檔的位置，以及版號。
 """
 import os
 import sys
@@ -11,7 +11,9 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from core.launch_env import bundled_client_secrets_path, external_process_environment, qt_environment_defaults
+from core.launch_env import (
+    app_version, bundled_client_secrets_path, external_process_environment, qt_environment_defaults,
+)
 
 
 class TestQtEnvironmentDefaults(unittest.TestCase):
@@ -70,6 +72,33 @@ class TestBundledClientSecretsPath(unittest.TestCase):
         for name, frozen, expected in cases:
             with self.subTest(name):
                 self.assertEqual(bundled_client_secrets_path(frozen, resource_dir, repo_root), expected)
+
+
+class TestAppVersion(unittest.TestCase):
+    """app_version：打包版讀資源目錄的版號檔，讀不到或從原始碼執行時是開發版（None）"""
+
+    def test_table(self):
+        resource_dir = os.path.join("tmp", "_MEI12345")
+        version_file = os.path.join("tmp", "_MEI12345", "version.txt")
+        cases = [
+            ("打包版讀版號檔", True, {version_file: "v1.2.0\n"}, "v1.2.0"),
+            ("打包版沒有版號檔是開發版", True, {}, None),
+            ("打包版版號檔是空的是開發版", True, {version_file: " \n"}, None),
+            ("從原始碼執行是開發版", False, {version_file: "v1.2.0\n"}, None),
+        ]
+        for name, frozen, files, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(app_version(frozen, resource_dir, _reader(files)), expected)
+
+
+def _reader(files):
+    """讀檔的替身：files 裡有的路徑回傳內容，沒有的像檔案不存在"""
+
+    def read_text(path):
+        if path not in files:
+            raise FileNotFoundError(path)
+        return files[path]
+    return read_text
 
 
 if __name__ == "__main__":

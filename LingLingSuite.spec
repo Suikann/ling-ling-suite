@@ -6,7 +6,8 @@ repo 裡唯一一份打包參數：CD、build.bat、build.sh 都只跑這份，�
 dist/LingLingSuite/。資源檔收進 PyInstaller 的資源目錄（sys._MEIPASS）。
 
 repo 根目錄有 client_secret.json 時（CD 由 GOOGLE_CLIENT_SECRET 寫入），收進資源目錄的根層；
-沒有時照常建置，只是這個版本不能登入 Google。
+沒有時照常建置，只是這個版本不能登入 Google。版號檔 version.txt 同樣由 CD 寫入、收進根層，
+沒有時「關於」顯示開發版。
 
 使用範例：
     pyinstaller --noconfirm LingLingSuite.spec
@@ -28,7 +29,13 @@ else:
         file=sys.stderr,
     )
 
-# 版號檔：由 CD 寫入、在這裡收進資源目錄（#90）
+# 版號檔：CD 把 git tag 寫進 repo 根目錄的 version.txt，收進資源目錄的根層（與 core.constants.VERSION_FILE 一致）；
+# 沒有時「關於」顯示開發版
+version_file = os.path.join(ROOT, "version.txt")
+if os.path.isfile(version_file):
+    datas.append((version_file, "."))
+else:
+    print("LingLingSuite.spec: repo 根目錄沒有 version.txt，「關於」會顯示開發版", file=sys.stderr)
 
 a = Analysis(
     [os.path.join(SRC, "main.py")],

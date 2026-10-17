@@ -1087,6 +1087,68 @@ class TestMainWindowKeepsResultAtStartup(MoveHistoryWindowTestCase):
         self.assertFalse(window.windowTitle().endswith(" *"))
 
 
+class TestMainWindowAbout(MainWindowTestCase):
+    """「說明」選單的「關於泠靈小工具」：版號、GitHub 網址與授權；網址經外部開啟"""
+
+    REPOSITORY_URL = "https://github.com/Suikann/ling-ling-suite"
+
+    def open_about(self) -> QDialog:
+        """從選單開啟「關於」視窗，回傳它（替換 exec，不會卡住測試）"""
+        opened = []
+
+        def fake_exec(dialog):
+            opened.append(dialog)
+            return QDialog.Accepted
+
+        with mock.patch.object(QDialog, "exec", fake_exec):
+            self.trigger_menu(t("menu.help.about"))
+        self.assertEqual(len(opened), 1)
+        return opened[0]
+
+    def texts_in(self, dialog: QDialog) -> List[str]:
+        """視窗裡各標籤的文字"""
+        return [label.text() for label in dialog.findChildren(QLabel)]
+
+    def test_source_run_shows_development_build(self):
+        texts = self.texts_in(self.open_about())
+        self.assertIn(t("about.version", version=t("about.dev_version")), texts)
+
+    def test_packaged_build_shows_version_from_resource_dir(self):
+        resource_dir = os.path.join(self.temp_dir, "_MEI12345")
+        os.makedirs(resource_dir)
+        with open(os.path.join(resource_dir, "version.txt"), "w") as f:
+            f.write("v1.2.0\n")
+        with answering_prompts(t("dialog.discard_btn")):
+            self.window.close()
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "_MEIPASS", resource_dir, create=True):
+            self.window = MainWindow(
+                self.preferences, history=self.history, opener=self.opener, auth_service=self.auth,
+                compressor=self.compressor(),
+            )
+            texts = self.texts_in(self.open_about())
+        self.assertIn(t("about.version", version="v1.2.0"), texts)
+
+    def test_shows_license(self):
+        self.assertIn(t("about.license"), self.texts_in(self.open_about()))
+
+    def test_repository_link_opens_with_external_opener(self):
+        dialog = self.open_about()
+        link = next(label for label in dialog.findChildren(QLabel) if self.REPOSITORY_URL in label.text())
+        link.linkActivated.emit(self.REPOSITORY_URL)
+        self.assertEqual(self.opener.opened, [self.REPOSITORY_URL])
+
+    def test_link_that_cannot_be_opened_says_so(self):
+        self.opener.opens = False
+        dialog = self.open_about()
+        link = next(label for label in dialog.findChildren(QLabel) if self.REPOSITORY_URL in label.text())
+        with answering_prompts() as shown:
+            link.linkActivated.emit(self.REPOSITORY_URL)
+        self.assertEqual(
+            shown, [(t("dialog.error"), t("dialog.error.external_open_failed", target=self.REPOSITORY_URL))],
+        )
+
+
 class TestPrepareApplication(unittest.TestCase):
     """啟動前的設定：補上輸入法環境變數，設定應用程式名稱與 desktop file name"""
 

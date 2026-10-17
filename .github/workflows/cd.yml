@@ -15,6 +15,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 從分支觸發時以 git describe 推版號，要有完整歷史與 tag
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -42,6 +45,18 @@ jobs:
             exit 1
           fi
           printf '%s' "$GOOGLE_CLIENT_SECRET" > client_secret.json
+        shell: bash
+
+      # 寫到 repo 根目錄，由 LingLingSuite.spec 收進資源目錄的根層，「關於」顯示它。
+      # 由 tag 觸發（含 workflow_dispatch 選了 tag）時就是該 tag；從分支觸發時是 git describe 的結果
+      - name: Write version file
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            printf '%s\n' "$GITHUB_REF_NAME" > version.txt
+          else
+            git describe --tags --always > version.txt
+          fi
+          cat version.txt
         shell: bash
 
       - name: Build portable EXE

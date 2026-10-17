@@ -5,6 +5,7 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
+import sys
 from typing import Any, Callable, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
@@ -18,6 +19,7 @@ from core.constants import (
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind,
 )
+from core.launch_env import app_version
 from core.locale import t, get_locale, is_english, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
@@ -106,6 +108,10 @@ class MainWindow(QMainWindow):
         self._auth_service.subscribe_not_saved(self._login_not_saved.emit)
         self._compressor = compressor or CompressionService(self.file_service)
         self._compression_output = CompressionOutputService(self.file_service, self._compressor)
+        # 「關於」顯示的版號：打包版讀資源目錄的版號檔，開發版為 None
+        self._version = app_version(
+            getattr(sys, "frozen", False), getattr(sys, "_MEIPASS", ""), self.file_service.read_text,
+        )
         # 背景工作（一次一件）與它進行中時的狀態列文字、關閉時的詢問
         self._task: Optional[BackgroundTask] = None
         self._task_status = ""
@@ -159,6 +165,8 @@ class MainWindow(QMainWindow):
             action = QAction(t(label_key), self)
             action.triggered.connect(lambda checked=False, c=code: self._set_language(c))
             lang_menu.addAction(action)
+        help_menu = mb.addMenu(t("menu.help"))
+        self._add_action(help_menu, t("menu.help.about"), self._show_about)
 
     def _add_action(self, menu, text, callback, shortcut=None) -> QAction:
         action = QAction(text, self)
@@ -856,6 +864,13 @@ class MainWindow(QMainWindow):
         self._show_background_state()
         self._sync_ui_from_project()
         self._update_title()
+
+    # --- 說明 ---
+
+    def _show_about(self):
+        """開啟「關於泠靈小工具」：版號、GitHub 網址與授權"""
+        from ui.about_dialog import AboutDialog
+        AboutDialog(self._version, self._opener, self).exec()
 
     # --- 譜庫 ---
 

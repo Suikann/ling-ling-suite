@@ -11,7 +11,9 @@ from typing import Dict, List, Tuple
 
 APP_NAME = "LingLingSuite"
 APP_DISPLAY_NAME = "泠靈小工具"
-APP_VERSION = "1.1.0-alpha"
+# 版號檔：CD 把 git tag 寫進 repo 根目錄的這個檔（不進 git），LingLingSuite.spec 收進資源目錄的根層
+VERSION_FILE = "version.txt"
+APP_REPOSITORY_URL = "https://github.com/Suikann/ling-ling-suite"
 # 視窗管理器認得的識別名：Qt 的應用程式名稱與 desktop file name（Wayland 的 app_id、X11 的 WM_CLASS），
 # 隨 AppImage 附的 .desktop 檔名與 StartupWMClass 要與它一致
 APP_ID = "lingling-suite"

@@ -22,6 +22,7 @@
 | 在背景執行可取消的長工作：進度與取消鈕、期間鎖住重新命名、分割、旋轉、復原、重做，關閉時詢問要不要取消 | `MainWindow._run_in_background`，背景執行緒由 `ui/background_task.py` 的 `BackgroundTask` 管 |
 | OAuth 登入時開瀏覽器、在 `127.0.0.1` 的隨機埠等回呼（Google 與 Discord 共用） | `services/local_callback.py` 的 `LocalCallback`：回傳回呼的 query 參數，逾時、取消都關掉本機伺服器；兌換權杖與檢查 `state` 由各登入服務做 |
 | 內附 Google 用戶端檔的位置 | `core/launch_env.py` 的 `bundled_client_secrets_path`：打包版讀資源目錄（`sys._MEIPASS`），從原始碼執行讀 repo 根目錄 |
+| 這次執行的版號（「關於」顯示） | `core/launch_env.py` 的 `app_version`：打包版讀資源目錄裡 CD 由 git tag 寫入的 `version.txt`（`VERSION_FILE`，`LingLingSuite.spec` 收進去），讀不到或從原始碼執行時是開發版 |
 | 在背景做會卡住的事時顯示可取消的等待視窗（例如等瀏覽器登入回來） | `ui/waiting_dialog.py` 的 `run_while_waiting`，背景執行緒同樣由 `BackgroundTask` 管 |
 | 分割與旋轉對話框共用的 UI 輔助 | `ui/widgets.py`：`ThumbnailLoader` 在背景載入縮圖，只交出最近一次載入的結果；`ensure_file_exists` 提示找不到檔案 |
 | 存檔對話框：沒打副檔名時補上，補上後的檔名已有檔案時先確認取代 | `ui/widgets.py` 的 `ask_save_path` |

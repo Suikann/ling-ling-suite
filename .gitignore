@@ -212,5 +212,8 @@ __marimo__/
 client_secret.json
 google_token.json
 
+# 版號檔：CD 由 git tag 寫入，LingLingSuite.spec 收進打包版
+version.txt
+
 # lingling 的 vendored git hooks（lib/ 被上方打包規則排除，需反向納入）
 !.githooks/lib/
