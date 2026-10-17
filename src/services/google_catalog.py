@@ -15,8 +15,9 @@
 """
 import json
 import threading
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from core.catalog_constants import DRIVE_FOLDER_MIME
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.catalog_models import DriveFile, DriveListing
 from services.catalog_ports import CellWrite, sheet_range
@@ -37,7 +38,8 @@ _STATUS_KINDS = {
 }
 # Drive 列出檔案時一頁最多幾筆（API 上限 1000）
 _DRIVE_PAGE_SIZE = 1000
-_DRIVE_FILE_FIELDS = "nextPageToken, files(id, name, mimeType, parents, md5Checksum)"
+_DRIVE_ONE_FILE_FIELDS = "id, name, mimeType, parents, md5Checksum"
+_DRIVE_FILE_FIELDS = f"nextPageToken, files({_DRIVE_ONE_FILE_FIELDS})"
 
 
 def open_google_catalog(auth: GoogleAuthService, spreadsheet_id: str) -> CatalogService:
@@ -95,17 +97,23 @@ class GoogleSheets(_Gateway):
     def __init__(self, spreadsheet_id: str, credentials: Optional["Credentials"] = None, http: Any = None):
         """
         Args:
-            spreadsheet_id: 譜庫試算表的 ID
+            spreadsheet_id: 譜庫試算表的 ID；還沒有譜庫試算表時為空字串，只能建立新的試算表
             credentials: Google 憑證
             http: 代替網路的 httplib2.Http（測試用）
         """
         super().__init__("sheets", "v4", credentials, http)
         self._spreadsheet_id = spreadsheet_id
 
+    def _bound_id(self) -> str:
+        """連著的試算表 ID；沒有時不送請求，丟出找不到"""
+        if not self._spreadsheet_id:
+            raise CatalogError(CatalogErrorKind.NOT_FOUND, "catalog_spreadsheet_id is empty")
+        return self._spreadsheet_id
+
     def read_ranges(self, ranges: Sequence[str]) -> List[List[List[str]]]:
         """讀多個範圍（values.batchGet）"""
         response = self._execute(self._api.spreadsheets().values().batchGet(
-            spreadsheetId=self._spreadsheet_id, ranges=list(ranges),
+            spreadsheetId=self._bound_id(), ranges=list(ranges),
         ))
         return [
             [[str(value) for value in row] for row in value_range.get("values", [])]
@@ -115,21 +123,21 @@ class GoogleSheets(_Gateway):
     def write_cells(self, data: Sequence[CellWrite]) -> None:
         """一次寫入多個範圍（values.batchUpdate），值以 RAW 寫入"""
         self._execute(self._api.spreadsheets().values().batchUpdate(
-            spreadsheetId=self._spreadsheet_id,
+            spreadsheetId=self._bound_id(),
             body={"valueInputOption": "RAW", "data": [{"range": r, "values": v} for r, v in data]},
         ))
 
     def append_rows(self, sheet: str, rows: Sequence[List[str]]) -> None:
         """在工作表最後一列之後新增多列（values.append），值以 RAW 寫入"""
         self._execute(self._api.spreadsheets().values().append(
-            spreadsheetId=self._spreadsheet_id, range=sheet_range(sheet, "A:A"),
+            spreadsheetId=self._bound_id(), range=sheet_range(sheet, "A:A"),
             valueInputOption="RAW", insertDataOption="INSERT_ROWS", body={"values": [list(row) for row in rows]},
         ))
 
     def add_sheet(self, title: str) -> None:
         """建立一張空的工作表"""
         self._execute(self._api.spreadsheets().batchUpdate(
-            spreadsheetId=self._spreadsheet_id,
+            spreadsheetId=self._bound_id(),
             body={"requests": [{"addSheet": {"properties": {"title": title}}}]},
         ))
 
@@ -143,7 +151,7 @@ class GoogleSheets(_Gateway):
     def sheet_ids(self) -> Dict[str, int]:
         """每張工作表的名稱與 sheetId（spreadsheets.get）"""
         response = self._execute(self._api.spreadsheets().get(
-            spreadsheetId=self._spreadsheet_id, fields="sheets.properties(sheetId,title)",
+            spreadsheetId=self._bound_id(), fields="sheets.properties(sheetId,title)",
         ))
         return {
             sheet["properties"]["title"]: sheet["properties"]["sheetId"] for sheet in response.get("sheets", [])
@@ -152,7 +160,7 @@ class GoogleSheets(_Gateway):
     def delete_rows(self, rows: Sequence[Tuple[int, int]]) -> None:
         """一次刪掉多列（batchUpdate）：由下往上刪，列號都以刪除之前的為準"""
         self._execute(self._api.spreadsheets().batchUpdate(
-            spreadsheetId=self._spreadsheet_id,
+            spreadsheetId=self._bound_id(),
             body={"requests": [
                 {"deleteDimension": {"range": {
                     "sheetId": sheet_id, "dimension": "ROWS", "startIndex": row, "endIndex": row + 1,
@@ -160,6 +168,23 @@ class GoogleSheets(_Gateway):
                 for sheet_id, row in sorted(set(rows), key=lambda target: -target[1])
             ]},
         ))
+
+
+    def create_spreadsheet(self, title: str, sheets: Mapping[str, Sequence[str]]) -> str:
+        """建立一份新的試算表（spreadsheets.create）：每張工作表寫好標題列並凍結"""
+        response = self._execute(self._api.spreadsheets().create(fields="spreadsheetId", body={
+            "properties": {"title": title},
+            "sheets": [
+                {
+                    "properties": {"title": name, "gridProperties": {"frozenRowCount": 1}},
+                    "data": [{"startRow": 0, "startColumn": 0, "rowData": [
+                        {"values": [{"userEnteredValue": {"stringValue": str(h)}} for h in headers]},
+                    ]}],
+                }
+                for name, headers in sheets.items()
+            ],
+        }))
+        return response["spreadsheetId"]
 
 
 class GoogleDrive(_Gateway):
@@ -179,14 +204,33 @@ class GoogleDrive(_Gateway):
             q=query, fields=_DRIVE_FILE_FIELDS, orderBy="name", pageSize=_DRIVE_PAGE_SIZE,
             pageToken=page_token or None,
         ))
-        files = [
-            DriveFile(
-                id=item["id"], name=item.get("name", ""), mime_type=item.get("mimeType", ""),
-                parents=tuple(item.get("parents", [])), md5=item.get("md5Checksum", ""),
-            )
-            for item in response.get("files", [])
-        ]
+        files = [_drive_file(item) for item in response.get("files", [])]
         return DriveListing(files, response.get("nextPageToken", ""))
+
+    def get_file(self, file_id: str) -> DriveFile:
+        """取一個檔案的中繼資料（files.get）"""
+        return _drive_file(self._execute(self._api.files().get(fileId=file_id, fields=_DRIVE_ONE_FILE_FIELDS)))
+
+    def create_folder(self, name: str, parent: str) -> DriveFile:
+        """在 parent 裡建立資料夾（files.create）"""
+        return _drive_file(self._execute(self._api.files().create(
+            body={"name": name, "mimeType": DRIVE_FOLDER_MIME, "parents": [parent]}, fields=_DRIVE_ONE_FILE_FIELDS,
+        )))
+
+    def rename_or_move(self, file_id: str, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = ()) -> None:
+        """改名與搬移（files.update）"""
+        self._execute(self._api.files().update(
+            fileId=file_id, body={"name": name} if name else {}, fields="id",
+            addParents=add_parent or None, removeParents=",".join(remove_parents) or None,
+        ))
+
+
+def _drive_file(item: dict) -> DriveFile:
+    """Drive 回應裡的一個檔案"""
+    return DriveFile(
+        id=item["id"], name=item.get("name", ""), mime_type=item.get("mimeType", ""),
+        parents=tuple(item.get("parents", [])), md5=item.get("md5Checksum", ""),
+    )
 
 
 def catalog_error_from(error: BaseException) -> CatalogError:

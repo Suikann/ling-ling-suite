@@ -21,6 +21,7 @@ from googleapiclient.http import HttpMockSequence
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
+from core.catalog_constants import DRIVE_FOLDER_MIME
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from services.catalog_service import CatalogService
 from services.google_auth_service import GoogleAuthService
@@ -157,6 +158,27 @@ class TestSheetsRequests(unittest.TestCase):
         self.assertEqual(starts, [(0, 5, 6), (0, 2, 3), (7, 1, 2)])
         self.assertEqual(len(http.request_sequence), 1)
 
+    def test_creates_a_spreadsheet_with_header_rows_frozen_in_one_request(self):
+        http = HttpMockSequence([ok({"spreadsheetId": "new-1"})])
+        new_id = GoogleSheets("", http=http).create_spreadsheet("譜庫目錄", {"曲目": ["id", "title"], "版本": ["id"]})
+        self.assertEqual(new_id, "new-1")
+        self.assertEqual(len(http.request_sequence), 1)
+        body = sent_body(http, 0)
+        self.assertEqual(body["properties"]["title"], "譜庫目錄")
+        sheets = [
+            (s["properties"]["title"], s["properties"]["gridProperties"]["frozenRowCount"],
+             [v["userEnteredValue"]["stringValue"] for v in s["data"][0]["rowData"][0]["values"]])
+            for s in body["sheets"]
+        ]
+        self.assertEqual(sheets, [("曲目", 1, ["id", "title"]), ("版本", 1, ["id"])])
+
+    def test_without_a_spreadsheet_id_reading_is_not_found_without_a_request(self):
+        http = HttpMockSequence([])
+        with self.assertRaises(CatalogError) as raised:
+            GoogleSheets("", http=http).read_ranges(["'曲目'!A:ZZ"])
+        self.assertEqual(raised.exception.kind, CatalogErrorKind.NOT_FOUND)
+        self.assertEqual(http.request_sequence, [])
+
     def test_google_errors_become_catalog_errors(self):
         http = HttpMockSequence([({"status": "404"}, json.dumps({"error": {"code": 404, "message": "not found"}}))])
         with self.assertRaises(CatalogError) as raised:
@@ -181,6 +203,35 @@ class TestDriveRequests(unittest.TestCase):
         file = listing.files[0]
         self.assertEqual((file.id, file.name, file.mime_type, file.parents, file.md5),
                          ("f1", "a.pdf", "application/pdf", ("d1",), "abc"))
+
+
+class TestDriveWriteRequests(unittest.TestCase):
+    """Drive 關口的中繼資料、建資料夾、改名與搬移，各一次請求"""
+
+    FILE = {"id": "f1", "name": "a.pdf", "mimeType": "application/pdf", "parents": ["d1"], "md5Checksum": "abc"}
+
+    def test_gets_file_metadata(self):
+        http = HttpMockSequence([ok(self.FILE)])
+        file = GoogleDrive(http=http).get_file("f1")
+        self.assertEqual((file.id, file.parents, file.md5), ("f1", ("d1",), "abc"))
+        self.assertIn("/files/f1", http.request_sequence[0][0])
+
+    def test_creates_a_folder_in_the_parent(self):
+        http = HttpMockSequence([ok({"id": "d2", "name": "新", "mimeType": DRIVE_FOLDER_MIME, "parents": ["d1"]})])
+        folder = GoogleDrive(http=http).create_folder("新", "d1")
+        self.assertEqual(folder.id, "d2")
+        self.assertEqual(sent_body(http, 0), {"name": "新", "mimeType": DRIVE_FOLDER_MIME, "parents": ["d1"]})
+
+    def test_renames_and_moves_in_one_update(self):
+        http = HttpMockSequence([ok(self.FILE), ok(self.FILE)])
+        drive = GoogleDrive(http=http)
+        drive.rename_or_move("f1", name="b.pdf")
+        drive.rename_or_move("f1", add_parent="d2", remove_parents=["d1", "d3"])
+        self.assertEqual(sent_body(http, 0), {"name": "b.pdf"})
+        self.assertNotIn("addParents", sent_query(http, 0))
+        self.assertEqual(sent_query(http, 1)["addParents"], ["d2"])
+        self.assertEqual(sent_query(http, 1)["removeParents"], ["d1,d3"])
+        self.assertEqual(len(http.request_sequence), 2)
 
 
 class TestOpenGoogleCatalog(unittest.TestCase):

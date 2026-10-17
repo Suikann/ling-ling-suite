@@ -11,11 +11,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.catalog_constants import (
-    SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_HEADERS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES,
-    PublishingPlatform,
+    DRIVE_FOLDER_MIME, DRIVE_SPREADSHEET_MIME, SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_HEADERS, SHEET_MOVEMENTS,
+    SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
-from fake_google_catalog import FakeGoogle
+from fake_google_catalog import ROOT, FakeGoogle
 from services.catalog_service import CatalogService
 
 
@@ -369,6 +369,101 @@ class TestDelete(CatalogTestCase):
         self.catalog.delete_piece("p1")
         self.assertEqual(self.ids(SHEET_PIECES), ["p2"])
         self.assertEqual(self.ids(SHEET_EDITIONS), ["e9"])
+
+
+class TestTagFolderAsPiece(CatalogTestCase):
+    """把 Drive 資料夾標記成一首曲目：一個版本指向資料夾，曲目以它為使用中版本"""
+
+    def rows(self, sheet: str) -> list:
+        """工作表的資料列"""
+        return self.google.sheets.rows(sheet)[1:]
+
+    def assert_tagged(self, piece_id: str) -> None:
+        """只有一首曲目與一個版本，彼此指向對方，版本指向資料夾"""
+        detail = self.catalog.piece_detail(piece_id)
+        self.assertEqual(detail.piece.title, "春江花月夜")
+        self.assertEqual([(e.id, e.drive_folder_id) for e in detail.editions],
+                         [(detail.piece.active_edition_id, "folder-1")])
+        self.assertEqual((len(self.rows(SHEET_PIECES)), len(self.rows(SHEET_EDITIONS))), (1, 1))
+
+    def test_adds_a_piece_whose_active_edition_is_the_folder(self):
+        self.assert_tagged(self.catalog.tag_folder_as_piece("folder-1", "春江花月夜"))
+
+    def test_tagging_again_after_any_failed_request_finishes_without_duplicates(self):
+        for number in range(1, 8):
+            with self.subTest(failed_request=number):
+                self.setUp()
+                self.google.fail_at(number, CatalogErrorKind.OFFLINE, applied=True)
+                try:
+                    self.catalog.tag_folder_as_piece("folder-1", "春江花月夜")
+                except CatalogError:
+                    pass
+                self.assert_tagged(self.catalog.tag_folder_as_piece("folder-1", "春江花月夜"))
+
+
+class TestDriveWrites(CatalogTestCase):
+    """Drive 的寫入：建資料夾、搬檔、改名；失敗時丟出錯誤，不以 False 或 None 代表失敗"""
+
+    def test_creates_a_folder_in_the_parent(self):
+        parent = self.google.drive.add_folder("譜庫")
+        folder = self.catalog.create_folder("春江花月夜", parent)
+        self.assertEqual([f.id for f in self.catalog.subfolders(parent)], [folder.id])
+        self.assertEqual(self.google.drive.file(folder.id).name, "春江花月夜")
+
+    def test_moves_a_file_out_of_its_parents_into_the_folder(self):
+        old = self.google.drive.add_folder("別處")
+        new = self.google.drive.add_folder("版本")
+        self.google.drive.add_file("二胡.pdf", old)
+        file = self.catalog.folder_contents(old).pdfs[0]
+        self.catalog.move_file(file, new)
+        self.assertEqual(self.google.drive.file(file.id).parents, (new,))
+
+    def test_renames_a_file(self):
+        file_id = self.google.drive.add_file("a.pdf")
+        self.catalog.rename_file(file_id, "二胡.pdf")
+        self.assertEqual(self.google.drive.file(file_id).name, "二胡.pdf")
+
+    def test_a_failed_rename_raises_its_kind(self):
+        file_id = self.google.drive.add_file("a.pdf")
+        self.google.fail_next(CatalogErrorKind.NO_PERMISSION)
+        with self.assertRaises(CatalogError) as raised:
+            self.catalog.rename_file(file_id, "二胡.pdf")
+        self.assertEqual(raised.exception.kind, CatalogErrorKind.NO_PERMISSION)
+        self.assertEqual(self.google.drive.file(file_id).name, "a.pdf")
+
+    def test_subfolders_lists_only_folders(self):
+        parent = self.google.drive.add_folder("譜庫")
+        self.google.drive.add_folder("乙", parent)
+        self.google.drive.add_folder("甲", parent)
+        self.google.drive.add_file("說明.pdf", parent)
+        self.assertEqual([f.name for f in self.catalog.subfolders(parent)], ["乙", "甲"])
+        self.assertTrue(all(f.mime_type == DRIVE_FOLDER_MIME for f in self.catalog.subfolders(parent)))
+
+
+class TestCreateCatalog(unittest.TestCase):
+    """譜庫設定：找資料夾裡的試算表、在資料夾裡建立新的譜庫試算表"""
+
+    def setUp(self):
+        self.google = FakeGoogle()
+        self.catalog = CatalogService(self.google.sheets, self.google.drive, sleep=lambda seconds: None)
+        self.folder = self.google.drive.add_folder("譜庫")
+
+    def test_lists_spreadsheets_in_the_folder(self):
+        sheet = self.google.drive.add_file("譜庫目錄", self.folder, mime_type=DRIVE_SPREADSHEET_MIME)
+        self.google.drive.add_file("說明.pdf", self.folder)
+        self.google.drive.add_file("別的", mime_type=DRIVE_SPREADSHEET_MIME)
+        self.assertEqual([f.id for f in self.catalog.spreadsheets_in(self.folder)], [sheet])
+
+    def test_creates_a_spreadsheet_with_every_sheet_and_a_frozen_header_row_in_the_folder(self):
+        spreadsheet_id = self.catalog.create_catalog("譜庫目錄", self.folder)
+        self.assertEqual([f.id for f in self.catalog.spreadsheets_in(self.folder)], [spreadsheet_id])
+        self.assertEqual(self.google.drive.file(spreadsheet_id).parents, (self.folder,))
+        self.assertEqual(self.google.drive.file(spreadsheet_id).name, "譜庫目錄")
+        self.assertEqual(self.google.sheets.tabs(), list(SHEET_HEADERS))
+        for title, headers in SHEET_HEADERS.items():
+            self.assertEqual(self.google.sheets.rows(title), [headers])
+            self.assertEqual(self.google.sheets.frozen_rows(title), 1)
+        self.assertNotIn(ROOT, self.google.drive.file(spreadsheet_id).parents)
 
 
 class TestWithoutGoogleClient(unittest.TestCase):

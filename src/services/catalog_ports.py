@@ -14,9 +14,9 @@
     values = sheets.read_ranges([sheet_range("曲目", "A:ZZ")])[0]
     listing = drive.list_files("'root' in parents and trashed = false")
 """
-from typing import Dict, List, Protocol, Sequence, Tuple
+from typing import Dict, List, Mapping, Protocol, Sequence, Tuple
 
-from core.catalog_models import DriveListing
+from core.catalog_models import DriveFile, DriveListing
 
 # 一個範圍與要寫進去的值（由左上角往右下填）
 CellWrite = Tuple[str, List[List[str]]]
@@ -102,6 +102,20 @@ class SheetsPort(Protocol):
             CatalogError: 刪除失敗，沒有任何一列被刪掉
         """
 
+    def create_spreadsheet(self, title: str, sheets: Mapping[str, Sequence[str]]) -> str:
+        """建立一份新的試算表（spreadsheets.create，放在 Drive 的根資料夾），跟這個關口連著的那份無關
+
+        Args:
+            title: 試算表名稱
+            sheets: 工作表名稱與標題列；每張的標題列都凍結
+
+        Returns:
+            新試算表的 ID（也是它在 Drive 上的檔案 ID）
+
+        Raises:
+            CatalogError: 建立失敗
+        """
+
 
 class DrivePort(Protocol):
     """Drive 關口：一次呼叫一次請求"""
@@ -118,5 +132,26 @@ class DrivePort(Protocol):
 
         Raises:
             CatalogError: 列出失敗
+        """
+
+    def get_file(self, file_id: str) -> DriveFile:
+        """取一個檔案的中繼資料（files.get，含 parents 與 md5Checksum）
+
+        Raises:
+            CatalogError: 讀取失敗；沒有這個檔或存取被拒時為找不到
+        """
+
+    def create_folder(self, name: str, parent: str) -> DriveFile:
+        """在 parent 裡建立資料夾（files.create）
+
+        Raises:
+            CatalogError: 建立失敗
+        """
+
+    def rename_or_move(self, file_id: str, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = ()) -> None:
+        """改名與搬移（files.update，一次請求）：name 不為空時改名，add_parent 不為空時加進那個資料夾，並離開 remove_parents
+
+        Raises:
+            CatalogError: 改不了，名稱與位置都沒變
         """
 

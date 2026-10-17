@@ -26,9 +26,9 @@ from dataclasses import fields
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Type, TypeVar
 
 from core.catalog_constants import (
-    CLUB_SETTING_PUBLISHING_PLATFORM, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS,
-    SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_HEADERS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES,
-    PublishingPlatform,
+    CLUB_SETTING_PUBLISHING_PLATFORM, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME, DRIVE_SPREADSHEET_MIME,
+    PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_HEADERS, SHEET_MOVEMENTS,
+    SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.catalog_models import (
@@ -314,6 +314,28 @@ class CatalogService:
                 return PUBLISHING_PLATFORM_NAMES.get(value)
         return None
 
+    def subfolders(self, folder_id: str) -> List[DriveFile]:
+        """列出 Drive 資料夾裡的子資料夾（依名稱排序，不含垃圾桶裡的）
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        return self._list_files(
+            f"{drive_literal(folder_id)} in parents and mimeType = {drive_literal(DRIVE_FOLDER_MIME)}"
+            " and trashed = false",
+        )
+
+    def spreadsheets_in(self, folder_id: str) -> List[DriveFile]:
+        """列出 Drive 資料夾裡的 Google 試算表（依名稱排序，不含垃圾桶裡的），譜庫設定以此找譜庫試算表
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        return self._list_files(
+            f"{drive_literal(folder_id)} in parents and mimeType = {drive_literal(DRIVE_SPREADSHEET_MIME)}"
+            " and trashed = false",
+        )
+
     # --- 寫入 ---
 
     def new_rows(self, sheet: str, records: Sequence[Mapping[str, str]]) -> PendingRows:
@@ -388,6 +410,88 @@ class CatalogService:
                 for name, value in values.items()
             ])
         self._call(send)
+
+    def create_catalog(self, name: str, folder_id: str) -> str:
+        """在 Drive 資料夾裡建立新的譜庫試算表：每張工作表有標題列並凍結
+
+        Args:
+            name: 試算表名稱
+            folder_id: 譜庫資料夾的 Drive ID
+
+        Returns:
+            新試算表的 ID
+
+        Raises:
+            CatalogError: 建不起來或搬不進資料夾
+        """
+        spreadsheet_id = self._call(lambda: self._sheets.create_spreadsheet(name, SHEET_HEADERS))
+        self.move_file(self._call(lambda: self._drive.get_file(spreadsheet_id)), folder_id)
+        return spreadsheet_id
+
+    def create_folder(self, name: str, parent_id: str) -> DriveFile:
+        """在 Drive 資料夾裡建立子資料夾
+
+        Raises:
+            CatalogError: 建不起來
+        """
+        return self._call(lambda: self._drive.create_folder(name, parent_id))
+
+    def move_file(self, file: DriveFile, folder_id: str) -> None:
+        """把 Drive 上的檔案或資料夾搬進 folder_id，離開原本所在的資料夾；已經在裡面時不送請求
+
+        Args:
+            file: 列出時拿到的檔案（以它的 parents 為原本所在的資料夾）
+            folder_id: 目標資料夾的 Drive ID
+
+        Raises:
+            CatalogError: 搬不動
+        """
+        if file.parents == (folder_id,):
+            return
+        self._call(lambda: self._drive.rename_or_move(
+            file.id, add_parent=folder_id, remove_parents=[p for p in file.parents if p != folder_id],
+        ))
+
+    def rename_file(self, file_id: str, name: str) -> None:
+        """改 Drive 上檔案的名稱
+
+        Raises:
+            CatalogError: 改不了
+        """
+        self._call(lambda: self._drive.rename_or_move(file_id, name=name))
+
+    def tag_folder_as_piece(self, folder_id: str, title: str) -> str:
+        """把 Drive 資料夾標記成一首曲目：新增指向資料夾的版本，與以它為使用中版本的曲目
+
+        先讀譜庫，已經有的就沿用：上一次中途失敗時以同樣的參數再呼叫一次，只補上缺的，不產生重複列。
+
+        Args:
+            folder_id: 資料夾的 Drive ID
+            title: 曲名
+
+        Returns:
+            曲目 ID
+
+        Raises:
+            CatalogError: 寫不進去；以同樣的參數再呼叫一次即可補齊
+        """
+        piece_rows, edition_rows = self._read_sheets(SHEET_PIECES, SHEET_EDITIONS)
+        edition = next(
+            (e for e in _models(edition_rows, SHEET_EDITIONS, Edition) if e.drive_folder_id == folder_id), None,
+        )
+        if edition is None:
+            edition_id = self.add_rows(self.new_rows(SHEET_EDITIONS, [{"drive_folder_id": folder_id}]))[0]
+            edition = Edition(id=edition_id, drive_folder_id=folder_id)
+        pieces = _models(piece_rows, SHEET_PIECES, Piece)
+        piece = next((p for p in pieces if edition.piece_id and p.id == edition.piece_id), None) or next(
+            (p for p in pieces if p.active_edition_id == edition.id), None,
+        )
+        piece_id = piece.id if piece else self.add_rows(
+            self.new_rows(SHEET_PIECES, [{"title": title, "active_edition_id": edition.id}]),
+        )[0]
+        if edition.piece_id != piece_id:
+            self.update_record(SHEET_EDITIONS, edition.id, {"piece_id": piece_id})
+        return piece_id
 
     def delete_record(self, sheet: str, record_id: str) -> None:
         """刪掉一筆紀錄（同一個 ID 有幾列就刪幾列）；請求數固定
