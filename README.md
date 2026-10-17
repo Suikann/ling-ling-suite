@@ -98,9 +98,37 @@ python -m pytest tests/ -v
 build.bat
 ```
 
+### Run from source on Linux
+
+Install the packages into a `.venv` at the repo root (on Debian and Ubuntu, install `python3-venv` first):
+```bash
+git clone https://github.com/Suikann/ling-ling-suite.git
+cd ling-ling-suite
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+./run.sh
+```
+
+`run.sh` uses `.venv/bin/python` when `.venv` exists and `python3` otherwise; if packages are missing, it lists them and stops.
+
+**Run tests:**
+```bash
+.venv/bin/pip install pytest
+.venv/bin/python -m pytest tests/ -v
+```
+
+**Build the folder version:**
+```bash
+./build.sh
+```
+
+`build.sh` picks Python the same way as `run.sh`, installs PyInstaller, runs the tests, and builds `dist/LingLingSuite/`.
+
+`LingLingSuite.spec` is the only set of build options; `build.bat`, `build.sh`, and CD all run it.
+
 ## CI/CD
 
-- **CI:** Automated testing on push/PR (Python 3.12, Windows)
+- **CI:** Automated testing on push/PR (Python 3.12, Windows and Linux)
 - **CD:** Push a `v*` tag to trigger portable EXE build and GitHub Release
 
 ## License

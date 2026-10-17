@@ -97,9 +97,37 @@ python -m pytest tests/ -v
 build.bat
 ```
 
+### 在 Linux 上從原始碼執行
+
+套件裝在 repo 根目錄的 `.venv`（Debian、Ubuntu 要先裝 `python3-venv`）：
+```bash
+git clone https://github.com/Suikann/ling-ling-suite.git
+cd ling-ling-suite
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+./run.sh
+```
+
+`run.sh` 有 `.venv` 就用 `.venv/bin/python`，否則用 `python3`；缺套件時會列出缺哪些並停下。
+
+**執行測試：**
+```bash
+.venv/bin/pip install pytest
+.venv/bin/python -m pytest tests/ -v
+```
+
+**建置資料夾版：**
+```bash
+./build.sh
+```
+
+`build.sh` 選 Python 的方式與 `run.sh` 相同，會裝 PyInstaller、執行測試，再建出 `dist/LingLingSuite/`。
+
+打包參數只有 `LingLingSuite.spec` 一份，`build.bat`、`build.sh` 與 CD 都只跑它。
+
 ## CI/CD
 
-- **CI：**每次 push/PR 自動執行測試（Python 3.12，Windows）
+- **CI：**每次 push/PR 自動執行測試（Python 3.12，Windows 與 Linux）
 - **CD：**推送 `v*` 標籤自動打包可攜式 EXE 並建立 GitHub Release
 
 ## 授權
