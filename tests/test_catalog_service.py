@@ -310,10 +310,10 @@ class TestUpdateRecord(CatalogTestCase):
         self.catalog.update_record(SHEET_PIECES, "p1", {"title": "乙"})
         self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[1][11], "e1")
 
-    def test_a_record_no_longer_in_the_sheet_raises_instead_of_writing(self):
+    def test_a_record_no_longer_in_the_sheet_raises_gone_instead_of_writing(self):
         with self.assertRaises(CatalogError) as raised:
             self.catalog.update_record(SHEET_PIECES, "gone", {"title": "乙"})
-        self.assertEqual(raised.exception.kind, CatalogErrorKind.OTHER)
+        self.assertEqual(raised.exception.kind, CatalogErrorKind.GONE)
         self.assertEqual(self.google.sheets.rows(SHEET_PIECES), [SHEET_HEADERS[SHEET_PIECES]])
 
 

@@ -2,7 +2,8 @@
 """
 譜庫的錯誤類別
 
-譜庫讀寫失敗時分成六類（斷網、要重新登入 Google、沒有權限、找不到、達到用量上限、其他），
+譜庫讀寫失敗時，Google 回的失敗分成六類（斷網、要重新登入 Google、沒有權限、找不到、達到用量上限、其他），
+另有一類「已經不在譜庫」：要改的紀錄在寫入前一刻已被另一台電腦刪掉，重送不會成功，處理按鈕是重新讀取。
 每類有自己的標題、怎麼辦與處理按鈕（CATALOG_ERROR_RULES）。Google 的例外由通事（services/google_catalog.py）
 轉成 CatalogError；畫面上的提示列與紀錄檔都以 CatalogFailure 記下的同一份內容呈現（log_entry() 是紀錄檔的一筆，
 detail_text() 是它的內容）。
@@ -32,6 +33,7 @@ class CatalogErrorKind(Enum):
     NOT_FOUND = "not_found"          # 找不到：試算表或資料夾不存在，或存取被拒（Drive 回 404）
     RATE_LIMITED = "rate_limited"    # 達到用量上限（429 與用量類的 403）
     OTHER = "other"                  # 其他
+    GONE = "gone"                    # 已經不在譜庫：要改的紀錄被另一台電腦刪了
 
 
 class CatalogRemedy(Enum):
@@ -40,6 +42,7 @@ class CatalogRemedy(Enum):
     RETRY = "retry"                  # 重試
     SIGN_IN = "sign_in"              # 重新登入 Google
     OPEN_SETTINGS = "open_settings"  # 開啟譜庫設定
+    RELOAD = "reload"                # 重新讀取（不重送寫入）
 
 
 @dataclass(frozen=True)
@@ -51,7 +54,7 @@ class CatalogErrorRule:
     remedy: CatalogRemedy
 
 
-# 各類錯誤的標題、怎麼辦與處理按鈕（spec #81「錯誤呈現」）
+# 各類錯誤的標題、怎麼辦與處理按鈕（spec #81「錯誤呈現」的六類，加上已經不在譜庫）
 CATALOG_ERROR_RULES = {
     CatalogErrorKind.OFFLINE: CatalogErrorRule(
         "catalog.error.offline.title", "catalog.error.offline.advice", CatalogRemedy.RETRY),
@@ -65,6 +68,8 @@ CATALOG_ERROR_RULES = {
         "catalog.error.rate_limited.title", "catalog.error.rate_limited.advice", CatalogRemedy.RETRY),
     CatalogErrorKind.OTHER: CatalogErrorRule(
         "catalog.error.other.title", "catalog.error.other.advice", CatalogRemedy.RETRY),
+    CatalogErrorKind.GONE: CatalogErrorRule(
+        "catalog.error.gone.title", "catalog.error.gone.advice", CatalogRemedy.RELOAD),
 }
 
 # 處理按鈕的介面字串
@@ -72,6 +77,7 @@ CATALOG_REMEDY_KEYS = {
     CatalogRemedy.RETRY: "catalog.error.retry",
     CatalogRemedy.SIGN_IN: "catalog.error.sign_in",
     CatalogRemedy.OPEN_SETTINGS: "catalog.error.open_settings",
+    CatalogRemedy.RELOAD: "catalog.error.reload",
 }
 
 

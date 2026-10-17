@@ -418,7 +418,7 @@ class CatalogService:
             values: 要改的欄位與新值（欄位名稱見 SHEET_HEADERS）
 
         Raises:
-            CatalogError: 寫不進去；工作表裡已經沒有這筆紀錄時為其他
+            CatalogError: 寫不進去；工作表裡已經沒有這筆紀錄時為已經不在譜庫（重送不會成功）
         """
         headers = SHEET_HEADERS[sheet]
 
@@ -427,7 +427,7 @@ class CatalogService:
             ids = self._ids_by_row(sheet)
             row = next((i + 1 for i, line_id in enumerate(ids) if i > 0 and line_id == record_id), None)
             if row is None:
-                raise CatalogError(CatalogErrorKind.OTHER, f"{record_id} is no longer in sheet {sheet}")
+                raise CatalogError(CatalogErrorKind.GONE, f"{record_id} is no longer in sheet {sheet}")
             self._sheets.write_cells([
                 (sheet_range(sheet, f"{_column_letter(headers.index(name))}{row}"), [[str(value)]])
                 for name, value in values.items()

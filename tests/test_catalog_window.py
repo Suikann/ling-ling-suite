@@ -55,7 +55,7 @@ EXPECTED = {
     CatalogErrorKind.RATE_LIMITED: ("Google 暫時不接受請求", "重試"),
     CatalogErrorKind.OTHER: ("譜庫讀寫失敗", "重試"),
 }
-REMEDY_BUTTONS = {"重試", "重新登入 Google", "開啟譜庫設定"}
+REMEDY_BUTTONS = {"重試", "重新登入 Google", "開啟譜庫設定", "重新讀取"}
 
 
 class CatalogWindowTestCase(unittest.TestCase):
@@ -533,6 +533,27 @@ class TestWriteFailures(WritesTestCase):
         wait_until(lambda: self.bar(window).isHidden())
         self.idle()
         self.assertEqual(len(self.rows(SHEET_PERFORMANCES)), 1)
+
+    def test_saving_a_record_another_computer_deleted_offers_to_reload_instead_of_retrying(self):
+        add_row(self.google, SHEET_MOVEMENTS, id="m1", piece_id="p1", movement_number="1")
+        window = self.open_settled()
+        self.open_piece(window)
+        page = self.tab(window, 3, t("catalog.movement.delete"))
+        # 畫面顯示之後，另一台電腦刪掉了這個樂章
+        self.google.sheets.create_tab(SHEET_MOVEMENTS, self.google.sheets.rows(SHEET_MOVEMENTS)[:1])
+        page.findChild(QTableWidget).item(0, 1).setText("慢板")
+        self.button(page, t("catalog.save")).click()
+        wait_until(lambda: not self.bar(window).isHidden())
+        self.assertTrue(self.bar_text(window).startswith("寫不進譜庫｜這筆已經不在譜庫："))
+        self.assertEqual(self.remedy_buttons(window), {"重新讀取"})
+        self.button(self.bar(window), "重新讀取").click()
+
+        def movements_shown():
+            """樂章頁籤重新顯示，表格裡沒有樂章（換掉的頁籤等事件迴圈才刪掉，所以看每一組）"""
+            return any(tabs.widget(3).findChild(QTableWidget).rowCount() == 0 for tabs in window.findChildren(QTabWidget))
+        wait_until(movements_shown)
+        self.assertTrue(self.bar(window).isHidden())
+        self.assertEqual(self.rows(SHEET_MOVEMENTS), [])
 
     def test_a_failed_move_names_the_file_and_retry_moves_the_rest(self):
         first = self.google.drive.add_file("乙.pdf", self.root)

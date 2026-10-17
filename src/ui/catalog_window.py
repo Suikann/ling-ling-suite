@@ -230,6 +230,12 @@ class CatalogWindow(QMainWindow):
         self._forget_connection()
         return True
 
+    def _reload(self):
+        """提示列的「重新讀取」：重新讀取樹狀清單與正在顯示的曲目（要改的紀錄已經不在譜庫時）"""
+        self._refresh_all()
+        if self._current_detail is not None:
+            self._show_piece_detail(self._current_detail.piece.id)
+
     def _forget_connection(self):
         """登入或設定改了：下次讀寫時重新建立譜庫服務"""
         with self._catalog_lock:
@@ -257,7 +263,7 @@ class CatalogWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(4, 4, 4, 4)
         self._error_bar = CatalogErrorBar(log=self._log)
-        self._error_bar.connect_remedies(self._sign_in_again, self._open_settings)
+        self._error_bar.connect_remedies(self._sign_in_again, self._open_settings, self._reload)
         layout.addWidget(self._error_bar)
         splitter = QSplitter(Qt.Horizontal)
         self._tree = QTreeWidget()
