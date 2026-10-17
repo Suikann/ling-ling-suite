@@ -113,6 +113,31 @@ class TestWorkspaceService(unittest.TestCase):
         self.service.remove_folder(folder)
         self.assertFalse(os.path.exists(folder))
 
+    def test_purge_leaves_folders_holding_split_leftovers_untouched(self):
+        # 分割中斷留下的暫用子資料夾；.replaced 裡是使用者原本被挪開的分譜
+        for leftover in ("a1b2c3d4.splitting", "a1b2c3d4.replaced"):
+            with self.subTest(leftover=leftover):
+                folder = self._folder()
+                os.makedirs(os.path.join(folder, leftover))
+                self._create_file("高笙.pdf", os.path.join(folder, leftover))
+                removed = self.service.purge_empty_folders()
+                self.assertEqual(removed, 0)
+                self.assertTrue(os.path.isfile(os.path.join(folder, WORKSPACE_META_FILE)))
+                self.assertTrue(os.path.isfile(os.path.join(folder, leftover, "高笙.pdf")))
+                shutil.rmtree(folder)
+
+    def test_purge_leaves_folders_holding_other_files_untouched(self):
+        folder = self._folder()
+        self._create_file("筆記.txt", folder)
+        self.assertEqual(self.service.purge_empty_folders(), 0)
+        self.assertIsNotNone(self.service.read_meta(folder))
+
+    def test_purge_counts_folders_holding_only_meta_and_its_residue(self):
+        folder = self._folder()
+        self._create_file(WORKSPACE_META_FILE + ATOMIC_WRITE_TEMP_SUFFIX, folder, "{partial")
+        self.assertEqual(self.service.purge_empty_folders(), 1)
+        self.assertFalse(os.path.exists(folder))
+
     def test_purge_skips_in_use_and_non_empty(self):
         f_in_use = self._folder(self._create_file("a.pdf"))
         f_full = self._folder(self._create_file("b.pdf"))
