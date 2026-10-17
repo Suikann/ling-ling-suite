@@ -407,6 +407,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.auth.reason.not_saved": "下次啟動需要重新登入",
         "catalog.auth.reason.token_rejected": "Google 不認這個登入，請重新登入",
         "catalog.auth.reason.unreachable": "連不上 Google",
+        "login.callback.done": "登入完成，可以關閉這個分頁",
+        "login.callback.not_done": "登入沒有完成，可以關閉這個分頁",
         # 譜庫 - 設定
         "catalog.settings.title": "譜庫設定",
         "catalog.settings.step1": "步驟 1：登入 Google 帳號",
@@ -933,6 +935,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.auth.reason.not_saved": "You'll need to sign in again next time",
         "catalog.auth.reason.token_rejected": "Google no longer accepts this sign-in. Please sign in again",
         "catalog.auth.reason.unreachable": "Can't reach Google",
+        "login.callback.done": "Signed in. You can close this tab.",
+        "login.callback.not_done": "Sign-in was not completed. You can close this tab.",
         # Catalog - Settings
         "catalog.settings.title": "Catalog Settings",
         "catalog.settings.step1": "Step 1: Sign in to Google",
