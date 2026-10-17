@@ -24,16 +24,14 @@ Google 登入服務
 """
 import datetime
 import json
-import os
 import secrets
-import sys
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
 from core.catalog_constants import GOOGLE_SCOPES
-from core.constants import GOOGLE_ACCOUNT_EMAIL_KEY, GOOGLE_KEYRING_SERVICE, LEGACY_TOKEN_FILE
-from core.launch_env import bundled_client_secrets_path
+from core.constants import GOOGLE_ACCOUNT_EMAIL_KEY, GOOGLE_KEYRING_SERVICE, LEGACY_TOKEN_FILE, REPO_ROOT
+from core.launch_env import bundled_client_secrets_path, current_build
 from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.local_callback import (
@@ -47,16 +45,9 @@ if TYPE_CHECKING:
 
 # google 與 OAuth 程式庫在第一次用到 Google 時才匯入：只用分割與重新命名的人不必在啟動時等它們載入
 
-# repo 根目錄（src/ 的上層）：從原始碼執行時內附用戶端檔放在這裡
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _DEFAULT_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 # 登入帳號的 email：drive 範圍已涵蓋，不必多要 openid 或 email 範圍
 _DRIVE_ABOUT_URL = "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)"
-
-
-def _bundled_client_secrets() -> str:
-    """這次執行的內附用戶端檔位置"""
-    return bundled_client_secrets_path(getattr(sys, "frozen", False), getattr(sys, "_MEIPASS", ""), _REPO_ROOT)
 
 
 class LoginFailure(Enum):
@@ -148,7 +139,10 @@ class GoogleAuthService:
         self._request = request
         self._opener = opener or ExternalOpener()
         self._preferences = preferences
-        self._client_secrets_path = client_secrets_path or _bundled_client_secrets()
+        build = current_build()
+        self._client_secrets_path = client_secrets_path or bundled_client_secrets_path(
+            build.frozen, build.resource_dir, REPO_ROOT,
+        )
         self._legacy_token_path = legacy_token_path
         self._login_timeout = login_timeout
         self._callback: Optional[LocalCallback] = None

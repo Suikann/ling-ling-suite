@@ -23,7 +23,8 @@
 | 壓縮的批次（多選檔、整個資料夾、另存單一檔）、輸出位置規則（預設位置、一批擋下輸入的資料夾、另存單一檔只擋原檔、會被覆蓋的檔）、整批壓縮與交出 | `services/compression_output_service.py` 的 `CompressionOutputService`；單一檔是只有一份的一批。主視窗整批壓完後由 `MainWindow._deliver_compressed` 先開比較畫面，再交出留下的 |
 | 在背景執行可取消的長工作：進度與取消鈕、期間鎖住重新命名、分割、旋轉、復原、重做，關閉時詢問要不要取消 | `MainWindow._run_in_background`（各種工作的字串鍵由 `_BackgroundTexts` 傳入），背景執行緒由 `ui/background_task.py` 的 `BackgroundTask` 管：工作交回後在主執行緒刪掉；關閉時等不到它停下就 `abandon`，背景執行緒之後不再碰它 |
 | OAuth 登入時開瀏覽器、在 `127.0.0.1` 的隨機埠等回呼（Google 與 Discord 共用） | `services/local_callback.py` 的 `LocalCallback`：回傳回呼的 query 參數，逾時、取消都關掉本機伺服器；兌換權杖與檢查 `state` 由各登入服務做 |
-| 內附 Google 用戶端檔的位置 | `core/launch_env.py` 的 `bundled_client_secrets_path`：打包版讀資源目錄（`sys._MEIPASS`），從原始碼執行讀 repo 根目錄 |
+| 這次執行是否為打包版、打包版的資源目錄（`sys.frozen`、`sys._MEIPASS`） | `core/launch_env.py` 的 `current_build`，呼叫當下讀；repo 根目錄是 `core/constants.py` 的 `REPO_ROOT`。不在別處直接讀 `sys.frozen`、`sys._MEIPASS` 或以 `__file__` 推 repo 根目錄 |
+| 內附 Google 用戶端檔的位置 | `core/launch_env.py` 的 `bundled_client_secrets_path`：打包版讀資源目錄，從原始碼執行讀 repo 根目錄 |
 | 這次執行的版號（「關於」顯示） | `core/launch_env.py` 的 `app_version`：打包版讀資源目錄裡 CD 由 git tag 寫入的 `version.txt`（`VERSION_FILE`，`LingLingSuite.spec` 收進去），讀不到或從原始碼執行時是開發版 |
 | 在背景做會卡住的事時顯示可取消的等待視窗（例如等瀏覽器登入回來） | `ui/waiting_dialog.py` 的 `run_while_waiting`，背景執行緒同樣由 `BackgroundTask` 管 |
 | 分割、旋轉對話框與比較畫面共用的 UI 輔助 | `ui/widgets.py`：`ThumbnailLoader` 在背景算繪 PDF 頁面（縮圖、比較畫面的頁面），只交出最近一次載入的結果；`ensure_file_exists` 提示找不到檔案 |

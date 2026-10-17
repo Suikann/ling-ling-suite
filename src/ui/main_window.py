@@ -5,7 +5,6 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
-import sys
 from typing import Any, Callable, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
@@ -19,7 +18,7 @@ from core.constants import (
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind,
 )
-from core.launch_env import app_version
+from core.launch_env import app_version, current_build
 from core.locale import t, get_locale, is_english, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
@@ -121,9 +120,8 @@ class MainWindow(QMainWindow):
         self._compressor = compressor or CompressionService(self.file_service)
         self._compression_output = CompressionOutputService(self.file_service, self._compressor)
         # 「關於」顯示的版號：打包版讀資源目錄的版號檔，開發版為 None
-        self._version = app_version(
-            getattr(sys, "frozen", False), getattr(sys, "_MEIPASS", ""), self.file_service.read_text,
-        )
+        build = current_build()
+        self._version = app_version(build.frozen, build.resource_dir, self.file_service.read_text)
         # 背景工作（一次一件）、它的字串鍵與進行中時的狀態列文字
         self._task: Optional[BackgroundTask] = None
         self._task_texts = _COMPRESS_TEXTS

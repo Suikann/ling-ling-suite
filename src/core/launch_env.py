@@ -4,13 +4,15 @@
 
 依環境變數、平台與是否為打包版，判斷啟動時要補的環境變數、開啟外部程式時子行程的環境、
 內附 Google 用戶端檔的位置，以及版號；只做判斷，不讀寫 os.environ、不碰檔案（版號檔由呼叫端傳入的函式讀）。
+這次執行是否為打包版、打包版的資源目錄全程式只在 current_build 讀（sys.frozen、sys._MEIPASS）。
 
 使用範例：
     from core.launch_env import qt_environment_defaults
     os.environ.update(qt_environment_defaults(os.environ, sys.platform))
 """
 import os
-from typing import Callable, Dict, Mapping, Optional
+import sys
+from typing import Callable, Dict, Mapping, NamedTuple, Optional
 
 from core.catalog_constants import CLIENT_SECRETS_FILE
 from core.constants import VERSION_FILE
@@ -22,6 +24,22 @@ _LINUX_IM_MODULES = "wayland;fcitx;ibus"
 # PyInstaller 打包版在 Linux 上把 LD_LIBRARY_PATH 指向打包的函式庫，原值存在 LD_LIBRARY_PATH_ORIG（原本沒設就沒有）
 _LIBRARY_PATH_VAR = "LD_LIBRARY_PATH"
 _ORIGINAL_LIBRARY_PATH_VAR = "LD_LIBRARY_PATH_ORIG"
+
+
+class Build(NamedTuple):
+    """這次執行是怎麼跑的
+
+    Attributes:
+        frozen: 是否為 PyInstaller 打包版（sys.frozen）
+        resource_dir: 打包版的資源目錄（sys._MEIPASS）；從原始碼執行時為空字串
+    """
+    frozen: bool
+    resource_dir: str
+
+
+def current_build() -> Build:
+    """這次執行是否為打包版與打包版的資源目錄；呼叫當下讀 sys"""
+    return Build(bool(getattr(sys, "frozen", False)), getattr(sys, "_MEIPASS", ""))
 
 
 def _is_linux(platform: str) -> bool:

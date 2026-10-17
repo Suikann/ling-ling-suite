@@ -3,16 +3,19 @@
 啟動與平台設定單元測試
 
 輸入環境變數、平台與是否為打包版，驗證建立 QApplication 前要補的環境變數、外部程式子行程的環境，
-內附 Google 用戶端檔的位置，以及版號。
+內附 Google 用戶端檔的位置，以及版號；這次執行是否為打包版在呼叫當下讀 sys。
 """
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
+from core.constants import REPO_ROOT
 from core.launch_env import (
-    app_version, bundled_client_secrets_path, external_process_environment, qt_environment_defaults,
+    Build, app_version, bundled_client_secrets_path, current_build, external_process_environment,
+    qt_environment_defaults,
 )
 
 
@@ -89,6 +92,23 @@ class TestAppVersion(unittest.TestCase):
         for name, frozen, files, expected in cases:
             with self.subTest(name):
                 self.assertEqual(app_version(frozen, resource_dir, _reader(files)), expected)
+
+
+class TestCurrentBuild(unittest.TestCase):
+    """current_build：呼叫當下讀 sys.frozen 與 sys._MEIPASS；REPO_ROOT 是 src/ 的上層"""
+
+    def test_source_run_is_not_frozen(self):
+        self.assertEqual(current_build(), Build(False, ""))
+
+    def test_packaged_build_reads_resource_dir(self):
+        resource_dir = os.path.join("tmp", "_MEI12345")
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "_MEIPASS", resource_dir, create=True):
+            self.assertEqual(current_build(), Build(True, resource_dir))
+
+    def test_repo_root_is_the_folder_above_src(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        self.assertEqual(REPO_ROOT, os.path.dirname(here))
 
 
 def _reader(files):

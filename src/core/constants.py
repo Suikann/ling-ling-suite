@@ -11,6 +11,8 @@ from typing import Dict, List, Tuple
 
 APP_NAME = "LingLingSuite"
 APP_DISPLAY_NAME = "泠靈小工具"
+# repo 根目錄（src/ 的上層）：從原始碼執行時內附的 Google 用戶端檔放在這裡
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 版號檔：CD 把 git tag 寫進 repo 根目錄的這個檔（不進 git），LingLingSuite.spec 收進資源目錄的根層
 VERSION_FILE = "version.txt"
 APP_REPOSITORY_URL = "https://github.com/Suikann/ling-ling-suite"

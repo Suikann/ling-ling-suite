@@ -15,7 +15,7 @@ import subprocess
 import sys
 from typing import Callable, Dict, List, Mapping, Optional
 
-from core.launch_env import external_process_environment
+from core.launch_env import current_build, external_process_environment
 
 Spawn = Callable[[List[str], Dict[str, str]], None]
 
@@ -40,13 +40,13 @@ class ExternalOpener:
         Args:
             platform: 平台代碼；省略時為 sys.platform
             environ: 子行程環境的來源；省略時為開啟當下的 os.environ
-            frozen: 是否為打包版；省略時讀 sys.frozen
+            frozen: 是否為打包版；省略時照 core.launch_env.current_build
             spawn: 啟動外部程式（指令、環境）；省略時在新的工作階段啟動、不等它結束
             startfile: Windows 上開啟網址或路徑；省略時為 os.startfile
         """
         self._platform = platform
         self._environ = environ
-        self._frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+        self._frozen = current_build().frozen if frozen is None else frozen
         self._spawn = spawn
         self._startfile = startfile or getattr(os, "startfile", None)
 
