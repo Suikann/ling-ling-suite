@@ -109,7 +109,6 @@ class CatalogSettingsDialog(QDialog):
         self._log = log or ActivityLog()
         self._club_settings = ClubSettingsService(preferences, self._log)
         self._tasks = CatalogTasks(self)
-        self._retry: Optional[Callable[[], None]] = None
         # 找到或建好的譜庫試算表；按「儲存設定」才寫進偏好設定
         self._spreadsheet_id = self._prefs.get(CATALOG_SPREADSHEET_ID_KEY) or ""
         self.setWindowTitle(t("catalog.settings.title"))
@@ -131,7 +130,7 @@ class CatalogSettingsDialog(QDialog):
         """排出提示列、登入、選擇資料夾兩個步驟與底部按鈕，顯示目前的登入狀態"""
         layout = QVBoxLayout(self)
         self._error_bar = CatalogErrorBar(log=self._log)
-        self._error_bar.connect_remedies(self._retry_failed, self._sign_in_again, self._focus_folder)
+        self._error_bar.connect_remedies(self._sign_in_again, self._focus_folder)
         layout.addWidget(self._error_bar)
         # --- 步驟 1：登入 ---
         step1 = QGroupBox(t("catalog.settings.step1"))
@@ -229,15 +228,9 @@ class CatalogSettingsDialog(QDialog):
         def failed(error: CatalogError):
             """失敗：提示列寫出類別與怎麼辦"""
             self._folder_status.setText("")
-            self._retry = retry
-            self._error_bar.show_failure(heading, CatalogFailure.from_error(error, action))
+            self._error_bar.show_failure(heading, CatalogFailure.from_error(error, action), retry)
         self._error_bar.clear()
         self._tasks.run(work, done, failed)
-
-    def _retry_failed(self):
-        """提示列的「重試」：重做失敗的那件事"""
-        if self._retry is not None:
-            self._retry()
 
     def _sign_in_again(self) -> bool:
         """提示列的「重新登入 Google」：登入並更新登入狀態，回傳是否登入成功"""
@@ -367,10 +360,9 @@ class _DriveFolderBrowser(QDialog):
         self.selected_id = ""
         self._connect = connect
         self._tasks = CatalogTasks(self)
-        self._retry: Callable[[], None] = lambda: None
         layout = QVBoxLayout(self)
         self._error_bar = CatalogErrorBar(log=log)
-        self._error_bar.connect_remedies(lambda: self._retry(), sign_in)
+        self._error_bar.connect_remedies(sign_in)
         layout.addWidget(self._error_bar)
         self._path_label = QLabel("My Drive")
         self._path_label.setStyleSheet("font-weight: bold; padding: 4px;")
@@ -421,9 +413,9 @@ class _DriveFolderBrowser(QDialog):
             """讀不到"""
             if parent_node is not None:
                 parent_node.setData(0, Qt.UserRole + 1, False)
-            self._retry = lambda: self._load_children(parent_node, folder_id)
             self._error_bar.show_failure(
                 t("catalog.error.cannot_read"), CatalogFailure.from_error(error, t("catalog.action.read")),
+                lambda: self._load_children(parent_node, folder_id),
             )
         self._error_bar.clear()
         self._tasks.run(lambda: self._connect().subfolders(folder_id), listed, failed)

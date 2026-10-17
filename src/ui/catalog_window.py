@@ -76,7 +76,6 @@ class CatalogWindow(QMainWindow):
         self._tasks = CatalogTasks(self)
         # 讀社團設定另用一組：它不顯示載入中，也不讓其他讀取以為還有東西在跑
         self._club_tasks = CatalogTasks(self)
-        self._retry: Optional[Callable[[], None]] = None
         # 樹狀清單與詳細面板每換一次內容就加一：背景讀取交回時內容已經換掉的，就不再填回
         self._tree_version = 0
         self._detail_version = 0
@@ -129,10 +128,9 @@ class CatalogWindow(QMainWindow):
             """讀不到：內容區寫讀不到，頂端顯示提示列"""
             self._settle_loading()
             unreadable()
-            self._retry = retry
             self._error_bar.show_failure(
                 t("catalog.error.cannot_read"),
-                CatalogFailure.from_error(error, t("catalog.action.read"), piece_title=piece_title),
+                CatalogFailure.from_error(error, t("catalog.action.read"), piece_title=piece_title), retry,
             )
         self._tasks.run(lambda: read(self._connected()), finished, failed)
 
@@ -163,10 +161,10 @@ class CatalogWindow(QMainWindow):
         def failed(error: CatalogError):
             """寫不進去：頂端顯示提示列"""
             self._settle_loading()
-            self._retry = lambda: self._write(action, write, done, piece_title, file_name)
             self._error_bar.show_failure(
                 t("catalog.error.cannot_write"),
                 CatalogFailure.from_error(error, action, file_name=file_name(), piece_title=piece_title),
+                lambda: self._write(action, write, done, piece_title, file_name),
             )
         self._tasks.run(lambda: write(self._connected()), finished, failed)
 
@@ -207,11 +205,6 @@ class CatalogWindow(QMainWindow):
         if not self._tasks.busy:
             self.unsetCursor()
             self._status_bar.clearMessage()
-
-    def _retry_failed(self):
-        """提示列的「重試」：重做失敗的那次讀寫"""
-        if self._retry is not None:
-            self._retry()
 
     def _sign_in_again(self) -> bool:
         """提示列的「重新登入 Google」：登入成功就在下次讀寫時以新的憑證重新連上譜庫
@@ -264,7 +257,7 @@ class CatalogWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(4, 4, 4, 4)
         self._error_bar = CatalogErrorBar(log=self._log)
-        self._error_bar.connect_remedies(self._retry_failed, self._sign_in_again, self._open_settings)
+        self._error_bar.connect_remedies(self._sign_in_again, self._open_settings)
         layout.addWidget(self._error_bar)
         splitter = QSplitter(Qt.Horizontal)
         self._tree = QTreeWidget()
@@ -1149,10 +1142,9 @@ class _DriveFilePicker(QDialog):
         self._connect = connect
         self._root_id = root_folder_id
         self._tasks = CatalogTasks(self)
-        self._retry: Callable[[], None] = lambda: None
         layout = QVBoxLayout(self)
         self._error_bar = CatalogErrorBar(log=log)
-        self._error_bar.connect_remedies(lambda: self._retry(), sign_in, open_settings)
+        self._error_bar.connect_remedies(sign_in, open_settings)
         layout.addWidget(self._error_bar)
         hint = QLabel(t("catalog.drive.collect_hint"))
         hint.setWordWrap(True)
@@ -1202,9 +1194,9 @@ class _DriveFilePicker(QDialog):
             """讀不到"""
             if parent_node is not None:
                 parent_node.setData(0, Qt.UserRole + 1, False)
-            self._retry = lambda: self._load_children(parent_node, folder_id)
             self._error_bar.show_failure(
                 t("catalog.error.cannot_read"), CatalogFailure.from_error(error, t("catalog.action.read")),
+                lambda: self._load_children(parent_node, folder_id),
             )
         self._error_bar.clear()
         self._tasks.run(lambda: self._connect().folder_contents(folder_id), listed, failed)

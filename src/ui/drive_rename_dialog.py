@@ -72,7 +72,7 @@ class DriveRenameDialog(QDialog):
         """排出提示列、命名模板、群組與樂器表、群組資訊、預覽與按鈕"""
         layout = QVBoxLayout(self)
         self._error_bar = CatalogErrorBar(log=self._log)
-        self._error_bar.connect_remedies(self._continue_rename, self._sign_in, self._open_settings)
+        self._error_bar.connect_remedies(self._sign_in, self._open_settings)
         layout.addWidget(self._error_bar)
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel(t("catalog.rename.template_label")))
@@ -279,7 +279,7 @@ class DriveRenameDialog(QDialog):
             file_name = pending[0].original_name if pending else ""
             self._error_bar.show_failure(
                 t("catalog.error.cannot_write"),
-                CatalogFailure.from_error(error, t("catalog.rename.title"), file_name=file_name),
+                CatalogFailure.from_error(error, t("catalog.rename.title"), file_name=file_name), self._continue_rename,
             )
         self._error_bar.clear()
         self._tasks.run(lambda: execute_drive_rename(self._connect(), pending), renamed, failed)
