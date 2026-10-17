@@ -22,22 +22,10 @@ from core.locale import t
 from services.compression_service import CompressionResult, CompressionService
 from services.file_service import FileService
 from tests.synthetic_pdfs import scanned_pdf
-from tests.test_main_window import button_in, wait_until
+from tests.test_main_window import RecordingOpener, button_in, wait_until
 from ui.compression_compare import CompressionCompareDialog
 
 KB = 1000
-
-
-class RecordingOpener:
-    """外部開啟的替身：記下要開的目標，回傳 opens 指定的結果"""
-
-    def __init__(self, opens: bool = True):
-        self.opens = opens
-        self.opened: List[str] = []
-
-    def open(self, target: str) -> bool:
-        self.opened.append(target)
-        return self.opens
 
 
 class CompareTestCase(unittest.TestCase):

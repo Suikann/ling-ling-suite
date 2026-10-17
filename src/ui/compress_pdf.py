@@ -3,7 +3,7 @@
 壓縮 PDF 的使用者互動
 
 選要壓縮的 PDF（多選同一資料夾的檔、或整個資料夾）與輸出位置、確認覆蓋，
-把壓縮進度寫成狀態列文字，交出後逐份告訴使用者結果。
+把壓縮進度寫成狀態列文字，交出後逐份告訴使用者結果；交出前的逐份比較在 ui/compression_compare.py。
 單一檔另存成一批只有一份；壓縮一份在 services/compression_service.py，
 批次、輸出位置的規則與交出在 services/compression_output_service.py。
 """
@@ -218,7 +218,7 @@ def report(
     Args:
         parent: 提示框的父元件
         batch: 這一批
-        results: 各份的壓縮結果
+        results: 交出的那幾份的壓縮結果（比較畫面留下的）
         errors: 交出時複製失敗的原檔路徑對應到錯誤
         size_limit: 壓縮時的大小上限（位元組），寫進提示
     """

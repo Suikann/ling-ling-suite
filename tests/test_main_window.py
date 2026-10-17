@@ -41,6 +41,7 @@ from services.move_history import MoveHistory, RenameVerdict
 from services.preferences_service import PreferencesService
 from services.project_service import ProjectService
 from services.workspace_service import WorkspaceService
+from ui.compression_compare import CompressionCompareDialog
 from ui.main_window import MainWindow
 from ui.preview_dialog import PreviewDialog
 from tests.failing_writes import FailingWrites
@@ -169,6 +170,47 @@ def executing_preview():
         yield pressed
     if not pressed:
         raise AssertionError("預覽對話框沒有開啟，或執行鈕停用")
+
+
+def keep_every_compressed_file(dialog: QDialog) -> None:
+    """在比較畫面把每份壓縮檔都留下，再按輸出"""
+    files = dialog.findChild(QListWidget)
+    for row in range(files.count()):
+        files.setCurrentRow(row)
+        keep = button_in(dialog, QPushButton, t("compare.keep"))
+        if keep.isVisibleTo(dialog):
+            keep.click()
+    button_in(dialog, QPushButton, t("compare.output")).click()
+
+
+@contextmanager
+def comparing(operate: Callable[[QDialog], None] = keep_every_compressed_file):
+    """模擬使用者在壓縮的比較畫面操作
+
+    替換 CompressionCompareDialog.exec：對話框開啟時呼叫 operate 操作它（按留下、不要、輸出或取消），
+    operate 沒有按輸出時視同取消。operate 拋出的例外（在 Qt 事件裡會被吞掉）在離開區塊時判定失敗。
+
+    Args:
+        operate: 接收對話框、操作它的函式；省略時每份壓縮檔都留下再按輸出
+
+    Yields:
+        開啟過的比較畫面
+    """
+    opened = []
+    errors = []
+
+    def fake_exec(dialog):
+        opened.append(dialog)
+        try:
+            operate(dialog)
+        except Exception as e:
+            errors.append(e)
+        return dialog.result()
+
+    with mock.patch.object(CompressionCompareDialog, "exec", fake_exec):
+        yield opened
+    if errors:
+        raise errors[0]
 
 
 class RecordingOpener:
@@ -1249,10 +1291,16 @@ class MainWindowCompressTestCase(MainWindowTestCase):
             self.trigger_menu(t("menu.tools.compress_pdf"))
         return save
 
-    def finish(self):
-        """放行壓縮並等結果回到主視窗"""
-        self.gated.gate.set()
-        wait_until(lambda: self.compress_action().isEnabled())
+    def finish(self, operate: Callable[[QDialog], None] = keep_every_compressed_file) -> List[QDialog]:
+        """放行壓縮並等結果回到主視窗；比較畫面開啟時以 operate 操作它（預設每份都留下再輸出）
+
+        Returns:
+            開啟過的比較畫面
+        """
+        with comparing(operate) as opened:
+            self.gated.gate.set()
+            wait_until(lambda: self.compress_action().isEnabled())
+        return opened
 
     def action(self, text: str) -> QAction:
         return next(a for a in self.window.findChildren(QAction) if a.text() == text)
@@ -1453,6 +1501,73 @@ class TestMainWindowCompressBatch(MainWindowCompressBatchTestCase):
                 answering_prompts() as shown:
             self.trigger_menu(t("menu.tools.compress_folder"))
         self.assertEqual(shown, [(t("dialog.info"), t("compress.no_pdfs"))])
+
+
+class TestMainWindowCompressCompare(MainWindowCompressBatchTestCase):
+    """比較畫面：壓完先逐份確認，確認後才一次輸出；取消時什麼都不輸出"""
+
+    size_limit = 100 * 1000
+
+    def test_nothing_is_output_before_confirming_and_a_discarded_file_is_left_out(self):
+        seen_before_confirming = []
+
+        def keep_flute_discard_violin(dialog: QDialog):
+            seen_before_confirming.append(os.path.exists(self.output_dir))
+            files = dialog.findChild(QListWidget)
+            self.assertEqual(
+                [files.item(row).text().splitlines()[0] for row in range(files.count())],
+                ["Flute.pdf", os.path.join("Strings", "Violin.pdf")],
+            )
+            files.setCurrentRow(0)
+            button_in(dialog, QPushButton, t("compare.keep")).click()
+            files.setCurrentRow(1)
+            button_in(dialog, QPushButton, t("compare.drop")).click()
+            button_in(dialog, QPushButton, t("compare.output")).click()
+
+        self.start_folder(t("compress.output.start"))
+        with answering_prompts():
+            opened = self.finish(keep_flute_discard_violin)
+        self.assertEqual(len(opened), 1)
+        self.assertEqual(seen_before_confirming, [False])
+        self.assertTrue(all(r.status is CompressionStatus.COMPRESSED for r in self.gated.results))
+        self.assertEqual(self.output_files(), ["Flute.pdf"])
+        self.assertEqual(self.scratch_files(), [])
+
+    def test_cancelling_the_comparison_outputs_nothing_and_clears_the_compressed_files(self):
+        self.start_folder(t("compress.output.start"))
+        cancel = lambda dialog: button_in(dialog, QPushButton, t("compare.cancel")).click()
+        with answering_prompts() as shown:
+            self.finish(cancel)
+        self.assertEqual(shown, [])
+        self.assertFalse(os.path.exists(self.output_dir))
+        self.assertEqual(self.scratch_files(), [])
+        self.assertTrue(self.status_shows(t("compress.cancelled")))
+
+    def test_discarding_every_file_outputs_nothing_and_says_so(self):
+        def discard_all(dialog: QDialog):
+            for _ in range(2):
+                button_in(dialog, QPushButton, t("compare.drop")).click()
+            button_in(dialog, QPushButton, t("compare.output")).click()
+
+        self.start_folder(t("compress.output.start"))
+        with answering_prompts() as shown:
+            self.finish(discard_all)
+        self.assertEqual(shown, [])
+        self.assertFalse(os.path.exists(self.output_dir))
+        self.assertEqual(self.scratch_files(), [])
+        self.assertTrue(self.status_shows(t("compress.status.nothing")))
+
+    def test_compare_view_opens_compressed_files_with_the_shared_opener(self):
+        def open_first(dialog: QDialog):
+            dialog.findChild(QListWidget).setCurrentRow(0)
+            button_in(dialog, QPushButton, t("compare.open")).click()
+
+        self.start_folder(t("compress.output.start"))
+        with answering_prompts():
+            self.finish(open_first)
+        self.assertEqual(len(self.opener.opened), 1)
+        self.assertEqual(os.path.basename(self.opener.opened[0]), "Flute.pdf")
+        self.assertTrue(self.opener.opened[0].startswith(self.scratch_dir))
 
 
 class TestMainWindowCompressBatchCancel(MainWindowCompressBatchTestCase):

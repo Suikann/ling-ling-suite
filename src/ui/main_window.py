@@ -744,22 +744,34 @@ class MainWindow(QMainWindow):
         )
 
     def _deliver_compressed(self, batch: CompressionBatch, results: Sequence[CompressionResult]):
-        """把整批壓完、檢查完的結果交到輸出位置，逐份告訴使用者結果，最後丟掉暫存的壓縮檔
+        """整批壓完、檢查完後先開比較畫面逐份確認，再把留下的一次交到輸出位置，最後丟掉暫存的壓縮檔
+
+        比較畫面取消、或一份都沒留下時什麼都不交出；選「不要這份」的不交出。
 
         Args:
             batch: 這一批
             results: 各份的壓縮結果，壓縮檔還在暫存資料夾
         """
         from ui import compress_pdf
+        from ui.compression_compare import CompressionCompareDialog
         output = self._compression_output
         try:
+            entries = [(job.name, result) for job, result in zip(batch.jobs, results)]
+            dialog = CompressionCompareDialog(entries, self._opener, self)
+            if dialog.exec() != CompressionCompareDialog.Accepted:
+                self._set_status(t("compress.cancelled"))
+                return
+            kept = dialog.kept()
+            if not kept:
+                self._set_status(t("compress.status.nothing"))
+                return
             try:
-                errors = output.deliver(batch, results)
+                errors = output.deliver(batch, kept)
             except ValueError as e:
                 self._set_status(t("status.ready"))
                 QMessageBox.critical(self, t("dialog.error"), t("compress.deliver_failed", error=e))
                 return
-            compress_pdf.report(self, batch, results, errors, self._compressor.size_limit)
+            compress_pdf.report(self, batch, kept, errors, self._compressor.size_limit)
             self._set_status(t("compress.status.done", name=os.path.basename(batch.output)))
         finally:
             output.discard(results)
