@@ -162,6 +162,18 @@ def executing_preview():
         raise AssertionError("預覽對話框沒有開啟，或執行鈕停用")
 
 
+class RecordingOpener:
+    """外部開啟的替身：記下要開啟的網址或路徑，不真的啟動外部程式；opens 為 False 時像外部程式啟動不了"""
+
+    def __init__(self):
+        self.opens = True
+        self.opened: List[str] = []
+
+    def open(self, target: str) -> bool:
+        self.opened.append(target)
+        return self.opens
+
+
 def _settle():
     """處理延後刪除的元件，如同事件迴圈跑過一輪：重建分頁後被換掉的舊分頁不會再被找到"""
     QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -198,7 +210,8 @@ class MainWindowTestCase(unittest.TestCase):
             journal_path=os.path.join(self.temp_dir, "pending_move.json"),
             backup_dir=os.path.join(self.temp_dir, "backups"),
         )
-        self.window = MainWindow(self.preferences, history=self.history)
+        self.opener = RecordingOpener()
+        self.window = MainWindow(self.preferences, history=self.history, opener=self.opener)
 
     def preferences_file_service(self) -> FileService:
         """偏好設定寫入用的檔案服務；要模擬最近清單寫不進去的測試換成寫不進去的"""
@@ -284,6 +297,27 @@ class TestMainWindowRecentListUnwritable(MainWindowTestCase):
         self.assertEqual(shown, [(t("dialog.close"), t("dialog.close.message"))])
         self.assertEqual(len(ProjectService().load_project(path).groups), 1)
         self.assertTrue(self.status_shows(t("status.recent_failed")))
+
+
+class TestMainWindowOpensWorkspaceFolder(MainWindowTestCase):
+    """開啟工作區資料夾經外部開啟；資料夾還不存在或外部程式啟動不了時提示"""
+
+    def setUp(self):
+        super().setUp()
+        self.workspace_dir = self.window.workspace_service.workspace_dir
+        os.makedirs(self.workspace_dir, exist_ok=True)
+
+    def test_opens_workspace_folder_with_external_opener(self):
+        with answering_prompts() as shown:
+            self.trigger_menu(t("menu.tools.open_workspace"))
+        self.assertEqual(shown, [])
+        self.assertEqual(self.opener.opened, [self.workspace_dir])
+
+    def test_tells_user_when_folder_cannot_be_opened(self):
+        self.opener.opens = False
+        with answering_prompts() as shown:
+            self.trigger_menu(t("menu.tools.open_workspace"))
+        self.assertEqual(shown, [(t("dialog.error"), t("dialog.error.external_open_failed", target=self.workspace_dir))])
 
 
 class TestMainWindowRecentMenu(MainWindowTestCase):

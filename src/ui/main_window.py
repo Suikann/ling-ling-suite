@@ -21,6 +21,7 @@ from core.constants import (
 from core.locale import t, get_locale, is_english, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
+from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.import_service import ImportService
 from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVerdict
@@ -60,12 +61,14 @@ class MainWindow(QMainWindow):
 
     def __init__(
         self, preferences: PreferencesService, parent=None, history: Optional[MoveHistory] = None,
+        opener: Optional[ExternalOpener] = None,
     ):
         """
         Args:
             preferences: 使用者偏好
             parent: 父元件
             history: 搬移歷程；省略時以使用者資料目錄建立
+            opener: 以預設程式開啟網址或檔案；省略時依目前的平台建立
         """
         super().__init__(parent)
         self.project = self._blank_project()
@@ -77,6 +80,7 @@ class MainWindow(QMainWindow):
         self._project_access = ProjectAccess(self.file_service, preferences, self.workspace_service)
         self._history = history or MoveHistory(self.file_service, self.workspace_service)
         self._splitter = SplitService(self.file_service, self.workspace_service)
+        self._opener = opener or ExternalOpener()
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
         # 紀錄寫不進去而留下進行中紀錄的那批搬移，其路徑變動已套用到的專案（之後保留結果時不再套用一次）
@@ -617,13 +621,13 @@ class MainWindow(QMainWindow):
     # --- 工作區 ---
 
     def _open_workspace_folder(self):
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices
+        """以檔案管理員開啟工作區資料夾；資料夾還不存在或開不了時提示"""
         folder = self.workspace_service.workspace_dir
         if not self.file_service.directory_exists(folder):
             QMessageBox.information(self, t("dialog.info"), t("workspace.open_failed"))
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        if not self._opener.open(folder):
+            QMessageBox.warning(self, t("dialog.error"), t("dialog.error.external_open_failed", target=folder))
 
     def _scan_workspace(self):
         """掃描工作區（最近清單中已不存在的專案檔會被移除，選單跟著更新）"""
