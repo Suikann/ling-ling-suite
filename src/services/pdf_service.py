@@ -65,18 +65,18 @@ def render_page_thumbnails(pdf_path: str, max_width: int = 160) -> List:
         PIL Image 物件清單，每頁一張
     """
     try:
-        import fitz
+        import pymupdf
     except ImportError as err:
         raise ImportError(
             "缺少 PyMuPDF 套件。請執行 pip install PyMuPDF 安裝。",
         ) from err
     from PIL import Image
 
-    doc = fitz.open(pdf_path)
+    doc = pymupdf.open(pdf_path)
     thumbnails = []
     for page in doc:
         scale = max_width / page.rect.width
-        mat = fitz.Matrix(scale, scale)
+        mat = pymupdf.Matrix(scale, scale)
         pix = page.get_pixmap(matrix=mat, alpha=False)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         thumbnails.append(img)
@@ -96,17 +96,17 @@ def render_single_page(pdf_path: str, page_index: int, max_width: int = 600):
         PIL Image 物件
     """
     try:
-        import fitz
+        import pymupdf
     except ImportError as err:
         raise ImportError(
             "缺少 PyMuPDF 套件。請執行 pip install PyMuPDF 安裝。",
         ) from err
     from PIL import Image
 
-    doc = fitz.open(pdf_path)
+    doc = pymupdf.open(pdf_path)
     page = doc[page_index]
     scale = max_width / page.rect.width
-    mat = fitz.Matrix(scale, scale)
+    mat = pymupdf.Matrix(scale, scale)
     pix = page.get_pixmap(matrix=mat, alpha=False)
     img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
     doc.close()
