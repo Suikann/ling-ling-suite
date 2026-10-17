@@ -8,7 +8,7 @@
 批次、輸出位置的規則與交出在 services/compression_output_service.py。
 """
 import os
-from typing import Dict, Optional, Sequence
+from typing import Dict, NamedTuple, Optional, Sequence
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
@@ -39,6 +39,28 @@ _PROBLEM_KEYS = {
 }
 
 
+
+
+class _ResultKeys(NamedTuple):
+    """一種結果的字串鍵：報告裡的那一行、比較畫面清單裡的狀態；兩邊帶同一組參數（見 _result_params）"""
+    line: str
+    state: str
+
+
+# 各種壓縮結果的說明，報告與比較畫面共用；取消的結果不交給這兩處
+_RESULT_KEYS = {
+    CompressionStatus.SMALL_ENOUGH: _ResultKeys("compress.line.small_enough", "compare.state.small_enough"),
+    CompressionStatus.COMPRESSED: _ResultKeys("compress.line.compressed", "compare.state.compressed"),
+    CompressionStatus.STILL_TOO_LARGE: _ResultKeys("compress.line.still_too_large", "compare.state.still_too_large"),
+    CompressionStatus.FAILED: _ResultKeys("compress.line.failed", "compare.state.failed"),
+    CompressionStatus.UNCOMPRESSIBLE: _ResultKeys("compress.line.uncompressible", "compare.state.uncompressible"),
+}
+# 沒有輸出、要帶原因的結果
+_PROBLEM_STATUSES = (CompressionStatus.FAILED, CompressionStatus.UNCOMPRESSIBLE)
+# 有壓縮檔、要帶級數與前後大小的結果
+_COMPRESSED_STATUSES = (CompressionStatus.COMPRESSED, CompressionStatus.STILL_TOO_LARGE)
+
+
 def level_text(level: CompressionLevel) -> str:
     """級數的顯示名稱"""
     return t(_LEVEL_KEYS[level])
@@ -67,7 +89,7 @@ def ask_files(parent: QWidget, output: CompressionOutputService, file_service: F
         這一批；任一個對話框按了取消、或不同意覆蓋時為 None
     """
     sources, _ = QFileDialog.getOpenFileNames(
-        parent, t("compress.select_source"), "", f"{t('filedialog.pdf_files')} (*.pdf)",
+        parent, t("compress.select_source"), "", f"{t('filedialog.pdf_files')} (*{PDF_EXTENSION})",
     )
     if not sources:
         return None
@@ -189,21 +211,28 @@ def describe_progress(progress: BatchProgress) -> tuple:
     return text, step.page, step.page_count
 
 
+def _result_params(result: CompressionResult) -> Dict[str, str]:
+    """結果說明要帶的參數：沒有輸出的帶原因，有壓縮檔的帶級數與前後大小，原樣複製的不帶"""
+    if result.status in _PROBLEM_STATUSES:
+        return {"reason": problem_text(result)}
+    if result.status in _COMPRESSED_STATUSES:
+        return {
+            "level": level_text(result.level),
+            "before": size_text(result.original_size), "after": size_text(result.compressed_size),
+        }
+    return {}
+
+
+def result_state(result: CompressionResult) -> str:
+    """一份結果在比較畫面清單裡的狀態：級數與前後大小、原樣複製，或沒有壓縮檔的原因"""
+    return t(_RESULT_KEYS[result.status].state, **_result_params(result))
+
+
 def _result_line(name: str, result: CompressionResult, error: Optional[OSError], limit: str) -> str:
     """一份結果在報告裡的那一行"""
-    status = result.status
     if error is not None:
         return t("compress.line.deliver_failed", name=name, error=error)
-    if status is CompressionStatus.FAILED:
-        return t("compress.line.failed", name=name, reason=problem_text(result))
-    if status is CompressionStatus.UNCOMPRESSIBLE:
-        return t("compress.line.uncompressible", name=name, reason=problem_text(result))
-    if status is CompressionStatus.SMALL_ENOUGH:
-        return t("compress.line.small_enough", name=name, limit=limit)
-    before, after = size_text(result.original_size), size_text(result.compressed_size)
-    if status is CompressionStatus.STILL_TOO_LARGE:
-        return t("compress.line.still_too_large", name=name, limit=limit, before=before, after=after)
-    return t("compress.line.compressed", name=name, level=level_text(result.level), before=before, after=after)
+    return t(_RESULT_KEYS[result.status].line, name=name, limit=limit, **_result_params(result))
 
 
 def report(

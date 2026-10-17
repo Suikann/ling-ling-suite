@@ -15,6 +15,7 @@
     if dialog.exec() == QDialog.Accepted:
         deliver(dialog.kept())
 """
+from enum import Enum
 from typing import Callable, List, NamedTuple, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -29,11 +30,24 @@ from core.locale import t
 from services.compression_service import CompressionResult
 from services.external_opener import ExternalOpener
 from services.pdf_service import render_page_gray
-from ui.compress_pdf import level_text, problem_text, size_text
+from ui.compress_pdf import result_state
 from ui.widgets import ThumbnailLoader
 
-# 決定：還沒決定、留下壓縮後的、不要這份
-_PENDING, _KEEP, _DROP = None, True, False
+
+
+class _Decision(Enum):
+    """一份壓縮檔的決定"""
+    PENDING = "pending"  # 還沒決定
+    KEEP = "keep"        # 留下壓縮後的
+    DROP = "drop"        # 不要這份
+
+
+# 各決定在清單裡的字串鍵
+_DECISION_KEYS = {
+    _Decision.PENDING: "compare.state.pending",
+    _Decision.KEEP: "compare.state.kept",
+    _Decision.DROP: "compare.state.dropped",
+}
 # 原檔與壓縮檔都以這個 dpi 算繪，放大鏡才看得出 600 dpi 原檔與降解析度後的差別
 _RENDER_DPI = 600
 # 縮圖的寬度（像素）
@@ -161,7 +175,7 @@ class CompressionCompareDialog(QDialog):
         super().__init__(parent)
         self._names = [name for name, _ in entries]
         self._results = [result for _, result in entries]
-        self._decisions: List[Optional[bool]] = [_PENDING] * len(self._results)
+        self._decisions: List[_Decision] = [_Decision.PENDING] * len(self._results)
         self._opener = opener
         self._current = 0
         self._page = 0
@@ -176,7 +190,7 @@ class CompressionCompareDialog(QDialog):
         """要交出的結果：留下的壓縮檔與原樣複製的原檔，依顯示順序"""
         return [
             result for result, decision in zip(self._results, self._decisions)
-            if result.status is CompressionStatus.SMALL_ENOUGH or (_comparable(result) and decision is _KEEP)
+            if result.status is CompressionStatus.SMALL_ENOUGH or (_comparable(result) and decision is _Decision.KEEP)
         ]
 
     def done(self, code: int):
@@ -256,9 +270,9 @@ class CompressionCompareDialog(QDialog):
         self._open = QPushButton(t("compare.open"))
         self._open.clicked.connect(self._open_compressed)
         drop = QPushButton(t("compare.drop"))
-        drop.clicked.connect(lambda: self._decide(_DROP))
+        drop.clicked.connect(lambda: self._decide(_Decision.DROP))
         keep = QPushButton(t("compare.keep"))
-        keep.clicked.connect(lambda: self._decide(_KEEP))
+        keep.clicked.connect(lambda: self._decide(_Decision.KEEP))
         actions = QHBoxLayout()
         actions.addWidget(self._open)
         actions.addStretch()
@@ -280,7 +294,7 @@ class CompressionCompareDialog(QDialog):
         """還沒決定的壓縮檔"""
         return [
             i for i, result in enumerate(self._results)
-            if _comparable(result) and self._decisions[i] is _PENDING
+            if _comparable(result) and self._decisions[i] is _Decision.PENDING
         ]
 
     def _pick(self, row: int):
@@ -345,7 +359,7 @@ class CompressionCompareDialog(QDialog):
             loupe.update()
         self._overview.update()
 
-    def _decide(self, decision: bool):
+    def _decide(self, decision: _Decision):
         """記下目前這份的決定，跳到下一份還沒決定的"""
         self._decisions[self._current] = decision
         self._refresh_files()
@@ -369,18 +383,7 @@ class CompressionCompareDialog(QDialog):
     def _state_text(self, row: int) -> str:
         """一份在清單裡的狀態：級數與前後大小加上決定，或沒有壓縮檔的原因"""
         result = self._results[row]
-        status = result.status
-        if status is CompressionStatus.SMALL_ENOUGH:
-            return t("compare.state.small_enough")
-        if status is CompressionStatus.FAILED:
-            return t("compare.state.failed", reason=problem_text(result))
-        if status is CompressionStatus.UNCOMPRESSIBLE:
-            return t("compare.state.uncompressible", reason=problem_text(result))
-        sizes = t(
-            "compare.state.sizes", level=level_text(result.level),
-            before=size_text(result.original_size), after=size_text(result.compressed_size),
-        )
-        if status is CompressionStatus.STILL_TOO_LARGE:
-            sizes = t("compare.state.still_too_large", sizes=sizes)
-        decision = {_PENDING: "compare.state.pending", _KEEP: "compare.state.kept", _DROP: "compare.state.dropped"}
-        return f"{sizes}\n{t(decision[self._decisions[row]])}"
+        state = result_state(result)
+        if not _comparable(result):
+            return state
+        return f"{state}\n{t(_DECISION_KEYS[self._decisions[row]])}"
