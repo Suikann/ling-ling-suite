@@ -2,7 +2,7 @@
 """
 泠靈小工具 - 應用程式進入點
 
-啟動 PySide6 主視窗；同一時間只允許一個程式執行。
+啟動前補上輸入法環境變數、設定應用程式識別名，再啟動 PySide6 主視窗；同一時間只允許一個程式執行。
 """
 import sys
 import os
@@ -12,7 +12,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QProxyStyle, QStyleFactory
 from PySide6.QtCore import Qt, QTimer
-from core.constants import INSTANCE_LOCK_FILE, LOCALE_ZH_TW, PREFERENCES_FILE
+from PySide6.QtGui import QGuiApplication
+from core.constants import APP_ID, INSTANCE_LOCK_FILE, LOCALE_ZH_TW, PREFERENCES_FILE
+from core.launch_env import qt_environment_defaults
 from core.locale import t, set_locale
 from core.models import Project
 from services.instance_lock import InstanceLock
@@ -33,6 +35,7 @@ class _AppStyle(QProxyStyle):
 
 
 def main():
+    prepare_application()
     prefs = PreferencesService(PREFERENCES_FILE)
     prefs.load()
     language = prefs.get("language") or LOCALE_ZH_TW
@@ -49,6 +52,16 @@ def main():
     finally:
         lock.release()
     sys.exit(code)
+
+
+def prepare_application() -> None:
+    """建立 QApplication 前的設定：補上缺的 Qt 環境變數，設定應用程式名稱與 desktop file name
+
+    環境變數要在 QApplication 建立前設好，Qt 才會依它挑輸入法外掛。
+    """
+    os.environ.update(qt_environment_defaults(os.environ, sys.platform))
+    QGuiApplication.setApplicationName(APP_ID)
+    QGuiApplication.setDesktopFileName(APP_ID)
 
 
 def launch(prefs: PreferencesService, lock: InstanceLock) -> Optional[QMainWindow]:

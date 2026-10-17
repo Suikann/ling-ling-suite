@@ -19,7 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox,
@@ -30,7 +30,7 @@ from core.constants import PartsOutputMode
 from core.locale import get_locale, set_locale, t
 from core.models import FileInfo, Group, Project, RenameEntry
 from services.file_service import FileService
-from main import launch
+from main import launch, prepare_application
 from services.instance_lock import InstanceLock
 from services.move_history import MoveHistory, RenameVerdict
 from services.preferences_service import PreferencesService
@@ -1007,6 +1007,24 @@ class TestMainWindowKeepsResultAtStartup(MoveHistoryWindowTestCase):
             self.assertTrue(window.prompt_pending_recovery())
         self.assertEqual(shown[-1], (t("dialog.info"), t("dialog.pending_move.project_unsaved")))
         self.assertFalse(window.windowTitle().endswith(" *"))
+
+
+class TestPrepareApplication(unittest.TestCase):
+    """啟動前的設定：補上輸入法環境變數，設定應用程式名稱與 desktop file name"""
+
+    def test_sets_input_method_modules_and_application_identity(self):
+        with mock.patch.dict(os.environ, {"QT_IM_MODULE": "fcitx"}, clear=True), \
+                mock.patch.object(sys, "platform", "linux"):
+            prepare_application()
+            self.assertEqual(os.environ.get("QT_IM_MODULES"), "wayland;fcitx;ibus")
+        self.assertEqual(QGuiApplication.desktopFileName(), "lingling-suite")
+        self.assertEqual(QGuiApplication.applicationName(), "lingling-suite")
+
+    def test_keeps_input_method_modules_set_by_user(self):
+        with mock.patch.dict(os.environ, {"QT_IM_MODULES": "ibus"}, clear=True), \
+                mock.patch.object(sys, "platform", "linux"):
+            prepare_application()
+            self.assertEqual(os.environ.get("QT_IM_MODULES"), "ibus")
 
 
 class TestSingleInstanceLaunch(unittest.TestCase):

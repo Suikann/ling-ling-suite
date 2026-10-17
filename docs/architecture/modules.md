@@ -15,6 +15,7 @@
 | 走訪專案引用的檔案（總譜＋分譜＋未分組）；依路徑取代、移除引用 | `Project.file_refs()`、`Project.replace_paths`、`Project.remove_paths` |
 | 群組欄位的編輯規則 | `Group.update`；不屬於專案的 Drive 群組也用它 |
 | 兩階段批次搬移 | `services/move_service.py`，只有 `services/move_history.py` 使用（見 [move-history.md](move-history.md)） |
+| 以預設程式開啟網址或本機的檔案、資料夾（瀏覽器、PDF 閱讀器、檔案管理員） | `services/external_opener.py` 的 `ExternalOpener.open`；Linux 打包版替外部程式還原 `LD_LIBRARY_PATH`（`core/launch_env.py`）。不直接呼叫 `QDesktopServices.openUrl` 或 `xdg-open` |
 | 分割與旋轉對話框共用的 UI 輔助 | `ui/widgets.py`：`ThumbnailLoader` 在背景載入縮圖，只交出最近一次載入的結果；`ensure_file_exists` 提示找不到檔案 |
 
 檔名容易誤會的：`ui/merge_dialog.py` 是連結樂章（`LinkMovementsDialog` → `Project.link_movements`），與合併譜無關。

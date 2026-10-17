@@ -12,6 +12,9 @@ from typing import Dict, List, Tuple
 APP_NAME = "LingLingSuite"
 APP_DISPLAY_NAME = "泠靈小工具"
 APP_VERSION = "1.1.0-alpha"
+# 視窗管理器認得的識別名：Qt 的應用程式名稱與 desktop file name（Wayland 的 app_id、X11 的 WM_CLASS），
+# 隨 AppImage 附的 .desktop 檔名與 StartupWMClass 要與它一致
+APP_ID = "lingling-suite"
 
 
 def _get_user_data_dir() -> str:

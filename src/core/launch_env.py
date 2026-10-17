@@ -11,7 +11,7 @@
 """
 from typing import Dict, Mapping
 
-# PySide6 wheel 沒附 fcitx 輸入法外掛：環境有 QT_IM_MODULE=fcitx 時 Qt 會找不到外掛、打不出中文。
+# pip 裝的 Qt 沒附 fcitx 輸入法外掛：環境有 QT_IM_MODULE=fcitx 時 Qt 會找不到外掛、打不出中文。
 # QT_IM_MODULES（Qt 6.7 起）優先於 QT_IM_MODULE，依序試 Wayland 原生輸入、fcitx、ibus（XWayland 下接 fcitx5 的 IBus 相容介面）
 _IM_MODULES_VAR = "QT_IM_MODULES"
 _LINUX_IM_MODULES = "wayland;fcitx;ibus"
