@@ -946,7 +946,7 @@ class MainWindow(QMainWindow):
     def _open_catalog_settings(self) -> bool:
         """開啟譜庫設定，回傳是否設定完成"""
         from ui.catalog_settings_dialog import CatalogSettingsDialog
-        dialog = CatalogSettingsDialog(self._auth_service, self._preferences, self)
+        dialog = CatalogSettingsDialog(self._auth_service, self._preferences, self, log=self._log)
         return dialog.exec() == CatalogSettingsDialog.Accepted
 
     # --- 輔助 ---

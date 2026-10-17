@@ -11,6 +11,7 @@
 使用範例：
     from services.google_catalog import open_google_catalog, catalog_error_from
     catalog = open_google_catalog(auth, spreadsheet_id)   # 拿不到憑證時丟出 CatalogError（要在背景執行緒呼叫）
+    setup = open_google_drive(auth)                       # 還沒有譜庫試算表時（譜庫設定）
     error = catalog_error_from(exception)                 # CatalogError，kind 為六種類別之一
 """
 import json
@@ -58,12 +59,36 @@ def open_google_catalog(auth: GoogleAuthService, spreadsheet_id: str) -> Catalog
     """
     if not spreadsheet_id:
         raise CatalogError(CatalogErrorKind.NOT_FOUND, "catalog_spreadsheet_id is empty")
+    credentials = _credentials(auth)
+    return CatalogService(GoogleSheets(spreadsheet_id, credentials), GoogleDrive(credentials))
+
+
+def open_google_drive(auth: GoogleAuthService) -> CatalogService:
+    """還沒有譜庫試算表時，以登入服務的憑證建立接 Google 的譜庫服務（要在背景執行緒呼叫）
+
+    譜庫設定以它瀏覽 Drive 資料夾、找資料夾裡的試算表、建立新的譜庫試算表；讀寫譜庫試算表的方法都丟出找不到。
+
+    Args:
+        auth: Google 登入服務
+
+    Returns:
+        接上 Google Drive、還沒有連著譜庫試算表的譜庫服務
+
+    Raises:
+        CatalogError: 拿不到憑證時，連不上 Google 為斷網，其餘為要重新登入
+    """
+    credentials = _credentials(auth)
+    return CatalogService(GoogleSheets("", credentials), GoogleDrive(credentials))
+
+
+def _credentials(auth: GoogleAuthService) -> "Credentials":
+    """登入服務的憑證；拿不到時依原因丟出斷網或要重新登入"""
     credentials = auth.get_credentials()
     if credentials is None:
         reason = auth.status().reason
         kind = CatalogErrorKind.OFFLINE if reason is LoginReason.UNREACHABLE else CatalogErrorKind.SIGN_IN
         raise CatalogError(kind, f"no Google credentials: {reason.value if reason else 'not signed in'}")
-    return CatalogService(GoogleSheets(spreadsheet_id, credentials), GoogleDrive(credentials))
+    return credentials
 
 
 class _Gateway:

@@ -54,7 +54,9 @@ class CatalogTasks:
         task = BackgroundTask(capture, self._parent)
 
         def finished(outcome: Tuple[Any, Any]) -> None:
-            """交回了：先刪掉工作物件，再交給 done 或 failed"""
+            """交回了：先刪掉工作物件，再交給 done 或 failed；放棄前就排進事件佇列的結果不交"""
+            if task not in self._running:
+                return
             self._running.remove(task)
             task.deleteLater()
             value, error = outcome

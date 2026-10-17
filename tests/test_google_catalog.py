@@ -25,7 +25,9 @@ from core.catalog_constants import DRIVE_FOLDER_MIME
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from services.catalog_service import CatalogService
 from services.google_auth_service import GoogleAuthService
-from services.google_catalog import GoogleDrive, GoogleSheets, catalog_error_from, open_google_catalog
+from services.google_catalog import (
+    GoogleDrive, GoogleSheets, catalog_error_from, open_google_catalog, open_google_drive,
+)
 from services.secure_storage import SecureStorage
 from tests.fake_browser import CallbackBrowser
 from tests.fake_google import FakeTokenEndpoint, write_client_secrets
@@ -277,6 +279,19 @@ class TestOpenGoogleCatalog(unittest.TestCase):
     def test_no_spreadsheet_id_is_not_found(self):
         self.auth().authenticate()
         self.assertEqual(self.kind_when_opening(""), CatalogErrorKind.NOT_FOUND)
+
+    def test_without_a_catalog_yet_opening_drive_still_asks_to_sign_in(self):
+        with self.assertRaises(CatalogError) as raised:
+            open_google_drive(self.auth())
+        self.assertEqual(raised.exception.kind, CatalogErrorKind.SIGN_IN)
+
+    def test_signed_in_opens_a_catalog_service_without_a_spreadsheet(self):
+        self.auth().authenticate()
+        self.endpoint.grant("access-2")
+        catalog = open_google_drive(self.auth())
+        with self.assertRaises(CatalogError) as raised:
+            catalog.piece_detail("p1")
+        self.assertEqual(raised.exception.kind, CatalogErrorKind.NOT_FOUND)
 
     def test_signed_in_opens_a_catalog_service(self):
         self.auth().authenticate()

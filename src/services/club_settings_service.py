@@ -14,6 +14,7 @@
     club = ClubSettingsService(preferences)
     show_publish = club.remembered() is not None      # 啟動時：只看偏好設定
     platform = club.read(catalog)                     # 連上譜庫或按下發譜時；讀不到時丟出 CatalogError
+    club.forget()                                     # 譜庫設定換了譜庫試算表時
 """
 from typing import Optional
 
@@ -56,9 +57,17 @@ class ClubSettingsService:
             CatalogError: 讀不到；記住的結果不變
         """
         platform = catalog.publishing_platform()
-        self._preferences.set(CLUB_PUBLISHING_PLATFORM_KEY, platform.value if platform else "")
+        self._remember(platform.value if platform else "")
+        return platform
+
+    def forget(self) -> None:
+        """忘掉記住的結果（換了譜庫試算表時）：發譜功能隱藏，直到讀到新譜庫的社團設定"""
+        self._remember("")
+
+    def _remember(self, value: str) -> None:
+        """記在偏好設定並存檔；存不進去時這次執行期間仍記得"""
+        self._preferences.set(CLUB_PUBLISHING_PLATFORM_KEY, value)
         try:
             self._preferences.save()
         except OSError:
             pass
-        return platform

@@ -108,5 +108,16 @@ class TestUnreadable(ClubSettingsTestCase):
         self.assertIsNone(self.club.remembered())
 
 
+
+class TestForget(ClubSettingsTestCase):
+    """換了譜庫時忘掉記住的結果：重開後也是沒有，直到讀到新譜庫的社團設定"""
+
+    def test_forgotten_platform_stays_hidden_after_restart(self):
+        self.club_settings(["發譜平台", "華夏國樂社"])
+        self.club.read(self.catalog)
+        self.club.forget()
+        self.assertIsNone(self.club.remembered())
+        self.assertIsNone(self.restarted().remembered())
+
 if __name__ == '__main__':
     unittest.main()

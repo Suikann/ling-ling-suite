@@ -3,7 +3,7 @@
 譜庫的錯誤提示列
 
 譜庫讀寫失敗時放在失敗的那個視窗頂端的一條紅色提示列（原型 #65 錯誤訊息的變體 B）：
-左邊寫「讀不到譜庫｜類別：怎麼辦」，右邊是這一類的處理按鈕（重試、重新登入 Google、開啟譜庫設定）與「詳細資料」。
+左邊寫「讀不到譜庫｜類別：怎麼辦」（寫入失敗時開頭是「寫不進譜庫」），右邊是這一類的處理按鈕（重試、重新登入 Google、開啟譜庫設定）與「詳細資料」。
 按「詳細資料」在提示列下方展開唯讀的時間、動作、檔名與原始訊息，內容即 CatalogFailure.detail_text()；
 建立時給了紀錄檔的，每顯示一次失敗就把同一筆（CatalogFailure.log_entry()）寫進紀錄檔，兩邊讀起來一樣。
 各類別的標題、怎麼辦與按鈕照 core/catalog_errors.py 的 CATALOG_ERROR_RULES。
@@ -14,10 +14,11 @@
     bar.retry_requested.connect(retry)
     bar.sign_in_requested.connect(sign_in)
     bar.settings_requested.connect(open_settings)
+    bar.connect_remedies(retry, sign_in=sign_in_again, open_settings=open_settings)   # 或一次接好三顆按鈕
     bar.show_failure(t("catalog.error.cannot_read"), CatalogFailure.from_error(error, t("catalog.action.read")))
     bar.clear()
 """
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget
@@ -101,6 +102,29 @@ class CatalogErrorBar(QFrame):
         """收起提示列"""
         self._details.hide()
         self.hide()
+
+    def connect_remedies(
+        self, retry: Callable[[], None], sign_in: Optional[Callable[[], bool]] = None,
+        open_settings: Optional[Callable[[], bool]] = None,
+    ) -> None:
+        """接上處理按鈕：「重試」收起提示列後呼叫 retry；「重新登入 Google」「開啟譜庫設定」做完回傳 True 時同樣重試
+
+        Args:
+            retry: 重做失敗的那件事
+            sign_in: 重新登入，回傳是否登入成功；省略時這顆按鈕直接重試
+            open_settings: 開啟譜庫設定，回傳是否改了設定；省略時這顆按鈕直接重試
+        """
+        def then_retry(remedy: Optional[Callable[[], bool]]) -> Callable[[], None]:
+            """先做 remedy，成功（或沒有 remedy）就收起提示列並重試"""
+            def handle() -> None:
+                """按下按鈕"""
+                if remedy is None or remedy():
+                    self.clear()
+                    retry()
+            return handle
+        self.retry_requested.connect(then_retry(None))
+        self.sign_in_requested.connect(then_retry(sign_in))
+        self.settings_requested.connect(then_retry(open_settings))
 
     def _toggle_details(self) -> None:
         """展開或收起詳細資料"""

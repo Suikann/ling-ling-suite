@@ -636,6 +636,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.error.open_settings": "開啟譜庫設定",
         "catalog.error.details": "詳細資料",
         "catalog.action.read": "讀取譜庫",
+        "catalog.error.cannot_write": "寫不進譜庫",
+        "catalog.action.create_catalog": "建立譜庫目錄",
     },
     LOCALE_EN: {
         # 應用程式
@@ -1244,6 +1246,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.error.open_settings": "Open Catalog Settings",
         "catalog.error.details": "Details",
         "catalog.action.read": "Read catalog",
+        "catalog.error.cannot_write": "Can't write to the catalog",
+        "catalog.action.create_catalog": "Create catalog",
     },
 }
 
