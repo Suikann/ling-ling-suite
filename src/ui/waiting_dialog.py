@@ -21,6 +21,13 @@ class _WaitingDialog(QDialog):
     """等待視窗：一段說明與「取消」；取消時只呼叫 cancel，由背景的工作結束時關閉"""
 
     def __init__(self, parent: Optional[QWidget], title: str, message: str, cancel: Callable[[], None]):
+        """
+        Args:
+            parent: 父元件
+            title: 視窗標題
+            message: 說明
+            cancel: 按「取消」時呼叫，讓背景的工作盡快結束
+        """
         super().__init__(parent)
         self._cancel = cancel
         self.setWindowTitle(title)
@@ -61,16 +68,18 @@ def run_while_waiting(
     outcome = []
 
     def run(should_cancel, report) -> Tuple[Any, Optional[Exception]]:
-        # BackgroundTask 只交回例外的訊息，這裡連同例外本身當成結果交回，呼叫端才分得出原因
+        """在背景執行 work；BackgroundTask 只交回例外的訊息，這裡連同例外本身當成結果交回，呼叫端才分得出原因"""
         try:
             return work(), None
         except Exception as e:
             return None, e
 
     def finish(result: Tuple[Any, Optional[Exception]]) -> None:
+        """work 結束了：記下結果，關閉等待視窗"""
         outcome.append(result)
         dialog.accept()
-    task = BackgroundTask(run)
+    # 以等待視窗為父物件：工作物件由它在主執行緒刪掉，不會在背景執行緒結束時被解構
+    task = BackgroundTask(run, dialog)
     task.finished.connect(finish)
     task.start()
     # 結果經事件迴圈回到主執行緒，最早也要等這個視窗開始等待時才送到

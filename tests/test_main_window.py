@@ -41,6 +41,7 @@ from services.move_history import MoveHistory, RenameVerdict
 from services.preferences_service import PreferencesService
 from services.project_service import ProjectService
 from services.workspace_service import WorkspaceService
+from ui.background_task import BackgroundTask
 from ui.compression_compare import CompressionCompareDialog
 from ui.main_window import MainWindow
 from ui.preview_dialog import PreviewDialog
@@ -1408,6 +1409,14 @@ class TestMainWindowCompressPdf(MainWindowCompressTestCase):
         with answering_prompts():
             self.finish()
         self.assertEqual(file_digest(beside), file_digest(self.source))
+
+    def test_finished_compression_leaves_no_background_task_behind(self):
+        for _ in range(2):
+            self.start_compressing(self.target)
+            with answering_prompts():
+                self.finish()
+        _settle()
+        self.assertEqual(self.window.findChildren(BackgroundTask), [])
 
     def test_closing_while_compressing_asks_and_staying_keeps_it_running(self):
         self.start_compressing(self.target)

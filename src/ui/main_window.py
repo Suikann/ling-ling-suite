@@ -40,8 +40,20 @@ from ui.instrument_list import InstrumentListEditor
 from ui.widgets import ask_save_path
 
 
-# 關閉程式時選了取消背景工作，最多等它停下幾秒（停在頁與頁之間，通常不到一秒）；逾時就直接關閉，暫存檔留待下次啟動清掉
+# 關閉程式時選了取消背景工作，最多等它停下幾秒（停在頁與頁之間，通常不到一秒）；
+# 逾時就放棄它（之後不再送回任何結果）再關閉，暫存檔留待下次啟動清掉
 _CLOSE_WAIT_SECONDS = 10
+
+
+class _BackgroundTexts(NamedTuple):
+    """一種背景工作的字串鍵：取消鈕、取消中的狀態列、拋出例外時的錯誤訊息（以 error 帶入）、進行中關閉時的詢問"""
+    cancel: str
+    cancelling: str
+    failure: str
+    close_message: str
+
+
+_COMPRESS_TEXTS = _BackgroundTexts("compress.cancel", "compress.cancelling", "compress.error", "compress.close.message")
 
 
 class _PendingMoveTexts(NamedTuple):
@@ -112,10 +124,10 @@ class MainWindow(QMainWindow):
         self._version = app_version(
             getattr(sys, "frozen", False), getattr(sys, "_MEIPASS", ""), self.file_service.read_text,
         )
-        # 背景工作（一次一件）與它進行中時的狀態列文字、關閉時的詢問
+        # 背景工作（一次一件）、它的字串鍵與進行中時的狀態列文字
         self._task: Optional[BackgroundTask] = None
+        self._task_texts = _COMPRESS_TEXTS
         self._task_status = ""
-        self._task_close_message = ""
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
         # 紀錄寫不進去而留下進行中紀錄的那批搬移，其路徑變動已套用到的專案（之後保留結果時不再套用一次）
@@ -233,7 +245,7 @@ class MainWindow(QMainWindow):
         self._task_progress.setFixedWidth(160)
         self._task_progress.setTextVisible(False)
         action_row.addWidget(self._task_progress)
-        self._task_cancel_btn = QPushButton(t("compress.cancel"))
+        self._task_cancel_btn = QPushButton()
         self._task_cancel_btn.clicked.connect(self._cancel_background)
         action_row.addWidget(self._task_cancel_btn)
         self._rename_btn = QPushButton(t("panel.preview_rename"))
@@ -739,9 +751,7 @@ class MainWindow(QMainWindow):
                 return
             self._deliver_compressed(batch, results)
 
-        self._run_in_background(
-            work, compress_pdf.describe_progress, finished, "compress.error", "compress.close.message",
-        )
+        self._run_in_background(work, compress_pdf.describe_progress, finished, _COMPRESS_TEXTS)
 
     def _deliver_compressed(self, batch: CompressionBatch, results: Sequence[CompressionResult]):
         """整批壓完、檢查完後先開比較畫面逐份確認，再把留下的一次交到輸出位置，最後丟掉暫存的壓縮檔
@@ -782,7 +792,7 @@ class MainWindow(QMainWindow):
 
     def _run_in_background(
         self, work: Work, describe: Callable[[Any], tuple], finished: Callable[[Any, bool], None],
-        failure_key: str, close_message_key: str,
+        texts: _BackgroundTexts,
     ):
         """在背景執行一件可取消的工作；期間停用會動到檔案的操作，狀態列顯示進度與取消鈕
 
@@ -792,15 +802,15 @@ class MainWindow(QMainWindow):
             work: 在背景執行緒呼叫的工作（見 BackgroundTask）
             describe: 把工作回報的進度轉成（狀態列文字，已完成數，總數）
             finished: 工作交回結果時在主執行緒呼叫，參數為結果與使用者是否要求過取消
-            failure_key: 工作拋出例外時錯誤訊息的字串鍵（以 error 帶入）
-            close_message_key: 進行中關閉程式時詢問要不要取消的字串鍵
+            texts: 這種工作的取消鈕、取消中、錯誤訊息與關閉時詢問的字串鍵
         """
         task = BackgroundTask(work, self)
         self._task = task
+        self._task_texts = texts
         self._task_status = ""
-        self._task_close_message = t(close_message_key)
 
         def progressed(progress):
+            """把進度寫到進度條；沒要求取消時也寫到狀態列"""
             text, done, total = describe(progress)
             self._task_status = text
             self._task_progress.setRange(0, max(total, 1))
@@ -809,17 +819,21 @@ class MainWindow(QMainWindow):
                 self._set_status(text)
 
         def settle():
+            """工作交回了：恢復會動到檔案的操作，在主執行緒延後刪掉工作物件"""
             self._task = None
+            task.deleteLater()
             self._show_background_state()
 
         def on_finished(result):
+            """交回結果：交給 finished"""
             settle()
             finished(result, task.cancel_requested)
 
         def on_failed(message: str):
+            """工作拋出例外：提示錯誤"""
             settle()
             self._set_status(t("status.ready"))
-            QMessageBox.critical(self, t("dialog.error"), t(failure_key, error=message))
+            QMessageBox.critical(self, t("dialog.error"), t(texts.failure, error=message))
 
         task.progressed.connect(progressed)
         task.finished.connect(on_finished)
@@ -831,7 +845,7 @@ class MainWindow(QMainWindow):
         """要求取消進行中的背景工作；工作在下一個停頓點停下後照常交回結果"""
         if self._task is not None:
             self._task.cancel()
-            self._set_status(t("compress.cancelling"))
+            self._set_status(t(self._task_texts.cancelling))
             self._show_background_state()
 
     def _show_background_state(self):
@@ -841,13 +855,16 @@ class MainWindow(QMainWindow):
             action.setEnabled(not busy)
         self._rename_btn.setEnabled(not busy)
         self._task_progress.setVisible(busy)
+        self._task_cancel_btn.setText(t(self._task_texts.cancel))
         self._task_cancel_btn.setVisible(busy)
         self._task_cancel_btn.setEnabled(busy and not self._task.cancel_requested)
         if busy and self._task_status and not self._task.cancel_requested:
             self._set_status(self._task_status)
 
     def _confirm_cancel_background(self) -> bool:
-        """關閉程式時有背景工作就詢問要不要取消；選取消就要求取消並等它停下
+        """關閉程式時有背景工作就詢問要不要取消；選取消就要求取消、等它停下，再放棄它
+
+        等不到它停下（逾時）也照樣關閉：放棄之後背景執行緒不再送回任何結果，工作物件隨主視窗刪掉也安全。
 
         Returns:
             可以關閉時為 True（沒有背景工作，或選了取消）
@@ -855,13 +872,14 @@ class MainWindow(QMainWindow):
         task = self._task
         if task is None:
             return True
-        answer = QMessageBox.question(self, t("dialog.close"), self._task_close_message)
+        answer = QMessageBox.question(self, t("dialog.close"), t(self._task_texts.close_message))
         if answer != QMessageBox.Yes:
             return False
         task.finished.disconnect()
         task.failed.disconnect()
         task.cancel()
         task.wait(_CLOSE_WAIT_SECONDS)
+        task.abandon()
         self._task = None
         return True
 
