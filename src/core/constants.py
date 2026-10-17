@@ -62,6 +62,10 @@ HUAXIA_KEYRING_SERVICE = "LingLingSuite HuaXia"
 LEGACY_TOKEN_FILE = os.path.join(APPDATA_DIR, "google_token.json")
 # 暫存資料夾：壓縮檔先寫在這裡，檢查通過才交出去，啟動時清空上次留下的殘檔；目前給獨立壓縮用，設計成發譜（spec #82）也能沿用
 TEMP_DIR = os.path.join(APPDATA_DIR, "temp")
+# 紀錄檔：譜庫的讀寫失敗與重要動作，一天一個檔（<年-月-日>.log）；保留這麼多天，啟動時刪掉更早的
+LOG_DIR = os.path.join(APPDATA_DIR, "logs")
+LOG_FILE_EXTENSION = ".log"
+LOG_RETENTION_DAYS = 30
 
 # 介面語言代碼：繁體中文（預設）與英文
 LOCALE_ZH_TW = "zh_TW"

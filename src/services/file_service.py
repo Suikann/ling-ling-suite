@@ -132,6 +132,22 @@ class FileService:
             self._remove_quietly(temp_path)
             raise
 
+    def append_text(self, path: str, text: str) -> None:
+        """在文字檔結尾附加文字；檔案或父目錄不存在時先建立
+
+        Args:
+            path: 目標檔案路徑
+            text: 要附加的文字（UTF-8，\n 寫成這個平台的換行）
+
+        Raises:
+            OSError: 寫不進去
+        """
+        parent = os.path.dirname(path)
+        if parent:
+            self.create_directory(parent)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(text)
+
     def remove_atomic_residue(self, path: str) -> None:
         """清除原子寫入在目標旁留下的暫名（寫到一半當機的殘留）
 

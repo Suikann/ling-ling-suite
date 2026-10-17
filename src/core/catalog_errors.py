@@ -4,7 +4,8 @@
 
 譜庫讀寫失敗時分成六類（斷網、要重新登入 Google、沒有權限、找不到、達到用量上限、其他），
 每類有自己的標題、怎麼辦與處理按鈕（CATALOG_ERROR_RULES）。Google 的例外由通事（services/google_catalog.py）
-轉成 CatalogError；畫面上的提示列與紀錄檔都以 CatalogFailure 記下的同一份內容呈現。
+轉成 CatalogError；畫面上的提示列與紀錄檔都以 CatalogFailure 記下的同一份內容呈現（log_entry() 是紀錄檔的一筆，
+detail_text() 是它的內容）。
 
 使用範例：
     from core.catalog_errors import CatalogError, CatalogErrorKind, CatalogFailure, CATALOG_ERROR_RULES
@@ -12,10 +13,14 @@
     failure = CatalogFailure.from_error(error, action=t("catalog.action.read"))
     rule = CATALOG_ERROR_RULES[failure.kind]
     details = failure.detail_text()
+    activity_log.record(failure.log_entry())
 """
 import datetime
 from dataclasses import dataclass, field
 from enum import Enum
+
+from core.locale import t
+from core.log_entry import LogEntry
 
 
 class CatalogErrorKind(Enum):
@@ -98,24 +103,34 @@ class CatalogFailure:
     action: str
     file_name: str = ""
     time: datetime.datetime = field(default_factory=_now)
+    piece_title: str = ""
+    path: str = ""
 
     @classmethod
-    def from_error(cls, error: CatalogError, action: str, file_name: str = "") -> "CatalogFailure":
+    def from_error(
+        cls, error: CatalogError, action: str, file_name: str = "", piece_title: str = "", path: str = "",
+    ) -> "CatalogFailure":
         """以譜庫錯誤建立失敗紀錄，時間為現在
 
         Args:
             error: 譜庫錯誤
             action: 失敗的動作（介面上的名稱，例如「讀取譜庫」）
             file_name: 正在處理的檔名，沒有時為空字串
+            piece_title: 正在處理的曲名，沒有時為空字串
+            path: 正在處理的本機路徑，沒有時為空字串
 
         Returns:
             失敗紀錄
         """
-        return cls(error.kind, error.message, action, file_name)
+        return cls(error.kind, error.message, action, file_name, piece_title=piece_title, path=path)
+
+    def log_entry(self) -> LogEntry:
+        """紀錄檔的那一筆：錯誤類別寫這一類的標題"""
+        return LogEntry(
+            self.action, piece_title=self.piece_title, file_name=self.file_name, path=self.path,
+            category=t(CATALOG_ERROR_RULES[self.kind].title_key), message=self.message, time=self.time,
+        )
 
     def detail_text(self) -> str:
-        """「詳細資料」的內容：第一行是時間、動作與檔名（全形空白分隔），第二行起是原始訊息"""
-        heading = "　".join(
-            part for part in (self.time.strftime("%Y-%m-%d %H:%M:%S"), self.action, self.file_name) if part
-        )
-        return f"{heading}\n{self.message}"
+        """「詳細資料」的內容，與紀錄檔那一筆相同（格式見 LogEntry.text）"""
+        return self.log_entry().text()
