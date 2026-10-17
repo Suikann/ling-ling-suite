@@ -16,6 +16,7 @@
     catalog = CatalogService(sheets, drive)          # 兩個關口；真的 Google 見 services/google_catalog.py
     overview = catalog.overview(root_folder_id)      # 曲目、作曲家、根資料夾內容
     detail = catalog.piece_detail(piece_id)
+    platform = catalog.publishing_platform()         # 社團設定啟用的發譜平台，沒有時為 None
     rows = catalog.new_rows(SHEET_PIECES, [{"title": "春江花月夜"}])
     ids = catalog.add_rows(rows)                     # 失敗時以同一個 rows 重送，不會重複新增
 """
@@ -25,8 +26,9 @@ from dataclasses import fields
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Type, TypeVar
 
 from core.catalog_constants import (
-    DRIVE_FOLDER_MIME, DRIVE_PDF_MIME, SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_HEADERS, SHEET_MOVEMENTS, SHEET_PARTS,
-    SHEET_PERFORMANCES, SHEET_PIECES,
+    CLUB_SETTING_PUBLISHING_PLATFORM, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS,
+    SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_HEADERS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES,
+    PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.catalog_models import (
@@ -271,6 +273,27 @@ class CatalogService:
         return self._list_files(
             f"{drive_literal(folder_id)} in parents and name = {drive_literal(name)} and trashed = false",
         )
+
+    def publishing_platform(self) -> Optional[PublishingPlatform]:
+        """讀社團設定裡啟用的發譜平台
+
+        先列出工作表名稱確認有社團設定（讀不存在的工作表會讓請求失敗），有才讀它，最多兩次請求。
+        只決定發譜功能顯示與否，不是權限。
+
+        Returns:
+            「發譜平台」一列寫的平台；沒有這張工作表、沒有這一列或寫的是不認得的平台時為 None
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        if SHEET_CLUB_SETTINGS not in self._call(self._sheets.sheet_titles):
+            return None
+        rows = self._call(lambda: self._sheets.read_ranges([sheet_range(SHEET_CLUB_SETTINGS, "A:B")]))[0]
+        for row in rows:
+            if row and row[0].strip() == CLUB_SETTING_PUBLISHING_PLATFORM:
+                value = row[1].strip() if len(row) > 1 else ""
+                return PUBLISHING_PLATFORM_NAMES.get(value)
+        return None
 
     # --- 寫入 ---
 

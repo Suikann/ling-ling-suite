@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.catalog_constants import (
     SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_HEADERS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES,
+    PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from fake_google_catalog import FakeGoogle
@@ -251,6 +252,43 @@ class TestWriteCells(CatalogTestCase):
         self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[1][2], "=新曲名")
         self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[1][6], "絲竹")
         self.assertEqual(self.google.requests, 2)
+
+
+class TestPublishingPlatform(CatalogTestCase):
+    """社團設定的「發譜平台」：讀到「華夏國樂社」為 HuaXia；沒有這一列或沒有這張工作表為沒有"""
+
+    def club_settings(self, *rows):
+        """社團設定工作表寫成標題列加 rows"""
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], *rows])
+
+    def test_huaxia_when_the_row_says_huaxia(self):
+        self.club_settings(["發譜平台", "華夏國樂社"])
+        self.assertIs(self.catalog.publishing_platform(), PublishingPlatform.HUAXIA)
+
+    def test_surrounding_spaces_are_ignored(self):
+        self.club_settings(["其他", "x"], [" 發譜平台 ", " 華夏國樂社 "])
+        self.assertIs(self.catalog.publishing_platform(), PublishingPlatform.HUAXIA)
+
+    def test_none_without_the_row(self):
+        self.club_settings(["其他", "華夏國樂社"])
+        self.assertIsNone(self.catalog.publishing_platform())
+
+    def test_none_for_a_platform_it_does_not_know(self):
+        self.club_settings(["發譜平台", "別的平台"])
+        self.assertIsNone(self.catalog.publishing_platform())
+
+    def test_none_without_the_sheet(self):
+        google = FakeGoogle()
+        google.sheets.create_tab("曲目", [SHEET_HEADERS[SHEET_PIECES]])
+        catalog = CatalogService(google.sheets, google.drive, sleep=self.waits.append)
+        self.assertIsNone(catalog.publishing_platform())
+
+    def test_unreadable_raises_with_the_kind(self):
+        self.club_settings(["發譜平台", "華夏國樂社"])
+        self.google.fail_at(2, CatalogErrorKind.OFFLINE)
+        with self.assertRaises(CatalogError) as raised:
+            self.catalog.publishing_platform()
+        self.assertEqual(raised.exception.kind, CatalogErrorKind.OFFLINE)
 
 
 class TestWithoutGoogleClient(unittest.TestCase):

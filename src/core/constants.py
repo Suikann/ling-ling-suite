@@ -71,8 +71,10 @@ LOCALE_EN = "en"
 PREFERENCES_FILE = os.path.join(APPDATA_DIR, "preferences.json")
 RECENT_PROJECTS_KEY = "recent_projects"
 MAX_RECENT_PROJECTS = 8
-# 上次登入的 Google 帳號 email：社團設定顯示它，下次登入帶 login_hint；不是祕密，不放安全儲存
+# 上次登入的 Google 帳號 email：譜庫設定顯示它，下次登入帶 login_hint；不是祕密，不放安全儲存
 GOOGLE_ACCOUNT_EMAIL_KEY = "google_account_email"
+# 上次讀到的社團設定裡啟用的發譜平台（PublishingPlatform 的值）；空字串為沒有或從沒讀到過，發譜功能隱藏
+CLUB_PUBLISHING_PLATFORM_KEY = "club_publishing_platform"
 DEFAULT_PREFERENCES = {
     "language": LOCALE_ZH_TW,
     "appearance_mode": "Dark",
@@ -80,6 +82,7 @@ DEFAULT_PREFERENCES = {
     "catalog_spreadsheet_id": "",
     "catalog_root_folder_id": "",
     GOOGLE_ACCOUNT_EMAIL_KEY: "",
+    CLUB_PUBLISHING_PLATFORM_KEY: "",
 }
 
 # 檔名不得含有的字元（Windows 最嚴），一律換成底線；Windows 保留名（CON、NUL 等）與尾端點空白不處理，這類名字不應出現

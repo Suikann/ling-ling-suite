@@ -5,6 +5,8 @@
 以 Drive 資料夾內容為主體，使用者可為資料夾加上元資料（曲目資訊、演出紀錄等）。
 讀取（曲目清單、作曲家、版本、資料夾與版本資料夾的檔）都經譜庫服務（services/catalog_service.py）在背景執行；
 讀不到時頂端顯示錯誤提示列（ui/catalog_error_bar.py），內容區寫「讀不到」，不顯示成空清單。
+讀到總覽（連上譜庫）後另在背景讀社團設定，把啟用的發譜平台記在偏好設定（services/club_settings_service.py）；
+這一項讀不到時沿用記住的結果，不顯示提示列。
 """
 import threading
 from dataclasses import replace
@@ -26,6 +28,7 @@ from core.catalog_models import (
     Composer, DriveFile, EditionFiles, Piece, Edition, Movement, Part, Performance, PieceDetail,
 )
 from services.catalog_service import CatalogService
+from services.club_settings_service import ClubSettingsService
 from services.sheets_service import SheetsService
 from services.drive_service import DriveService
 from services.google_auth_service import GoogleAuthService
@@ -57,7 +60,7 @@ class CatalogWindow(QMainWindow):
         """
         Args:
             auth_service: Google 登入服務
-            preferences: 偏好設定（譜庫試算表 ID、根資料夾 ID）
+            preferences: 偏好設定（譜庫試算表 ID、根資料夾 ID；連上譜庫時記下社團設定的發譜平台）
             parent: 父元件
             catalog_factory: 在背景執行緒建立譜庫服務的函式，拿不到時丟出 CatalogError；
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
@@ -67,6 +70,7 @@ class CatalogWindow(QMainWindow):
         self._prefs = preferences
         self._catalog_factory = catalog_factory or self._open_google_catalog
         self._catalog: Optional[CatalogService] = None
+        self._club_settings = ClubSettingsService(preferences)
         self._catalog_lock = threading.Lock()
         self._sheets: Optional[SheetsService] = None
         self._drive: Optional[DriveService] = None
@@ -75,6 +79,8 @@ class CatalogWindow(QMainWindow):
         self._current_detail: Optional[PieceDetail] = None
         self._composers: List[Composer] = []
         self._tasks = CatalogTasks(self)
+        # 讀社團設定另用一組：它不顯示載入中，也不讓其他讀取以為還有東西在跑
+        self._club_tasks = CatalogTasks(self)
         self._retry: Optional[Callable[[], None]] = None
         # 樹狀清單與詳細面板每換一次內容就加一：背景讀取交回時內容已經換掉的，就不再填回
         self._tree_version = 0
@@ -87,6 +93,7 @@ class CatalogWindow(QMainWindow):
     def closeEvent(self, event):
         """關閉視窗：放棄還在跑的背景讀取，之後它們不再碰這個視窗"""
         self._tasks.abandon_all()
+        self._club_tasks.abandon_all()
         super().closeEvent(event)
 
     # --- 經譜庫服務的背景讀取 ---
@@ -256,6 +263,7 @@ class CatalogWindow(QMainWindow):
                   composers=len(self._composers),
                   pieces=len(self._pieces)),
             )
+            self._remember_club_settings()
 
         def unreadable():
             """讀不到：樹狀清單換成「讀不到」"""
@@ -263,6 +271,14 @@ class CatalogWindow(QMainWindow):
             self._tree_pane.setCurrentIndex(1)
 
         self._read(lambda catalog: catalog.overview(root_id), on_done, unreadable, self._refresh_all)
+
+    def _remember_club_settings(self):
+        """連上譜庫後在背景讀社團設定並記住；讀不到時沿用記住的結果，不另外顯示提示列（按下發譜時才說明原因）"""
+        if self._club_tasks.busy:
+            return
+        self._club_tasks.run(
+            lambda: self._club_settings.read(self._connected()), lambda platform: None, lambda error: None,
+        )
 
     # --- Drive 樹狀結構 ---
 

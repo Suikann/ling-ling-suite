@@ -45,6 +45,8 @@ SHEET_EDITIONS = "版本"
 SHEET_MOVEMENTS = "樂章"
 SHEET_PARTS = "分譜"
 SHEET_PERFORMANCES = "演出紀錄"
+# 社團設定：「鍵、值」兩欄，由譜務在試算表上手動填寫
+SHEET_CLUB_SETTINGS = "社團設定"
 
 SHEET_HEADERS = {
     SHEET_COMPOSERS: [
@@ -73,6 +75,19 @@ SHEET_HEADERS = {
         "venue", "conductor", "ensemble", "status",
         "program_order", "notes",
     ],
+    SHEET_CLUB_SETTINGS: ["鍵", "值"],
+}
+
+
+class PublishingPlatform(str, Enum):
+    """社團用的發譜平台；值是記在偏好設定裡的寫法"""
+    HUAXIA = "huaxia"
+
+
+# 社團設定裡記發譜平台的鍵，以及值的寫法對應的平台（其他寫法都當成沒有）
+CLUB_SETTING_PUBLISHING_PLATFORM = "發譜平台"
+PUBLISHING_PLATFORM_NAMES = {
+    "華夏國樂社": PublishingPlatform.HUAXIA,
 }
 
 # Drive 的資料夾與 PDF 的 mimeType

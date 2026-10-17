@@ -9,6 +9,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -17,11 +18,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTableWidget, QTabWidget, QTextEdit, QTreeWidget
 
-from core.catalog_constants import SHEET_EDITIONS, SHEET_PIECES
+from core.catalog_constants import SHEET_EDITIONS, SHEET_PIECES, PublishingPlatform
 from core.catalog_errors import CatalogErrorKind
+from core.constants import CLUB_PUBLISHING_PLATFORM_KEY
 from core.locale import t
 from fake_google_catalog import FakeGoogle
 from services.catalog_service import CatalogService
+from services.club_settings_service import ClubSettingsService
 from services.google_auth_service import GoogleAuthService
 from services.preferences_service import PreferencesService
 from services.secure_storage import SecureStorage
@@ -193,6 +196,47 @@ class TestErrorBar(CatalogWindowTestCase):
         self.assertTrue(self.bar_text(window).startswith("讀不到譜庫｜連不上網路："))
         self.assertTrue(self.shows_unreadable(window))
         self.assertIsNone(window.findChild(QTabWidget))
+
+
+class TestRemembersClubSettings(CatalogWindowTestCase):
+    """連上譜庫時讀社團設定，把啟用的發譜平台記在偏好設定；讀不到時沿用記住的，不另外顯示提示列"""
+
+    def remembered(self):
+        """偏好設定裡記住的發譜平台"""
+        return ClubSettingsService(self.preferences).remembered()
+
+    def test_opening_the_window_remembers_the_publishing_platform(self):
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        self.open_window()
+        wait_until(lambda: self.remembered() is PublishingPlatform.HUAXIA)
+        reloaded = PreferencesService(self.preferences.path)
+        reloaded.load()
+        self.assertIs(ClubSettingsService(reloaded).remembered(), PublishingPlatform.HUAXIA)
+
+    def test_a_removed_row_is_remembered_as_none(self):
+        self.preferences.set(CLUB_PUBLISHING_PLATFORM_KEY, PublishingPlatform.HUAXIA.value)
+        self.open_window()
+        wait_until(lambda: self.remembered() is None)
+
+    def test_unreadable_club_settings_keep_the_remembered_result_without_a_bar(self):
+        self.preferences.set(CLUB_PUBLISHING_PLATFORM_KEY, PublishingPlatform.HUAXIA.value)
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"]])
+        self.google.fail_at(3, CatalogErrorKind.OFFLINE)
+        window = self.open_window()
+        wait_until(lambda: self.google.requests >= 3)
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline:
+            QApplication.processEvents()
+        self.assertEqual(self.google.requests, 3)
+        self.assertTrue(self.bar(window).isHidden())
+        self.assertIs(self.remembered(), PublishingPlatform.HUAXIA)
+
+    def test_nothing_is_read_when_the_catalog_is_unreadable(self):
+        self.preferences.set(CLUB_PUBLISHING_PLATFORM_KEY, PublishingPlatform.HUAXIA.value)
+        self.google.fail_at(1, CatalogErrorKind.OFFLINE)
+        self.open_window()
+        self.assertEqual(self.google.requests, 1)
+        self.assertIs(self.remembered(), PublishingPlatform.HUAXIA)
 
 
 if __name__ == '__main__':

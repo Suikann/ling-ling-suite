@@ -16,6 +16,7 @@
 | 群組欄位的編輯規則 | `Group.update`；不屬於專案的 Drive 群組也用它 |
 | 讀寫譜庫（Google 試算表與 Drive） | `services/catalog_service.py` 的 `CatalogService`：UI 與其他服務只呼叫它，失敗時丟出帶錯誤類別的 `CatalogError`（`core/catalog_errors.py`），不以空值或空清單代表失敗。它對下只經過試算表與 Drive 兩個關口（`services/catalog_ports.py` 的 `SheetsPort`、`DrivePort`，一次呼叫一次請求）；接 Google 的通事是 `services/google_catalog.py`，全程式只有它匯入 `googleapiclient`、把 Google 的例外轉成錯誤類別。寫入的共用規則（值以 RAW 寫入、Drive 名稱搜尋的跳脫、429 退避重試、ID 撞號重抽、新增列重送不重複）都在服務與通事裡。舊的 `SheetsService`、`DriveService` 還做著譜庫視窗的寫入與 Drive 重新命名，改走譜庫服務後刪除 |
 | 譜庫讀寫失敗的呈現：失敗的那個視窗頂端的提示列（類別、怎麼辦、處理按鈕、可展開的詳細資料） | `ui/catalog_error_bar.py` 的 `CatalogErrorBar`；各類別的標題、怎麼辦與按鈕照 `core/catalog_errors.py` 的 `CATALOG_ERROR_RULES`，詳細資料是 `CatalogFailure.detail_text()`，紀錄檔記同一份。在背景呼叫譜庫服務經 `ui/catalog_tasks.py` 的 `CatalogTasks`：失敗時交回 `CatalogError` 本身（`BackgroundTask` 只交回訊息），呼叫端才分得出類別 |
+| 社團設定的發譜平台（發譜功能顯示與否） | `services/club_settings_service.py` 的 `ClubSettingsService`：`read` 經 `CatalogService.publishing_platform` 讀譜庫的社團設定工作表並記在偏好設定，讀不到時丟出 `CatalogError`、記住的不變；`remembered` 只看偏好設定，啟動時用它決定顯示與否 |
 | 讀寫系統的安全儲存（keyring） | `services/secure_storage.py` 的 `SecureStorage`；backend 依平台明確指定，不用 keyring 的自動選擇 |
 | 兩階段批次搬移 | `services/move_service.py`，只有 `services/move_history.py` 使用（見 [move-history.md](move-history.md)） |
 | 以預設程式開啟網址或本機的檔案、資料夾（瀏覽器、PDF 閱讀器、檔案管理員） | `services/external_opener.py` 的 `ExternalOpener.open`；Linux 打包版替外部程式還原 `LD_LIBRARY_PATH`（`core/launch_env.py`）。不直接呼叫 `QDesktopServices.openUrl` 或 `xdg-open` |
