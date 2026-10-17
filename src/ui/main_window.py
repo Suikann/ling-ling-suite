@@ -144,7 +144,7 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(4)
         splitter = QSplitter(Qt.Horizontal)
         main_layout.addWidget(splitter, stretch=1)
-        self._instrument_editor = InstrumentListEditor(project=self.project)
+        self._instrument_editor = InstrumentListEditor(project=self.project, file_service=self.file_service)
         self._instrument_editor.setFixedWidth(260)
         self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
         splitter.addWidget(self._instrument_editor)

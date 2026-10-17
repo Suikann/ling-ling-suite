@@ -13,12 +13,13 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidgetItem,
     QLineEdit, QPushButton, QComboBox, QLabel, QMessageBox,
     QAbstractItemView, QMenu, QDialog, QTableWidget,
-    QTableWidgetItem, QSpinBox, QHeaderView, QFileDialog,
+    QTableWidgetItem, QSpinBox, QHeaderView,
 )
-from ui.widgets import DragListWidget
+from services.file_service import FileService
+from ui.widgets import DragListWidget, ask_save_path
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
-from core.constants import DEFAULT_HEADCOUNT, INSTRUMENT_PRESETS, SECTION_NAMES_EN
+from core.constants import DEFAULT_HEADCOUNT, INSTRUMENT_PRESETS, SECTION_NAMES_EN, TEXT_EXTENSION
 from core.locale import is_english, localized, t
 from core.naming import section_for
 
@@ -31,9 +32,18 @@ class InstrumentListEditor(QWidget):
 
     instruments_changed = Signal(list)
 
-    def __init__(self, project: Optional["Project"] = None, parent=None):
+    def __init__(
+        self, project: Optional["Project"] = None, parent=None, file_service: Optional[FileService] = None,
+    ):
+        """
+        Args:
+            project: 目前的專案（編制的建議人數與聲部組）
+            parent: 父元件
+            file_service: 檔案服務（寫出匯出的編制表）；None 時自建
+        """
         super().__init__(parent)
         self._project = project
+        self._file_service = file_service or FileService()
         self._group = None
         self._editing = False
         self._build_ui()
@@ -236,13 +246,13 @@ class InstrumentListEditor(QWidget):
             )
 
     def _export_instruments(self):
-        """匯出編制表為文字檔"""
+        """匯出編制表為文字檔；以 \n 分行，寫檔時換成這個平台的換行"""
         instruments = self.get_instruments()
         if not instruments:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, t("filedialog.export_instruments"), "",
-            f"{t('filedialog.text_files')} (*.txt)",
+        path = ask_save_path(
+            self, t("filedialog.export_instruments"), "", t("filedialog.text_files"), TEXT_EXTENSION,
+            self._file_service,
         )
         if not path:
             return
@@ -272,8 +282,11 @@ class InstrumentListEditor(QWidget):
             lines.append("")
         lines.append("=" * 40)
         lines.append(f"{total_parts} parts / {total_people} people")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\r\n".join(lines))
+        try:
+            self._file_service.write_text_atomic(path, "\n".join(lines))
+        except OSError as e:
+            QMessageBox.critical(self, t("dialog.error"), str(e))
+            return
         QMessageBox.information(
             self, t("dialog.info"),
             t("instrument.export_done", path=path),

@@ -71,6 +71,8 @@ DEFAULT_PREFERENCES = {
 # 檔名不得含有的字元（Windows 最嚴），一律換成底線；Windows 保留名（CON、NUL 等）與尾端點空白不處理，這類名字不應出現
 FILENAME_ILLEGAL_CHARS = '<>:"/\\|?*'
 PDF_EXTENSION = ".pdf"
+# 匯出編制表的文字檔副檔名
+TEXT_EXTENSION = ".txt"
 # 不能當資料夾名稱的名字：指向目前或上一層目錄，命名結果是這些時拒絕，檔案才不會落到輸出位置外
 RELATIVE_DIR_NAMES = (".", "..")
 # 分割輸出：區段名清理後為空時的檔名

@@ -646,6 +646,21 @@ class TestMainWindowInstrumentListFollowsGroup(MainWindowTestCase):
         self.assertFalse(self._instrument_entry().isEnabled())
         self.assertEqual(self._shown_instruments(), [])
 
+    def test_exported_list_gets_the_extension_and_platform_newlines(self):
+        """匯出編制表：沒打副檔名就補上 .txt，每行以這個平台的換行結尾、不會多出空行"""
+        self.click_button(t("group.add"))
+        for name in ("Flute", "Oboe"):
+            QTest.keyClicks(self._instrument_entry(), name)
+            QTest.keyClick(self._instrument_entry(), Qt.Key_Return)
+        typed = os.path.join(self.temp_dir, "ensemble")
+        with answering_prompts(), saving_as(typed):
+            self.click_button(t("instrument.export"))
+        with open(typed + ".txt", "rb") as f:
+            lines = f.read().decode("utf-8").split(os.linesep)
+        self.assertEqual([line for line in lines if "\r" in line or "\n" in line], [])
+        self.assertIn("  Flute                          x 1", lines)
+        self.assertEqual(lines[-1], "2 parts / 2 people")
+
     def test_instruments_entered_after_adding_a_group_are_saved(self):
         self.click_button(t("group.add"))
         QTest.keyClicks(self._instrument_entry(), "Flute")

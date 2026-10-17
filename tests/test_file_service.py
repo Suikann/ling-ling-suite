@@ -36,6 +36,14 @@ class TestFileServiceAtomicWrite(unittest.TestCase):
             self.assertEqual(json.load(f), {"曲名": "貝五", "n": [1, 2]})
         self.assertEqual(self._leftovers(), [])
 
+    def test_text_lines_end_with_the_platform_newline(self):
+        """以 \\n 分行的文字寫成這個平台的換行：Windows 是 \\r\\n，Linux 是 \\n"""
+        path = os.path.join(self.temp_dir, "list.txt")
+        self.file_service.write_text_atomic(path, "長笛\nOboe")
+        with open(path, "rb") as f:
+            expected = {"nt": b"\r\n", "posix": b"\n"}[os.name]
+            self.assertEqual(f.read(), "長笛".encode("utf-8") + expected + b"Oboe")
+
     def test_creates_missing_parent_directory(self):
         path = os.path.join(self.temp_dir, "undo", "undo_x.json")
         self.file_service.write_json_atomic(path, {"ok": True})
