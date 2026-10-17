@@ -33,7 +33,7 @@
 
 ## 測試
 
-- 一律以 pytest 執行：`tests/conftest.py` 在任何測試模組匯入前把使用者資料目錄（`APPDATA_DIR`）導到臨時目錄，只有 pytest 會載入它（直接執行測試檔時不會，測試可能寫進真實的使用者資料目錄）
+- 一律以 pytest 執行：`tests/conftest.py` 在任何測試模組匯入前把使用者資料目錄（`APPDATA_DIR`）導到臨時目錄，只有 pytest 會載入它（直接執行測試檔時不會，測試可能寫進真實的使用者資料目錄）。它也關掉自動垃圾回收，改在每個測試收尾後於主執行緒回收：測試留下的 Qt 物件不會在背景執行緒（例如壓縮）被解構而 segfault（`tests/test_garbage_collection.py` 釘住）
 - UI 接線測試在匯入 PySide6 之前設定 `os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")`，只測與服務層的接線、不測畫面，不需要顯示器
 - 共用 fixture：
   - `tests/path_spellings.py`：同一路徑的不同寫法（大小寫、相對路徑、多餘分隔符），測路徑比對
