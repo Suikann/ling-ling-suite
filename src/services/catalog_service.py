@@ -233,7 +233,7 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到
         """
-        children = self._list_files(f"{drive_literal(folder_id)} in parents and trashed = false")
+        children = self._children(folder_id)
         return FolderContents(
             folders=[f for f in children if f.mime_type == DRIVE_FOLDER_MIME],
             pdfs=[f for f in children if f.mime_type == DRIVE_PDF_MIME],
@@ -304,9 +304,7 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到
         """
-        return self._list_files(
-            f"{drive_literal(folder_id)} in parents and name = {drive_literal(name)} and trashed = false",
-        )
+        return self._children(folder_id, f"name = {drive_literal(name)}")
 
     def publishing_platform(self) -> Optional[PublishingPlatform]:
         """讀社團設定裡啟用的發譜平台
@@ -335,10 +333,7 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到
         """
-        return self._list_files(
-            f"{drive_literal(folder_id)} in parents and mimeType = {drive_literal(DRIVE_FOLDER_MIME)}"
-            " and trashed = false",
-        )
+        return self._children(folder_id, f"mimeType = {drive_literal(DRIVE_FOLDER_MIME)}")
 
     def spreadsheets_in(self, folder_id: str) -> List[DriveFile]:
         """列出 Drive 資料夾裡的 Google 試算表（依名稱排序，不含垃圾桶裡的），譜庫設定以此找譜庫試算表
@@ -346,10 +341,7 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到
         """
-        return self._list_files(
-            f"{drive_literal(folder_id)} in parents and mimeType = {drive_literal(DRIVE_SPREADSHEET_MIME)}"
-            " and trashed = false",
-        )
+        return self._children(folder_id, f"mimeType = {drive_literal(DRIVE_SPREADSHEET_MIME)}")
 
     # --- 寫入 ---
 
@@ -399,8 +391,7 @@ class CatalogService:
         """
         def send() -> None:
             """讀 ID 欄，送出還不在工作表裡的列"""
-            column = self._sheets.read_ranges([sheet_range(rows.sheet, "A:A")])[0]
-            values = rows.to_send({line[0] for line in column[1:] if line}, self._draw_ids)
+            values = rows.to_send(set(self._ids_by_row(rows.sheet)[1:]) - {""}, self._draw_ids)
             if values:
                 rows.mark_sent()
                 self._sheets.append_rows(rows.sheet, values)
@@ -433,8 +424,8 @@ class CatalogService:
 
         def send() -> None:
             """找列號後寫入"""
-            column = self._sheets.read_ranges([sheet_range(sheet, "A:A")])[0]
-            row = next((i + 1 for i, line in enumerate(column) if i > 0 and line and line[0] == record_id), None)
+            ids = self._ids_by_row(sheet)
+            row = next((i + 1 for i, line_id in enumerate(ids) if i > 0 and line_id == record_id), None)
             if row is None:
                 raise CatalogError(CatalogErrorKind.OTHER, f"{record_id} is no longer in sheet {sheet}")
             self._sheets.write_cells([
@@ -622,6 +613,19 @@ class CatalogService:
     def _read_sheets(self, *sheets: str) -> List[List[List[str]]]:
         """以一次請求讀多張工作表的全部列（含標題列）"""
         return self._call(lambda: self._sheets.read_ranges([_whole_sheet(sheet) for sheet in sheets]))
+
+    def _ids_by_row(self, sheet: str) -> List[str]:
+        """讀工作表的 ID 欄（一次請求）：第 i 個是第 i + 1 列的 ID，空列為空字串，第 0 個是標題
+
+        不經 _call：呼叫端把讀 ID 與接著的寫入當成一個步驟，整個交給 _call 重試。
+        """
+        column = self._sheets.read_ranges([sheet_range(sheet, "A:A")])[0]
+        return [line[0] if line else "" for line in column]
+
+    def _children(self, folder_id: str, *conditions: str) -> List[DriveFile]:
+        """列出 Drive 資料夾裡符合 conditions（Drive 查詢條件，以 and 連接）的全部檔案，不含垃圾桶裡的"""
+        query = " and ".join([f"{drive_literal(folder_id)} in parents", *conditions, "trashed = false"])
+        return self._list_files(query)
 
     def _list_files(self, query: str) -> List[DriveFile]:
         """列出符合查詢的全部檔案（逐頁請求）"""

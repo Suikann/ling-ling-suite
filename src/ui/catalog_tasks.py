@@ -17,7 +17,7 @@ from typing import Any, Callable, List, Tuple
 
 from PySide6.QtCore import QObject
 
-from core.catalog_errors import CatalogError, CatalogErrorKind
+from core.catalog_errors import CatalogError, as_catalog_error
 from ui.background_task import BackgroundTask
 
 
@@ -46,10 +46,8 @@ class CatalogTasks:
             """執行 work，把結果或錯誤一起交回"""
             try:
                 return work(), None
-            except CatalogError as e:
-                return None, e
             except Exception as e:
-                return None, CatalogError(CatalogErrorKind.OTHER, f"{type(e).__name__}: {e}")
+                return None, as_catalog_error(e)
 
         task = BackgroundTask(capture, self._parent)
 

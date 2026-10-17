@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from core.locale import t
-from core.log_entry import LogEntry
+from core.log_entry import LogEntry, now
 
 
 class CatalogErrorKind(Enum):
@@ -101,11 +101,6 @@ def as_catalog_error(error: BaseException) -> CatalogError:
     return CatalogError(CatalogErrorKind.OTHER, exception_message(error))
 
 
-def _now() -> datetime.datetime:
-    """現在的本機時間，精確到秒"""
-    return datetime.datetime.now().replace(microsecond=0)
-
-
 @dataclass(frozen=True)
 class CatalogFailure:
     """一次譜庫讀寫失敗的紀錄：提示列的「詳細資料」與紀錄檔記的是同一份"""
@@ -114,7 +109,7 @@ class CatalogFailure:
     message: str
     action: str
     file_name: str = ""
-    time: datetime.datetime = field(default_factory=_now)
+    time: datetime.datetime = field(default_factory=now)
     piece_title: str = ""
     path: str = ""
 

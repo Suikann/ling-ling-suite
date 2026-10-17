@@ -19,7 +19,7 @@ import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from core.catalog_constants import DRIVE_FOLDER_MIME
-from core.catalog_errors import CatalogError, CatalogErrorKind
+from core.catalog_errors import CatalogError, CatalogErrorKind, exception_message
 from core.constants import CATALOG_SPREADSHEET_ID_KEY
 from core.catalog_models import DriveFile, DriveListing
 from services.catalog_ports import CellWrite, sheet_range
@@ -273,8 +273,7 @@ def catalog_error_from(error: BaseException) -> CatalogError:
     """
     if isinstance(error, CatalogError):
         return error
-    message = f"{type(error).__name__}: {error}"
-    return CatalogError(_kind_of(error), message)
+    return CatalogError(_kind_of(error), exception_message(error))
 
 
 def _kind_of(error: BaseException) -> CatalogErrorKind:

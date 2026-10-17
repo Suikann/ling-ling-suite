@@ -31,8 +31,8 @@ _SECRET_PATTERNS = (
 )
 
 
-def _now() -> datetime.datetime:
-    """現在的本機時間，精確到秒"""
+def now() -> datetime.datetime:
+    """現在的本機時間，精確到秒（紀錄檔一筆的時間）"""
     return datetime.datetime.now().replace(microsecond=0)
 
 
@@ -60,7 +60,7 @@ class LogEntry:
     path: str = ""
     category: str = ""
     message: str = ""
-    time: datetime.datetime = field(default_factory=_now)
+    time: datetime.datetime = field(default_factory=now)
 
     def text(self) -> str:
         """寫進紀錄檔與「詳細資料」的內容
