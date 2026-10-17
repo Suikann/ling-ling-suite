@@ -20,7 +20,7 @@
 | PDF 壓縮：級數、三層檢查、暫存的壓縮檔 | `services/compression_service.py` 的 `CompressionService`；PDF 內容的讀寫在 `services/pdf_service.py`（`save_lossless`、`save_downsampled`、`check_compressed`） |
 | 使用 PyMuPDF（算繪、壓縮、檢查） | `services/pdf_service.py` 裡掛 `_exclusive` 的函式：全部經同一把鎖，一次只有一個在執行（PyMuPDF 不能多執行緒同時使用，壓縮檢查讀的 MuPDF 警告也是全程式一份）。新的 PyMuPDF 呼叫也要掛上 |
 | 壓縮的比較畫面：逐份對照原檔與壓縮後、決定留下或不要、開啟壓縮檔 | `ui/compression_compare.py` 的 `CompressionCompareDialog`：只接（顯示名稱，壓縮結果），由 `kept()` 交回要交出的結果；獨立壓縮由 `MainWindow._deliver_compressed` 開啟，發譜預覽也開同一個 |
-| 壓縮的批次（多選檔、整個資料夾、另存單一檔）、輸出位置規則（預設位置、擋下輸入的資料夾、會被覆蓋的檔）、整批壓縮與交出 | `services/compression_output_service.py` 的 `CompressionOutputService`；單一檔是只有一份的一批。主視窗整批壓完後由 `MainWindow._deliver_compressed` 先開比較畫面，再交出留下的 |
+| 壓縮的批次（多選檔、整個資料夾、另存單一檔）、輸出位置規則（預設位置、一批擋下輸入的資料夾、另存單一檔只擋原檔、會被覆蓋的檔）、整批壓縮與交出 | `services/compression_output_service.py` 的 `CompressionOutputService`；單一檔是只有一份的一批。主視窗整批壓完後由 `MainWindow._deliver_compressed` 先開比較畫面，再交出留下的 |
 | 在背景執行可取消的長工作：進度與取消鈕、期間鎖住重新命名、分割、旋轉、復原、重做，關閉時詢問要不要取消 | `MainWindow._run_in_background`，背景執行緒由 `ui/background_task.py` 的 `BackgroundTask` 管 |
 | OAuth 登入時開瀏覽器、在 `127.0.0.1` 的隨機埠等回呼（Google 與 Discord 共用） | `services/local_callback.py` 的 `LocalCallback`：回傳回呼的 query 參數，逾時、取消都關掉本機伺服器；兌換權杖與檢查 `state` 由各登入服務做 |
 | 內附 Google 用戶端檔的位置 | `core/launch_env.py` 的 `bundled_client_secrets_path`：打包版讀資源目錄（`sys._MEIPASS`），從原始碼執行讀 repo 根目錄 |

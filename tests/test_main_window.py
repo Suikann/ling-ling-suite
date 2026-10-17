@@ -1358,14 +1358,21 @@ class TestMainWindowCompressPdf(MainWindowCompressTestCase):
             self.finish()
         self.assertEqual(file_digest(typed + ".pdf"), file_digest(self.source))
 
-    def test_target_inside_the_original_folder_is_refused_and_asked_again(self):
-        inside = os.path.join(os.path.dirname(self.source), "Flute small.pdf")
+    def test_choosing_the_original_file_is_refused_and_asked_again(self):
+        digest = file_digest(self.source)
         with answering_prompts() as shown:
-            save = self.start_compressing(inside, "")
+            save = self.start_compressing(self.source, "")
         self.assertEqual(save.call_count, 2)
         self.assertEqual(shown, [(t("dialog.warning"), t("compress.target_blocked"))])
         self.assertTrue(self.compress_action().isEnabled())
-        self.assertFalse(os.path.exists(inside))
+        self.assertEqual(file_digest(self.source), digest)
+
+    def test_another_name_in_the_original_folder_is_saved_there(self):
+        beside = os.path.join(os.path.dirname(self.source), "Flute small.pdf")
+        self.start_compressing(beside)
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(file_digest(beside), file_digest(self.source))
 
     def test_closing_while_compressing_asks_and_staying_keeps_it_running(self):
         self.start_compressing(self.target)

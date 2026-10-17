@@ -2,7 +2,7 @@
 """
 壓縮輸出位置的規則測試（臨時目錄）
 
-預設位置是原資料夾旁的「<原資料夾名>（壓縮）」、檔名不變；原檔與原資料夾內的位置都擋下；
+預設位置是原資料夾旁的「<原資料夾名>（壓縮）」、檔名不變；一批時輸入的資料夾內都擋下，另存單一檔時只擋原檔本身；
 不到上限的檔原樣複製，壓縮過的交出暫存的壓縮檔。
 """
 import os
@@ -46,26 +46,24 @@ class TestCompressionOutput(unittest.TestCase):
     def root(self) -> str:
         return self.output.input_root([self.source])
 
-    def test_original_file_and_anywhere_inside_its_folder_are_blocked(self):
-        for target in (
-            self.source,
-            os.path.join(self.parts, "Flute small.pdf"),
-            os.path.join(self.parts, "sub", "Flute.pdf"),
-            *spellings(self.source).values(),
-        ):
+    def test_only_the_original_file_itself_is_blocked(self):
+        for target in (self.source, *spellings(self.source).values()):
             with self.subTest(target=target):
-                self.assertTrue(self.output.is_blocked(self.root(), target))
+                self.assertTrue(self.output.is_single_blocked(self.source, target))
                 with self.assertRaises(ValueError):
                     self.output.plan_single(self.source, target)
 
-    def test_default_target_and_a_similarly_named_sibling_folder_are_allowed(self):
+    def test_another_name_in_the_original_folder_and_other_folders_are_allowed(self):
         for target in (
+            os.path.join(self.parts, "Flute small.pdf"),
+            os.path.join(self.parts, "sub", "Flute.pdf"),
             self.output.default_target(self.source),
             os.path.join(self.temp_dir, "Symphony2", "Flute.pdf"),
             os.path.join(self.temp_dir, "Flute.pdf"),
         ):
             with self.subTest(target=target):
-                self.assertFalse(self.output.is_blocked(self.root(), target))
+                self.assertFalse(self.output.is_single_blocked(self.source, target))
+                self.assertEqual(self.output.plan_single(self.source, target).jobs[0].target, target)
 
     def test_single_file_is_a_batch_of_one_saved_under_the_chosen_name(self):
         target = os.path.join(self.temp_dir, "out", "Flute small.pdf")
@@ -91,6 +89,24 @@ class TestCompressionOutput(unittest.TestCase):
         output.discard(results)
         self.assertFalse(os.path.exists(results[0].output_path))
         self.assertTrue(os.path.isfile(target))
+
+    def test_saving_under_another_name_beside_the_original_delivers_there(self):
+        target = os.path.join(self.parts, "Flute small.pdf")
+        batch = self.output.plan_single(self.source, target)
+        results = self.output.compress(batch)
+        self.assertEqual(self.output.deliver(batch, results), {})
+        self.assertEqual(file_digest(target), file_digest(self.source))
+
+    def test_delivering_a_single_file_onto_the_original_is_refused(self):
+        output = CompressionOutputService(FileService(), self.compressor(size_limit=500 * KB))
+        job = CompressionJob(self.source, self.source, "Flute.pdf")
+        batch = CompressionBatch(self.parts, self.source, (job,), single=True)
+        results = output.compress(batch)
+        digest = file_digest(self.source)
+        with self.assertRaises(ValueError):
+            output.deliver(batch, results)
+        output.discard(results)
+        self.assertEqual(file_digest(self.source), digest)
 
     def test_delivering_to_a_blocked_target_is_refused(self):
         output = CompressionOutputService(FileService(), self.compressor(size_limit=500 * KB))

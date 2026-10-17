@@ -5,7 +5,8 @@
 把要壓縮的 PDF（多選同一資料夾的檔、整個資料夾連同子資料夾，或另存單一檔）排成一批，
 決定各份交到輸出位置的哪裡、擋下會蓋掉原檔的位置、列出會被覆蓋的檔，
 一次一份壓完整批後再一起交出；取消時已壓好的全部丟掉、什麼都不交出。
-輸出的檔名不加後綴、照原本的子資料夾結構，所以輸入的資料夾（含子資料夾）一律不能當輸出位置。
+一批輸出的檔名不加後綴、照原本的子資料夾結構，所以輸入的資料夾（含子資料夾）一律不能當輸出位置；
+另存單一檔時檔名由使用者決定，只擋原檔本身。
 壓縮一份 PDF 在 compression_service，這裡只管批次與輸出，檔案存取經過 FileService。
 
 使用範例：
@@ -48,13 +49,15 @@ class CompressionBatch:
     """要一起壓縮、一起交出的一批 PDF
 
     Attributes:
-        root: 輸入的資料夾（多選檔時是它們所在的資料夾）；輸出位置不能在它裡面
+        root: 輸入的資料夾（多選檔時是它們所在的資料夾）；一批的輸出位置不能在它裡面
         output: 輸出位置：一批時是資料夾，單一檔另存時是那個檔案
         jobs: 各份，依原檔的路徑排序
+        single: 是否為另存單一檔（只擋原檔本身，見 is_single_blocked）；否則照一批的規則（見 is_blocked）
     """
     root: str
     output: str
     jobs: Tuple[CompressionJob, ...]
+    single: bool = False
 
 
 class BatchProgress(NamedTuple):
@@ -168,36 +171,49 @@ class CompressionOutputService:
 
     @staticmethod
     def is_blocked(root: str, location: str) -> bool:
-        """輸出位置會不會蓋掉原檔：是輸入的資料夾、或在它裡面（任意深度）就擋下
+        """一批的輸出位置會不會蓋掉原檔：是輸入的資料夾、或在它裡面（任意深度）就擋下
 
-        輸出的檔名不加後綴，所以輸入的資料夾裡一律不能當輸出位置。
+        一批輸出的檔名不加後綴，所以輸入的資料夾裡一律不能當輸出位置。
 
         Args:
             root: 輸入的資料夾
-            location: 輸出位置：一批的資料夾，或單一檔另存的檔案
+            location: 輸出位置的資料夾，或要交到的檔案
 
         Returns:
             要擋下時為 True
         """
         return same_path(location, root) or is_inside(location, root)
 
-    def plan_single(self, source: str, target: str) -> CompressionBatch:
-        """單一檔另存成一批只有一份：輸入的資料夾是原檔所在的資料夾，交到使用者選的檔名
+    @staticmethod
+    def is_single_blocked(source: str, target: str) -> bool:
+        """另存單一檔的位置會不會蓋掉原檔：選到原檔本身（不分大小寫、不論寫法）才擋下
 
         Args:
             source: 原檔路徑
             target: 另存的檔案路徑
 
         Returns:
+            要擋下時為 True
+        """
+        return same_path(target, source)
+
+    def plan_single(self, source: str, target: str) -> CompressionBatch:
+        """單一檔另存成一批只有一份：輸入的資料夾是原檔所在的資料夾，交到使用者選的檔名
+
+        Args:
+            source: 原檔路徑
+            target: 另存的檔案路徑；原檔所在的資料夾裡、換個檔名也可以
+
+        Returns:
             只有一份的一批
 
         Raises:
-            ValueError: 另存位置被擋下（見 is_blocked）
+            ValueError: 另存位置是原檔本身（見 is_single_blocked）
         """
-        root = self.input_root([source])
-        if self.is_blocked(root, target):
-            raise ValueError(f"另存位置在原檔的資料夾裡，會蓋掉原檔：{target}")
-        return CompressionBatch(root, target, (CompressionJob(source, target, os.path.basename(target)),))
+        if self.is_single_blocked(source, target):
+            raise ValueError(f"另存位置是原檔，會蓋掉原檔：{target}")
+        job = CompressionJob(source, target, os.path.basename(target))
+        return CompressionBatch(self.input_root([source]), target, (job,), single=True)
 
     def overwritten(self, batch: CompressionBatch) -> List[CompressionJob]:
         """輸出位置已有同名檔的那幾份（例如上次的壓縮結果），交出時會被覆蓋
@@ -262,13 +278,13 @@ class CompressionOutputService:
             複製失敗的原檔路徑對應到錯誤；全部成功時為空
 
         Raises:
-            ValueError: 有一份的目的地被擋下（見 is_blocked），此時什麼都不交出
+            ValueError: 有一份的目的地被擋下（見 is_blocked、is_single_blocked），此時什麼都不交出
         """
         targets = {path_key(job.source): job.target for job in batch.jobs}
         pending = []
         for result in results:
             target = targets[path_key(result.source)]
-            if self.is_blocked(batch.root, target):
+            if self._target_blocked(batch, result.source, target):
                 raise ValueError(f"輸出位置會蓋掉原檔，拒絕交出：{target}")
             if result.status is CompressionStatus.SMALL_ENOUGH:
                 pending.append((result.source, result.source, target))
@@ -282,6 +298,12 @@ class CompressionOutputService:
             except OSError as e:
                 errors[source] = e
         return errors
+
+    def _target_blocked(self, batch: CompressionBatch, source: str, target: str) -> bool:
+        """交出前再確認一次目的地不會蓋掉原檔：另存單一檔照 is_single_blocked，一批照 is_blocked"""
+        if batch.single:
+            return self.is_single_blocked(source, target)
+        return self.is_blocked(batch.root, target)
 
     def discard(self, results: Sequence[CompressionResult]) -> None:
         """丟掉各結果在暫存資料夾裡的壓縮檔（交出之後、取消、或使用者不要時）"""

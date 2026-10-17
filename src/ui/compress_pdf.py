@@ -110,11 +110,10 @@ def ask_folder(parent: QWidget, output: CompressionOutputService) -> Optional[Co
 def _ask_single_target(
     parent: QWidget, output: CompressionOutputService, file_service: FileService, source: str,
 ) -> Optional[CompressionBatch]:
-    """詢問單一檔的另存位置；沒打副檔名時補上，在原檔的資料夾裡時提示並再問一次
+    """詢問單一檔的另存位置；沒打副檔名時補上，選到原檔本身時提示並再問一次
 
     已有檔案時由另存對話框確認取代，這裡不再問一次覆蓋。
     """
-    root = output.input_root([source])
     suggested = output.default_target(source)
     while True:
         target = ask_save_path(
@@ -122,7 +121,7 @@ def _ask_single_target(
         )
         if not target:
             return None
-        if not output.is_blocked(root, target):
+        if not output.is_single_blocked(source, target):
             return output.plan_single(source, target)
         QMessageBox.warning(parent, t("dialog.warning"), t("compress.target_blocked"))
 
