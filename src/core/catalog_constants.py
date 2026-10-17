@@ -7,14 +7,6 @@
 from enum import Enum
 
 
-class PartStatus(str, Enum):
-    """分譜狀態"""
-    AVAILABLE = "available"
-    MISSING = "missing"
-    DAMAGED = "damaged"
-    UNKNOWN = "unknown"
-
-
 class PerformanceStatus(str, Enum):
     """演出狀態"""
     PLANNED = "planned"
@@ -23,21 +15,12 @@ class PerformanceStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-PART_STATUS_LABELS = {
-    PartStatus.AVAILABLE: ("有", "Available"),
-    PartStatus.MISSING: ("缺", "Missing"),
-    PartStatus.DAMAGED: ("損壞", "Damaged"),
-    PartStatus.UNKNOWN: ("未知", "Unknown"),
-}
-
 PERFORMANCE_STATUS_LABELS = {
     PerformanceStatus.PLANNED: ("已規劃", "Planned"),
     PerformanceStatus.REHEARSING: ("排練中", "Rehearsing"),
     PerformanceStatus.PERFORMED: ("已演出", "Performed"),
     PerformanceStatus.CANCELLED: ("已取消", "Cancelled"),
 }
-
-DEFAULT_CATALOG_NAME = "譜庫目錄"
 
 SHEET_COMPOSERS = "作曲家"
 SHEET_PIECES = "曲目"

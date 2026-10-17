@@ -507,7 +507,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.drive.collect_hint": "勾選要移入的檔案或資料夾。勾選資料夾會整個搬過來，不需要逐一勾選裡面的檔案。",
         "catalog.drive.collect_selected": "已選取 {count} 個檔案",
         "catalog.drive.collect_result": "已移動 {moved}/{total} 個檔案。",
-        "catalog.drive.collect_errors": "以下檔案移動失敗：{files}",
         "catalog.drive.apply_template": "套用命名格式",
         # 譜庫 - 重新命名
         "catalog.rename.title": "套用命名格式",
@@ -529,7 +528,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.rename.conflict_warning": "偵測到 {count} 組檔名衝突",
         "catalog.rename.execute": "執行重新命名",
         "catalog.rename.success": "已成功重新命名 {success}/{total} 個檔案。",
-        "catalog.rename.errors": "以下檔案重新命名失敗：{files}",
         "catalog.rename.confirm": "確定要在 Drive 上重新命名這些檔案嗎？此操作無法復原。",
         # 譜庫 - 作曲家
         "catalog.composer.title": "作曲家資訊",
@@ -585,12 +583,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # 譜庫 - 分譜
         "catalog.part.title": "分譜狀態",
         "catalog.part.instrument": "樂器",
-        "catalog.part.status": "狀態",
         "catalog.part.file": "檔案",
-        "catalog.part.status.available": "有",
-        "catalog.part.status.missing": "缺",
-        "catalog.part.status.damaged": "損壞",
-        "catalog.part.status.unknown": "未知",
         "catalog.part.add_instruments": "從樂器表新增",
         "catalog.part.scan_folder": "從 Drive 資料夾掃描",
         # 譜庫 - 演出紀錄
@@ -612,9 +605,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # 譜庫 - 通用
         "catalog.save": "儲存",
         "catalog.cancel": "取消",
-        "catalog.error": "發生錯誤：{error}",
         "catalog.loading": "載入中...",
-        "catalog.no_connection": "尚未登入 Google 帳號或未設定試算表 ID，請至「譜庫 > 譜庫設定」完成設定。",
         # 譜庫 - 錯誤提示列（類別、標題、怎麼辦與按鈕見 core/catalog_errors.py 的 CATALOG_ERROR_RULES）
         "catalog.error.cannot_read": "讀不到譜庫",
         "catalog.error.banner": "{heading}｜{title}：{advice}",
@@ -1118,7 +1109,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.drive.collect_hint": "Check files or folders to move. Checking a folder moves it entirely — no need to check individual files inside.",
         "catalog.drive.collect_selected": "{count} file(s) selected",
         "catalog.drive.collect_result": "Moved {moved}/{total} file(s).",
-        "catalog.drive.collect_errors": "Failed to move: {files}",
         "catalog.drive.apply_template": "Apply Naming Template",
         # Catalog - Rename
         "catalog.rename.title": "Apply Naming Template",
@@ -1140,7 +1130,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.rename.conflict_warning": "{count} naming conflict(s) detected",
         "catalog.rename.execute": "Execute Rename",
         "catalog.rename.success": "Successfully renamed {success}/{total} file(s).",
-        "catalog.rename.errors": "Failed to rename: {files}",
         "catalog.rename.confirm": "Rename these files on Drive? This cannot be undone.",
         # Catalog - Composer
         "catalog.composer.title": "Composer Info",
@@ -1196,12 +1185,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # Catalog - Part
         "catalog.part.title": "Part Status",
         "catalog.part.instrument": "Instrument",
-        "catalog.part.status": "Status",
         "catalog.part.file": "File",
-        "catalog.part.status.available": "Available",
-        "catalog.part.status.missing": "Missing",
-        "catalog.part.status.damaged": "Damaged",
-        "catalog.part.status.unknown": "Unknown",
         "catalog.part.add_instruments": "Add from Instrument List",
         "catalog.part.scan_folder": "Scan from Drive Folder",
         # Catalog - Performance
@@ -1223,9 +1207,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # Catalog - Common
         "catalog.save": "Save",
         "catalog.cancel": "Cancel",
-        "catalog.error": "Error: {error}",
         "catalog.loading": "Loading...",
-        "catalog.no_connection": "Not signed in to Google or spreadsheet ID not set. Go to Catalog > Catalog Settings.",
         # Catalog - error bar (kinds, titles, advice and buttons: CATALOG_ERROR_RULES in core/catalog_errors.py)
         "catalog.error.cannot_read": "Can't read the catalog",
         "catalog.error.banner": "{heading} | {title}: {advice}",
