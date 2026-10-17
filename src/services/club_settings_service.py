@@ -15,7 +15,7 @@
     show_publish = club.remembered() is not None      # 啟動時：只看偏好設定
     club.refresh(lambda: catalog)                     # 連上譜庫時；讀不到時寫進紀錄檔，不丟出例外
     platform = club.read(catalog)                     # 連上譜庫或按下發譜時；讀不到時丟出 CatalogError
-    club.forget()                                     # 譜庫設定換了譜庫試算表時
+    club.forget()                                     # 譜庫設定存了另一份譜庫試算表時
 """
 from typing import Callable, Optional
 

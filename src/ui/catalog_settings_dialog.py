@@ -5,8 +5,9 @@
 引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫目錄。
 登入區顯示登入的帳號 email 與帳號提醒；登入時在背景等瀏覽器回來，期間顯示可取消的等待視窗。
 瀏覽 Drive 資料夾、找資料夾裡的試算表與建立譜庫目錄都經譜庫服務（services/catalog_service.py）在背景執行，
-失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。換了譜庫試算表時，忘掉記住的發譜平台，
-改讀新譜庫的社團設定（services/club_settings_service.py）。
+失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。找到或建好的譜庫試算表先記在對話框裡，
+按「儲存設定」才寫進偏好設定，取消時偏好設定不變；存的是另一份譜庫試算表時，忘掉記住的發譜平台，
+在背景改讀新譜庫的社團設定（services/club_settings_service.py）。
 """
 import re
 from typing import Callable, List, Optional
@@ -109,6 +110,8 @@ class CatalogSettingsDialog(QDialog):
         self._club_settings = ClubSettingsService(preferences, self._log)
         self._tasks = CatalogTasks(self)
         self._retry: Optional[Callable[[], None]] = None
+        # 找到或建好的譜庫試算表；按「儲存設定」才寫進偏好設定
+        self._spreadsheet_id = self._prefs.get(CATALOG_SPREADSHEET_ID_KEY) or ""
         self.setWindowTitle(t("catalog.settings.title"))
         self.setMinimumWidth(560)
         self._build_ui()
@@ -282,21 +285,9 @@ class CatalogSettingsDialog(QDialog):
         self._folder_status.setStyleSheet(f"color: {color};")
 
     def _use_catalog(self, sheet: DriveFile):
-        """使用找到的試算表作為譜庫目錄"""
-        self._connect_catalog(sheet.id)
+        """使用找到的試算表作為譜庫目錄（按「儲存設定」才寫進偏好設定）"""
+        self._spreadsheet_id = sheet.id
         self._show_folder_status(t("catalog.settings.catalog_found", name=sheet.name), "#2ecc71")
-
-    def _connect_catalog(self, spreadsheet_id: str):
-        """記下譜庫試算表；換了試算表時忘掉記住的發譜平台，在背景改讀新譜庫的社團設定（讀不到時就是沒有，寫進紀錄檔）"""
-        if spreadsheet_id == self._prefs.get(CATALOG_SPREADSHEET_ID_KEY):
-            return
-        self._prefs.set(CATALOG_SPREADSHEET_ID_KEY, spreadsheet_id)
-        self._club_settings.forget()
-        # refresh 不丟出例外：讀不到時自己寫進紀錄檔，交回時沒有要顯示的
-        self._tasks.run(
-            lambda: self._club_settings.refresh(lambda: self._catalog_factory(spreadsheet_id)),
-            lambda _: None, lambda _: None,
-        )
 
     def _pick_catalog(self, sheets: List[DriveFile]):
         """資料夾內有多個試算表時，讓使用者選擇"""
@@ -328,8 +319,8 @@ class CatalogSettingsDialog(QDialog):
         pending = PendingCatalog(name.strip(), folder_id)
 
         def created(spreadsheet_id: str):
-            """建好了"""
-            self._connect_catalog(spreadsheet_id)
+            """建好了（按「儲存設定」才寫進偏好設定）"""
+            self._spreadsheet_id = spreadsheet_id
             self._show_folder_status(t("catalog.settings.catalog_created"), "#2ecc71")
 
         def create():
@@ -342,10 +333,18 @@ class CatalogSettingsDialog(QDialog):
         create()
 
     def _save_settings(self):
-        """儲存設定"""
-        folder_id = _extract_folder_id(self._folder_entry.text())
-        self._prefs.set(CATALOG_ROOT_FOLDER_ID_KEY, folder_id)
+        """儲存設定；換了譜庫試算表時忘掉記住的發譜平台，在背景改讀新譜庫的社團設定（讀不到時就是沒有，寫進紀錄檔）"""
+        spreadsheet_id = self._spreadsheet_id
+        changed = spreadsheet_id != (self._prefs.get(CATALOG_SPREADSHEET_ID_KEY) or "")
+        self._prefs.set(CATALOG_ROOT_FOLDER_ID_KEY, _extract_folder_id(self._folder_entry.text()))
+        self._prefs.set(CATALOG_SPREADSHEET_ID_KEY, spreadsheet_id)
+        if changed:
+            self._club_settings.forget()
         self._prefs.save()
+        if changed:
+            # 對話框關閉後背景工作照常跑完（只是不再交回）；refresh 不丟出例外，讀不到時自己寫進紀錄檔
+            club, connect = self._club_settings, self._catalog_factory
+            self._tasks.run(lambda: club.refresh(lambda: connect(spreadsheet_id)), lambda _: None, lambda _: None)
         self.accept()
 
 
