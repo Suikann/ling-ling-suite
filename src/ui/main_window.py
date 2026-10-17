@@ -758,10 +758,12 @@ class MainWindow(QMainWindow):
         try:
             entries = [(job.name, result) for job, result in zip(batch.jobs, results)]
             dialog = CompressionCompareDialog(entries, self._opener, self)
-            if dialog.exec() != CompressionCompareDialog.Accepted:
+            confirmed = dialog.exec() == CompressionCompareDialog.Accepted
+            kept = dialog.kept()
+            dialog.deleteLater()
+            if not confirmed:
                 self._set_status(t("compress.cancelled"))
                 return
-            kept = dialog.kept()
             if not kept:
                 self._set_status(t("compress.status.nothing"))
                 return

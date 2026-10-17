@@ -180,8 +180,11 @@ class CompressionCompareDialog(QDialog):
         ]
 
     def done(self, code: int):
-        """關閉時作廢還沒算繪完的頁面"""
+        """關閉時作廢還沒算繪完的頁面，放掉算繪好的頁面（600 dpi 的一頁有數十 MB）"""
         self._loader.cancel()
+        for loupe in (self._loupe_original, self._loupe_compressed):
+            loupe.image = QImage()
+        self._overview.set_image(QImage())
         super().done(code)
 
     def _build(self, accept_text: str):
