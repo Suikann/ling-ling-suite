@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, 
 
 from core.catalog_constants import DRIVE_FOLDER_MIME
 from core.catalog_errors import CatalogError, CatalogErrorKind
+from core.constants import CATALOG_SPREADSHEET_ID_KEY
 from core.catalog_models import DriveFile, DriveListing
 from services.catalog_ports import CellWrite, sheet_range
 from services.catalog_service import CatalogService
@@ -58,7 +59,7 @@ def open_google_catalog(auth: GoogleAuthService, spreadsheet_id: str) -> Catalog
             安全儲存沒解鎖、Google 不認這個權杖）為要重新登入
     """
     if not spreadsheet_id:
-        raise CatalogError(CatalogErrorKind.NOT_FOUND, "catalog_spreadsheet_id is empty")
+        raise CatalogError(CatalogErrorKind.NOT_FOUND, f"{CATALOG_SPREADSHEET_ID_KEY} is empty")
     credentials = _credentials(auth)
     return CatalogService(GoogleSheets(spreadsheet_id, credentials), GoogleDrive(credentials))
 
@@ -132,7 +133,7 @@ class GoogleSheets(_Gateway):
     def _bound_id(self) -> str:
         """連著的試算表 ID；沒有時不送請求，丟出找不到"""
         if not self._spreadsheet_id:
-            raise CatalogError(CatalogErrorKind.NOT_FOUND, "catalog_spreadsheet_id is empty")
+            raise CatalogError(CatalogErrorKind.NOT_FOUND, f"{CATALOG_SPREADSHEET_ID_KEY} is empty")
         return self._spreadsheet_id
 
     def read_ranges(self, ranges: Sequence[str]) -> List[List[List[str]]]:

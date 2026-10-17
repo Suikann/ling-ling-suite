@@ -28,7 +28,7 @@ from core.catalog_constants import (
     SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, PublishingPlatform,
 )
 from core.catalog_errors import CatalogErrorKind
-from core.constants import CLUB_PUBLISHING_PLATFORM_KEY
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY
 from core.locale import t
 from fake_google_catalog import FakeGoogle
 from services.activity_log import ActivityLog
@@ -78,8 +78,8 @@ class CatalogWindowTestCase(unittest.TestCase):
         add_row(self.google, SHEET_EDITIONS, id="e1", piece_id="p1", drive_folder_id=self.piece_folder)
         self.log_dir = os.path.join(self.temp_dir, "logs")
         self.preferences = PreferencesService(os.path.join(self.temp_dir, "preferences.json"))
-        self.preferences.set("catalog_spreadsheet_id", "sheet-1")
-        self.preferences.set("catalog_root_folder_id", self.root)
+        self.preferences.set(CATALOG_SPREADSHEET_ID_KEY, "sheet-1")
+        self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, self.root)
         browser = CallbackBrowser()
         self.addCleanup(browser.finish)
         self.auth = GoogleAuthService(

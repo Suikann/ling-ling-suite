@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QInputDia
 
 from core.catalog_constants import DRIVE_SPREADSHEET_MIME, SHEET_HEADERS, PublishingPlatform
 from core.catalog_errors import CatalogErrorKind
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
 from core.locale import t
 from services.catalog_service import CatalogService
 from services.club_settings_service import ClubSettingsService
@@ -102,7 +103,7 @@ class TestLoginReason(LoginAreaTestCase):
     def test_cancelled_unlock_is_asked_only_once_when_opening_with_a_folder_set(self):
         self.auth.authenticate()
         self.auth = self.login_service()
-        self.preferences.set("catalog_root_folder_id", "folder-id")
+        self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, "folder-id")
         self.keyring.locked = True
         self.keyring.calls.clear()
         dialog = self.open_dialog()
@@ -182,10 +183,10 @@ class CatalogFolderTestCase(LoginAreaTestCase):
 
     def open_with_folder(self) -> CatalogSettingsDialog:
         """資料夾已設定時開啟，等找譜庫試算表的結果"""
-        self.preferences.set("catalog_root_folder_id", self.folder)
-        before = self.preferences.get("catalog_spreadsheet_id")
+        self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, self.folder)
+        before = self.preferences.get(CATALOG_SPREADSHEET_ID_KEY)
         dialog = self.open_dialog()
-        wait_until(lambda: not self.bar(dialog).isHidden() or self.preferences.get("catalog_spreadsheet_id") != before)
+        wait_until(lambda: not self.bar(dialog).isHidden() or self.preferences.get(CATALOG_SPREADSHEET_ID_KEY) != before)
         return dialog
 
     def bar(self, dialog: QDialog) -> CatalogErrorBar:
@@ -207,13 +208,13 @@ class TestFindCatalog(CatalogFolderTestCase):
     def test_uses_the_only_spreadsheet_in_the_folder(self):
         sheet = self.add_spreadsheet("譜庫目錄")
         dialog = self.open_with_folder()
-        self.assertEqual(self.preferences.get("catalog_spreadsheet_id"), sheet)
+        self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), sheet)
         self.assertTrue(self.shows(dialog, t("catalog.settings.catalog_found", name="譜庫目錄")))
 
     def test_creates_a_catalog_in_an_empty_folder(self):
         with mock.patch.object(QInputDialog, "getText", return_value=("社團譜庫", True)):
             dialog = self.open_with_folder()
-        sheet = self.preferences.get("catalog_spreadsheet_id")
+        sheet = self.preferences.get(CATALOG_SPREADSHEET_ID_KEY)
         self.assertEqual(self.google.drive.file(sheet).parents, (self.folder,))
         self.assertEqual(self.google.drive.file(sheet).name, "社團譜庫")
         self.assertEqual(self.google.sheets.tabs(), list(SHEET_HEADERS))
@@ -225,7 +226,7 @@ class TestFindCatalog(CatalogFolderTestCase):
         dialog = self.open_with_folder()
         self.assertTrue(self.bar_text(dialog).startswith("讀不到譜庫｜連不上網路："))
         next(b for b in self.bar(dialog).findChildren(QPushButton) if b.text() == "重試").click()
-        wait_until(lambda: self.preferences.get("catalog_spreadsheet_id") == sheet)
+        wait_until(lambda: self.preferences.get(CATALOG_SPREADSHEET_ID_KEY) == sheet)
         self.assertTrue(self.bar(dialog).isHidden())
 
     def test_failing_to_create_shows_the_write_bar(self):
@@ -233,7 +234,7 @@ class TestFindCatalog(CatalogFolderTestCase):
         with mock.patch.object(QInputDialog, "getText", return_value=("社團譜庫", True)):
             dialog = self.open_with_folder()
         self.assertTrue(self.bar_text(dialog).startswith("寫不進譜庫｜沒有權限："))
-        self.assertFalse(self.preferences.get("catalog_spreadsheet_id"))
+        self.assertFalse(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY))
 
 
 class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
@@ -244,7 +245,7 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
         old = FakeGoogle()
         old.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
         ClubSettingsService(self.preferences).read(CatalogService(old.sheets, old.drive))
-        self.preferences.set("catalog_spreadsheet_id", "old-sheet")
+        self.preferences.set(CATALOG_SPREADSHEET_ID_KEY, "old-sheet")
 
     def test_a_new_catalog_without_the_platform_hides_publishing(self):
         self.remember_huaxia()
@@ -290,7 +291,7 @@ class TestBrowseFolders(CatalogFolderTestCase):
         sheet = self.add_spreadsheet("譜庫目錄")
         dialog = self.open_dialog()
         self.browse(dialog, "譜庫")
-        wait_until(lambda: self.preferences.get("catalog_spreadsheet_id") == sheet)
+        wait_until(lambda: self.preferences.get(CATALOG_SPREADSHEET_ID_KEY) == sheet)
 
     def test_unreadable_drive_shows_the_bar_in_the_browser(self):
         self.google.fail_next(CatalogErrorKind.RATE_LIMITED, times=6)

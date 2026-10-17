@@ -79,12 +79,15 @@ MAX_RECENT_PROJECTS = 8
 GOOGLE_ACCOUNT_EMAIL_KEY = "google_account_email"
 # 上次讀到的社團設定裡啟用的發譜平台（PublishingPlatform 的值）；空字串為沒有或從沒讀到過，發譜功能隱藏
 CLUB_PUBLISHING_PLATFORM_KEY = "club_publishing_platform"
+# 譜庫設定：譜庫試算表的 ID 與譜庫根資料夾的 Drive ID
+CATALOG_SPREADSHEET_ID_KEY = "catalog_spreadsheet_id"
+CATALOG_ROOT_FOLDER_ID_KEY = "catalog_root_folder_id"
 DEFAULT_PREFERENCES = {
     "language": LOCALE_ZH_TW,
     "appearance_mode": "Dark",
     RECENT_PROJECTS_KEY: [],
-    "catalog_spreadsheet_id": "",
-    "catalog_root_folder_id": "",
+    CATALOG_SPREADSHEET_ID_KEY: "",
+    CATALOG_ROOT_FOLDER_ID_KEY: "",
     GOOGLE_ACCOUNT_EMAIL_KEY: "",
     CLUB_PUBLISHING_PLATFORM_KEY: "",
 }

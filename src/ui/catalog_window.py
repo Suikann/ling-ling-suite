@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCursor
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
 from core.locale import t
 from core.catalog_constants import (
     PerformanceStatus, SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PERFORMANCES, SHEET_PIECES,
@@ -94,7 +95,7 @@ class CatalogWindow(QMainWindow):
 
     def _open_google_catalog(self) -> CatalogService:
         """以登入服務的憑證接 Google（背景執行緒呼叫）"""
-        return open_google_catalog(self._auth, self._prefs.get("catalog_spreadsheet_id") or "")
+        return open_google_catalog(self._auth, self._prefs.get(CATALOG_SPREADSHEET_ID_KEY) or "")
 
     def _connected(self) -> CatalogService:
         """譜庫服務，第一次用到時才建立（背景執行緒呼叫，同時有幾件讀取也只建一次；拿不到時丟出 CatalogError）"""
@@ -299,7 +300,7 @@ class CatalogWindow(QMainWindow):
 
     def _refresh_all(self):
         """經譜庫服務重新讀取曲目、作曲家與譜庫根資料夾的內容"""
-        root_id = self._prefs.get("catalog_root_folder_id") or ""
+        root_id = self._prefs.get(CATALOG_ROOT_FOLDER_ID_KEY) or ""
 
         def on_done(overview):
             """讀到了：填進樹狀清單，收起提示列"""
@@ -436,7 +437,7 @@ class CatalogWindow(QMainWindow):
     def _create_subfolder(self):
         """在目前選取的資料夾中建立子資料夾"""
         current = self._tree.currentItem()
-        parent_id = self._prefs.get("catalog_root_folder_id") or ""
+        parent_id = self._prefs.get(CATALOG_ROOT_FOLDER_ID_KEY) or ""
         if current:
             data = current.data(0, Qt.UserRole)
             if data and data[0] == "folder":
@@ -554,7 +555,7 @@ class CatalogWindow(QMainWindow):
 
     def _collect_files_to_folder(self, target_folder_id: str, folder_name: str):
         """從 Drive 其他位置挑檔案或資料夾搬進此資料夾；中途失敗時重試從失敗的那份接著搬"""
-        root_id = self._prefs.get("catalog_root_folder_id") or ""
+        root_id = self._prefs.get(CATALOG_ROOT_FOLDER_ID_KEY) or ""
         if not root_id:
             return
         dialog = _DriveFilePicker(

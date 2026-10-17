@@ -31,6 +31,7 @@ from core.catalog_constants import (
     SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY
 from core.catalog_models import (
     CatalogOverview, Composer, DriveFile, Edition, EditionFiles, FolderContents, Movement, Part, Performance, Piece,
     PieceDetail,
@@ -210,7 +211,7 @@ class CatalogService:
             CatalogError: 讀不到；沒設定根資料夾時為找不到
         """
         if not root_folder_id:
-            raise CatalogError(CatalogErrorKind.NOT_FOUND, "catalog_root_folder_id is empty")
+            raise CatalogError(CatalogErrorKind.NOT_FOUND, f"{CATALOG_ROOT_FOLDER_ID_KEY} is empty")
         pieces_rows, composer_rows, edition_rows = self._read_sheets(SHEET_PIECES, SHEET_COMPOSERS, SHEET_EDITIONS)
         pieces = _models(pieces_rows, SHEET_PIECES, Piece)
         pieces_by_id = {piece.id: piece for piece in pieces}

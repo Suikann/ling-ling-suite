@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import DriveFile
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
 from core.locale import t
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingCatalog
@@ -151,7 +152,7 @@ class CatalogSettingsDialog(QDialog):
         step2_layout = QVBoxLayout(step2)
         folder_row = QHBoxLayout()
         self._folder_entry = QLineEdit(
-            self._prefs.get("catalog_root_folder_id") or "",
+            self._prefs.get(CATALOG_ROOT_FOLDER_ID_KEY) or "",
         )
         self._folder_entry.setPlaceholderText(
             t("catalog.settings.folder_hint"),
@@ -287,9 +288,9 @@ class CatalogSettingsDialog(QDialog):
 
     def _connect_catalog(self, spreadsheet_id: str):
         """記下譜庫試算表；換了試算表時忘掉記住的發譜平台，在背景改讀新譜庫的社團設定（讀不到時就是沒有）"""
-        if spreadsheet_id == self._prefs.get("catalog_spreadsheet_id"):
+        if spreadsheet_id == self._prefs.get(CATALOG_SPREADSHEET_ID_KEY):
             return
-        self._prefs.set("catalog_spreadsheet_id", spreadsheet_id)
+        self._prefs.set(CATALOG_SPREADSHEET_ID_KEY, spreadsheet_id)
         self._club_settings.forget()
         self._tasks.run(
             lambda: self._club_settings.read(self._catalog_factory(spreadsheet_id)),
@@ -342,7 +343,7 @@ class CatalogSettingsDialog(QDialog):
     def _save_settings(self):
         """儲存設定"""
         folder_id = _extract_folder_id(self._folder_entry.text())
-        self._prefs.set("catalog_root_folder_id", folder_id)
+        self._prefs.set(CATALOG_ROOT_FOLDER_ID_KEY, folder_id)
         self._prefs.save()
         self.accept()
 

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
-    DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
+    CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind,
 )
@@ -935,7 +935,7 @@ class MainWindow(QMainWindow):
     def _open_catalog(self):
         """開啟譜庫瀏覽器，尚未設定時先引導設定"""
         auth = self._auth_service
-        spreadsheet_id = self._preferences.get("catalog_spreadsheet_id")
+        spreadsheet_id = self._preferences.get(CATALOG_SPREADSHEET_ID_KEY)
         if auth.get_credentials() is None or not spreadsheet_id:
             if not self._open_catalog_settings():
                 return

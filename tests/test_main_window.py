@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QPushButton, QRadioButton, QTabWidget, QWidget,
 )
 
-from core.constants import CompressionStatus, PartsOutputMode
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CompressionStatus, PartsOutputMode
 from core.locale import get_locale, set_locale, t
 from core.models import FileInfo, Group, Project, RenameEntry
 from services.activity_log import ActivityLog
@@ -1284,7 +1284,7 @@ class TestMainWindowOpenCatalog(MainWindowTestCase):
             legacy_token_path=self.legacy_token,
         )
         self.window.close()
-        self.preferences.set("catalog_root_folder_id", "folder-id")
+        self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, "folder-id")
         self.window = MainWindow(self.preferences, history=self.history, opener=self.opener, auth_service=self.auth)
         self.keyring.locked = True
         self.keyring.calls.clear()
