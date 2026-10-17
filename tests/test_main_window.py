@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from core.constants import CompressionStatus, PartsOutputMode
 from core.locale import get_locale, set_locale, t
 from core.models import FileInfo, Group, Project, RenameEntry
+from services.activity_log import ActivityLog
 from services.compression_service import CompressionService
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
@@ -276,9 +277,10 @@ class MainWindowTestCase(unittest.TestCase):
             client_secrets_path=write_client_secrets(os.path.join(self.temp_dir, "client_secret.json")),
             legacy_token_path=self.legacy_token,
         )
+        self.log_dir = os.path.join(self.temp_dir, "logs")
         self.window = MainWindow(
             self.preferences, history=self.history, opener=self.opener, auth_service=self.auth,
-            compressor=self.compressor(),
+            compressor=self.compressor(), log=ActivityLog(FileService(), self.log_dir),
         )
 
     def compressor(self) -> CompressionService:
@@ -390,6 +392,30 @@ class TestMainWindowOpensWorkspaceFolder(MainWindowTestCase):
         with answering_prompts() as shown:
             self.trigger_menu(t("menu.tools.open_workspace"))
         self.assertEqual(shown, [(t("dialog.error"), t("dialog.error.external_open_failed", target=self.workspace_dir))])
+
+
+class TestMainWindowOpensLogFolder(MainWindowTestCase):
+    """「說明」選單的「開啟紀錄檔資料夾」經外部開啟打開紀錄檔資料夾；還沒有紀錄檔或開不了時提示"""
+
+    def test_opens_the_log_folder_with_external_opener(self):
+        os.makedirs(self.log_dir)
+        with answering_prompts() as shown:
+            self.trigger_menu(t("menu.help.open_log_folder"))
+        self.assertEqual(shown, [])
+        self.assertEqual(self.opener.opened, [self.log_dir])
+
+    def test_says_there_are_no_logs_yet_when_the_folder_is_missing(self):
+        with answering_prompts() as shown:
+            self.trigger_menu(t("menu.help.open_log_folder"))
+        self.assertEqual(shown, [(t("dialog.info"), t("log.folder_missing"))])
+        self.assertEqual(self.opener.opened, [])
+
+    def test_tells_user_when_folder_cannot_be_opened(self):
+        os.makedirs(self.log_dir)
+        self.opener.opens = False
+        with answering_prompts() as shown:
+            self.trigger_menu(t("menu.help.open_log_folder"))
+        self.assertEqual(shown, [(t("dialog.error"), t("dialog.error.external_open_failed", target=self.log_dir))])
 
 
 class TestMainWindowRecentMenu(MainWindowTestCase):

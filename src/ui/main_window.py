@@ -181,6 +181,7 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, c=code: self._set_language(c))
             lang_menu.addAction(action)
         help_menu = mb.addMenu(t("menu.help"))
+        self._add_action(help_menu, t("menu.help.open_log_folder"), self._open_log_folder)
         self._add_action(help_menu, t("menu.help.about"), self._show_about)
 
     def _add_action(self, menu, text, callback, shortcut=None) -> QAction:
@@ -910,6 +911,15 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     # --- 說明 ---
+
+    def _open_log_folder(self):
+        """以檔案管理員開啟紀錄檔資料夾；還沒有紀錄檔或開不了時提示"""
+        folder = self._log.folder
+        if not self.file_service.directory_exists(folder):
+            QMessageBox.information(self, t("dialog.info"), t("log.folder_missing"))
+            return
+        if not self._opener.open(folder):
+            QMessageBox.warning(self, t("dialog.error"), t("dialog.error.external_open_failed", target=folder))
 
     def _show_about(self):
         """開啟「關於泠靈小工具」：版號、GitHub 網址與授權"""

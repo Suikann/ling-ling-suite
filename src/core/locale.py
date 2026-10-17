@@ -63,6 +63,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # 選單 - 說明
         "menu.help": "說明",
         "menu.help.about": "關於泠靈小工具",
+        "menu.help.open_log_folder": "開啟紀錄檔資料夾",
         "about.version": "版號：{version}",
         "about.dev_version": "開發版",
         "about.license": "授權：MIT",
@@ -435,6 +436,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "workspace.cleanup_done": "已清理 {count} 個項目。",
         "workspace.close": "關閉",
         "workspace.open_failed": "工作區資料夾尚不存在。",
+        # 紀錄檔
+        "log.folder_missing": "還沒有紀錄檔。",
         # 遺失檔案
         "missing.on_load": "{count} 個檔案找不到（可能已被移動或清理），相關群組在重新命名時會略過它們：\n{files}",
         "preview.missing_warning": "{count} 個檔案找不到，將略過：\n{files}",
@@ -668,6 +671,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # 選單 - 說明
         "menu.help": "Help",
         "menu.help.about": "About Ling Ling Suite",
+        "menu.help.open_log_folder": "Open Log Folder",
         "about.version": "Version: {version}",
         "about.dev_version": "Development build",
         "about.license": "License: MIT",
@@ -1040,6 +1044,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "workspace.cleanup_done": "Cleaned up {count} item(s).",
         "workspace.close": "Close",
         "workspace.open_failed": "The workspace folder does not exist yet.",
+        # 紀錄檔
+        "log.folder_missing": "There are no log files yet.",
         # 遺失檔案
         "missing.on_load": "{count} file(s) could not be found (moved or cleaned up); their groups will skip them when renaming:\n{files}",
         "preview.missing_warning": "{count} file(s) could not be found and will be skipped:\n{files}",
