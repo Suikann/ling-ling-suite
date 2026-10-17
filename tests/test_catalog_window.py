@@ -431,6 +431,15 @@ class TestWrites(WritesTestCase):
             self.wait_for_rows(SHEET_MOVEMENTS, 0)
         self.assertEqual(self.rows(SHEET_PARTS), [])
 
+    def test_a_new_movement_is_numbered_after_the_movements_read_just_before_writing(self):
+        window = self.open_settled()
+        movements = self.open_piece(window).widget(3)
+        # 畫面顯示之後，另一台電腦新增了第 1 樂章
+        add_row(self.google, SHEET_MOVEMENTS, id="m1", piece_id="p1", movement_number="1", sort_order="1")
+        self.button(movements, t("catalog.movement.add")).click()
+        added = next(m for m in self.wait_for_rows(SHEET_MOVEMENTS, 2) if m["id"] != "m1")
+        self.assertEqual((added["movement_number"], added["sort_order"]), ("2", "2"))
+
     def test_adding_saving_and_deleting_a_performance(self):
         window = self.open_settled()
         performances = self.open_piece(window).widget(2)

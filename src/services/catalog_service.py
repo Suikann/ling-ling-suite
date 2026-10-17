@@ -364,6 +364,23 @@ class CatalogService:
         """
         return PendingRows(sheet, records)
 
+    def new_movement(self, piece_id: str) -> PendingRows:
+        """準備一首曲目的新樂章：寫入前一刻才讀這首曲目已有的樂章，編號與排序接在它們之後（一次請求）
+
+        Args:
+            piece_id: 曲目 ID
+
+        Returns:
+            待新增的一列；交給 add_rows 送出，失敗時以同一個物件重送
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        rows = self._read_sheets(SHEET_MOVEMENTS)[0]
+        count = sum(1 for movement in _models(rows, SHEET_MOVEMENTS, Movement) if movement.piece_id == piece_id)
+        number = str(count + 1)
+        return self.new_rows(SHEET_MOVEMENTS, [{"piece_id": piece_id, "movement_number": number, "sort_order": number}])
+
     def add_rows(self, rows: PendingRows) -> List[str]:
         """新增一批列：先讀這張工作表的 ID 欄，再以一次請求新增
 

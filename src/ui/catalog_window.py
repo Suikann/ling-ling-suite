@@ -141,7 +141,7 @@ class CatalogWindow(QMainWindow):
     ):
         """在背景經譜庫服務寫入，完成時在主執行緒呼叫 done；失敗時顯示「寫不進譜庫」提示列並寫進紀錄檔
 
-        按「重試」時以同一個 write 再寫一次，所以 write 要能重送：新增列用 _adding 準備，批次的搬檔、改名從失敗的那份接著做。
+        按「重試」時以同一個 write 再寫一次，所以 write 要能重送：新增列用 _adding 或 _adding_prepared 準備，批次的搬檔、改名從失敗的那份接著做。
 
         Args:
             action: 寫入的動作（介面上的名稱），記進詳細資料與紀錄檔
@@ -180,12 +180,24 @@ class CatalogWindow(QMainWindow):
         Returns:
             以譜庫服務新增、回傳各列 ID 的函式
         """
+        return CatalogWindow._adding_prepared(lambda catalog: catalog.new_rows(sheet, records))
+
+    @staticmethod
+    def _adding_prepared(prepare: Callable[[CatalogService], PendingRows]) -> Callable[[CatalogService], List[str]]:
+        """新增列的寫入：第一次送出時在背景以 prepare 準備這批列，重試時以同一批重送，不重複新增
+
+        Args:
+            prepare: 以譜庫服務準備這批列的函式（例如寫入前一刻才算編號的 new_movement）
+
+        Returns:
+            以譜庫服務新增、回傳各列 ID 的函式
+        """
         pending: List[PendingRows] = []
 
         def add(catalog: CatalogService) -> List[str]:
             """送出這批列"""
             if not pending:
-                pending.append(catalog.new_rows(sheet, records))
+                pending.append(prepare(catalog))
             return catalog.add_rows(pending[0])
         return add
 
@@ -879,13 +891,9 @@ class CatalogWindow(QMainWindow):
         return widget
 
     def _add_movement(self, piece_id: str):
-        """新增樂章，編號接在畫面上這首曲目已有的樂章之後"""
-        detail = self._current_detail
-        count = len(detail.movements) if detail is not None and detail.piece.id == piece_id else 0
-        number = str(count + 1)
+        """新增樂章，編號接在寫入前一刻讀到的這首曲目已有的樂章之後"""
         self._write(
-            t("catalog.movement.add"),
-            self._adding(SHEET_MOVEMENTS, [{"piece_id": piece_id, "movement_number": number, "sort_order": number}]),
+            t("catalog.movement.add"), self._adding_prepared(lambda catalog: catalog.new_movement(piece_id)),
             lambda ids: self._show_piece_detail(piece_id), piece_title=self._piece_title(piece_id),
         )
 
