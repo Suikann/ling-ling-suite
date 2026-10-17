@@ -418,6 +418,20 @@ class TestDriveWrites(CatalogTestCase):
         self.catalog.move_file(file, new)
         self.assertEqual(self.google.drive.file(file.id).parents, (new,))
 
+    def test_moving_several_files_leaves_the_rest_pending_when_one_fails(self):
+        old = self.google.drive.add_folder("別處")
+        new = self.google.drive.add_folder("版本")
+        for name in ("a.pdf", "b.pdf", "c.pdf"):
+            self.google.drive.add_file(name, old)
+        pending = self.catalog.folder_contents(old).pdfs
+        self.google.fail_at(self.google.requests + 2, CatalogErrorKind.OFFLINE)
+        with self.assertRaises(CatalogError):
+            self.catalog.move_files(pending, new)
+        self.assertEqual([f.name for f in pending], ["b.pdf", "c.pdf"])
+        self.catalog.move_files(pending, new)
+        self.assertEqual(pending, [])
+        self.assertEqual([f.name for f in self.catalog.folder_contents(new).pdfs], ["a.pdf", "b.pdf", "c.pdf"])
+
     def test_renames_a_file(self):
         file_id = self.google.drive.add_file("a.pdf")
         self.catalog.rename_file(file_id, "二胡.pdf")

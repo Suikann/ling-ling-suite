@@ -452,6 +452,20 @@ class CatalogService:
             file.id, add_parent=folder_id, remove_parents=[p for p in file.parents if p != folder_id],
         ))
 
+    def move_files(self, pending: List[DriveFile], folder_id: str) -> None:
+        """依序把 pending 裡的檔案搬進 folder_id，搬好一份就從 pending 拿掉
+
+        Args:
+            pending: 還沒搬的檔案（列出時拿到的）；呼叫後只剩還沒搬的
+            folder_id: 目標資料夾的 Drive ID
+
+        Raises:
+            CatalogError: 搬不動；pending[0] 是失敗的那份，以同一個 pending 再呼叫一次即補齊
+        """
+        while pending:
+            self.move_file(pending[0], folder_id)
+            pending.pop(0)
+
     def rename_file(self, file_id: str, name: str) -> None:
         """改 Drive 上檔案的名稱
 

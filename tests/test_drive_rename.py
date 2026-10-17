@@ -3,26 +3,32 @@
 Drive 重新命名測試
 
 計畫與撞名偵測經過命名模組，檔名與本機重新命名一致；不需要 Google 用戶端程式庫。
-對話框以假的 Drive 服務驅動，以 QT_QPA_PLATFORM=offscreen 執行，不需要顯示器。
+讀群組與改名經譜庫服務、對假 Google；對話框以 QT_QPA_PLATFORM=offscreen 執行，不需要顯示器。
 """
 import os
 import subprocess
 import sys
 import unittest
-from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, SRC_DIR)
 
-from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox, QPushButton, QTableWidget, QTextEdit
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget, QTextEdit,
+)
 
+from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.catalog_models import Piece, PieceDetail
 from core.constants import DEFAULT_MASTER_TEMPLATE
 from core.locale import get_locale, set_locale, t
 from core.models import FileInfo, Group, Project
-from services.drive_rename_service import build_groups_from_drive, generate_drive_rename_plan
+from services.catalog_service import CatalogService
+from services.drive_rename_service import build_groups_from_drive, execute_drive_rename, generate_drive_rename_plan
 from services.rename_service import generate_rename_plan
+from tests.fake_google_catalog import FakeGoogle
+from tests.test_main_window import answering_prompts, wait_until
+from ui.catalog_error_bar import CatalogErrorBar
 from ui.drive_rename_dialog import DriveRenameDialog
 
 
@@ -109,47 +115,79 @@ class TestConflicts(unittest.TestCase):
         self.assertEqual(plan.conflicts, [])
 
 
-class FakeDrive:
-    """假的 Drive 服務：版本資料夾沒有子資料夾、只有這些 PDF；記下重新命名的呼叫"""
+class DriveRenameTestCase(unittest.TestCase):
+    """假 Google 裡有一個版本資料夾，放著 a.pdf、b.pdf；譜庫服務接假 Google"""
 
-    def __init__(self, *pdf_names):
-        self._pdfs = [{"id": f"id-{name}", "name": name} for name in pdf_names]
-        self.renamed = []
+    def setUp(self):
+        self.google = FakeGoogle()
+        self.catalog = CatalogService(self.google.sheets, self.google.drive, sleep=lambda seconds: None)
+        self.folder = self.google.drive.add_folder("Sym")
+        self.a = self.google.drive.add_file("a.pdf", self.folder)
+        self.b = self.google.drive.add_file("b.pdf", self.folder)
 
-    def list_subfolders(self, folder_id):
-        return []
-
-    def list_pdfs_in_folder(self, folder_id):
-        return list(self._pdfs)
-
-    def rename_file(self, file_id, new_name):
-        self.renamed.append((file_id, new_name))
-        return True
+    def names(self) -> list:
+        """版本資料夾裡兩份檔目前的名稱"""
+        return [self.google.drive.file(file_id).name for file_id in (self.a, self.b)]
 
 
-class TestDriveRenameDialog(unittest.TestCase):
-    """對話框接線（以假的 Drive 服務驅動）：預覽有撞名時停用執行，執行的是預覽的計畫"""
+class TestRenameOnDrive(DriveRenameTestCase):
+    """群組從 Drive 資料夾經譜庫服務讀出；改名經譜庫服務，失敗時留下還沒改的，以同一份清單再呼叫即補齊"""
+
+    def test_groups_follow_subfolders_and_root_pdfs(self):
+        first = self.google.drive.add_folder("I", self.folder)
+        self.google.drive.add_file("c.pdf", first)
+        groups = build_groups_from_drive(self.catalog, self.folder, PieceDetail(piece=Piece(title="Sym")))
+        self.assertEqual(
+            [(g.name, g.movement_number, [f.display_name for f in g.files]) for g in groups],
+            [("I", "1", ["c.pdf"]), ("Sym", "", ["a.pdf", "b.pdf"])],
+        )
+
+    def test_a_failed_rename_leaves_the_rest_pending_and_calling_again_finishes(self):
+        groups = build_groups_from_drive(self.catalog, self.folder, PieceDetail(piece=Piece(title="Sym")))
+        pending = list(generate_drive_rename_plan(groups, "{Instrument}.pdf", ["Flute", "Horn"]).entries)
+        # 第一次呼叫在 a 就失敗；第二次改好 a、在 b 失敗
+        self.google.fail_next(CatalogErrorKind.OFFLINE)
+        self.google.fail_at(self.google.requests + 3, CatalogErrorKind.OFFLINE)
+        with self.assertRaises(CatalogError):
+            execute_drive_rename(self.catalog, pending)
+        with self.assertRaises(CatalogError):
+            execute_drive_rename(self.catalog, pending)
+        self.assertEqual([e.original_name for e in pending], ["b.pdf"])
+        self.assertEqual(self.names(), ["Flute.pdf", "b.pdf"])
+        execute_drive_rename(self.catalog, pending)
+        self.assertEqual((pending, self.names()), ([], ["Flute.pdf", "Horn.pdf"]))
+
+
+class TestDriveRenameDialog(DriveRenameTestCase):
+    """對話框接線（以假 Google 驅動）：預覽有撞名時停用執行，執行的是預覽的計畫，失敗時提示列出現"""
 
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        super().setUp()
         self._locale = get_locale()
         set_locale("zh_TW")
-        self.drive = FakeDrive("a.pdf", "b.pdf")
-        groups = build_groups_from_drive(self.drive, "folder", PieceDetail(piece=Piece(title="Sym")))
-        self.dialog = DriveRenameDialog(self.drive, groups)
+        groups = build_groups_from_drive(self.catalog, self.folder, PieceDetail(piece=Piece(title="Sym")))
+        self.dialog = DriveRenameDialog(lambda: self.catalog, groups)
         self.template = next(e for e in self.dialog.findChildren(QLineEdit) if e.text() == DEFAULT_MASTER_TEMPLATE)
         self.template.setText("{Instrument}.pdf")
-        self.voices = self.dialog.findChild(QTextEdit)
+        self.voices = next(
+            e for e in self.dialog.findChildren(QTextEdit) if e.placeholderText() == t("catalog.rename.instruments_hint")
+        )
         self.execute = next(
             b for b in self.dialog.findChildren(QPushButton) if b.text() == t("catalog.rename.execute")
         )
 
     def tearDown(self):
         self.dialog.close()
+        self.dialog.deleteLater()
         set_locale(self._locale)
+
+    def bar(self) -> CatalogErrorBar:
+        """對話框頂端的錯誤提示列"""
+        return self.dialog.findChild(CatalogErrorBar)
 
     def test_execute_is_disabled_while_the_preview_has_conflicts_and_enabled_once_resolved(self):
         self.voices.setPlainText("Flute\nFLUTE")
@@ -170,14 +208,32 @@ class TestDriveRenameDialog(unittest.TestCase):
 
     def test_executing_renames_on_drive_what_the_preview_shows(self):
         self.voices.setPlainText("Flute\nHorn")
-        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
-                mock.patch.object(QMessageBox, "information", return_value=QMessageBox.Ok):
+        with answering_prompts(QMessageBox.Yes) as shown:
             self.execute.click()
-        self.assertEqual(self.drive.renamed, [("id-a.pdf", "Flute.pdf"), ("id-b.pdf", "Horn.pdf")])
+            wait_until(lambda: self.dialog.result() == QDialog.Accepted)
+        self.assertEqual(self.names(), ["Flute.pdf", "Horn.pdf"])
+        self.assertIn((t("catalog.rename.title"), t("catalog.rename.success", success=2, total=2)), shown)
+
+    def test_a_failed_rename_shows_the_bar_and_retry_renames_the_rest(self):
+        self.voices.setPlainText("Flute\nHorn")
+        self.google.fail_at(self.google.requests + 2, CatalogErrorKind.NO_PERMISSION)
+        with answering_prompts(QMessageBox.Yes):
+            self.execute.click()
+            wait_until(lambda: not self.bar().isHidden())
+        self.assertTrue(self.bar().findChild(QLabel).text().startswith("寫不進譜庫｜沒有權限："))
+        self.assertIn("b.pdf", self.bar().findChild(QTextEdit).toPlainText())
+        self.assertEqual(self.names(), ["Flute.pdf", "b.pdf"])
+        requests = self.google.requests
+        with answering_prompts() as shown:
+            next(b for b in self.bar().findChildren(QPushButton) if b.text() == "重新登入 Google").click()
+            wait_until(lambda: self.dialog.result() == QDialog.Accepted)
+        self.assertEqual(self.names(), ["Flute.pdf", "Horn.pdf"])
+        self.assertEqual(self.google.requests, requests + 1)
+        self.assertIn((t("catalog.rename.title"), t("catalog.rename.success", success=2, total=2)), shown)
 
 
 class TestWithoutGoogleClient(unittest.TestCase):
-    """計畫、撞名偵測與對話框不載入 Google 用戶端程式庫（只有 Drive 的 adapter 會）"""
+    """計畫、撞名偵測與對話框不載入 Google 用戶端程式庫（只有譜庫的通事會）"""
 
     def test_plan_and_dialog_modules_load_no_google_library(self):
         code = (

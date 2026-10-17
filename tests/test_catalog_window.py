@@ -2,8 +2,9 @@
 """
 譜庫視窗的接線測試
 
-讀取經譜庫服務、對假 Google；只測接線：讀到的東西出現在樹狀清單與詳細面板，
-讀不到時頂端出現提示列（標題與按鈕對應錯誤類別）、內容區寫「讀不到」，紀錄檔寫一筆與詳細資料相同的內容。不測畫面。
+讀寫經譜庫服務、對假 Google；只測接線：讀到的東西出現在樹狀清單與詳細面板，寫入後假 Google 的試算表與 Drive 內容正確，
+讀不到時頂端出現提示列（標題與按鈕對應錯誤類別）、內容區寫「讀不到」，寫不進去時提示列以「寫不進譜庫」開頭，
+紀錄檔寫一筆與詳細資料相同的內容。不測畫面。
 """
 import os
 import shutil
@@ -11,14 +12,21 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTableWidget, QTabWidget, QTextEdit, QTreeWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QDialog, QDialogButtonBox, QInputDialog, QLabel, QLineEdit, QListWidget, QMessageBox,
+    QPushButton, QTableWidget, QTabWidget, QTextEdit, QTreeWidget, QWidget,
+)
 
-from core.catalog_constants import SHEET_EDITIONS, SHEET_PIECES, PublishingPlatform
+from core.catalog_constants import (
+    SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, PublishingPlatform,
+)
 from core.catalog_errors import CatalogErrorKind
 from core.constants import CLUB_PUBLISHING_PLATFORM_KEY
 from core.locale import t
@@ -34,7 +42,7 @@ from tests.fake_browser import CallbackBrowser
 from tests.fake_google import FakeTokenEndpoint, write_client_secrets
 from tests.memory_keyring import MemoryKeyring
 from tests.test_catalog_service import add_row, empty_catalog
-from tests.test_main_window import _settle, wait_until
+from tests.test_main_window import _settle, answering_prompts, wait_until
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.catalog_window import CatalogWindow
 
@@ -280,6 +288,257 @@ class TestFailuresAreLogged(CatalogWindowTestCase):
     def test_successful_reads_write_nothing(self):
         self.open_window()
         self.assertEqual(self.log_text(), "")
+
+
+
+class WritesTestCase(CatalogWindowTestCase):
+    """寫入測試的共用工具：等背景讀取都交回、打開曲目的頁籤、找按鈕、看工作表的列"""
+
+    def idle(self) -> None:
+        """等背景讀取都交回：假 Google 一段時間沒有新請求"""
+        count = -1
+        while count != self.google.requests:
+            count = self.google.requests
+            for _ in range(20):
+                QApplication.processEvents()
+                time.sleep(0.005)
+
+    def open_settled(self) -> CatalogWindow:
+        """開啟譜庫視窗，等連上譜庫後的讀取都交回"""
+        window = self.open_window()
+        self.idle()
+        return window
+
+    def select(self, window: CatalogWindow, name: str) -> None:
+        """在樹狀清單選取最上層名稱為 name 的項目，等讀取交回"""
+        tree = self.tree(window)
+        tree.setCurrentItem(next(
+            tree.topLevelItem(i) for i in range(tree.topLevelItemCount()) if tree.topLevelItem(i).text(0) == name
+        ))
+        self.idle()
+
+    def open_piece(self, window: CatalogWindow) -> QTabWidget:
+        """選取標記過的曲目資料夾，等曲目的頁籤出現"""
+        self.select(window, "春江花月夜  *")
+        wait_until(lambda: window.findChild(QTabWidget) is not None)
+        self.idle()
+        return window.findChild(QTabWidget)
+
+    def tab(self, window: CatalogWindow, index: int, button_text: str) -> QWidget:
+        """等曲目重新顯示到第 index 個頁籤裡有 button_text 的按鈕，回傳那個頁籤"""
+        def page():
+            """目前的頁籤（還沒顯示時為 None）"""
+            tabs = window.findChild(QTabWidget)
+            return tabs.widget(index) if tabs is not None else None
+        wait_until(lambda: page() is not None and any(b.text() == button_text for b in page().findChildren(QPushButton)))
+        self.idle()
+        return page()
+
+    @staticmethod
+    def button(parent: QWidget, text: str) -> QPushButton:
+        """parent 裡文字為 text 的第一顆按鈕"""
+        return next(b for b in parent.findChildren(QPushButton) if b.text() == text)
+
+    def rows(self, sheet: str) -> list:
+        """工作表的資料列（依欄位名稱）"""
+        rows = self.google.sheets.rows(sheet)
+        return [dict(zip(rows[0], row + [""] * (len(rows[0]) - len(row)))) for row in rows[1:]]
+
+    def wait_for_rows(self, sheet: str, count: int) -> list:
+        """等工作表有 count 列，回傳它們"""
+        wait_until(lambda: len(self.rows(sheet)) == count)
+        self.idle()
+        return self.rows(sheet)
+
+    def subfolder(self, parent: str, name: str):
+        """parent 裡名稱為 name 的資料夾（不算請求次數的讀法：直接看假 Drive）"""
+        catalog = CatalogService(self.google.sheets, self.google.drive)
+        requests = self.google.requests
+        found = next((f for f in catalog.subfolders(parent) if f.name == name), None)
+        self.google.requests = requests
+        return found
+
+    def pick_files(self, *names: str, before_ok=lambda: None):
+        """替換「從其他位置移入檔案」的挑選視窗：勾選最上層名稱在 names 裡的檔，做 before_ok 後按確定"""
+        def pick(picker):
+            """勾選後按確定"""
+            tree = picker.findChild(QTreeWidget)
+            wait_until(lambda: tree.topLevelItemCount() > 0)
+            self.idle()
+            for i in range(tree.topLevelItemCount()):
+                if tree.topLevelItem(i).text(0) in names:
+                    tree.topLevelItem(i).setCheckState(0, Qt.Checked)
+            before_ok()
+            picker.findChild(QDialogButtonBox).button(QDialogButtonBox.Ok).click()
+            return picker.result()
+        return mock.patch.object(QDialog, "exec", pick)
+
+
+class TestWrites(WritesTestCase):
+    """譜庫視窗的增刪改經譜庫服務寫進假 Google"""
+
+    def test_tagging_a_folder_adds_a_piece_and_marks_the_folder(self):
+        window = self.open_settled()
+        self.select(window, "未標記")
+        self.button(window, t("catalog.drive.tag_as_piece")).click()
+        wait_until(lambda: "未標記  *" in self.tree_names(window))
+        piece = next(p for p in self.rows(SHEET_PIECES) if p["title"] == "未標記")
+        edition = next(e for e in self.rows(SHEET_EDITIONS) if e["id"] == piece["active_edition_id"])
+        self.assertEqual(edition["piece_id"], piece["id"])
+        self.assertEqual(edition["drive_folder_id"], self.subfolder(self.root, "未標記").id)
+
+    def test_saving_a_piece_writes_its_fields_and_adds_a_new_composer(self):
+        window = self.open_settled()
+        info = self.open_piece(window).widget(0)
+        next(e for e in info.findChildren(QLineEdit) if e.text() == "春江花月夜").setText("=春江")
+        info.findChild(QComboBox).setEditText("彭修文")
+        self.button(info, t("catalog.save")).click()
+        composers = self.wait_for_rows(SHEET_COMPOSERS, 1)
+        wait_until(lambda: self.rows(SHEET_PIECES)[0]["title"] == "=春江")
+        self.assertEqual(composers[0]["name"], "彭修文")
+        self.assertEqual(self.rows(SHEET_PIECES)[0]["composer_id"], composers[0]["id"])
+        self.assertEqual(self.rows(SHEET_PIECES)[0]["active_edition_id"], "e1")
+
+    def test_deleting_a_piece_removes_it_with_its_editions_and_performances(self):
+        add_row(self.google, SHEET_PERFORMANCES, id="r1", piece_id="p1")
+        window = self.open_settled()
+        info = self.open_piece(window).widget(0)
+        with answering_prompts(QMessageBox.Yes):
+            self.button(info, t("catalog.piece.delete")).click()
+            self.wait_for_rows(SHEET_PIECES, 0)
+        self.assertEqual((self.rows(SHEET_EDITIONS), self.rows(SHEET_PERFORMANCES)), ([], []))
+
+    def test_adding_an_edition_and_setting_it_active(self):
+        window = self.open_settled()
+        editions = self.open_piece(window).widget(4)
+        with mock.patch.object(QInputDialog, "getText", return_value=("人民音樂", True)):
+            self.button(editions, t("catalog.edition.add")).click()
+        added = next(e for e in self.wait_for_rows(SHEET_EDITIONS, 2) if e["id"] != "e1")
+        self.assertEqual((added["piece_id"], added["publisher"]), ("p1", "人民音樂"))
+        self.button(self.tab(window, 4, t("catalog.edition.set_active")), t("catalog.edition.set_active")).click()
+        wait_until(lambda: self.rows(SHEET_PIECES)[0]["active_edition_id"] == added["id"])
+
+    def test_adding_and_deleting_a_movement_with_its_parts(self):
+        window = self.open_settled()
+        movements = self.open_piece(window).widget(3)
+        self.button(movements, t("catalog.movement.add")).click()
+        added = self.wait_for_rows(SHEET_MOVEMENTS, 1)[0]
+        self.assertEqual((added["piece_id"], added["movement_number"]), ("p1", "1"))
+        add_row(self.google, SHEET_PARTS, id="t1", edition_id="e1", movement_id=added["id"])
+        page = self.tab(window, 3, t("catalog.movement.delete"))
+        with answering_prompts(QMessageBox.Yes):
+            self.button(page, t("catalog.movement.delete")).click()
+            self.wait_for_rows(SHEET_MOVEMENTS, 0)
+        self.assertEqual(self.rows(SHEET_PARTS), [])
+
+    def test_adding_saving_and_deleting_a_performance(self):
+        window = self.open_settled()
+        performances = self.open_piece(window).widget(2)
+        self.button(performances, t("catalog.performance.add")).click()
+        added = self.wait_for_rows(SHEET_PERFORMANCES, 1)[0]
+        self.assertEqual((added["piece_id"], added["status"]), ("p1", "planned"))
+        page = self.tab(window, 2, t("catalog.performance.delete"))
+        page.findChild(QTableWidget).item(0, 1).setText("中山堂")
+        self.button(page, t("catalog.save")).click()
+        wait_until(lambda: self.rows(SHEET_PERFORMANCES)[0]["venue"] == "中山堂")
+        page = self.tab(window, 2, t("catalog.performance.delete"))
+        with answering_prompts(QMessageBox.Yes):
+            self.button(page, t("catalog.performance.delete")).click()
+            self.wait_for_rows(SHEET_PERFORMANCES, 0)
+
+    def test_creating_a_subfolder_in_the_selected_folder(self):
+        window = self.open_settled()
+        self.select(window, "未標記")
+        with mock.patch.object(QInputDialog, "getText", return_value=("新資料夾", True)):
+            self.button(window, t("catalog.toolbar.new_folder")).click()
+        unmarked = self.subfolder(self.root, "未標記")
+        wait_until(lambda: self.subfolder(unmarked.id, "新資料夾") is not None)
+
+    def test_collecting_files_moves_the_picked_ones_into_the_folder(self):
+        stray = self.google.drive.add_file("散落.pdf", self.root)
+        window = self.open_settled()
+        self.select(window, "未標記")
+        with self.pick_files("散落.pdf"), answering_prompts() as shown:
+            self.button(window, t("catalog.drive.collect_files")).click()
+            wait_until(lambda: shown)
+        self.assertEqual(self.google.drive.file(stray).parents, (self.subfolder(self.root, "未標記").id,))
+        self.assertEqual(shown, [(t("catalog.drive.collect_files"), t("catalog.drive.collect_result", moved=1, total=1))])
+
+    def test_the_parts_tab_has_no_status_dropdown(self):
+        window = self.open_settled()
+        parts = self.open_piece(window).widget(1)
+        self.assertEqual(parts.findChildren(QComboBox), [])
+        self.assertIn("總譜.pdf", [
+            table.item(row, 0).text() for table in parts.findChildren(QTableWidget) for row in range(table.rowCount())
+        ])
+
+    def test_applying_a_template_opens_the_drive_rename_with_the_edition_files(self):
+        window = self.open_settled()
+        parts = self.open_piece(window).widget(1)
+        opened = []
+
+        def look(dialog):
+            """記下 Drive 重新命名對話框的群組清單後取消"""
+            groups = dialog.findChild(QListWidget)
+            opened.append([groups.item(i).text() for i in range(groups.count())])
+            return QDialog.Rejected
+        with mock.patch.object(QDialog, "exec", look):
+            self.button(parts, t("catalog.drive.apply_template")).click()
+            wait_until(lambda: opened)
+        self.assertEqual(opened, [["春江花月夜  (1)"]])
+
+
+class TestWriteFailures(WritesTestCase):
+    """寫不進去時，頂端的提示列以「寫不進譜庫」開頭並寫進紀錄檔；重試補上，不重複新增"""
+
+    def test_a_failed_save_shows_the_write_bar_and_retry_saves(self):
+        window = self.open_settled()
+        info = self.open_piece(window).widget(0)
+        next(e for e in info.findChildren(QLineEdit) if e.text() == "春江花月夜").setText("春江")
+        self.google.fail_next(CatalogErrorKind.OFFLINE)
+        self.button(info, t("catalog.save")).click()
+        wait_until(lambda: not self.bar(window).isHidden())
+        self.assertTrue(self.bar_text(window).startswith("寫不進譜庫｜連不上網路："))
+        self.assertEqual(self.log_text().strip(), self.details_text(window))
+        self.assertIn("春江花月夜", self.log_text())
+        self.assertEqual(self.rows(SHEET_PIECES)[0]["title"], "春江花月夜")
+        self.button(self.bar(window), "重試").click()
+        wait_until(lambda: self.rows(SHEET_PIECES)[0]["title"] == "春江")
+        self.assertTrue(self.bar(window).isHidden())
+
+    def test_retrying_an_add_whose_response_was_lost_adds_one_row(self):
+        window = self.open_settled()
+        performances = self.open_piece(window).widget(2)
+        # 第 1 次請求讀 ID，第 2 次新增：Google 做完了，回應卻沒收到
+        self.google.fail_at(self.google.requests + 2, CatalogErrorKind.OFFLINE, applied=True)
+        self.button(performances, t("catalog.performance.add")).click()
+        wait_until(lambda: not self.bar(window).isHidden())
+        self.button(self.bar(window), "重試").click()
+        wait_until(lambda: self.bar(window).isHidden())
+        self.idle()
+        self.assertEqual(len(self.rows(SHEET_PERFORMANCES)), 1)
+
+    def test_a_failed_move_names_the_file_and_retry_moves_the_rest(self):
+        first = self.google.drive.add_file("乙.pdf", self.root)
+        second = self.google.drive.add_file("甲.pdf", self.root)
+        window = self.open_settled()
+        self.select(window, "未標記")
+        target = self.subfolder(self.root, "未標記").id
+        # 依名稱排序先搬乙、再搬甲：搬甲時連不上
+        fail_second = lambda: self.google.fail_at(self.google.requests + 2, CatalogErrorKind.OFFLINE)
+        with self.pick_files("乙.pdf", "甲.pdf", before_ok=fail_second):
+            self.button(window, t("catalog.drive.collect_files")).click()
+            wait_until(lambda: not self.bar(window).isHidden())
+        self.assertTrue(self.bar_text(window).startswith("寫不進譜庫｜連不上網路："))
+        self.assertIn("甲.pdf", self.details_text(window))
+        self.assertEqual((self.google.drive.file(first).parents, self.google.drive.file(second).parents),
+                         ((target,), (self.root,)))
+        requests = self.google.requests
+        with answering_prompts() as shown:
+            self.button(self.bar(window), "重試").click()
+            wait_until(lambda: shown)
+        self.assertEqual(self.google.drive.file(second).parents, (target,))
+        self.assertGreaterEqual(self.google.requests, requests + 1)
 
 
 if __name__ == '__main__':

@@ -3,8 +3,9 @@
 Drive 重新命名對話框
 
 讓使用者設定模板、樂器表與群組元資料，預覽後直接在 Drive 上重新命名。
+改名經譜庫服務在背景執行；改不了時頂端顯示錯誤提示列並寫進紀錄檔，按處理按鈕後從失敗的那份接著改。
 """
-from typing import TYPE_CHECKING, List
+from typing import Callable, List, Optional
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QSplitter, QListWidget, QListWidgetItem,
@@ -18,21 +19,41 @@ from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     TEMPLATE_VARIABLES, INSTRUMENT_PRESETS,
 )
-from core.models import Group
+from core.catalog_errors import CatalogError, CatalogFailure
+from core.models import DriveRenameEntry, Group
+from services.activity_log import ActivityLog
+from services.catalog_service import CatalogService
 from services.drive_rename_service import generate_drive_rename_plan, execute_drive_rename
-
-if TYPE_CHECKING:
-    from services.drive_service import DriveService
+from ui.catalog_error_bar import CatalogErrorBar
+from ui.catalog_tasks import CatalogTasks
 
 
 class DriveRenameDialog(QDialog):
     """Drive 重新命名對話框"""
 
     def __init__(
-        self, drive: "DriveService", groups: List[Group], parent=None,
+        self, connect: Callable[[], CatalogService], groups: List[Group], parent=None,
+        sign_in: Optional[Callable[[], bool]] = None, open_settings: Optional[Callable[[], bool]] = None,
+        log: Optional[ActivityLog] = None,
     ):
+        """
+        Args:
+            connect: 在背景執行緒取得譜庫服務的函式，拿不到時丟出 CatalogError
+            groups: 這次要命名的 Drive 群組
+            parent: 父元件
+            sign_in: 提示列「重新登入 Google」時呼叫，回傳是否登入成功；省略時直接重試
+            open_settings: 提示列「開啟譜庫設定」時呼叫，回傳是否改了設定；省略時直接重試
+            log: 紀錄檔，改名失敗時寫進去；省略時不寫
+        """
         super().__init__(parent)
-        self._drive = drive
+        self._connect = connect
+        self._tasks = CatalogTasks(self)
+        self._log = log
+        # 這次執行還沒改名的檔案，與這次執行共有幾份
+        self._pending: List[DriveRenameEntry] = []
+        self._total = 0
+        self._sign_in = sign_in
+        self._open_settings = open_settings
         # 這次要命名的 Drive 群組（不屬於任何專案、不存檔），群組資訊的修改經過 Group.update
         self._groups = list(groups)
         self.setWindowTitle(t("catalog.rename.title"))
@@ -42,8 +63,17 @@ class DriveRenameDialog(QDialog):
             self._group_list.setCurrentRow(0)
         self._update_preview()
 
+    def done(self, result: int):
+        """關閉對話框：放棄還在跑的改名，之後它不再碰這個對話框"""
+        self._tasks.abandon_all()
+        super().done(result)
+
     def _build_ui(self):
+        """排出提示列、命名模板、群組與樂器表、群組資訊、預覽與按鈕"""
         layout = QVBoxLayout(self)
+        self._error_bar = CatalogErrorBar(log=self._log)
+        self._error_bar.connect_remedies(self._continue_rename, self._sign_in, self._open_settings)
+        layout.addWidget(self._error_bar)
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel(t("catalog.rename.template_label")))
         self._template_entry = QLineEdit(localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN))
@@ -214,7 +244,7 @@ class DriveRenameDialog(QDialog):
         self._execute_btn.setEnabled(not plan.conflicts)
 
     def _execute_rename(self):
-        """執行重新命名"""
+        """確認後在背景執行預覽的計畫"""
         plan = self._current_plan
         if not plan.entries or plan.conflicts:
             return
@@ -224,11 +254,32 @@ class DriveRenameDialog(QDialog):
         )
         if result != QMessageBox.Yes:
             return
-        success, errors = execute_drive_rename(self._drive, plan.entries)
-        total = len(plan.entries)
-        msg = t("catalog.rename.success", success=success, total=total)
-        if errors:
-            msg += "\n" + t("catalog.rename.errors", files=", ".join(errors))
-        QMessageBox.information(self, t("catalog.rename.title"), msg)
-        if success > 0:
+        self._pending = list(plan.entries)
+        self._total = len(plan.entries)
+        self._continue_rename()
+
+    def _continue_rename(self):
+        """在背景改名還沒改的檔案；全部改好就關閉對話框，改不了時顯示提示列"""
+        if not self._pending:
+            return
+        self._execute_btn.setEnabled(False)
+        pending = self._pending
+
+        def renamed(_result):
+            """全部改好了"""
+            QMessageBox.information(
+                self, t("catalog.rename.title"),
+                t("catalog.rename.success", success=self._total, total=self._total),
+            )
             self.accept()
+
+        def failed(error: CatalogError):
+            """改不了：提示列寫出失敗的那份；改計畫後可再執行"""
+            self._execute_btn.setEnabled(not self._current_plan.conflicts)
+            file_name = pending[0].original_name if pending else ""
+            self._error_bar.show_failure(
+                t("catalog.error.cannot_write"),
+                CatalogFailure.from_error(error, t("catalog.rename.title"), file_name=file_name),
+            )
+        self._error_bar.clear()
+        self._tasks.run(lambda: execute_drive_rename(self._connect(), pending), renamed, failed)

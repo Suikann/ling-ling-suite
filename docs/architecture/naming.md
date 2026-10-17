@@ -44,4 +44,5 @@
 
 - `services/drive_rename_service.py` 的 `generate_drive_rename_plan(groups, template, voices=None)` 經 `name_group` 產生計畫與撞名（`DriveRenamePlan.entries`／`conflicts`）：只改檔名、不放資料夾，不改寫群組（對話框清空樂器框就用群組自己的樂器表）
 - 撞名＝重新命名後同一群組（同一個 Drive 資料夾）內同名，以 `name_key` 比對、不分大小寫，不改名的多出分譜也算；有撞名時對話框停用執行
-- 計畫、撞名偵測與 Drive 重新命名對話框不載入 Google 用戶端程式庫，只有 adapter（`services/drive_service.py`）載入（`tests/test_drive_rename.py` 驗證）
+- 讀版本資料夾（`build_groups_from_drive`）與改名（`execute_drive_rename`）經譜庫服務；改名逐份進行，改不了時丟出帶類別的錯誤、清單留下還沒改的，對話框顯示提示列，按處理按鈕後從失敗的那份接著改
+- 計畫、撞名偵測與 Drive 重新命名對話框不載入 Google 用戶端程式庫，只有譜庫的通事（`services/google_catalog.py`）在用到時載入（`tests/test_drive_rename.py` 驗證）
