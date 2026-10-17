@@ -1229,6 +1229,13 @@ class TestMainWindowCompressPdf(MainWindowCompressTestCase):
         self.assertEqual(len(shown), 1)
         self.assertIn(self.target, shown[0][1])
 
+    def test_target_typed_without_extension_is_saved_with_pdf_added(self):
+        typed = os.path.join(self.temp_dir, "out", "Flute small")
+        self.start_compressing(typed)
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(file_digest(typed + ".pdf"), file_digest(self.source))
+
     def test_target_inside_the_original_folder_is_refused_and_asked_again(self):
         inside = os.path.join(os.path.dirname(self.source), "Flute small.pdf")
         with answering_prompts() as shown:

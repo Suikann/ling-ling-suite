@@ -696,7 +696,7 @@ class MainWindow(QMainWindow):
     def _compress_pdf(self):
         """選一份 PDF 與另存位置，在背景壓縮；壓完交到另存位置並告訴使用者結果"""
         from ui import compress_pdf
-        paths = compress_pdf.ask_paths(self, self._compression_output)
+        paths = compress_pdf.ask_paths(self, self._compression_output, self.file_service)
         if paths is None:
             return
         source, target = paths

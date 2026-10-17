@@ -9,10 +9,12 @@ from typing import Optional, Tuple
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
-from core.constants import CompressionLevel, CompressionProblem, CompressionStatus
+from core.constants import PDF_EXTENSION, CompressionLevel, CompressionProblem, CompressionStatus
 from core.locale import t
 from services.compression_output_service import CompressionOutputService
 from services.compression_service import CompressionProgress, CompressionResult
+from services.file_service import FileService
+from ui.widgets import ask_save_path
 
 _LEVEL_KEYS = {
     CompressionLevel.LOSSLESS: "compress.level.lossless",
@@ -50,12 +52,15 @@ def size_text(size: int) -> str:
     return f"{size / 1000 / 1000:.1f} MB"
 
 
-def ask_paths(parent: QWidget, output: CompressionOutputService) -> Optional[Tuple[str, str]]:
-    """詢問要壓縮的 PDF 與另存位置；另存位置在原檔的資料夾裡時提示並再問一次
+def ask_paths(
+    parent: QWidget, output: CompressionOutputService, file_service: FileService,
+) -> Optional[Tuple[str, str]]:
+    """詢問要壓縮的 PDF 與另存位置；另存位置沒打副檔名時補上，在原檔的資料夾裡時提示並再問一次
 
     Args:
         parent: 對話框的父元件
         output: 另存位置的規則
+        file_service: 檔案服務（確認補上副檔名後的檔名是否已有檔案）
 
     Returns:
         （原檔，另存位置）；任一個對話框按了取消時為 None
@@ -67,8 +72,8 @@ def ask_paths(parent: QWidget, output: CompressionOutputService) -> Optional[Tup
         return None
     suggested = output.default_target(source)
     while True:
-        target, _ = QFileDialog.getSaveFileName(
-            parent, t("compress.select_target"), suggested, f"{t('filedialog.pdf_files')} (*.pdf)",
+        target = ask_save_path(
+            parent, t("compress.select_target"), suggested, t("filedialog.pdf_files"), PDF_EXTENSION, file_service,
         )
         if not target:
             return None
