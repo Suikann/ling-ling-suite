@@ -5,6 +5,7 @@
 提供 zh_TW / en 雙語字典與 t(key, **kwargs) 存取函數。
 
 依介面語言挑選中英文版本（預設模板、預設編制名稱、聲部組預設值等）一律經過 is_english 或 localized。
+字串裡的 {trash}（英文句首或按鈕用 {Trash}）由 t() 換成這個平台對系統回收處的稱呼（見 trash_name）。
 
 使用範例：
     from core.locale import t, set_locale, get_locale, localized
@@ -13,10 +14,17 @@
     status = t("status.imported_files", count=5)
     template = localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN)
 """
+import os
 from typing import Dict, FrozenSet, Optional, TypeVar
 from core.constants import LOCALE_EN, LOCALE_ZH_TW
 
 _T = TypeVar("_T")
+
+# 系統回收處的稱呼（各語言：Windows 的，其他平台的）
+_TRASH_NAMES = {
+    LOCALE_ZH_TW: ("資源回收桶", "垃圾桶"),
+    LOCALE_EN: ("recycle bin", "trash"),
+}
 
 _current_locale = LOCALE_ZH_TW
 
@@ -180,8 +188,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "ungrouped.new_group_from_selected": "建立新群組",
         # 檔案清單
         "file.delete_from_disk": "刪除檔案",
-        "file.confirm_delete": "確定要將以下檔案移至資源回收桶？\n\n{name}",
-        "file.deleted": "已移至資源回收桶",
+        "file.confirm_delete": "確定要將以下檔案移至{trash}？\n\n{name}",
+        "file.deleted": "已移至{trash}",
         "file_list.empty": "尚無檔案",
         # 樂器表
         "instrument.title": "樂器表",
@@ -251,7 +259,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "history.residual.redo": "重做失敗後留下的 {count} 個檔案",
         "history.record_not_saved": "操作已完成，但紀錄無法寫入：\n{error}",
         "history.meta_not_restored": "下列工作區子資料夾的來源資訊寫不回去：\n{folders}",
-        "history.split_replaced": "分割時被取代的檔案沒有找回，仍在資源回收桶：\n{files}",
+        "history.split_replaced": "分割時被取代的檔案沒有找回，仍在{trash}：\n{files}",
         # PDF 分割
         "split.title": "PDF 分割",
         "split.select_file": "選擇要分割的檔案：",
@@ -260,7 +268,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "split.output_dir": "輸出資料夾：",
         "split.output_workspace": "工作區",
         "split.output_custom": "指定資料夾",
-        "split.resplit_confirm": "這份合併譜先前已分割過，工作區內有 {count} 個分譜。{owner}\n繼續將以這次的分割結果取代它們：新分譜就位後，才把舊分譜移至資源回收桶。\n\n是否繼續？",
+        "split.resplit_confirm": "這份合併譜先前已分割過，工作區內有 {count} 個分譜。{owner}\n繼續將以這次的分割結果取代它們：新分譜就位後，才把舊分譜移至{trash}。\n\n是否繼續？",
         "split.resplit_owner": "這些分譜屬於專案「{project}」{missing}，尚未重新命名。",
         "split.resplit_owner_missing": "（找不到）",
         "split.error.overwrite_source": "分譜「{name}」的輸出路徑與來源合併譜相同，會覆蓋來源。\n請改名或改用其他輸出資料夾。",
@@ -326,7 +334,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "menu.tools.cleanup_workspace": "清理工作區...",
         # 工作區清理對話框
         "workspace.title": "清理工作區",
-        "workspace.intro": "工作區存放分割產生、尚未重新命名的分譜。勾選要移至資源回收桶的項目：",
+        "workspace.intro": "工作區存放分割產生、尚未重新命名的分譜。勾選要移至{trash}的項目：",
         "workspace.empty": "工作區是空的。",
         "workspace.col.source": "來源",
         "workspace.col.files": "檔案數",
@@ -340,7 +348,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "workspace.status.unknown_source": "來源不明",
         "workspace.unreadable_notice": "{count} 個專案檔無法讀取，已知屬於它們的項目已取消勾選；其他引用無法得知，請自行確認：\n{files}",
         "workspace.summary": "已勾選 {count} 個項目，共 {size}",
-        "workspace.cleanup": "移至資源回收桶",
+        "workspace.cleanup": "移至{trash}",
         "workspace.cleanup_done": "已清理 {count} 個項目。",
         "workspace.close": "關閉",
         "workspace.open_failed": "工作區資料夾尚不存在。",
@@ -667,8 +675,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "ungrouped.new_group_from_selected": "Create New Group",
         # 檔案清單
         "file.delete_from_disk": "Delete File",
-        "file.confirm_delete": "Move this file to the recycle bin?\n\n{name}",
-        "file.deleted": "Moved to recycle bin",
+        "file.confirm_delete": "Move this file to the {trash}?\n\n{name}",
+        "file.deleted": "Moved to the {trash}",
         "file_list.empty": "No files",
         # 樂器表
         "instrument.title": "Instruments",
@@ -738,7 +746,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "history.residual.redo": "{count} file(s) left by a failed redo",
         "history.record_not_saved": "The operation finished, but its record could not be written:\n{error}",
         "history.meta_not_restored": "Source info could not be written back for these workspace folders:\n{folders}",
-        "history.split_replaced": "Files replaced by the split were not restored; they are still in the recycle bin:\n{files}",
+        "history.split_replaced": "Files replaced by the split were not restored; they are still in the {trash}:\n{files}",
         # PDF 分割
         "split.title": "PDF Split",
         "split.select_file": "Select file to split:",
@@ -747,7 +755,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "split.output_dir": "Output folder:",
         "split.output_workspace": "Workspace",
         "split.output_custom": "Custom folder",
-        "split.resplit_confirm": "This PDF was split before; the workspace holds {count} part(s) from it.{owner}\nContinuing will replace them with this split: the old parts move to the recycle bin once the new ones are in place.\n\nContinue?",
+        "split.resplit_confirm": "This PDF was split before; the workspace holds {count} part(s) from it.{owner}\nContinuing will replace them with this split: the old parts move to the {trash} once the new ones are in place.\n\nContinue?",
         "split.resplit_owner": "These parts belong to the project \"{project}\"{missing} and have not been renamed yet.",
         "split.resplit_owner_missing": " (not found)",
         "split.error.overwrite_source": "The output path of part \"{name}\" is the source PDF itself and would overwrite it.\nRename the part or choose another output folder.",
@@ -813,7 +821,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "menu.tools.cleanup_workspace": "Clean Up Workspace...",
         # 工作區清理對話框
         "workspace.title": "Clean Up Workspace",
-        "workspace.intro": "The workspace holds split parts that have not been renamed yet. Check the items to move to the recycle bin:",
+        "workspace.intro": "The workspace holds split parts that have not been renamed yet. Check the items to move to the {trash}:",
         "workspace.empty": "The workspace is empty.",
         "workspace.col.source": "Source",
         "workspace.col.files": "Files",
@@ -827,7 +835,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "workspace.status.unknown_source": "Unknown source",
         "workspace.unreadable_notice": "{count} project file(s) could not be read. Items known to belong to them have been unchecked; other references cannot be determined, please check manually:\n{files}",
         "workspace.summary": "{count} item(s) checked, {size} total",
-        "workspace.cleanup": "Move to Recycle Bin",
+        "workspace.cleanup": "Move to {Trash}",
         "workspace.cleanup_done": "Cleaned up {count} item(s).",
         "workspace.close": "Close",
         "workspace.open_failed": "The workspace folder does not exist yet.",
@@ -1021,6 +1029,19 @@ def localized(zh: _T, en: _T) -> _T:
     return en if is_english() else zh
 
 
+def trash_name(os_name: str = os.name) -> str:
+    """系統回收處在目前介面語言的稱呼：Windows 是資源回收桶，其他平台（Linux）是垃圾桶
+
+    Args:
+        os_name: 平台的 os.name，預設為目前的平台
+
+    Returns:
+        句中用的稱呼，例如「垃圾桶」、"recycle bin"
+    """
+    windows, others = _TRASH_NAMES.get(_current_locale, _TRASH_NAMES[LOCALE_ZH_TW])
+    return windows if os_name == "nt" else others
+
+
 def set_locale(locale_code: str):
     """設定目前語言
 
@@ -1052,6 +1073,8 @@ def get_keys(locale_code: str) -> FrozenSet[str]:
 def t(key: str, **kwargs) -> str:
     """取得翻譯字串
 
+    字串裡的 {trash}、{Trash} 換成這個平台的系統回收處稱呼（後者首字母大寫），不必由呼叫端傳入。
+
     Args:
         key: 點分階層鍵名，例如 "menu.file.new"
         **kwargs: 用於 str.format_map() 的參數
@@ -1064,6 +1087,8 @@ def t(key: str, **kwargs) -> str:
     if text is None:
         fallback = _STRINGS[LOCALE_ZH_TW]
         text = fallback.get(key, key)
+    trash = trash_name()
+    text = text.replace("{trash}", trash).replace("{Trash}", trash.title())
     if kwargs:
         try:
             text = text.format_map(kwargs)
