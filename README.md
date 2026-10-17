@@ -62,6 +62,11 @@ Download the latest portable EXE from the **[Releases](../../releases)** page. N
 5. **Configure naming format** at the bottom (e.g., `{Number}-{PieceName}-{Instrument}.pdf`)
 6. **Preview & Rename** to execute
 
+## Known Limitations
+
+- **Paths are compared case-insensitively**: on every platform, paths that differ only in letter case count as the same file. On Linux, when one folder holds both `Flute.pdf` and `flute.pdf`, Ling Ling Suite treats them as one file; a move first checks whether the destination is a different file and refuses to overwrite it, so no file is damaged.
+- **File names are cleaned by Windows rules**: Linux also replaces characters Windows does not allow (`< > : " / \ | ? *`) with underscores, because the files are uploaded to Drive and downloaded by Windows users.
+
 ## Development
 
 **Requirements:**
