@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-社團設定（譜庫設定對話框）的登入區接線測試
+譜庫設定對話框的登入區接線測試
 
 只測與登入服務的接線：登入狀態旁的原因、帳號 email、帳號提醒，以及登入沒有完成時的提示；不測畫面。
 登入服務的安全儲存、Google 權杖端點與開瀏覽器都換成替身。
@@ -29,7 +29,7 @@ from ui.catalog_settings_dialog import CatalogSettingsDialog
 
 
 class LoginAreaTestCase(unittest.TestCase):
-    """社團設定登入區測試的共用骨架：替身組成的登入服務、臨時目錄裡的偏好設定"""
+    """譜庫設定登入區測試的共用骨架：替身組成的登入服務、臨時目錄裡的偏好設定"""
 
     @classmethod
     def setUpClass(cls):
@@ -58,7 +58,7 @@ class LoginAreaTestCase(unittest.TestCase):
         )
 
     def open_dialog(self) -> CatalogSettingsDialog:
-        """開啟社團設定"""
+        """開啟譜庫設定"""
         dialog = CatalogSettingsDialog(self.auth, self.preferences)
         self.addCleanup(dialog.deleteLater)
         return dialog
