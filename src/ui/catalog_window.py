@@ -394,7 +394,7 @@ class CatalogWindow(QMainWindow):
     # --- 資料夾詳細 ---
 
     def _show_folder_detail(self, folder_id: str, folder_name: str):
-        """顯示資料夾內容與元資料"""
+        """顯示資料夾的操作，並經譜庫服務在背景列出資料夾裡的 PDF；標記過的資料夾改顯示曲目"""
         self._clear_detail()
         piece = self._piece_by_folder.get(folder_id)
         if piece:
