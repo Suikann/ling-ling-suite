@@ -322,6 +322,10 @@ class FakeDrive:
         """把檔案丟進垃圾桶"""
         self._items[file_id].trashed = True
 
+    def is_trashed(self, file_id: str) -> bool:
+        """檔案是否在垃圾桶裡"""
+        return self._items[file_id].trashed
+
     def file(self, file_id: str) -> DriveFile:
         """檔案目前的樣子"""
         return self._items[file_id].as_file()
@@ -372,6 +376,13 @@ class FakeDrive:
             if add_parent or remove_parents:
                 kept = [p for p in item.parents if p not in remove_parents]
                 item.parents = kept + ([add_parent] if add_parent and add_parent not in kept else [])
+        self._google.request(handle)
+
+    def move_to_trash(self, file_id: str) -> None:
+        """把檔案丟進垃圾桶；沒有這個檔時找不到"""
+        def handle():
+            """標成在垃圾桶裡"""
+            self._item(file_id).trashed = True
         self._google.request(handle)
 
     def _item(self, file_id: str) -> _DriveItem:

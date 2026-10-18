@@ -155,3 +155,9 @@ class DrivePort(Protocol):
             CatalogError: 改不了，名稱與位置都沒變
         """
 
+    def move_to_trash(self, file_id: str) -> None:
+        """把檔案丟進 Drive 垃圾桶（files.update，trashed 設為 true）；約 30 天內可從垃圾桶救回
+
+        Raises:
+            CatalogError: 丟不進去，檔案還在原處
+        """

@@ -19,6 +19,8 @@
     platform = catalog.publishing_platform()         # 社團設定啟用的發譜平台，沒有時為 None
     place = catalog.read_place(edition_id, movement_id, OrchestraType.CHINESE)  # 群組要連的一處
     outcome = catalog.sync_instrumentation(place_writes(project), project.orchestra_type, email, WriteSource.SAVE, {})
+    page = catalog.edition_page(edition_id, movement_id, OrchestraType.CHINESE)  # 版本頁：登記與沒登記的檔
+    catalog.register_files(PendingRegistration(edition_id, movement_id, {"琵琶": pdf}))  # 失敗時以同一個物件重送
     rows = catalog.new_rows(SHEET_PIECES, [{"title": "春江花月夜"}])
     ids = catalog.add_rows(rows)                     # 失敗時以同一個 rows 重送，不會重複新增
 """
@@ -37,8 +39,8 @@ from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, OrchestraType
 from core.voice_suggestions import ranked_by_usage
 from core.catalog_models import (
-    CatalogOverview, CatalogPlace, Composer, DriveFile, Edition, EditionFiles, FolderContents, LinkTargets, Movement,
-    Part, Performance, Piece, PieceDetail, SectionMapEntry, sort_order_key,
+    CatalogOverview, CatalogPlace, Composer, DriveFile, Edition, EditionFiles, EditionPage, FolderContents, FolderPdf,
+    LinkTargets, Movement, Part, Performance, Piece, PieceDetail, Registration, SectionMapEntry, sort_order_key,
 )
 from core.catalog_sync import (
     CurrentPlace, Decision, ItemReview, PlaceReview, PlaceWrite, SyncField, SyncItem, SyncOutcome, Verdict, WriteSource,
@@ -292,6 +294,23 @@ class _PlaceTables:
             sections=_club_sections([record for _, record in self._sections], self._orchestra_type), filed=[],
         )
 
+    def registrations(self, edition_id: str, movement_id: str) -> Dict[str, Registration]:
+        """一處登記了 Drive 檔案的聲部與登記的檔"""
+        return {
+            part.instrument_name: Registration(part.drive_file_id.strip(), part.file_name)
+            for _, part in self._voice_rows(edition_id, movement_id) if part.drive_file_id.strip()
+        }
+
+    def score(self, edition_id: str, movement_id: str) -> Optional[Registration]:
+        """一處的總譜列登記的檔；沒有總譜列或沒登記時為 None"""
+        row = self._score_row(edition_id, movement_id)
+        part = row[1] if row else None
+        return Registration(part.drive_file_id.strip(), part.file_name) if part and part.drive_file_id.strip() else None
+
+    def registered_file_ids(self) -> Set[str]:
+        """所有分譜列（不分版本與樂章，含總譜列）登記的 Drive 檔案"""
+        return {part.drive_file_id.strip() for _, part in self._parts if part.drive_file_id.strip()}
+
     def other_pieces(self, edition_id: str) -> Dict[str, int]:
         """譜庫裡每種樂器（第一次出現的寫法）被這個版本的曲目以外的幾首曲目用到（總譜列不算）"""
         piece_id = self.editions[edition_id].piece_id if edition_id in self.editions else ""
@@ -408,6 +427,13 @@ class _PlaceTables:
             (row, part) for row, part in self._parts
             if part.edition_id == edition_id and part.movement_id == movement_id
         ])
+
+    def _score_row(self, edition_id: str, movement_id: str) -> Optional[Tuple[int, Part]]:
+        """一處的總譜列與列號；有幾列時只認排在前面那一列"""
+        return next((
+            (row, part) for row, part in self._parts
+            if part.edition_id == edition_id and part.movement_id == movement_id and _is_true(part.is_score)
+        ), None)
 
     def _duration_row(self, edition_id: str, movement_id: str) -> Optional[Tuple[int, Dict[str, str]]]:
         """一處的時長列與列號；有幾列時只認第一列"""
@@ -544,6 +570,31 @@ class PendingPlace:
         self._edition_rows: Optional[PendingRows] = None
         self._movement_rows: Optional[PendingRows] = None
         self._activate_edition = False
+
+
+class PendingRegistration:
+    """要登記到一處的檔：聲部各一份，總譜列一份；版本頁按儲存時送出
+
+    CatalogService.register_files 寫入登記時記下被換掉的舊檔，丟進垃圾桶一份就拿掉一份：之後中途失敗時以同一個物件
+    重送，已寫好的登記不再寫，還沒丟的舊檔接著丟。
+    """
+
+    def __init__(
+        self, edition_id: str, movement_id: str, voices: Mapping[str, DriveFile], score: Optional[DriveFile] = None,
+    ):
+        """
+        Args:
+            edition_id: 版本 ID
+            movement_id: 樂章 ID；整首為空字串
+            voices: 聲部（譜庫的寫法）與要登記給它的檔
+            score: 要登記給總譜列的檔；不登記時為 None
+        """
+        self.edition_id = edition_id
+        self.movement_id = movement_id
+        self.voices: Dict[str, DriveFile] = dict(voices)
+        self.score = score
+        # 被換掉、還沒丟進垃圾桶的舊檔
+        self.replaced: List[str] = []
 
 
 class CatalogService:
@@ -742,8 +793,53 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到；版本或樂章已不在譜庫時為已經不在譜庫
         """
+        return self._place(self._place_tables(orchestra_type), edition_id, movement_id)
+
+    def edition_page(self, edition_id: str, movement_id: str, orchestra_type: OrchestraType) -> EditionPage:
+        """讀譜庫視窗的版本頁：一處的編制、各聲部與總譜列登記的檔，以及版本資料夾裡沒登記的檔
+
+        試算表兩次請求（同 read_place），再逐層列出版本資料夾與它的子資料夾。沒登記的檔是沒被任何分譜列
+        （不分版本與樂章）登記的 PDF；版本沒有 Drive 資料夾時沒有。
+
+        Args:
+            edition_id: 版本 ID
+            movement_id: 樂章 ID；整首為空字串
+            orchestra_type: 樂團類型（聲部組對照只取這一套）
+
+        Returns:
+            版本頁
+
+        Raises:
+            CatalogError: 讀不到；版本或樂章已不在譜庫時為已經不在譜庫
+        """
+        catalog = self._place_tables(orchestra_type)
+        place = self._place(catalog, edition_id, movement_id)
+        registered = catalog.registered_file_ids()
+        folder_id = catalog.editions[edition_id].drive_folder_id
+        return EditionPage(
+            place=place,
+            registrations=catalog.registrations(edition_id, movement_id),
+            score=catalog.score(edition_id, movement_id),
+            unregistered=[pdf for pdf in self._pdfs_under(folder_id) if pdf.file.id not in registered]
+            if folder_id else [],
+        )
+
+    def _place_tables(self, orchestra_type: OrchestraType) -> "_PlaceTables":
+        """讀一處要的各工作表（列出工作表名稱、讀取各一次請求）；時長與聲部組對照還沒建立時當成空的"""
         sheets = _place_sheets(self._call(self._sheets.sheet_titles))
-        catalog = _PlaceTables(dict(zip(sheets, self._read_sheets(*sheets))), orchestra_type)
+        return _PlaceTables(dict(zip(sheets, self._read_sheets(*sheets))), orchestra_type)
+
+    def _pdfs_under(self, folder_id: str, prefix: str = "") -> List[FolderPdf]:
+        """資料夾與它所有子資料夾裡的 PDF，連同在資料夾裡的路徑，依路徑排序（每個資料夾一次列出）"""
+        contents = self.folder_contents(folder_id)
+        pdfs = [FolderPdf(pdf, prefix + pdf.name) for pdf in contents.pdfs]
+        for folder in contents.folders:
+            pdfs += self._pdfs_under(folder.id, f"{prefix}{folder.name}/")
+        return sorted(pdfs, key=lambda pdf: pdf.path)
+
+    @staticmethod
+    def _place(catalog: "_PlaceTables", edition_id: str, movement_id: str) -> CatalogPlace:
+        """從讀到的各工作表組出一處"""
         current = catalog.current(edition_id, movement_id)
         edition = catalog.editions[edition_id]
         movement = catalog.movements.get(movement_id)
@@ -951,6 +1047,59 @@ class CatalogService:
                 self._sheets.append_rows(rows.sheet, values)
         self._call(send)
         return rows.ids
+
+    def register_files(self, pending: PendingRegistration) -> None:
+        """把檔登記到一處的聲部與總譜列，換掉的舊檔丟進 Drive 垃圾桶
+
+        寫入前一刻讀分譜工作表找列號，所有登記以一個請求寫入（已經登記同一份的不再寫）；這處還沒有總譜列時新增一列。
+        登記寫好之後才丟舊檔，所以中途失敗時舊檔還在：登記還沒改，或登記已改、舊檔還沒丟，以同一個 pending 重送即補齊
+        （回應沒收到而其實已寫入時，重送不再寫，照樣丟掉記下的舊檔）。
+
+        Args:
+            pending: 要登記的檔；上一次失敗時傳入同一個
+
+        Raises:
+            CatalogError: 讀不到或寫不進去；要登記的聲部已不在譜庫時為已經不在譜庫
+        """
+        def send() -> None:
+            """找列號後寫入登記"""
+            rows = self._sheets.read_ranges([_whole_sheet(SHEET_PARTS)])[0]
+            parts = _numbered(rows, SHEET_PARTS, Part)
+            here = [
+                (row, part) for row, part in parts
+                if part.edition_id == pending.edition_id and part.movement_id == pending.movement_id
+            ]
+            voices = {voice_key(part.instrument_name): (row, part) for row, part in _voice_parts(here)}
+            score = next(((row, part) for row, part in here if _is_true(part.is_score)), None)
+            batch = _Batch({SHEET_PARTS: rows}, self._draw_ids)
+            replaced = []
+            targets = []
+            for voice, file in pending.voices.items():
+                if voice_key(voice) not in voices:
+                    raise CatalogError(CatalogErrorKind.GONE, f"voice {voice} is no longer in the catalog")
+                targets.append((voices[voice_key(voice)], file))
+            if pending.score is not None and score is None:
+                batch.add(SHEET_PARTS, {
+                    "edition_id": pending.edition_id, "movement_id": pending.movement_id, "is_score": CATALOG_TRUE,
+                    "drive_file_id": pending.score.id, "file_name": pending.score.name,
+                })
+            elif pending.score is not None:
+                targets.append((score, pending.score))
+            for (row, part), file in targets:
+                if part.drive_file_id.strip() == file.id:
+                    continue
+                if part.drive_file_id.strip():
+                    replaced.append(part.drive_file_id.strip())
+                batch.set(SHEET_PARTS, row, "drive_file_id", file.id)
+                batch.set(SHEET_PARTS, row, "file_name", file.name)
+            # 寫入前就記下：回應沒收到而其實已寫入時，重送讀到的已是新登記，舊檔只能從這裡知道
+            pending.replaced += [file_id for file_id in replaced if file_id not in pending.replaced]
+            if batch.cells:
+                self._sheets.write_cells(batch.cells)
+        self._call(send)
+        while pending.replaced:
+            self._call(lambda: self._drive.move_to_trash(pending.replaced[0]))
+            pending.replaced.pop(0)
 
     def write_cells(self, data: Sequence[CellWrite]) -> None:
         """一次寫入多個範圍（一個請求，全成或全不成）

@@ -215,7 +215,7 @@ class TestDriveRequests(unittest.TestCase):
 
 
 class TestDriveWriteRequests(unittest.TestCase):
-    """Drive 關口的中繼資料、建資料夾、改名與搬移，各一次請求"""
+    """Drive 關口的中繼資料、建資料夾、改名與搬移、丟進垃圾桶，各一次請求"""
 
     FILE = {"id": "f1", "name": "a.pdf", "mimeType": "application/pdf", "parents": ["d1"], "md5Checksum": "abc"}
 
@@ -241,6 +241,13 @@ class TestDriveWriteRequests(unittest.TestCase):
         self.assertEqual(sent_query(http, 1)["addParents"], ["d2"])
         self.assertEqual(sent_query(http, 1)["removeParents"], ["d1,d3"])
         self.assertEqual(len(http.request_sequence), 2)
+
+    def test_moves_a_file_to_the_trash_in_one_update(self):
+        http = HttpMockSequence([ok(self.FILE)])
+        GoogleDrive(http=http).move_to_trash("f1")
+        self.assertEqual(sent_body(http, 0), {"trashed": True})
+        self.assertIn("/files/f1", http.request_sequence[0][0])
+        self.assertEqual(http.request_sequence[0][1], "PATCH")
 
 
 class TestOpenGoogleCatalog(unittest.TestCase):

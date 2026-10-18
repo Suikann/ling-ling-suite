@@ -250,6 +250,10 @@ class GoogleDrive(_Gateway):
             addParents=add_parent or None, removeParents=",".join(remove_parents) or None,
         ))
 
+    def move_to_trash(self, file_id: str) -> None:
+        """丟進垃圾桶（files.update）"""
+        self._execute(self._api.files().update(fileId=file_id, body={"trashed": True}, fields="id"))
+
 
 def _drive_file(item: dict) -> DriveFile:
     """Drive 回應裡的一個檔案"""
