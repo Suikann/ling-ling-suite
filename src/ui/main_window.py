@@ -28,6 +28,7 @@ from services.compression_service import CompressionResult, CompressionService
 from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
+from services.huaxia_auth_service import HuaXiaAuthService
 from services.import_service import ImportService
 from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVerdict
 from services.workspace_service import WorkspaceService
@@ -84,6 +85,7 @@ class MainWindow(QMainWindow):
 
     # 登入在背景執行緒進行：「沒存進安全儲存」的通知經這個訊號轉回主執行緒才提示
     _login_not_saved = Signal()
+    _huaxia_login_not_saved = Signal()
 
     def __init__(
         self, preferences: PreferencesService, parent=None, history: Optional[MoveHistory] = None,
@@ -91,6 +93,7 @@ class MainWindow(QMainWindow):
         auth_service: Optional[GoogleAuthService] = None,
         compressor: Optional[CompressionService] = None,
         log: Optional[ActivityLog] = None,
+        huaxia_auth: Optional[HuaXiaAuthService] = None,
     ):
         """建立主視窗；刪掉舊版的明文權杖檔，不碰安全儲存
 
@@ -102,6 +105,7 @@ class MainWindow(QMainWindow):
             auth_service: Google 登入服務；省略時以系統的安全儲存建立
             compressor: PDF 壓縮服務；省略時以使用者資料目錄下的暫存資料夾建立
             log: 紀錄檔；省略時以使用者資料目錄下的紀錄檔資料夾建立
+            huaxia_auth: HuaXia 登入服務；省略時以系統的安全儲存接真的 HuaXia
         """
         super().__init__(parent)
         self.project = self._blank_project()
@@ -120,6 +124,10 @@ class MainWindow(QMainWindow):
         self._auth_service.remove_legacy_token()
         self._login_not_saved.connect(self._warn_login_not_saved)
         self._auth_service.subscribe_not_saved(self._login_not_saved.emit)
+        # HuaXia 登入全程式一份：續期權杖只能用一次，同一時間只能有一個續期
+        self._huaxia_auth = huaxia_auth or HuaXiaAuthService(opener=self._opener)
+        self._huaxia_login_not_saved.connect(self._warn_huaxia_login_not_saved)
+        self._huaxia_auth.subscribe_not_saved(self._huaxia_login_not_saved.emit)
         self._compressor = compressor or CompressionService(self.file_service)
         self._compression_output = CompressionOutputService(self.file_service, self._compressor)
         self._log = log or ActivityLog(self.file_service)
@@ -932,6 +940,10 @@ class MainWindow(QMainWindow):
         """登入或換發的續期權杖沒寫進安全儲存：提示下次啟動需要重新登入"""
         QMessageBox.warning(self, t("catalog.auth.title"), t("catalog.auth.reason.not_saved"))
 
+    def _warn_huaxia_login_not_saved(self):
+        """HuaXia 登入或續期換到的續期權杖沒寫進安全儲存：提示下次啟動需要重新登入"""
+        QMessageBox.warning(self, t("huaxia.auth.title"), t("catalog.auth.reason.not_saved"))
+
     def _open_catalog(self):
         """開啟譜庫瀏覽器，尚未設定時先引導設定"""
         auth = self._auth_service
@@ -940,13 +952,15 @@ class MainWindow(QMainWindow):
             if not self._open_catalog_settings():
                 return
         from ui.catalog_window import CatalogWindow
-        self._catalog_window = CatalogWindow(auth, self._preferences, log=self._log)
+        self._catalog_window = CatalogWindow(auth, self._preferences, log=self._log, huaxia_auth=self._huaxia_auth)
         self._catalog_window.show()
 
     def _open_catalog_settings(self) -> bool:
         """開啟譜庫設定，回傳是否設定完成"""
         from ui.catalog_settings_dialog import CatalogSettingsDialog
-        dialog = CatalogSettingsDialog(self._auth_service, self._preferences, self, log=self._log)
+        dialog = CatalogSettingsDialog(
+            self._auth_service, self._preferences, self, log=self._log, huaxia_auth=self._huaxia_auth,
+        )
         return dialog.exec() == CatalogSettingsDialog.Accepted
 
     # --- 輔助 ---

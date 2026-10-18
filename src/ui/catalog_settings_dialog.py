@@ -8,6 +8,8 @@
 失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。找到或建好的譜庫試算表先記在對話框裡，
 按「儲存設定」才寫進偏好設定，取消時偏好設定不變；存的是另一份譜庫試算表時，忘掉記住的發譜平台，
 在背景改讀新譜庫的社團設定（services/club_settings_service.py）。
+這台電腦記住的社團設定啟用 HuaXia 發譜時，另有 HuaXia 登入區（services/huaxia_auth_service.py）：
+登入前寫出連結 Discord 的提醒，以 Discord 登入時顯示可取消的等待視窗，不是幹部時說明原因；登出在背景進行。
 """
 import re
 from typing import Callable, List, Optional
@@ -18,6 +20,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QDialogButtonBox, QWidget,
 )
 from PySide6.QtCore import Qt
+from core.catalog_constants import PublishingPlatform
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import DriveFile
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
@@ -27,8 +30,12 @@ from services.catalog_service import CatalogService, PendingCatalog
 from services.club_settings_service import ClubSettingsService
 from services.google_auth_service import GoogleAuthService, LoginFailed, LoginFailure, LoginReason
 from services.google_catalog import open_google_catalog, open_google_drive
+from services.huaxia_auth_service import (
+    AccountStanding, HuaXiaAuthService, HuaXiaLoginFailed, HuaXiaLoginFailure, HuaXiaReason, NotOfficer,
+)
 from services.preferences_service import PreferencesService
 from ui.catalog_error_bar import CatalogErrorBar
+from ui.background_task import BackgroundTask
 from ui.catalog_tasks import CatalogTasks
 from ui.waiting_dialog import run_while_waiting
 
@@ -47,6 +54,26 @@ _LOGIN_FAILURE_KEYS = {
     LoginFailure.TIMED_OUT: "catalog.auth.timed_out",
     LoginFailure.DENIED: "catalog.auth.denied",
     LoginFailure.SCOPES_MISSING: "catalog.auth.scopes_missing",
+}
+# HuaXia 登入狀態旁的原因對應的介面字串（安全儲存的三種與 Google 共用）
+_HUAXIA_REASON_KEYS = {
+    HuaXiaReason.NO_SECURE_STORAGE: "catalog.auth.reason.no_secure_storage",
+    HuaXiaReason.STORAGE_LOCKED: "catalog.auth.reason.storage_locked",
+    HuaXiaReason.NOT_SAVED: "catalog.auth.reason.not_saved",
+    HuaXiaReason.SESSION_GONE: "huaxia.auth.session_gone",
+}
+# HuaXia 登入沒有完成時提示的介面字串；取消不提示，不是幹部與 FAILED 另組訊息
+_HUAXIA_FAILURE_KEYS = {
+    HuaXiaLoginFailure.BROWSER_NOT_OPENED: "catalog.auth.browser_not_opened",
+    HuaXiaLoginFailure.TIMED_OUT: "huaxia.auth.timed_out",
+    HuaXiaLoginFailure.DENIED: "huaxia.auth.denied",
+}
+# 不是幹部時各種帳號狀況的說明
+_NOT_OFFICER_KEYS = {
+    AccountStanding.JUST_CREATED: "huaxia.not_officer.just_created",
+    AccountStanding.AWAITING_APPROVAL: "huaxia.not_officer.awaiting_approval",
+    AccountStanding.DISABLED: "huaxia.not_officer.disabled",
+    AccountStanding.NOT_OFFICER: "huaxia.not_officer.not_officer",
 }
 
 
@@ -84,6 +111,39 @@ def sign_in_google(parent: QWidget, auth: GoogleAuthService) -> bool:
     return True
 
 
+def not_officer_text(not_officer: NotOfficer) -> str:
+    """不是幹部時的說明：帳號的狀況與目前登入的 Discord 帳號名稱（登入與發譜前重查共用）"""
+    return t(_NOT_OFFICER_KEYS[not_officer.standing], name=not_officer.discord_name)
+
+
+def sign_in_huaxia(parent: QWidget, auth: HuaXiaAuthService) -> bool:
+    """以 Discord 登入 HuaXia，期間顯示可取消的等待視窗；沒有完成時提示原因（取消不提示）
+
+    Args:
+        parent: 等待視窗與提示的父元件
+        auth: HuaXia 登入服務
+
+    Returns:
+        是否登入成功（是幹部）
+    """
+    try:
+        run_while_waiting(
+            parent, t("huaxia.auth.title"), t("huaxia.auth.waiting"), auth.authenticate, auth.cancel_login,
+        )
+    except HuaXiaLoginFailed as e:
+        if e.failure is HuaXiaLoginFailure.NOT_OFFICER:
+            message = not_officer_text(e.not_officer)
+        elif e.failure in _HUAXIA_FAILURE_KEYS:
+            message = t(_HUAXIA_FAILURE_KEYS[e.failure])
+        elif e.failure is HuaXiaLoginFailure.CANCELLED:
+            return False
+        else:
+            message = t("huaxia.auth.failed", error=str(e))
+        QMessageBox.warning(parent, t("huaxia.auth.title"), message)
+        return False
+    return True
+
+
 class CatalogSettingsDialog(QDialog):
     """譜庫設定對話框"""
 
@@ -92,6 +152,7 @@ class CatalogSettingsDialog(QDialog):
         preferences: PreferencesService, parent=None,
         catalog_factory: Optional[Callable[[str], CatalogService]] = None,
         log: Optional[ActivityLog] = None,
+        huaxia_auth: Optional[HuaXiaAuthService] = None,
     ):
         """
         Args:
@@ -101,8 +162,11 @@ class CatalogSettingsDialog(QDialog):
             catalog_factory: 在背景執行緒以試算表 ID（還沒有時為空字串）建立譜庫服務的函式，拿不到時丟出 CatalogError；
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
             log: 紀錄檔，讀寫失敗時寫進去；省略時以使用者資料目錄下的紀錄檔資料夾建立
+            huaxia_auth: HuaXia 登入服務（全程式一份）；省略時沒有 HuaXia 登入區
         """
         super().__init__(parent)
+        self._huaxia = huaxia_auth
+        self._huaxia_task: Optional[BackgroundTask] = None
         self._auth = auth_service
         self._prefs = preferences
         self._catalog_factory = catalog_factory or self._open_google
@@ -116,8 +180,10 @@ class CatalogSettingsDialog(QDialog):
         self._build_ui()
 
     def done(self, result: int):
-        """關閉對話框：放棄還在跑的背景工作，之後它們不再碰這個對話框"""
+        """關閉對話框：放棄還在跑的背景工作，之後它們不再碰這個對話框（HuaXia 登出照常在背景跑完）"""
         self._tasks.abandon_all()
+        if self._huaxia_task is not None:
+            self._huaxia_task.abandon()
         super().done(result)
 
     def _open_google(self, spreadsheet_id: str) -> CatalogService:
@@ -168,6 +234,8 @@ class CatalogSettingsDialog(QDialog):
         self._folder_status.setWordWrap(True)
         step2_layout.addWidget(self._folder_status)
         layout.addWidget(step2)
+        if self._huaxia is not None and self._club_settings.remembered() is PublishingPlatform.HUAXIA:
+            layout.addWidget(self._build_huaxia_area())
         # --- 底部按鈕 ---
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -182,6 +250,59 @@ class CatalogSettingsDialog(QDialog):
         # 開啟時只在已登入時自動找譜庫目錄：安全儲存沒解鎖時不為此再跳一次解鎖視窗
         if self._folder_entry.text().strip() and self._auth.status().signed_in:
             self._check_catalog_in_folder()
+
+    def _build_huaxia_area(self) -> QGroupBox:
+        """排出 HuaXia 登入區：登入狀態、登入或登出、連結 Discord 的提醒與狀態旁的原因"""
+        group = QGroupBox(t("huaxia.settings.group"))
+        group_layout = QVBoxLayout(group)
+        row = QHBoxLayout()
+        self._huaxia_status = QLabel()
+        row.addWidget(self._huaxia_status)
+        row.addStretch()
+        self._huaxia_btn = QPushButton()
+        self._huaxia_btn.clicked.connect(self._toggle_huaxia)
+        row.addWidget(self._huaxia_btn)
+        group_layout.addLayout(row)
+        self._huaxia_reminder = QLabel(t("huaxia.auth.link_discord_first"))
+        self._huaxia_reminder.setWordWrap(True)
+        group_layout.addWidget(self._huaxia_reminder)
+        self._huaxia_reason = QLabel()
+        self._huaxia_reason.setWordWrap(True)
+        self._huaxia_reason.setStyleSheet("color: #f39c12;")
+        group_layout.addWidget(self._huaxia_reason)
+        self._update_huaxia_display()
+        return group
+
+    def _update_huaxia_display(self):
+        """更新 HuaXia 登入狀態、按鈕、提醒（只在沒登入時）與狀態旁的原因"""
+        status = self._huaxia.status()
+        self._huaxia_reason.setText(t(_HUAXIA_REASON_KEYS[status.reason]) if status.reason else "")
+        self._huaxia_reason.setVisible(status.reason is not None)
+        self._huaxia_reminder.setVisible(not status.signed_in)
+        self._huaxia_btn.setEnabled(True)
+        if status.signed_in:
+            name = status.discord_name
+            text = t("huaxia.auth.connected_as", name=name) if name else t("huaxia.auth.connected")
+            self._huaxia_status.setText(text)
+            self._huaxia_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
+            self._huaxia_btn.setText(t("huaxia.auth.disconnect"))
+        else:
+            self._huaxia_status.setText(t("huaxia.auth.not_connected"))
+            self._huaxia_status.setStyleSheet("color: #e74c3c;")
+            self._huaxia_btn.setText(t("huaxia.auth.connect"))
+
+    def _toggle_huaxia(self):
+        """以 Discord 登入 HuaXia，或在背景登出（登出要連網，結束後才更新狀態）"""
+        if not self._huaxia.status().signed_in:
+            sign_in_huaxia(self, self._huaxia)
+            self._update_huaxia_display()
+            return
+        self._huaxia_btn.setEnabled(False)
+        auth = self._huaxia
+        self._huaxia_task = BackgroundTask(lambda should_cancel, report: auth.logout(), self)
+        self._huaxia_task.finished.connect(lambda _: self._update_huaxia_display())
+        self._huaxia_task.failed.connect(lambda _: self._update_huaxia_display())
+        self._huaxia_task.start()
 
     def _update_auth_display(self):
         """更新登入狀態與旁邊的原因"""

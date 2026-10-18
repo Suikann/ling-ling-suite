@@ -33,6 +33,7 @@ from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingRows
 from services.club_settings_service import ClubSettingsService
 from services.google_auth_service import GoogleAuthService
+from services.huaxia_auth_service import HuaXiaAuthService
 from services.google_catalog import open_google_catalog
 from services.preferences_service import PreferencesService
 from ui.catalog_error_bar import CatalogErrorBar
@@ -51,6 +52,7 @@ class CatalogWindow(QMainWindow):
         preferences: PreferencesService, parent=None,
         catalog_factory: Optional[Callable[[], CatalogService]] = None,
         log: Optional[ActivityLog] = None,
+        huaxia_auth: Optional[HuaXiaAuthService] = None,
     ):
         """
         Args:
@@ -60,9 +62,11 @@ class CatalogWindow(QMainWindow):
             catalog_factory: 在背景執行緒建立譜庫服務的函式，拿不到時丟出 CatalogError；
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
             log: 紀錄檔，讀寫失敗時寫進去；省略時以使用者資料目錄下的紀錄檔資料夾建立
+            huaxia_auth: HuaXia 登入服務，交給譜庫設定的 HuaXia 登入區；省略時譜庫設定沒有 HuaXia 登入區
         """
         super().__init__(parent)
         self._auth = auth_service
+        self._huaxia_auth = huaxia_auth
         self._prefs = preferences
         self._catalog_factory = catalog_factory or self._open_google_catalog
         self._catalog: Optional[CatalogService] = None
@@ -225,7 +229,8 @@ class CatalogWindow(QMainWindow):
             是否存了設定
         """
         from ui.catalog_settings_dialog import CatalogSettingsDialog
-        if CatalogSettingsDialog(self._auth, self._prefs, self, log=self._log).exec() != QDialog.Accepted:
+        dialog = CatalogSettingsDialog(self._auth, self._prefs, self, log=self._log, huaxia_auth=self._huaxia_auth)
+        if dialog.exec() != QDialog.Accepted:
             return False
         self._forget_connection()
         return True

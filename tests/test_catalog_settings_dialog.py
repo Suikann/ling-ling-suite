@@ -5,6 +5,7 @@
 登入區只測與登入服務的接線：登入狀態旁的原因、帳號 email、帳號提醒，以及登入沒有完成時的提示。
 選資料夾、找與建立譜庫試算表經譜庫服務、對假 Google：結果寫進偏好設定與假 Google，失敗時提示列出現。不測畫面。
 登入服務的安全儲存、Google 權杖端點與開瀏覽器都換成替身。
+HuaXia 登入區只在社團設定啟用 HuaXia 發譜時出現，對假 HuaXia 測登入、不是幹部的說明與登出的接線。
 """
 import os
 import shutil
@@ -21,18 +22,21 @@ from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QInputDia
 
 from core.catalog_constants import DRIVE_SPREADSHEET_MIME, SHEET_HEADERS, PublishingPlatform
 from core.catalog_errors import CatalogErrorKind
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY
 from core.locale import t
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.club_settings_service import ClubSettingsService
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
+from services.huaxia_auth_service import HuaXiaAuthService
+from services.huaxia_client import HuaXiaClient
 from services.preferences_service import PreferencesService
 from services.secure_storage import SecureStorage
 from tests.fake_browser import CallbackBrowser
 from tests.fake_google import FakeTokenEndpoint, write_client_secrets
 from tests.fake_google_catalog import FakeGoogle
+from tests.fake_huaxia import FakeHuaXia
 from tests.memory_keyring import MemoryKeyring
 from tests.test_main_window import answering_prompts, wait_until
 from ui.catalog_error_bar import CatalogErrorBar
@@ -159,6 +163,84 @@ class TestLoginArea(LoginAreaTestCase):
         self.assertEqual(shown, [])
         self.assertTrue(self.shows(dialog, t("catalog.auth.not_connected")))
 
+
+class TestHuaXiaLoginArea(LoginAreaTestCase):
+    """HuaXia 登入區：社團設定啟用 HuaXia 發譜才出現；以 Discord 登入、不是幹部時說明原因、登出只結束這台電腦"""
+
+    def setUp(self):
+        super().setUp()
+        self.huaxia = FakeHuaXia()
+        self.huaxia.add_account("officer_amy", roles=("officer",))
+        self.huaxia.sign_in_as("officer_amy")
+        self.huaxia_browser = CallbackBrowser(provider=self.huaxia.authorize)
+        self.addCleanup(self.huaxia_browser.finish)
+        self.huaxia_keyring = MemoryKeyring()
+        self.huaxia_auth = HuaXiaAuthService(
+            HuaXiaClient(session=self.huaxia), storage=SecureStorage("test-huaxia", backend=self.huaxia_keyring),
+            opener=self.huaxia_browser,
+        )
+
+    def open_dialog(self) -> CatalogSettingsDialog:
+        """開啟譜庫設定，帶 HuaXia 登入服務"""
+        dialog = CatalogSettingsDialog(self.auth, self.preferences, huaxia_auth=self.huaxia_auth)
+        self.addCleanup(dialog.deleteLater)
+        return dialog
+
+    def enable_huaxia(self):
+        """社團設定啟用 HuaXia 發譜（這台電腦記住的結果）"""
+        self.preferences.set(CLUB_PUBLISHING_PLATFORM_KEY, PublishingPlatform.HUAXIA.value)
+
+    def click(self, dialog: CatalogSettingsDialog, text: str) -> list:
+        """按下文字為 text 的按鈕，回傳跳出過的提示框（標題，訊息）"""
+        button = next(b for b in dialog.findChildren(QPushButton) if b.text() == text)
+        with answering_prompts() as shown:
+            button.click()
+        return shown
+
+    def test_hidden_when_club_settings_do_not_enable_huaxia(self):
+        dialog = self.open_dialog()
+        self.assertFalse(self.shows(dialog, t("huaxia.auth.link_discord_first")))
+        self.assertFalse(any(b.text() == t("huaxia.auth.connect") for b in dialog.findChildren(QPushButton)))
+        self.assertEqual(self.huaxia_keyring.calls, [])
+
+    def test_shown_with_the_reminder_before_signing_in(self):
+        self.enable_huaxia()
+        dialog = self.open_dialog()
+        self.assertTrue(self.shows(dialog, t("huaxia.auth.not_connected")))
+        self.assertTrue(self.shows(dialog, t("huaxia.auth.link_discord_first")))
+
+    def test_officer_signs_in_and_sees_the_discord_account(self):
+        self.enable_huaxia()
+        dialog = self.open_dialog()
+        self.assertEqual(self.click(dialog, t("huaxia.auth.connect")), [])
+        self.assertTrue(self.shows(dialog, t("huaxia.auth.connected_as", name="officer_amy")))
+        self.assertEqual(len(self.huaxia_keyring.stored()), 1)
+
+    def test_not_an_officer_is_told_why_with_the_discord_account(self):
+        self.enable_huaxia()
+        self.huaxia.add_account("member_mei", roles=("member",))
+        self.huaxia.sign_in_as("member_mei")
+        dialog = self.open_dialog()
+        shown = self.click(dialog, t("huaxia.auth.connect"))
+        self.assertEqual(shown, [(t("huaxia.auth.title"), t("huaxia.not_officer.not_officer", name="member_mei"))])
+        self.assertTrue(self.shows(dialog, t("huaxia.auth.not_connected")))
+        self.assertEqual(self.huaxia_keyring.stored(), [])
+
+    def test_denied_in_discord_says_so(self):
+        self.enable_huaxia()
+        self.huaxia_browser.deny()
+        dialog = self.open_dialog()
+        shown = self.click(dialog, t("huaxia.auth.connect"))
+        self.assertEqual(shown, [(t("huaxia.auth.title"), t("huaxia.auth.denied"))])
+
+    def test_logout_ends_only_this_computer_in_the_background(self):
+        self.enable_huaxia()
+        self.huaxia_auth.authenticate()
+        dialog = self.open_dialog()
+        self.click(dialog, t("huaxia.auth.disconnect"))
+        wait_until(lambda: self.shows(dialog, t("huaxia.auth.not_connected")))
+        wait_until(lambda: self.huaxia_keyring.stored() == [])
+        self.assertEqual(self.huaxia.logouts(), ["local"])
 
 
 class CatalogFolderTestCase(LoginAreaTestCase):
