@@ -98,6 +98,27 @@ class HuaXiaPiece(NamedTuple):
     ensemble: HuaXiaEnsemble
 
 
+class HuaXiaPart(NamedTuple):
+    """HuaXia 曲目上的一個聲部（piece_parts 的一列）
+
+    Attributes:
+        id: 聲部編號
+        piece_id: 所屬曲目的編號
+        name: 聲部名稱（HuaXia 的寫法）
+        needed: 人數的記法（「6」「6-8」「2↑」）
+        needed_min: 最少人數
+        section: 聲部組；沒有時為空字串
+        sort: 排序
+    """
+    id: str
+    piece_id: str
+    name: str
+    needed: str
+    needed_min: int
+    section: str
+    sort: int
+
+
 def _discord_name(user: Dict[str, Any]) -> str:
     """Auth 回應裡 user 的 Discord 帳號名稱：使用者名稱，沒有時依序退回 name、user_name、preferred_username、顯示名稱"""
     metadata = user.get("user_metadata") or {}
@@ -232,6 +253,25 @@ class HuaXiaClient:
         except (KeyError, TypeError, ValueError) as e:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected pieces: {e}") from e
         return sorted(pieces, key=lambda piece: piece.title)
+
+    def piece_parts(self, access_token: str) -> List[HuaXiaPart]:
+        """看得到的所有曲目的聲部，依曲目、排序與名稱（同 HuaXia 網頁的 order(sort)）
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        rows = self.select("piece_parts", access_token, "id,piece_id,name,needed,needed_min,section,sort")
+        try:
+            parts = [
+                HuaXiaPart(
+                    row["id"], row["piece_id"], row["name"], row.get("needed") or "", int(row.get("needed_min") or 0),
+                    row.get("section") or "", int(row.get("sort") or 0),
+                )
+                for row in rows
+            ]
+        except (KeyError, TypeError, ValueError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected piece parts: {e}") from e
+        return sorted(parts, key=lambda part: (part.piece_id, part.sort, part.name))
 
     # --- 共用 ---
 

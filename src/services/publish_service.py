@@ -22,14 +22,14 @@
 """
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from core.constants import OrchestraType
 from core.models import CatalogChange, Group, Project
 from core.naming import is_renamed
 from core.voice_names import duplicate_rows
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
-from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaPiece
+from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaPart, HuaXiaPiece
 
 
 class ProjectBlock(Enum):
@@ -55,6 +55,7 @@ class PublishReadiness:
         function_problem: 發譜函式不能用的原因；能用時為 None
         function_version: HuaXia 回報的介面版本；沒有發譜函式或沒查到時為 None
         pieces: 可以挑的曲目（未封存，依曲名）；不能發時為空
+        parts: 可以挑的曲目上已有的聲部，以曲目編號為鍵（依 HuaXia 的排序）；沒有聲部的曲目不在裡面
         discord_name: 登入的 Discord 帳號名稱
     """
 
@@ -62,6 +63,7 @@ class PublishReadiness:
     function_problem: Optional[FunctionProblem] = None
     function_version: Optional[int] = None
     pieces: List[HuaXiaPiece] = field(default_factory=list)
+    parts: Dict[str, List[HuaXiaPart]] = field(default_factory=dict)
     discord_name: str = ""
 
     @property
@@ -133,7 +135,7 @@ class PublishService:
         self._client = auth.client
 
     def prepare(self) -> PublishReadiness:
-        """重查幹部身分、查發譜函式的版本，都過了才讀可以挑的曲目；不是幹部時已登出
+        """重查幹部身分、查發譜函式的版本，都過了才讀可以挑的曲目與它們的聲部；不是幹部時已登出
 
         Returns:
             檢查結果；不能發時寫明原因
@@ -150,6 +152,12 @@ class PublishService:
             return PublishReadiness(function_problem=FunctionProblem.MISSING)
         if version != PUBLISH_INTERFACE_VERSION:
             return PublishReadiness(function_problem=FunctionProblem.VERSION_MISMATCH, function_version=version)
+        pieces = self._client.pieces(token)
+        parts: Dict[str, List[HuaXiaPart]] = {piece.id: [] for piece in pieces}
+        for part in self._client.piece_parts(token):
+            if part.piece_id in parts:
+                parts[part.piece_id].append(part)
         return PublishReadiness(
-            function_version=version, pieces=self._client.pieces(token), discord_name=self._auth.status().discord_name,
+            function_version=version, pieces=pieces, parts={piece: found for piece, found in parts.items() if found},
+            discord_name=self._auth.status().discord_name,
         )

@@ -11,7 +11,8 @@
 - PostgREST：資料表的讀取（select 欄位與 eq 篩選），各表的讀取權限照 HuaXia 的 RLS 寫在 _READ_POLICIES。
 - rpc：is_officer（帳號啟用且有 admin 或 officer）；發譜函式的版本查詢預設不存在（同 HuaXia 合併 #117 之前），
   以 install_publish_function 裝上指定的版本。
-- 曲目（pieces）：以 add_piece 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider（不實作 in_piece 的排人判斷）。
+- 曲目（pieces）與聲部（piece_parts）：以 add_piece、add_part 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider
+  （不實作 in_piece 的排人判斷）；聲部組沒給時照 HuaXia 的觸發器以 guess_section 依名稱補上。
 
 擴充（之後的工單）：新資料表加進 tables 與 _READ_POLICIES；寫入在 _rest 裡依方法分派（POST、PATCH、DELETE）；
 新的 rpc 函式加進 functions（名稱對應以（使用者 ID，參數）求值的函式）；Storage 在 _route 加 /storage/v1/ 的分支。
@@ -29,6 +30,7 @@ import base64
 import datetime
 import hashlib
 import itertools
+import re
 import threading
 import uuid
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -96,7 +98,9 @@ class FakeHuaXia:
         self.expires_in = TOKEN_LIFETIME
         self.offline = False
         self.requests: List[Dict[str, Any]] = []
-        self.tables: Dict[str, List[Dict[str, Any]]] = {"profiles": [], "user_roles": [], "pieces": []}
+        self.tables: Dict[str, List[Dict[str, Any]]] = {
+            "profiles": [], "user_roles": [], "pieces": [], "piece_parts": [],
+        }
         self.functions: Dict[str, Callable[[Optional[str], dict], Any]] = {"is_officer": self._is_officer}
         # Discord 帳號名稱對應 HuaXia 的使用者 ID；使用者 ID 對應 auth.users 的那筆
         self._identities: Dict[str, str] = {}
@@ -149,6 +153,31 @@ class FakeHuaXia:
                 "archived": archived, "ensemble": ensemble, "created_at": _now().isoformat(),
             })
             return piece_id
+
+    def add_part(
+        self, piece_id: str, name: str, needed: str = "1", needed_min: int = 1, section: Optional[str] = None,
+        sort: int = 0,
+    ) -> str:
+        """在曲目上加入一個聲部（piece_parts 的一列），回傳聲部編號；聲部組沒給時照觸發器以 guess_section 補上"""
+        with self._lock:
+            part_id = str(uuid.uuid4())
+            self.tables["piece_parts"].append({
+                "id": part_id, "piece_id": piece_id, "name": name, "needed": needed, "needed_min": needed_min,
+                "sort": sort, "tutor_id": None, "note": "", "section": section or guess_section(name),
+            })
+            return part_id
+
+    def remove_part(self, part_id: str) -> None:
+        """刪掉一個聲部（幹部在網頁上刪了它）"""
+        with self._lock:
+            self.tables["piece_parts"] = [row for row in self.tables["piece_parts"] if row["id"] != part_id]
+
+    def rename_part(self, part_id: str, name: str) -> None:
+        """改一個聲部的名稱（幹部在網頁上改了它）"""
+        with self._lock:
+            for row in self.tables["piece_parts"]:
+                if row["id"] == part_id:
+                    row["name"] = name
 
     def install_publish_function(self, version: Optional[int]) -> None:
         """HuaXia 的發譜函式：回報這個介面版本；None 為沒有發譜函式（呼叫時回 PGRST202）"""
@@ -409,6 +438,21 @@ def _matches(row: Dict[str, Any], column: str, condition: str) -> bool:
     return (str(actual).lower() if isinstance(actual, bool) else str(actual)) == value
 
 
+# HuaXia 的 guess_section(n)：依名稱猜聲部組，依序比對，都不符時為 None（省略其中的簡體寫法）
+_SECTION_GUESSES = (
+    ("吹管", "笛|笙|嗩吶|管子|簫|巴烏|葫蘆絲|dizi|sheng|suona|flute"),
+    ("低音", "大提|低音提|倍大提|革胡|貝斯|cello|bass"),
+    ("拉弦", "胡|erhu|gaohu|zhonghu"),
+    ("彈撥", "琵琶|阮|柳琴|揚琴|箏|三弦|箜篌|pipa|ruan|liuqin|yangqin|guzheng"),
+    ("打擊", "打擊|鼓|鑼|鈸|木魚|定音|鐘琴|鐵琴|木琴|鈴|梆子|板|perc|timp|drum"),
+)
+
+
+def guess_section(name: str) -> Optional[str]:
+    """HuaXia 的 guess_section：piece_parts 的聲部組沒填時，觸發器依名稱補上的值"""
+    return next((section for section, pattern in _SECTION_GUESSES if re.search(pattern, name, re.IGNORECASE)), None)
+
+
 # HuaXia 的 is_insider() 認的身分組
 _INSIDER_ROLES = frozenset({"admin", "officer", "leader", "member", "newbie", "teacher", "alumni"})
 
@@ -418,4 +462,5 @@ _READ_POLICIES: Dict[str, Callable[[FakeHuaXia, Optional[str], Dict[str, Any]], 
     "profiles": lambda fake, caller, row: row["id"] == caller or fake._is_active(caller),
     "user_roles": lambda fake, caller, row: row["user_id"] == caller or fake._is_active(caller),
     "pieces": lambda fake, caller, row: fake._is_insider(caller),
+    "piece_parts": lambda fake, caller, row: fake._is_insider(caller),
 }
