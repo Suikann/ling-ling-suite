@@ -19,6 +19,7 @@
 """
 import re
 import unicodedata
+from collections import Counter
 from typing import Iterable, List, Optional, Tuple
 
 VoiceKey = Tuple[str, Optional[int]]
@@ -72,6 +73,13 @@ def distinct_voices(names: Iterable[str]) -> List[str]:
             seen.add(key)
             distinct.append(name)
     return distinct
+
+
+def duplicate_rows(names: Iterable[str]) -> List[int]:
+    """重名的列：與另一列是同一聲部的每一列（包含第一次出現的），依原順序列出位置（從 0 起算）"""
+    keys = [voice_key(name) for name in names]
+    counts = Counter(keys)
+    return [i for i, key in enumerate(keys) if counts[key] > 1]
 
 
 def _split_number(text: str) -> Tuple[str, Optional[int]]:

@@ -261,7 +261,8 @@ class GroupTab(QWidget):
         self._check_mismatch()
 
     def _check_mismatch(self):
-        n_inst = len(self.group.instruments)
+        """本專案有的聲部數與分譜數是否相同"""
+        n_inst = len(self.group.pairing())
         n_files = len(self.group.files)
         if n_files == 0 and n_inst == 0:
             self._mismatch_label.setText("")
@@ -275,11 +276,11 @@ class GroupTab(QWidget):
             self._mismatch_label.setStyleSheet("color: #2ecc71; font-size: 12px;")
 
     def _refresh_file_list(self):
-        """列出分譜；每列記住它在群組中的位置，拖拉排序後依此還原新順序"""
+        """列出分譜與配到的聲部（本專案沒有的聲部跳過）；每列記住它在群組中的位置，拖拉排序後依此還原新順序"""
         self._file_list.clear()
-        instruments = self.group.instruments
+        voices = [pair.voice for pair in self.group.pairing()]
         for i, f in enumerate(self.group.files):
-            inst = f"{instruments[i]}  |  " if i < len(instruments) else ""
+            inst = f"{voices[i]}  |  " if i < len(voices) else ""
             item = QListWidgetItem(f"{inst}{f.display_name}")
             item.setData(Qt.UserRole, i)
             self._file_list.addItem(item)

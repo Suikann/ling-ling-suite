@@ -26,7 +26,7 @@ from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox,
-    QPushButton, QRadioButton, QTabWidget, QTableWidget, QWidget,
+    QPushButton, QRadioButton, QSplitter, QTabWidget, QTableWidget, QWidget,
 )
 
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CompressionStatus, PartsOutputMode
@@ -45,7 +45,7 @@ from services.project_service import ProjectService
 from services.workspace_service import WorkspaceService
 from ui.background_task import BackgroundTask
 from ui.compression_compare import CompressionCompareDialog
-from ui.instrument_list import EnsembleDialog
+from ui.instrumentation_table import InstrumentationTable
 from ui.main_window import MainWindow
 from ui.preview_dialog import PreviewDialog
 from tests.failing_writes import FailingWrites
@@ -722,19 +722,28 @@ class TestMainWindowKeepsTypedInput(MainWindowTestCase):
 
 
 class InstrumentListTestCase(MainWindowTestCase):
-    """操作主視窗樂器表的測試共用的輔助"""
+    """操作主視窗編制表的測試共用的輔助"""
+
+    def _instrumentation_table(self) -> InstrumentationTable:
+        """主視窗左欄的編制表"""
+        return self.window.findChild(InstrumentationTable)
 
     def _instrument_entry(self) -> QLineEdit:
-        """樂器表的輸入欄"""
+        """編制表的輸入欄"""
         return next(
             e for e in self.window.findChildren(QLineEdit)
             if e.placeholderText() == t("instrument.placeholder")
         )
 
+    def _voice_cell(self, row: int):
+        """編制表第 row 列的聲部名稱儲存格"""
+        editor = self._instrumentation_table()
+        return editor.findChild(QTableWidget).item(row, editor.column("voice"))
+
     def _shown_instruments(self) -> List[str]:
-        """樂器表目前列出的樂器"""
-        listing = self._instrument_entry().parentWidget().findChild(QListWidget)
-        return [listing.item(i).text() for i in range(listing.count())]
+        """編制表目前列出的聲部"""
+        table = self._instrumentation_table().findChild(QTableWidget)
+        return [self._voice_cell(row).text() for row in range(table.rowCount())]
 
 
 class TestMainWindowInstrumentListFollowsGroup(InstrumentListTestCase):
@@ -774,6 +783,41 @@ class TestMainWindowInstrumentListFollowsGroup(InstrumentListTestCase):
         self.assertEqual(ProjectService().load_project(path).groups[0].instruments, ["Flute"])
 
 
+class TestMainWindowInstrumentationTable(InstrumentListTestCase):
+    """左欄就是編制表（舊的樂器表清單不在了），分隔線可以拖寬；編制表的改動反映在分頁的分譜配對與未分組"""
+
+    def setUp(self):
+        super().setUp()
+        files = self.create_files("fl.pdf", "ob.pdf", "hn.pdf")
+        self.open_from_menu(Project(groups=[Group(name="g", instruments=["Flute", "Oboe", "Horn"], files=files)]))
+
+    def _tab_rows(self, index: int) -> List[str]:
+        """第 index 個分頁的檔案清單"""
+        _settle()
+        listing = self.window.findChild(QTabWidget).widget(index).findChild(QListWidget)
+        return [listing.item(i).text() for i in range(listing.count())]
+
+    def test_the_left_column_is_the_instrumentation_table_and_its_width_is_adjustable(self):
+        editor = self._instrumentation_table()
+        self.assertIsInstance(editor.parentWidget(), QSplitter)
+        self.assertLess(editor.minimumWidth(), editor.maximumWidth())
+        voices = ["Flute", "Oboe", "Horn"]
+        lists = [[w.item(i).text() for i in range(w.count())] for w in self.window.findChildren(QListWidget)]
+        self.assertNotIn(voices, lists)
+        self.assertEqual(self._shown_instruments(), voices)
+
+    def test_unchecking_a_voice_moves_its_part_to_the_ungrouped_tab_and_the_rest_keep_their_voices(self):
+        editor = self._instrumentation_table()
+        editor.findChild(QTableWidget).item(1, editor.column("present")).setCheckState(Qt.Unchecked)
+        self.assertEqual(self._tab_rows(1), ["Flute  |  fl.pdf", "Horn  |  hn.pdf"])
+        self.assertEqual(self._tab_rows(0), ["ob.pdf"])
+        self.assertTrue(self.is_marked_unsaved())
+
+    def test_dragging_a_voice_moves_its_part_in_the_group_tab(self):
+        self._instrumentation_table().findChild(QTableWidget).rows_dropped.emit([2], 0)
+        self.assertEqual(self._tab_rows(1), ["Horn  |  hn.pdf", "Flute  |  fl.pdf", "Oboe  |  ob.pdf"])
+
+
 class TestMainWindowInstrumentListRefusesDuplicateVoices(InstrumentListTestCase):
     """在樂器表輸入與其他列同一聲部的名稱時顯示說明，名稱不變"""
 
@@ -790,17 +834,15 @@ class TestMainWindowInstrumentListRefusesDuplicateVoices(InstrumentListTestCase)
         self.assertEqual(self._saved_instruments(), ["Violin I", "Violin II"])
 
     def test_renaming_to_another_row_s_voice_shows_why_and_restores_the_name(self):
-        listing = self._instrument_entry().parentWidget().findChild(QListWidget)
         with answering_prompts() as shown:
-            listing.item(0).setText("Violin 2")
+            self._voice_cell(0).setText("Violin 2")
         self.assertEqual(shown, [(t("dialog.warning"), t("instrument.duplicate", name="Violin 2", existing="Violin II"))])
         self.assertEqual(self._shown_instruments(), ["Violin I", "Violin II"])
         self.assertEqual(self._saved_instruments(), ["Violin I", "Violin II"])
 
     def test_renaming_to_another_spelling_of_itself_is_kept(self):
-        listing = self._instrument_entry().parentWidget().findChild(QListWidget)
         with answering_prompts() as shown:
-            listing.item(0).setText("Violin 1")
+            self._voice_cell(0).setText("Violin 1")
         self.assertEqual(shown, [])
         self.assertEqual(self._saved_instruments(), ["Violin 1", "Violin II"])
 
@@ -849,35 +891,8 @@ class TestMainWindowNewerProjectFile(MainWindowTestCase):
             self.assertEqual(json.load(f)["version"], 99)
 
 
-@contextmanager
-def editing_ensemble(operate: Callable[[EnsembleDialog], None]):
-    """模擬使用者在「編輯人數」對話框操作後按下儲存
-
-    替換 EnsembleDialog.exec：對話框開啟時呼叫 operate 操作它，接著按儲存。
-    operate 拋出的例外（在 Qt 事件裡會被吞掉）與對話框沒有開啟，都在離開區塊時判定失敗。
-    """
-    opened = []
-    errors = []
-
-    def fake_exec(dialog):
-        opened.append(dialog)
-        try:
-            operate(dialog)
-        except Exception as e:
-            errors.append(e)
-        dialog.accept()
-        return dialog.result()
-
-    with mock.patch.object(EnsembleDialog, "exec", fake_exec):
-        yield
-    if errors:
-        raise errors[0]
-    if not opened:
-        raise AssertionError("編輯人數對話框沒有開啟")
-
-
 class TestMainWindowOrchestraTypeAndSections(InstrumentListTestCase):
-    """專案設定可改樂團類型，聲部組的選項跟著換；聲部組以樂器為單位，改一列時同一樂器的其他編號跟著改"""
+    """專案設定可改樂團類型，編制表的聲部組選項跟著換；改一列時同一樂器的其他編號跟著改"""
 
     def setUp(self):
         super().setUp()
@@ -889,21 +904,14 @@ class TestMainWindowOrchestraTypeAndSections(InstrumentListTestCase):
             if [c.itemText(i) for i in range(c.count())] == [t("orchestra.chinese"), t("orchestra.western")]
         )
 
-    @staticmethod
-    def _section_combos(dialog: QDialog) -> List[QComboBox]:
-        table = dialog.findChild(QTableWidget)
-        return [table.cellWidget(row, 1) for row in range(table.rowCount())]
+    def _section_combos(self) -> List[QComboBox]:
+        editor = self._instrumentation_table()
+        table = editor.findChild(QTableWidget)
+        return [table.cellWidget(row, editor.column("section")) for row in range(table.rowCount())]
 
     def _options_shown(self) -> List[str]:
-        seen = []
-
-        def read(dialog):
-            combo = self._section_combos(dialog)[0]
-            seen.extend(combo.itemData(i) for i in range(combo.count()))
-
-        with editing_ensemble(read):
-            self.click_button(t("instrument.headcount"))
-        return seen
+        combo = self._section_combos()[0]
+        return [combo.itemData(i) for i in range(combo.count())]
 
     def test_changing_the_orchestra_type_swaps_the_section_options(self):
         self.assertEqual(self._orchestra_combo().currentText(), t("orchestra.chinese"))
@@ -913,25 +921,14 @@ class TestMainWindowOrchestraTypeAndSections(InstrumentListTestCase):
         self.assertTrue(self.is_marked_unsaved())
         self.assertEqual(self._options_shown(), ["木管", "銅管", "打擊", "鍵盤", "弦樂", "其他"])
 
-    def test_changing_one_number_changes_the_others_and_says_so(self):
-        seen = {}
-
-        def change_first(dialog):
-            table = dialog.findChild(QTableWidget)
-            seen["notes"] = [table.item(row, 2).text() for row in range(table.rowCount())]
-            combos = self._section_combos(dialog)
-            combos[0].setCurrentIndex(combos[0].findData("低音"))
-            seen["shown"] = [combo.currentData() for combo in combos]
-
-        with editing_ensemble(change_first):
-            self.click_button(t("instrument.headcount"))
-        self.assertEqual(seen["notes"], [
-            t("instrument.section_follows", voices="二胡 II"), t("instrument.section_follows", voices="二胡 I"), "",
-        ])
-        self.assertEqual(seen["shown"], ["低音", "低音", "拉弦"])
+    def test_changing_one_number_changes_the_others(self):
+        combo = self._section_combos()[0]
+        combo.setCurrentIndex(combo.findData("低音"))
+        self.assertEqual([c.currentData() for c in self._section_combos()], ["低音", "低音", "拉弦"])
         self.assertEqual(
             [self.window.project.section_of(v) for v in ("二胡 I", "二胡 II", "中胡")], ["低音", "低音", "拉弦"],
         )
+        self.assertTrue(self.is_marked_unsaved())
 
 
 class TestMainWindowPreviewNaming(MainWindowTestCase):

@@ -37,7 +37,7 @@ from services.project_access import AccessResult, ProjectAccess
 from services.rename_service import assign_default_sections
 from services.split_service import SplitService
 from ui.background_task import BackgroundTask, Work
-from ui.instrument_list import InstrumentListEditor
+from ui.instrumentation_table import InstrumentationTable
 from ui.widgets import ask_save_path
 
 
@@ -214,11 +214,12 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(4, 4, 4, 4)
         main_layout.setSpacing(4)
         splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
         main_layout.addWidget(splitter, stretch=1)
-        self._instrument_editor = InstrumentListEditor(project=self.project, file_service=self.file_service)
-        self._instrument_editor.setFixedWidth(260)
-        self._instrument_editor.instruments_changed.connect(self._on_instruments_changed)
-        splitter.addWidget(self._instrument_editor)
+        self._instrumentation_table = InstrumentationTable(project=self.project, file_service=self.file_service)
+        self._instrumentation_table.setMinimumWidth(300)
+        self._instrumentation_table.instruments_changed.connect(self._on_instruments_changed)
+        splitter.addWidget(self._instrumentation_table)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(6, 0, 0, 0)
@@ -238,6 +239,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self._tab_widget)
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([380, 900])
         self._build_bottom_panel(main_layout)
         self._rebuild_tabs()
 
@@ -253,9 +255,7 @@ class MainWindow(QMainWindow):
         for orchestra_type in OrchestraType:
             self._orchestra_combo.addItem(t(f"orchestra.{orchestra_type.value}"), orchestra_type.value)
         self._show_orchestra_type()
-        self._orchestra_combo.currentIndexChanged.connect(
-            lambda _index: self.project.set_orchestra_type(self._orchestra_combo.currentData()),
-        )
+        self._orchestra_combo.currentIndexChanged.connect(self._on_orchestra_type_chosen)
         template_row.addWidget(self._orchestra_combo)
         template_row.addWidget(QLabel(t("panel.master_template")))
         self._master_template_entry = QLineEdit(self.project.master_template)
@@ -341,15 +341,19 @@ class MainWindow(QMainWindow):
         self._rebuild_tabs()
 
     def _on_tab_changed(self, index: int):
-        self._instrument_editor.show_group(self._current_group())
+        self._instrumentation_table.show_group(self._current_group())
 
-    # --- 樂器表回呼 ---
+    # --- 編制表回呼 ---
 
-    def _on_instruments_changed(self, instruments):
-        """樂器表已寫入目前群組，重新顯示目前分頁的分譜與樂器對應"""
-        widget = self._tab_widget.currentWidget()
-        if widget is not None:
-            widget.refresh()
+    def _on_orchestra_type_chosen(self, _index: int):
+        """改樂團類型：寫入專案，編制表的聲部組改列新的那一套"""
+        self.project.set_orchestra_type(self._orchestra_combo.currentData())
+        self._instrumentation_table.refresh()
+
+    def _on_instruments_changed(self):
+        """編制表已寫入目前群組：重新顯示各分頁（分譜與聲部的配對，以及移到未分組的分譜）"""
+        for index in range(self._tab_widget.count()):
+            self._tab_widget.widget(index).refresh()
 
     # --- 檔案操作 ---
 
@@ -500,7 +504,7 @@ class MainWindow(QMainWindow):
 
     def _sync_ui_from_project(self):
         """畫面改為顯示目前的專案"""
-        self._instrument_editor.set_project(self.project)
+        self._instrumentation_table.set_project(self.project)
         for action in self._save_actions:
             action.setEnabled(not self.project.read_only)
         self._show_orchestra_type()

@@ -67,7 +67,7 @@ After upgrading, do not open project files saved by the new version with an olde
 1. Launch `LingLingSuite.exe`
 2. **Import** PDF files or folders via the Import menu
 3. **Organize groups** --- each group = one piece, or one of its movements
-4. **Set up the instrument list** of a group in the left panel while its tab is open (manual entry or load preset)
+4. **Set up the voices** of a group in the instrumentation table on the left while its tab is open (manual entry or load preset); dragging a voice takes its part along, and unchecking "In Project" sets aside a part this project does not have
 5. **Configure naming format** at the bottom (e.g., `{Number}-{PieceName}-{Instrument}.pdf`)
 6. **Preview & Rename** to execute
 

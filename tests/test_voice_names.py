@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from core.voice_names import distinct_voices, same_instrument, same_voice
+from core.voice_names import distinct_voices, duplicate_rows, same_instrument, same_voice
 
 SAME_VOICE = [
     # 結尾編號的各種寫法互通
@@ -126,6 +126,16 @@ class TestDistinctVoices(unittest.TestCase):
             distinct_voices(["二胡1", "Cello", "二胡 I", "二胡 II", "cello", "二胡"]),
             ["二胡1", "Cello", "二胡 II", "二胡"],
         )
+
+
+class TestDuplicateRows(unittest.TestCase):
+    """重名的列：與另一列是同一聲部的每一列都算，包含第一次出現的那列"""
+
+    def test_lists_every_row_that_shares_a_voice_with_another(self):
+        self.assertEqual(duplicate_rows(["二胡 I", "Cello", "二胡1", "二胡 II", "cello", "二胡"]), [0, 1, 2, 4])
+
+    def test_no_duplicates(self):
+        self.assertEqual(duplicate_rows(["二胡 I", "二胡 II", "二胡"]), [])
 
 
 if __name__ == "__main__":
