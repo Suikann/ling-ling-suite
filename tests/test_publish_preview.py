@@ -95,6 +95,45 @@ class TestPieceStep(PreviewTestCase):
         self.assertEqual(preview.decisions(self.group).keep, set())
 
 
+class TestRerunNewPiece(PreviewTestCase):
+    """新建的曲目在發譜一開始產生編號；重發時沿用那個編號，HuaXia 上已經有它就用它的聲部與樂譜"""
+
+    def setUp(self):
+        super().setUp()
+        self.new = NewHuaXiaPiece("烽火操", "劉文金", 5.0, HuaXiaEnsemble.TUTTI)
+        self.project.set_huaxia_link(self.group, HuaXiaLink(
+            piece_id="hx-new", piece_title="烽火操", new_piece=self.new, part_ids={"琵琶": "p-new-pipa"},
+        ))
+
+    def test_editing_the_new_piece_keeps_its_generated_number_and_chosen_parts(self):
+        preview = self.preview()
+        edited = self.new._replace(title="長城隨想－烽火操")
+        preview.set_piece(self.group, HuaXiaLink(piece_title=edited.title, new_piece=edited))
+        link = self.group.huaxia_link
+        self.assertEqual((link.piece_id, link.new_piece, link.part_ids), ("hx-new", edited, {"琵琶": "p-new-pipa"}))
+
+    def test_choosing_new_again_after_an_existing_piece_gets_the_generated_number_back(self):
+        preview = self.preview()
+        preview.set_piece(self.group, HuaXiaLink(piece_id="hx-1", piece_title="長城隨想－烽火操"))
+        preview.set_piece(self.group, HuaXiaLink(piece_title="烽火操", new_piece=self.new))
+        self.assertEqual(self.group.huaxia_link.piece_id, "hx-new")
+
+    def test_an_existing_piece_number_is_not_taken_into_a_new_piece(self):
+        self.project.set_huaxia_link(self.group, HuaXiaLink(piece_id="hx-1", piece_title="長城隨想－烽火操"))
+        preview = PublishPreview(self.project, check_groups(self.project), self.readiness, FileService(), 20 * MB)
+        preview.set_piece(self.group, HuaXiaLink(piece_title="烽火操", new_piece=self.new))
+        self.assertEqual(self.group.huaxia_link.piece_id, "")
+
+    def test_a_new_piece_already_created_on_huaxia_uses_its_parts(self):
+        self.readiness.parts["hx-new"] = [
+            HuaXiaPart("p-new-erhu", "hx-new", "二胡 I", "6-8", 6, "拉弦", 1),
+            HuaXiaPart("p-new-pipa", "hx-new", "琵琶", "2", 2, "彈撥", 2),
+        ]
+        plan = self.preview().voice_plan(self.group)
+        self.assertEqual(plan.creates, [])
+        self.assertEqual([row.part.id for row in plan.rows], ["p-new-erhu", "p-new-pipa"])
+
+
 class TestVoicesStep(PreviewTestCase):
     """「聲部」步：有衝突、沒挑或要建卻沒填最少人數的群組讓「下一步」按不下去"""
 

@@ -307,6 +307,21 @@ class TestPieceStep(PublishWindowTestCase):
         new = self.window.project.groups[0].huaxia_link.new_piece
         self.assertEqual(new, NewHuaXiaPiece("烽火操", "劉文金", 7.5, HuaXiaEnsemble.TUTTI))
 
+    def test_editing_a_new_piece_keeps_the_number_it_was_given(self):
+        group = self.window.project.groups[0]
+        new = NewHuaXiaPiece("烽火操", "劉文金", 7.5, HuaXiaEnsemble.TUTTI)
+        self.window.project.set_huaxia_link(group, HuaXiaLink(piece_id="hx-new", piece_title="烽火操", new_piece=new))
+        self.window.project.mark_saved()
+
+        def operate(dialog):
+            title = group_cell(dialog, "烽火操").findChildren(QLineEdit)[0]
+            title.setText("長城隨想－烽火操")
+            title.editingFinished.emit()
+        self.publish(operate=operate)
+        self.assertEqual(
+            (group.huaxia_link.piece_id, group.huaxia_link.new_piece.title), ("hx-new", "長城隨想－烽火操"),
+        )
+
     def test_the_instrumentation_table_shows_the_huaxia_piece(self):
         self.window.findChild(QTabWidget).setCurrentIndex(1)
         self.publish(operate=lambda dialog: choose(dialog, "烽火操", "existing"))

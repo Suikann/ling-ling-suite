@@ -269,8 +269,8 @@ def plan_voices(
 
     Args:
         project: 專案（聲部組以它的對照為準）
-        group: 群組；對到新建的曲目時 parts 為空
-        parts: 群組對到的 HuaXia 曲目上已有的聲部
+        group: 群組
+        parts: 群組對到的 HuaXia 曲目上已有的聲部；新建、HuaXia 上還沒有的曲目為空
         decisions: 譜務這次的決定；省略時全照預設
 
     Returns:
@@ -407,7 +407,7 @@ def plan_files(group: Group, voices: VoicePlan, scores: List[HuaXiaScore], file_
     Args:
         group: 群組（已重新命名，檔在輸出位置）
         voices: 群組的聲部對到 HuaXia 的結果（plan_voices）
-        scores: 群組對到的 HuaXia 曲目上登記的樂譜；新建的曲目為空
+        scores: 群組對到的 HuaXia 曲目上登記的樂譜；新建、HuaXia 上還沒有的曲目為空
         file_service: 讀本機檔案大小
 
     Returns:
@@ -587,13 +587,22 @@ class PublishPreview:
         return any(piece.id == link.piece_id for piece in self.readiness.pieces)
 
     def set_piece(self, group: Group, link: Optional[HuaXiaLink]) -> None:
-        """「曲目」步的選擇改了：寫進專案；選回同一首現有曲目時沿用手動挑的聲部配對，換了曲目就清掉這次的聲部決定"""
+        """「曲目」步的選擇改了：寫進專案，換了曲目就清掉這次的聲部決定
+
+        選回同一首現有曲目時沿用手動挑的聲部配對。新建的曲目沿用目前或開啟預覽時那份新建曲目已產生的編號與手動
+        配對（發譜一開始產生編號，重發時沿用；改新建的欄位不換編號），不會在 HuaXia 上重複建曲目與聲部。
+        """
         previous = group.huaxia_link
-        if link is not None and link.new_piece is None:
-            for before in (previous, self._opened_links.get(group.id)):
-                if before is not None and before.new_piece is None and before.piece_id == link.piece_id:
-                    link.part_ids = dict(before.part_ids)
-                    break
+        for before in (previous, self._opened_links.get(group.id)):
+            if link is None or before is None or (before.new_piece is None) != (link.new_piece is None):
+                continue
+            if link.new_piece is None and before.piece_id == link.piece_id:
+                link.part_ids = dict(before.part_ids)
+                break
+            if link.new_piece is not None and before.piece_id:
+                link.piece_id = before.piece_id
+                link.part_ids = dict(before.part_ids)
+                break
         if _piece_identity(previous) != _piece_identity(link):
             self._decisions.pop(group.id, None)
         self.project.set_huaxia_link(group, link)
@@ -628,15 +637,19 @@ class PublishPreview:
         _toggle(self.chosen_events, event_id, chosen)
 
     def voice_plan(self, group: Group) -> VoicePlan:
-        """群組目前的聲部配對與要寫的內容（依「曲目」步對到的曲目與「聲部」步的選擇）；群組要已對到曲目"""
-        link = group.huaxia_link
-        parts = self.readiness.parts.get(link.piece_id, []) if link.new_piece is None else []
+        """群組目前的聲部配對與要寫的內容（依「曲目」步對到的曲目與「聲部」步的選擇）；群組要已對到曲目
+
+        新建的曲目已有編號、而且 HuaXia 上已經有它（上次發到一半）時，用它已有的聲部。
+        """
+        parts = self.readiness.parts.get(group.huaxia_link.piece_id, [])
         return plan_voices(self.project, group, parts, self.decisions(group))
 
     def file_plan(self, group: Group) -> FilePlan:
-        """群組要發的檔與各自要取代的（依目前的聲部配對）；群組要已對到曲目"""
-        link = group.huaxia_link
-        scores = self.readiness.scores.get(link.piece_id, []) if link.new_piece is None else []
+        """群組要發的檔與各自要取代的（依目前的聲部配對）；群組要已對到曲目
+
+        新建的曲目已有編號、而且 HuaXia 上已經有它時，用它已登記的樂譜。
+        """
+        scores = self.readiness.scores.get(group.huaxia_link.piece_id, [])
         return plan_files(group, self.voice_plan(group), scores, self._file_service)
 
     def publish_plan(self) -> List[GroupPublish]:
