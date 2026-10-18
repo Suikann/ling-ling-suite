@@ -107,20 +107,35 @@ def _whole_sheet(sheet: str) -> str:
     return sheet_range(sheet, "A:ZZ")
 
 
-def _models(rows: List[List[str]], sheet: str, model_class: Type[T]) -> List[T]:
-    """把工作表讀到的列（含標題列）依程式的欄位常數轉成資料模型；標題列與空列略過"""
+def _numbered_records(rows: List[List[str]], sheet: str) -> List[Tuple[int, Dict[str, str]]]:
+    """把工作表讀到的列（含標題列）依程式的欄位常數轉成欄位名稱對值，連同從 1 起算的列號；標題列與空列略過
+
+    其他列轉資料模型的寫法（_models、_numbered、_records）都從這裡來。
+    """
     headers = SHEET_HEADERS[sheet]
+    return [
+        (index + 1, {header: (row[i] if i < len(row) else "") for i, header in enumerate(headers)})
+        for index, row in enumerate(rows) if index > 0 and any(row)
+    ]
+
+
+def _numbered(rows: List[List[str]], sheet: str, model_class: Type[T]) -> List[Tuple[int, T]]:
+    """把工作表讀到的列轉成資料模型（只取模型有的欄位），連同從 1 起算的列號；標題列與空列略過"""
     names = {f.name for f in fields(model_class)}
-    result = []
-    for row in rows[1:]:
-        if not any(row):
-            continue
-        values = {
-            header: (row[i] if i < len(row) else "")
-            for i, header in enumerate(headers) if header in names
-        }
-        result.append(model_class(**values))
-    return result
+    return [
+        (row, model_class(**{name: value for name, value in record.items() if name in names}))
+        for row, record in _numbered_records(rows, sheet)
+    ]
+
+
+def _models(rows: List[List[str]], sheet: str, model_class: Type[T]) -> List[T]:
+    """把工作表讀到的列轉成資料模型；標題列與空列略過"""
+    return [model for _, model in _numbered(rows, sheet, model_class)]
+
+
+def _records(rows: List[List[str]], sheet: str) -> List[Dict[str, str]]:
+    """把工作表讀到的列轉成欄位名稱對值；標題列與空列略過"""
+    return [record for _, record in _numbered_records(rows, sheet)]
 
 
 def _is_true(value: str) -> bool:
@@ -239,27 +254,6 @@ def _club_sections(records: List[Dict[str, str]], orchestra_type: OrchestraType)
     return sections
 
 
-def _numbered(rows: List[List[str]], sheet: str, model_class: Type[T]) -> List[Tuple[int, T]]:
-    """把工作表讀到的列（含標題列）轉成資料模型，連同從 1 起算的列號；標題列與空列略過"""
-    headers = SHEET_HEADERS[sheet]
-    names = {f.name for f in fields(model_class)}
-    return [
-        (index + 1, model_class(**{
-            header: (row[i] if i < len(row) else "") for i, header in enumerate(headers) if header in names
-        }))
-        for index, row in enumerate(rows) if index > 0 and any(row)
-    ]
-
-
-def _records(rows: List[List[str]], sheet: str) -> List[Dict[str, str]]:
-    """把工作表讀到的列（含標題列）轉成欄位名稱對值；標題列與空列略過"""
-    headers = SHEET_HEADERS[sheet]
-    return [
-        {header: (row[i] if i < len(row) else "") for i, header in enumerate(headers)}
-        for row in rows[1:] if any(row)
-    ]
-
-
 def _place_sheets(titles: Sequence[str]) -> List[str]:
     """讀一處或聲部組對照要讀的工作表：曲目、版本、樂章、分譜，以及已經建立的時長與聲部組對照"""
     return [SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS] + [
@@ -332,9 +326,7 @@ class _PlaceTables:
         self.editions = {e.id: e for e in _models(tables[SHEET_EDITIONS], SHEET_EDITIONS, Edition)}
         self.movements = {m.id: m for m in _models(tables[SHEET_MOVEMENTS], SHEET_MOVEMENTS, Movement)}
         self._parts = _numbered(tables[SHEET_PARTS], SHEET_PARTS, Part)
-        self._durations = [
-            (row, record) for row, record in _numbered_records(tables.get(SHEET_DURATIONS, []), SHEET_DURATIONS)
-        ]
+        self._durations = _numbered_records(tables.get(SHEET_DURATIONS, []), SHEET_DURATIONS)
         self._sections = [
             (row, record) for row, record in _numbered_records(tables.get(SHEET_SECTIONS, []), SHEET_SECTIONS)
             if record["orchestra_type"].strip() == orchestra_type.value and record["instrument"].strip()
@@ -371,6 +363,12 @@ class _PlaceTables:
         return {
             part.instrument_name: Registration(part.drive_file_id.strip(), part.file_name)
             for _, part in self._voice_rows(edition_id, movement_id) if part.drive_file_id.strip()
+        }
+
+    def registered_voices(self, edition_id: str, movement_id: str) -> Dict[str, str]:
+        """一處的聲部列（不含總譜列）登記的 Drive 檔案 ID → 聲部"""
+        return {
+            registration.file_id: voice for voice, registration in self.registrations(edition_id, movement_id).items()
         }
 
     def score(self, edition_id: str, movement_id: str) -> Optional[Registration]:
@@ -495,16 +493,11 @@ class _PlaceTables:
 
     def _voice_rows(self, edition_id: str, movement_id: str) -> List[Tuple[int, Part]]:
         """一處認得的聲部列與列號"""
-        return _voice_parts([
-            (row, part) for row, part in self._parts
-            if part.edition_id == edition_id and part.movement_id == movement_id
-        ])
+        return _voice_parts(_at(self._parts, edition_id, movement_id))
 
     def _score_row(self, edition_id: str, movement_id: str) -> Optional[Tuple[int, Part]]:
         """一處的總譜列與列號；有幾列時只認排在前面那一列"""
-        return _score_part([
-            (row, part) for row, part in self._parts if part.edition_id == edition_id and part.movement_id == movement_id
-        ])
+        return _score_part(_at(self._parts, edition_id, movement_id))
 
     def _duration_row(self, edition_id: str, movement_id: str) -> Optional[Tuple[int, Dict[str, str]]]:
         """一處的時長列與列號；有幾列時只認第一列"""
@@ -512,15 +505,6 @@ class _PlaceTables:
             (row, record) for row, record in self._durations
             if record["edition_id"] == edition_id and record["movement_id"] == movement_id
         ), None)
-
-
-def _numbered_records(rows: List[List[str]], sheet: str) -> List[Tuple[int, Dict[str, str]]]:
-    """把工作表讀到的列（含標題列）轉成欄位名稱對值，連同從 1 起算的列號；標題列與空列略過"""
-    headers = SHEET_HEADERS[sheet]
-    return [
-        (index + 1, {header: (row[i] if i < len(row) else "") for i, header in enumerate(headers)})
-        for index, row in enumerate(rows) if index > 0 and any(row)
-    ]
 
 
 def _log_record(
@@ -921,8 +905,7 @@ class CatalogService:
 
     def _place_tables(self, orchestra_type: OrchestraType) -> "_PlaceTables":
         """讀一處要的各工作表（列出工作表名稱、讀取各一次請求）；時長與聲部組對照還沒建立時當成空的"""
-        sheets = _place_sheets(self._call(self._sheets.sheet_titles))
-        return _PlaceTables(dict(zip(sheets, self._read_sheets(*sheets))), orchestra_type)
+        return _PlaceTables(self._read_named(_place_sheets(self._call(self._sheets.sheet_titles))), orchestra_type)
 
     def _pdfs_under(self, folder_id: str) -> List[FolderPdf]:
         """資料夾與它所有子資料夾裡的 PDF，連同在資料夾裡的路徑，依路徑排序（每個資料夾一次列出）"""
@@ -983,8 +966,7 @@ class CatalogService:
         titles = self._call(self._sheets.sheet_titles)
         if SHEET_INSTRUMENTATION_LOG not in titles:
             return []
-        sheets = _place_sheets(titles) + [SHEET_INSTRUMENTATION_LOG]
-        tables = dict(zip(sheets, self._read_sheets(*sheets)))
+        tables = self._read_named(_place_sheets(titles) + [SHEET_INSTRUMENTATION_LOG])
         try:
             current = _PlaceTables(tables, orchestra_type).current(edition_id, movement_id)
         except CatalogError as error:
@@ -1003,8 +985,7 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到
         """
-        sheets = _place_sheets(self._call(self._sheets.sheet_titles))
-        tables = dict(zip(sheets, self._read_sheets(*sheets)))
+        tables = self._read_named(_place_sheets(self._call(self._sheets.sheet_titles)))
         return {orchestra: _PlaceTables(tables, orchestra).section_entries() for orchestra in OrchestraType}
 
     def sync_instrumentation(
@@ -1144,7 +1125,7 @@ class CatalogService:
                         pdfs_by_key[folder_key(path)] = pdfs
                 trees[folder_id] = (folders_by_key, pdfs_by_key)
             folders, files = trees.get(folder_id, ({}, {}))
-            here = [(row, part) for row, part in parts if part.edition_id == edition_id and part.movement_id == movement_id]
+            here = _at(parts, edition_id, movement_id)
             voices = _voice_parts(here)
             score = _score_part(here)
             listed = [(part.instrument_name, part) for _, part in voices] + ([(SCORE_VOICE, score[1])] if score else [])
@@ -1345,8 +1326,7 @@ class CatalogService:
         """
         titles = self._call(self._sheets.sheet_titles)
         logs = [sheet for sheet in (SHEET_DEPOSIT_LOG, SHEET_INSTRUMENTATION_LOG) if sheet in titles]
-        sheets = _place_sheets(titles) + logs
-        tables = dict(zip(sheets, self._read_sheets(*sheets)))
+        tables = self._read_named(_place_sheets(titles) + logs)
         entries = _models(tables.get(SHEET_DEPOSIT_LOG, []), SHEET_DEPOSIT_LOG, DepositLogEntry)
         ours = [entry for entry in entries if entry.deposit_id == deposit_id]
         catalog = _PlaceTables(tables, orchestra_type)
@@ -1371,11 +1351,7 @@ class CatalogService:
             if error.kind is not CatalogErrorKind.GONE:
                 raise
             return RevertPlace(None)
-        registered = {
-            part.drive_file_id.strip(): part.instrument_name
-            for _, part in catalog._voice_rows(edition_id, movement_id) if part.drive_file_id.strip()
-        }
-        return RevertPlace(place, registered)
+        return RevertPlace(place, catalog.registered_voices(edition_id, movement_id))
 
     def trash_file(self, file_id: str) -> None:
         """把 Drive 上的檔丟進垃圾桶（一次請求），約 30 天內可從垃圾桶救回
@@ -1541,10 +1517,7 @@ class CatalogService:
             """找列號後寫入登記"""
             rows = self._sheets.read_ranges([_whole_sheet(SHEET_PARTS)])[0]
             parts = _numbered(rows, SHEET_PARTS, Part)
-            here = [
-                (row, part) for row, part in parts
-                if part.edition_id == pending.edition_id and part.movement_id == pending.movement_id
-            ]
+            here = _at(parts, pending.edition_id, pending.movement_id)
             voices = {voice_key(part.instrument_name): (row, part) for row, part in _voice_parts(here)}
             score = _score_part(here)
             batch = _Batch({SHEET_PARTS: rows}, self._draw_ids)
@@ -1890,6 +1863,10 @@ class CatalogService:
         for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
             self._call(lambda: self._sheets.add_sheet(sheet))
         self._call(lambda: self._sheets.write_cells(batch.cells))
+
+    def _read_named(self, sheets: Sequence[str]) -> Dict[str, List[List[str]]]:
+        """以一次請求讀多張工作表的全部列（含標題列），依工作表名稱交回"""
+        return dict(zip(sheets, self._read_sheets(*sheets)))
 
     def _read_sheets(self, *sheets: str) -> List[List[List[str]]]:
         """以一次請求讀多張工作表的全部列（含標題列）"""
