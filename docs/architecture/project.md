@@ -7,6 +7,7 @@
 - UI 只表達意圖並立即寫入：修改一律呼叫 `Project` 的公開編輯操作（`update_group`、`add_group`、`move_to_group`、`apply_split`、`guess_piece_name`…，完整清單看 `Project` 的公開方法），不直接指定 `Project`、`Group`、`FileInfo` 的欄位
 - 舊欄位鏡像（`selected_instruments`、`use_parts_subfolder`）由編輯操作與載入流程維持，呼叫端不碰
 - 群組分頁、樂器表、預覽對話框不呼叫主視窗的私有方法：群組分頁以 `groups_changed` 讓主視窗重建分頁（影響其他分頁的修改），樂器表發出 `instruments_changed`，預覽對話框用主視窗注入的 callback（`check`、`on_execute`）
+- 同一份樂器表不重名：新增（`add_instrument`）或改名（`rename_instrument`）成與其他列同一聲部的名稱（`core/voice_names.py` 的規則，例如已有「二胡 I」時的「二胡1」）時丟出 `DuplicateVoiceError`、樂器表不變，樂器表編輯器顯示說明並還原名稱；改成自己的另一種寫法不算重名。整份換掉樂器表（`set_instruments`：拖動、刪除、預設樂器表）不檢查，舊專案已有的重名原樣保留
 - 樂器表顯示目前分頁那個群組的樂器表；目前分頁不是群組（未分組）時清空並停用，輸入的樂器才不會沒有地方寫入（`InstrumentListEditor.show_group`）
 
 ### 未存檔狀態

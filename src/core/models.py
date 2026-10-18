@@ -14,6 +14,19 @@ from core.constants import (
 )
 from core.paths import path_key
 from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
+from core.voice_names import voice_key
+
+
+class DuplicateVoiceError(ValueError):
+    """樂器表新增或改名會讓兩列成為同一聲部（重名）時丟出
+
+    Attributes:
+        existing: 樂器表裡已有、與新名稱同一聲部的那一列的寫法
+    """
+
+    def __init__(self, existing: str):
+        super().__init__(f"樂器表已有同一聲部：{existing}")
+        self.existing = existing
 
 
 @dataclass
@@ -736,6 +749,29 @@ class Project:
         group.assign_instruments(instruments)
         self._changed()
 
+    def add_instrument(self, group: Group, name: str) -> None:
+        """在群組樂器表的最後加上一個聲部
+
+        Raises:
+            DuplicateVoiceError: 樂器表已有同一聲部（另一種寫法也算），樂器表不變
+        """
+        _refuse_duplicate_voice(group.instruments, name)
+        group.assign_instruments(group.instruments + [name])
+        self._changed()
+
+    def rename_instrument(self, group: Group, index: int, name: str) -> None:
+        """把群組樂器表第 index 列改成 name，位置不變
+
+        Raises:
+            DuplicateVoiceError: 樂器表的其他列已有同一聲部，樂器表不變；改成自己的另一種寫法不算
+        """
+        others = group.instruments[:index] + group.instruments[index + 1:]
+        _refuse_duplicate_voice(others, name)
+        instruments = list(group.instruments)
+        instruments[index] = name
+        group.assign_instruments(instruments)
+        self._changed()
+
     def link_movements(self, groups: Iterable[Group], piece_name: str) -> None:
         """把群組連成同一首曲目的各樂章：曲名一致、樂章編號依序，沒有樂章名稱的以群組名稱補上"""
         for number, group in enumerate(groups, start=1):
@@ -886,6 +922,14 @@ class Project:
             ref.group.score_file = None
         else:
             ref.group.files = [f for f in ref.group.files if f is not ref.file]
+
+
+def _refuse_duplicate_voice(instruments: Iterable[str], name: str) -> None:
+    """name 與 instruments 裡任一列是同一聲部時丟出 DuplicateVoiceError"""
+    key = voice_key(name)
+    existing = next((other for other in instruments if voice_key(other) == key), None)
+    if existing is not None:
+        raise DuplicateVoiceError(existing)
 
 
 def _index_of(files: List[FileInfo], file: FileInfo) -> int:

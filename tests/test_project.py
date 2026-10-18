@@ -18,7 +18,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from core.models import FileInfo, Group, Project, SplitResult, UndoMapping
+from core.models import DuplicateVoiceError, FileInfo, Group, Project, SplitResult, UndoMapping
 from services.project_service import ProjectService
 from path_spellings import spellings
 
@@ -440,6 +440,44 @@ class TestGroupEdits(unittest.TestCase):
             [("命運", "1", "Adagio"), ("命運", "2", "Allegro")],
         )
         self.assert_changed()
+
+
+class TestInstrumentListWithoutDuplicateVoices(unittest.TestCase):
+    """樂器表新增或改名：經「同一聲部」規則判為相同的兩列算重名，擋下且樂器表不變"""
+
+    def setUp(self):
+        self.group = Group(name="g", instruments=["二胡 I", "二胡 II", "Cello"])
+        self.project = Project(groups=[self.group])
+        self.heard = []
+        self.project.subscribe(lambda: self.heard.append(self.project.is_modified()))
+
+    def test_adding_a_new_voice_appends_it(self):
+        self.project.add_instrument(self.group, "二胡 III")
+        self.assertEqual(self.group.instruments, ["二胡 I", "二胡 II", "Cello", "二胡 III"])
+        self.assertEqual(self.heard, [True])
+
+    def test_adding_another_spelling_of_an_existing_voice_is_refused(self):
+        with self.assertRaises(DuplicateVoiceError) as refused:
+            self.project.add_instrument(self.group, "二胡1")
+        self.assertEqual(refused.exception.existing, "二胡 I")
+        self.assertEqual(self.group.instruments, ["二胡 I", "二胡 II", "Cello"])
+        self.assertEqual(self.heard, [])
+
+    def test_renaming_a_voice_replaces_it_in_place(self):
+        self.project.rename_instrument(self.group, 2, "大提琴")
+        self.assertEqual(self.group.instruments, ["二胡 I", "二胡 II", "大提琴"])
+        self.assertEqual(self.heard, [True])
+
+    def test_renaming_to_another_spelling_of_itself_is_allowed(self):
+        self.project.rename_instrument(self.group, 0, "二胡1")
+        self.assertEqual(self.group.instruments, ["二胡1", "二胡 II", "Cello"])
+
+    def test_renaming_to_another_row_s_voice_is_refused(self):
+        with self.assertRaises(DuplicateVoiceError) as refused:
+            self.project.rename_instrument(self.group, 0, "二胡Ⅱ")
+        self.assertEqual(refused.exception.existing, "二胡 II")
+        self.assertEqual(self.group.instruments, ["二胡 I", "二胡 II", "Cello"])
+        self.assertEqual(self.heard, [])
 
 
 class TestApplySplit(unittest.TestCase):
