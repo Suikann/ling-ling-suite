@@ -4,7 +4,8 @@
 
 確認譜庫裡有內容相同的一份之後，永久刪掉本機的總譜與分譜，連同清空後變空的資料夾：
 preview 讀本機檔案的 MD5 與譜庫各處登記的 Drive 檔，交回每份檔的歸類（規則在 core/clear_local.py）；
-clear 只刪勾了的群組裡可清除的檔，刪之前再算一次 MD5，預覽之後內容變了的不刪。
+clear 只刪勾了的群組裡可清除的檔：刪之前一刻重讀譜庫那幾處的登記與 Drive 上的檔，預覽之後登記換了、
+Drive 上那份改過或丟進垃圾桶的不刪；每份刪之前再算一次本機 MD5，預覽之後內容變了的也不刪。
 這是泠靈唯一的永久刪除（FileService.delete_permanently），其他刪除照舊走資源回收桶；不放上復原堆疊。
 
 清除後本機沒有、群組記著存入指紋的檔就是「只在譜庫」（Group.has_catalog_copy），不另外存；
@@ -17,7 +18,7 @@ UI 要在背景執行緒呼叫。
     from services.clear_local_service import ClearLocalService
     service = ClearLocalService(file_service, log)
     plan = service.preview(project, catalog)
-    outcome = service.clear(plan, group_ids, should_cancel, report)
+    outcome = service.clear(plan, group_ids, catalog, should_cancel, report)
     project.record_fingerprints(outcome.fingerprints)
 """
 import os
@@ -27,6 +28,7 @@ from typing import Callable, Collection, Dict, List, NamedTuple, Optional, Seque
 from core.clear_local import (
     ClearItem, ClearPlan, ClearStatus, GroupClear, classify, clear_sources, emptied_folders, standard_user_folders,
 )
+from core.catalog_errors import CatalogError
 from core.deposit import PlaceFiles
 from core.locale import t
 from core.log_entry import LogEntry
@@ -53,12 +55,16 @@ class ClearOutcome:
         changed: 預覽之後本機內容變了、沒刪的檔
         failed: 刪不掉的檔與原因
         cancelled: 是否因為要求取消而停下
+        catalog_changed: 預覽之後譜庫那份不再一致（登記換了、Drive 上改過或丟進垃圾桶）、沒刪的檔
+        error: 刪之前重讀譜庫讀不到時的錯誤（什麼都沒刪）
     """
     cleared: List[ClearItem] = field(default_factory=list)
     total: int = 0
     changed: List[ClearItem] = field(default_factory=list)
     failed: List[Tuple[ClearItem, str]] = field(default_factory=list)
     cancelled: bool = False
+    catalog_changed: List[ClearItem] = field(default_factory=list)
+    error: Optional[CatalogError] = None
 
     @property
     def fingerprints(self) -> Dict[str, str]:
@@ -131,26 +137,39 @@ class ClearLocalService:
         return ClearPlan(plan)
 
     def clear(
-        self, plan: ClearPlan, group_ids: Collection[str], should_cancel: Callable[[], bool],
+        self, plan: ClearPlan, group_ids: Collection[str], catalog: CatalogService, should_cancel: Callable[[], bool],
         report: Callable[[ClearProgress], None],
     ) -> ClearOutcome:
         """永久刪掉勾了的群組裡可清除的檔，再刪掉因此變空的資料夾（往上到輸出位置為止）
 
-        每份刪之前再算一次 MD5，跟預覽時不同就不刪；要求取消時做完目前這一份就停。
+        刪之前一刻重讀譜庫那幾處：登記的 Drive 檔跟預覽時不再一致的不刪（catalog_changed），讀不到時什麼都不刪；
+        每份刪之前再算一次本機 MD5，跟預覽時不同就不刪；要求取消時做完目前這一份就停。
 
         Args:
             plan: preview 算出的計畫
             group_ids: 勾了的群組
+            catalog: 譜庫服務
             should_cancel: 是否已要求取消
             report: 回報進度
 
         Returns:
-            清除的結果；刪不掉的檔不丟出，記在 failed
+            清除的結果；刪不掉的檔不丟出，記在 failed，重讀譜庫失敗記在 error
         """
         work = plan.chosen(group_ids)
+        chosen = [group for group in plan.groups if group.group_id in group_ids and group.clearable]
+        try:
+            places = catalog.deposit_places(sorted({group.place_key for group in chosen})) if chosen else {}
+        except CatalogError as e:
+            return ClearOutcome(total=len(work), error=e)
+        unchanged = {
+            id(item) for group in chosen for item in group.clearable
+            if classify(item.source, item.md5, places.get(group.place_key)) is ClearStatus.CLEARABLE
+        }
         cleared: List[ClearItem] = []
         changed: List[ClearItem] = []
         failed: List[Tuple[ClearItem, str]] = []
+        catalog_changed = [item for item in work if id(item) not in unchanged]
+        work = [item for item in work if id(item) in unchanged]
         cancelled = False
         for done, item in enumerate(work):
             if should_cancel():
@@ -168,7 +187,7 @@ class ClearLocalService:
             cleared.append(item)
             self._record_in_log(plan, item)
         self._remove_emptied_folders(cleared)
-        return ClearOutcome(cleared, len(work), changed, failed, cancelled)
+        return ClearOutcome(cleared, len(work) + len(catalog_changed), changed, failed, cancelled, catalog_changed)
 
     def _remove_emptied_folders(self, cleared: List[ClearItem]) -> None:
         """刪掉清除後變空的資料夾，由深到淺；還有東西的不刪"""

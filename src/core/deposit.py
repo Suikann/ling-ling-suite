@@ -149,6 +149,10 @@ class PlaceFiles:
         key = voice_key(voice)
         return next((file for name, file in self.registered if name != SCORE_VOICE and voice_key(name) == key), None)
 
+    def holds(self, file: DriveFile) -> bool:
+        """這份檔在版本資料夾（含子資料夾）裡、不在垃圾桶；登記到別處的檔（例如別人分享進來、擁有者刪得掉的）不算"""
+        return any(listed.id == file.id for pdfs in self.files.values() for listed in pdfs)
+
     def lists(self, voice: str) -> bool:
         """這處的分譜工作表有沒有這個聲部（總譜一律算有）"""
         return voice == SCORE_VOICE or any(voice_key(name) == voice_key(voice) for name in self.voices)

@@ -1423,11 +1423,14 @@ class MainWindow(QMainWindow):
         service = self._clear_service
         stopped = []
 
-        def read():
+        def read() -> tuple:
             """在背景接譜庫並核對出計畫"""
-            return service.preview(project, self._catalog_factory())
+            catalog = self._catalog_factory()
+            return catalog, service.preview(project, catalog)
         try:
-            plan = run_while_waiting(self, t("clear.title"), t("clear.reading"), read, lambda: stopped.append(True))
+            catalog, plan = run_while_waiting(
+                self, t("clear.title"), t("clear.reading"), read, lambda: stopped.append(True),
+            )
         except Exception as e:
             failure = CatalogFailure.from_error(as_catalog_error(e), t("clear.title"))
             self._catalog_error_bar.show_failure(t("catalog.error.cannot_read"), failure, self._clear_local_copies)
@@ -1444,8 +1447,8 @@ class MainWindow(QMainWindow):
             return
 
         def work(should_cancel, report) -> ClearOutcome:
-            """在背景永久刪除"""
-            return service.clear(plan, group_ids, should_cancel, report)
+            """在背景重讀譜庫核對後永久刪除"""
+            return service.clear(plan, group_ids, catalog, should_cancel, report)
 
         self._run_in_background(work, _describe_clear, self._clear_finished, _CLEAR_TEXTS, locks_project=True)
 
@@ -1463,15 +1466,21 @@ class MainWindow(QMainWindow):
         return box.clickedButton() is delete
 
     def _clear_finished(self, outcome: ClearOutcome, _cancelled: bool):
-        """清除結束（做完或取消）：清除了的指紋交回專案並只存專案檔，重畫分頁標出只在譜庫的檔；沒刪的列出來"""
+        """清除結束（做完或取消）：清除了的指紋交回專案並只存專案檔，重畫分頁標出只在譜庫的檔；沒刪的列出來；
+        刪之前重讀譜庫讀不到時頂端顯示提示列（什麼都沒刪）"""
         if outcome.cleared:
             self.project.record_fingerprints(outcome.fingerprints)
             if self._project_path and not self.project.read_only and self.project.is_modified():
                 self._write_project_file(self._project_path)
             self._rebuild_tabs()
+        if outcome.error is not None:
+            failure = CatalogFailure.from_error(outcome.error, t("clear.title"))
+            self._catalog_error_bar.show_failure(t("catalog.error.cannot_read"), failure, self._clear_local_copies)
+            self._set_status(t("status.ready"))
+            return
         key = "clear.cancelled" if outcome.cancelled else "clear.done"
         self._set_status(t(key, count=len(outcome.cleared), size=size_text(outcome.freed)))
-        kept = [item.path for item in outcome.changed] + [item.path for item, _ in outcome.failed]
+        kept = [item.path for item in outcome.changed + outcome.catalog_changed] + [item.path for item, _ in outcome.failed]
         if kept:
             QMessageBox.warning(self, t("clear.title"), t("clear.kept", count=len(kept), files="\n".join(kept)))
 

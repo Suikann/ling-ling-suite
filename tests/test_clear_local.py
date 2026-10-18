@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.catalog_errors import CatalogError, CatalogErrorKind
-from core.catalog_constants import SHEET_PARTS
+from core.catalog_constants import SHEET_HEADERS, SHEET_PARTS
 from core.clear_local import ClearStatus
 from core.models import FileInfo, UndoMapping
 from services.clear_local_service import ClearLocalService
@@ -50,7 +50,7 @@ class ClearTestCase(DepositFixture, unittest.TestCase):
         """預覽後清除（預設清除全部群組），回傳（預覽，結果）"""
         plan = self.clearer.preview(self.project, self.catalog)
         chosen = [group.group_id for group in plan.groups] if group_ids is None else group_ids
-        return plan, self.clearer.clear(plan, chosen, should_cancel, lambda progress: None)
+        return plan, self.clearer.clear(plan, chosen, self.catalog, should_cancel, lambda progress: None)
 
     def registered_id(self, voice: str) -> str:
         """分譜工作表裡第一樂章這個聲部登記的 Drive 檔案 ID；總譜以「總譜」為鍵"""
@@ -62,6 +62,61 @@ class ClearTestCase(DepositFixture, unittest.TestCase):
     def statuses(self, plan) -> dict:
         """第一個群組每份檔的歸類：檔名 → ClearStatus"""
         return {os.path.basename(item.path): item.status for item in plan.groups[0].items}
+
+
+class TestRecheckBeforeDeleting(ClearTestCase):
+    """刪之前一刻重讀譜庫：預覽之後登記換了、Drive 上那份改過或丟進垃圾桶的檔不刪"""
+
+    def preview_then(self, change):
+        """預覽後做 change（扮演別人在預覽之後改了譜庫），再清除全部群組，回傳結果"""
+        plan = self.clearer.preview(self.project, self.catalog)
+        change()
+        chosen = [group.group_id for group in plan.groups]
+        return self.clearer.clear(plan, chosen, self.catalog, lambda: False, lambda progress: None)
+
+    def test_a_file_changed_on_drive_after_the_preview_is_kept(self):
+        outcome = self.preview_then(lambda: self.google.drive.set_content(self.registered_id("琵琶"), b"web edit"))
+        self.assertEqual([os.path.basename(item.path) for item in outcome.catalog_changed], ["琵琶.pdf"])
+        self.assertTrue(os.path.exists(self.parts[1].original_path))
+        self.assertFalse(os.path.exists(self.parts[0].original_path))
+
+    def test_a_file_trashed_after_the_preview_is_kept(self):
+        outcome = self.preview_then(lambda: self.google.drive.trash(self.registered_id("總譜")))
+        self.assertEqual([os.path.basename(item.path) for item in outcome.catalog_changed], ["總譜.pdf"])
+        self.assertTrue(os.path.exists(self.score.original_path))
+
+    def test_a_registration_removed_after_the_preview_is_kept(self):
+        column = SHEET_HEADERS[SHEET_PARTS].index("drive_file_id")
+        row = next(i + 1 for i, r in enumerate(self.google.sheets.rows(SHEET_PARTS)) if len(r) > 3 and r[3] == "琵琶")
+        outcome = self.preview_then(
+            lambda: self.google.sheets.set_cell(SHEET_PARTS, f"{chr(ord('A') + column)}{row}", ""),
+        )
+        self.assertEqual([os.path.basename(item.path) for item in outcome.catalog_changed], ["琵琶.pdf"])
+        self.assertTrue(os.path.exists(self.parts[1].original_path))
+
+    def test_nothing_is_deleted_when_the_catalog_cannot_be_read_again(self):
+        plan = self.clearer.preview(self.project, self.catalog)
+        self.google.fail_next(CatalogErrorKind.OFFLINE)
+        outcome = self.clearer.clear(
+            plan, [g.group_id for g in plan.groups], self.catalog, lambda: False, lambda progress: None,
+        )
+        self.assertEqual(outcome.error.kind, CatalogErrorKind.OFFLINE)
+        self.assertEqual(outcome.cleared, [])
+        self.assertTrue(os.path.exists(self.parts[0].original_path))
+
+
+class TestOnlyInsideTheEditionFolder(ClearTestCase):
+    """登記的檔不在版本資料夾裡（例如別人分享進來、擁有者刪得掉的檔）不算譜庫裡有一份"""
+
+    def test_a_registered_file_outside_the_edition_folder_is_not_in_the_catalog(self):
+        elsewhere = self.google.drive.add_folder("別人的資料夾")
+        outside = self.google.drive.add_file("琵琶.pdf", elsewhere, "琵琶".encode())
+        column = SHEET_HEADERS[SHEET_PARTS].index("drive_file_id")
+        row = next(i + 1 for i, r in enumerate(self.google.sheets.rows(SHEET_PARTS)) if len(r) > 3 and r[3] == "琵琶")
+        self.google.sheets.set_cell(SHEET_PARTS, f"{chr(ord('A') + column)}{row}", outside)
+        plan, outcome = self.clear()
+        self.assertEqual(self.statuses(plan)["琵琶.pdf"], ClearStatus.NOT_IN_CATALOG)
+        self.assertTrue(os.path.exists(self.parts[1].original_path))
 
 
 class TestVerification(ClearTestCase):
@@ -106,7 +161,7 @@ class TestVerification(ClearTestCase):
         plan = self.clearer.preview(self.project, self.catalog)
         with open(self.parts[0].original_path, "wb") as f:
             f.write(b"changed meanwhile")
-        outcome = self.clearer.clear(plan, [plan.groups[0].group_id], lambda: False, lambda progress: None)
+        outcome = self.clearer.clear(plan, [plan.groups[0].group_id], self.catalog, lambda: False, lambda progress: None)
         self.assertNotIn(self.parts[0].original_path, [item.path for item in outcome.cleared])
         self.assertTrue(os.path.exists(self.parts[0].original_path))
 

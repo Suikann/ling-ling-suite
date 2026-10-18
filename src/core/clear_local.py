@@ -10,7 +10,8 @@
 每份檔的歸類（ClearStatus）：
 - 本機找得到：
   - 群組沒連到譜庫，或分譜沒配到聲部：還沒存入
-  - 那處的這個聲部（總譜為總譜列）沒登記 Drive 檔，或登記的檔已不在 Drive、在垃圾桶裡：譜庫裡沒有
+  - 那處的這個聲部（總譜為總譜列）沒登記 Drive 檔，或登記的檔已不在 Drive、在垃圾桶裡、不在版本資料夾裡
+    （例如別人分享進來、擁有者刪得掉的檔）：譜庫裡沒有
   - 登記的檔的 MD5 跟本機不同：跟譜庫裡的不一樣，請先重新存入
   - 相同：可清除
 - 本機找不到：群組記著它在譜庫裡有一份（Group.has_catalog_copy）時是只在譜庫，否則是找不到
@@ -27,7 +28,7 @@
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Collection, Dict, Iterable, List, Optional
+from typing import Collection, Dict, Iterable, List, Optional, Tuple
 
 from core.deposit import SCORE_VOICE, PlaceFiles
 from core.models import CatalogLink, FileInfo, Group, Project
@@ -122,6 +123,12 @@ class GroupClear:
         return self.sources.group_id
 
     @property
+    def place_key(self) -> Optional[Tuple[str, str]]:
+        """群組連到的那處（版本 ID，樂章 ID）；沒連到譜庫時為 None"""
+        link = self.sources.link
+        return (link.edition_id, link.movement_id) if link is not None else None
+
+    @property
     def clearable(self) -> List[ClearItem]:
         """可清除的檔"""
         return [item for item in self.items if item.status is ClearStatus.CLEARABLE]
@@ -184,7 +191,7 @@ def classify(source: ClearSource, md5: str, place: Optional[PlaceFiles]) -> Clea
     if place is None or source.voice is None:
         return ClearStatus.NOT_ARCHIVED
     registered = place.registered_file(source.voice)
-    if registered is None:
+    if registered is None or not place.holds(registered):
         return ClearStatus.NOT_IN_CATALOG
     return ClearStatus.CLEARABLE if registered.md5 == md5 else ClearStatus.DIFFERENT
 

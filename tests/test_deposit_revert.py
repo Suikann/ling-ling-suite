@@ -334,7 +334,7 @@ class ClearedTestCase(RevertTestCase):
         self.deposit_id = self.archive()
         ClearLocalService(FileService(), home=os.path.join(self.temp, "home")).clear(
             ClearLocalService(FileService()).preview(self.project, self.catalog), [g.id for g in self.project.groups],
-            lambda: False, lambda progress: None,
+            self.catalog, lambda: False, lambda progress: None,
         )
         self.cleared = [f.original_path for g in self.project.groups for f in [g.score_file] + list(g.files)]
         self.assertFalse(any(os.path.exists(path) for path in self.cleared))
