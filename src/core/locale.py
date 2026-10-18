@@ -149,6 +149,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "status.workspace_owner_failed": "有 {count} 個工作區子資料夾的所屬專案更新失敗，清理工作區時可能顯示為舊位置。",
         "status.recent_failed": "最近開啟的專案清單無法更新。",
         # 底部面板
+        "panel.orchestra_type": "樂團類型：",
+        "orchestra.chinese": "國樂團",
+        "orchestra.western": "管弦樂團",
         "panel.master_template": "命名格式：",
         "panel.insert_variable": "插入變數",
         "panel.subfolder": "將各群組分別放入子資料夾",
@@ -220,6 +223,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "instrument.headcount_section": "聲部組",
         "instrument.export_done": "已匯出至 {path}",
         "instrument.section_other": "其他",
+        "instrument.section_follows": "{voices} 也會跟著改",
         "instrument.duplicate": "樂器表已有「{existing}」，和「{name}」是同一個聲部。",
         # 連結樂章
         "group.link_movements": "連結為樂章...",
@@ -773,6 +777,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "status.workspace_owner_failed": "Could not update the owning project of {count} workspace folder(s); the cleanup dialog may show their old location.",
         "status.recent_failed": "Could not update the recent projects list.",
         # 底部面板
+        "panel.orchestra_type": "Orchestra Type:",
+        "orchestra.chinese": "Chinese Orchestra",
+        "orchestra.western": "Western Orchestra",
         "panel.master_template": "Naming Format:",
         "panel.insert_variable": "Insert Variable",
         "panel.subfolder": "Create Subfolders",
@@ -844,6 +851,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "instrument.headcount_section": "Section",
         "instrument.export_done": "Exported to {path}",
         "instrument.section_other": "Other",
+        "instrument.section_follows": "{voices} will change too",
         "instrument.duplicate": "\"{existing}\" is already in the list and is the same voice as \"{name}\".",
         # 連結樂章
         "group.link_movements": "Link as Movements...",

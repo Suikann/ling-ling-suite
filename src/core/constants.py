@@ -415,59 +415,62 @@ INSTRUMENT_PRESETS: List[InstrumentPreset] = [
     ),
 ]
 
-SECTION_KEYWORDS: List[Tuple[str, str, List[str]]] = [
-    ("吹管", "Winds", [
-        "笛", "曲笛", "梆笛", "新笛", "簫", "笙", "嗩吶", "管子",
-    ]),
-    ("彈撥", "Plucked Strings", [
-        "琵琶", "阮", "柳琴", "揚琴", "箏", "三弦",
-    ]),
-    ("木管", "Woodwinds", [
-        "flute", "piccolo", "oboe", "english horn", "cor anglais",
-        "clarinet", "bassoon", "contrabassoon", "saxophone", "sax",
-    ]),
-    ("銅管", "Brass", [
-        "horn", "trumpet", "cornet", "trombone", "tuba", "euphonium",
-    ]),
-    ("打擊", "Percussion", [
-        "timpani", "percussion", "xylophone", "marimba", "vibraphone",
-        "glockenspiel", "drum", "打擊", "鼓", "鑼", "鈸",
-    ]),
-    ("鍵盤", "Keyboard", [
-        "piano", "keyboard", "organ", "celesta", "harpsichord", "harp",
-    ]),
-    ("弦樂", "Strings", [
-        "violin", "viola", "violoncello", "cello", "contrabass",
-        "double bass", "string bass", "胡", "高胡", "二胡", "中胡",
-        "大提琴", "低音提琴",
-    ]),
-]
+class OrchestraType(str, Enum):
+    """樂團類型（專案檔存的是值）：決定聲部組用哪一套"""
+    CHINESE = "chinese"
+    WESTERN = "western"
+
+
+# 各樂團類型的聲部組，依選單順序；兩套都另有 OTHER_SECTION
+ORCHESTRA_SECTIONS: Dict[OrchestraType, Tuple[str, ...]] = {
+    OrchestraType.CHINESE: ("吹管", "拉弦", "彈撥", "打擊", "低音"),
+    OrchestraType.WESTERN: ("木管", "銅管", "打擊", "鍵盤", "弦樂"),
+}
+# 偵測聲部組的關鍵字（不分大小寫、部分相符），依比對順序：先比到的先算。
+# 國樂團的低音排在拉弦之前，「革胡」才不會被「胡」歸進拉弦；管弦樂團的木管排在銅管之前，「English Horn」才不會歸進銅管
+SECTION_KEYWORDS: Dict[OrchestraType, Tuple[Tuple[str, Tuple[str, ...]], ...]] = {
+    OrchestraType.CHINESE: (
+        ("吹管", ("笛", "簫", "笙", "嗩吶", "管子", "巴烏", "葫蘆絲", "塤")),
+        ("彈撥", ("琵琶", "阮", "柳琴", "揚琴", "箏", "三弦", "豎琴")),
+        ("低音", ("大提琴", "低音提琴", "革胡", "cello", "contrabass", "double bass")),
+        ("拉弦", ("胡",)),
+        ("打擊", ("打擊", "鼓", "鑼", "鈸", "timpani", "percussion")),
+    ),
+    OrchestraType.WESTERN: (
+        ("木管", (
+            "flute", "piccolo", "oboe", "english horn", "cor anglais",
+            "clarinet", "bassoon", "contrabassoon", "saxophone", "sax",
+        )),
+        ("銅管", ("horn", "trumpet", "cornet", "trombone", "tuba", "euphonium")),
+        ("打擊", (
+            "timpani", "percussion", "xylophone", "marimba", "vibraphone",
+            "glockenspiel", "drum", "打擊", "鼓", "鑼", "鈸",
+        )),
+        ("鍵盤", ("piano", "keyboard", "organ", "celesta", "harpsichord", "harp")),
+        ("弦樂", (
+            "violin", "viola", "violoncello", "cello", "contrabass",
+            "double bass", "string bass", "胡", "大提琴", "低音提琴",
+        )),
+    ),
+}
+# 新專案的樂團類型
+DEFAULT_ORCHESTRA_TYPE = OrchestraType.CHINESE
 
 # 偵測不到聲部組時的名稱
 OTHER_SECTION = "其他"
-OTHER_SECTION_EN = "Other"
 
+# 聲部組的英文名稱：介面為英文時顯示用；專案存的一律是中文名稱（舊版存的英文名稱在開啟時對回中文）
 SECTION_NAMES_EN = {
-    **{section_zh: section_en for section_zh, section_en, _ in SECTION_KEYWORDS},
-    OTHER_SECTION: OTHER_SECTION_EN,
+    "吹管": "Winds",
+    "拉弦": "Bowed Strings",
+    "彈撥": "Plucked Strings",
+    "低音": "Bass",
+    "木管": "Woodwinds",
+    "銅管": "Brass",
+    "打擊": "Percussion",
+    "鍵盤": "Keyboard",
+    "弦樂": "Strings",
+    OTHER_SECTION: "Other",
 }
 
 DEFAULT_HEADCOUNT = 1
-
-
-def detect_instrument_section(instrument_name: str, english: bool = False) -> str:
-    """根據聲部名稱自動偵測所屬聲部組
-
-    Args:
-        instrument_name: 聲部名稱
-        english: 為 True 時回傳英文名稱
-
-    Returns:
-        聲部組名稱，偵測不到時回傳「其他」（英文為 Other）
-    """
-    name_lower = instrument_name.lower()
-    for section_zh, section_en, keywords in SECTION_KEYWORDS:
-        for kw in keywords:
-            if kw.lower() in name_lower:
-                return section_en if english else section_zh
-    return OTHER_SECTION_EN if english else OTHER_SECTION

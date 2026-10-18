@@ -101,54 +101,56 @@ class TestRenamePlan(unittest.TestCase):
 
 
 class TestSectionsWrittenOnFirstUse(unittest.TestCase):
-    """聲部組資料夾模式下，還沒有聲部組的聲部在預檢前依指定語言寫進專案的編制設定；產生計畫本身不改專案"""
+    """聲部組資料夾模式下，樂器還沒有聲部組的聲部在預檢前依樂團類型偵測、寫進以樂器為鍵的對照；產生計畫本身不改專案"""
 
     def _project(self, **fields):
         project = Project(
             master_template="{樂器}.pdf", output_directory=OUT_DIR, parts_output_mode=PartsOutputMode.SECTION,
-            groups=[_group()], **fields,
+            groups=[_group()], orchestra_type="western", **fields,
         )
         project.mark_saved()
         return project
 
-    def test_missing_sections_are_written_in_the_given_language(self):
+    def test_missing_sections_are_detected_for_the_orchestra_type(self):
         project = self._project(instrument_sections={"Horn": "Corni"})
-        assign_default_sections(project, english=True)
+        assign_default_sections(project)
         new_paths = [e.new_path for e in generate_rename_plan(project).entries]
-        self.assertEqual(project.instrument_sections, {"Flute": "Woodwinds", "Horn": "Corni"})
+        self.assertEqual(project.instrument_sections, {"Horn": "Corni", "Flute": "木管"})
         self.assertEqual(new_paths[1:], [
-            os.path.join(OUT_DIR, "Woodwinds", "Flute.pdf"), os.path.join(OUT_DIR, "Corni", "Horn.pdf"),
+            os.path.join(OUT_DIR, "木管", "Flute.pdf"), os.path.join(OUT_DIR, "Corni", "Horn.pdf"),
         ])
         self.assertTrue(project.is_modified())
 
-    def test_written_sections_stay_when_assigned_again_in_another_language(self):
+    def test_written_sections_stay_after_changing_the_orchestra_type(self):
         project = self._project()
-        assign_default_sections(project, english=True)
-        assign_default_sections(project, english=False)
+        assign_default_sections(project)
+        project.set_orchestra_type("chinese")
+        assign_default_sections(project)
         new_paths = [e.new_path for e in generate_rename_plan(project).entries]
-        self.assertEqual(new_paths[1], os.path.join(OUT_DIR, "Woodwinds", "Flute.pdf"))
+        self.assertEqual(new_paths[1], os.path.join(OUT_DIR, "木管", "Flute.pdf"))
 
-    def test_chinese_sections(self):
-        project = self._project()
-        assign_default_sections(project, english=False)
-        self.assertEqual(project.instrument_sections, {"Flute": "木管", "Horn": "銅管"})
+    def test_numbers_of_one_instrument_are_written_once_under_the_first_spelling(self):
+        project = self._project(instrument_sections={"Flute": "木管"})
+        project.set_instruments(project.groups[0], ["Horn 1", "Horn 2"])
+        assign_default_sections(project)
+        self.assertEqual(project.instrument_sections, {"Flute": "木管", "Horn 1": "銅管"})
 
     def test_voice_without_a_known_family_goes_to_the_other_section(self):
         project = self._project()
         project.set_instruments(project.groups[0], ["Flute", "Theremin"])
-        assign_default_sections(project, english=True)
-        self.assertEqual(project.instrument_sections["Theremin"], "Other")
+        assign_default_sections(project)
+        self.assertEqual(project.instrument_sections["Theremin"], "其他")
 
     def test_blank_section_is_replaced_by_the_default(self):
         project = self._project(instrument_sections={"Flute": "  ", "Horn": "銅管"})
-        assign_default_sections(project, english=False)
+        assign_default_sections(project)
         self.assertEqual(project.instrument_sections, {"Flute": "木管", "Horn": "銅管"})
 
     def test_only_voices_of_selected_groups_are_written(self):
         project = self._project()
         other = Group(name="other", files=[_info("x.pdf")], instruments=["Oboe"])
         project.add_groups([other], score_label="Score")
-        assign_default_sections(project, english=True, group_ids={project.groups[0].id})
+        assign_default_sections(project, group_ids={project.groups[0].id})
         self.assertNotIn("Oboe", project.instrument_sections)
 
     def test_other_modes_do_not_touch_the_project(self):
@@ -157,17 +159,16 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
                 project = self._project()
                 project.set_output_settings(parts_output_mode=mode)
                 project.mark_saved()
-                assign_default_sections(project, english=True)
+                assign_default_sections(project)
                 generate_rename_plan(project)
                 self.assertEqual(project.instrument_sections, {})
                 self.assertFalse(project.is_modified())
 
     def test_planning_never_writes_sections(self):
-        project = self._project(instrument_sections={"Flute": "Woodwinds"})
+        project = self._project(instrument_sections={"Flute": "木管"})
         with self.assertRaises(KeyError):
             generate_rename_plan(project)
         self.assertFalse(project.is_modified())
-
 
 if __name__ == '__main__':
     unittest.main()

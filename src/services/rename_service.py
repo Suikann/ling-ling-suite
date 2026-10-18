@@ -8,7 +8,7 @@
 
 使用範例：
     from services.rename_service import assign_default_sections, generate_rename_plan
-    assign_default_sections(project, english=False)
+    assign_default_sections(project)
     planned = generate_rename_plan(project)
     for entry in planned.entries:
         print(entry.original_path, entry.new_path)
@@ -39,22 +39,21 @@ class RenamePlan:
     unknown_variables: List[str] = field(default_factory=list)
 
 
-def assign_default_sections(
-    project: Project, english: bool, group_ids: Optional[Collection[str]] = None,
-) -> None:
-    """分譜依聲部組分放時，把這些群組會被命名、還沒有聲部組（或留空）的聲部寫進專案的編制設定
+def assign_default_sections(project: Project, group_ids: Optional[Collection[str]] = None) -> None:
+    """分譜依聲部組分放時，把這些群組會被命名、樂器還沒有聲部組（或留空）的聲部寫進以樂器為鍵的對照
 
-    預設值依指定語言偵測；寫進專案後就定下，之後切換介面語言不會改變。其他分譜存放模式不寫。
+    預設值依專案的樂團類型偵測；寫進專案後就定下，之後改樂團類型不會改變。其他分譜存放模式不寫。
     產生重新命名計畫（重新命名預檢）前呼叫。
 
     Args:
         project: 專案資料
-        english: 預設值用英文名稱（通常依目前介面語言）
         group_ids: 只處理這些群組；None 表示全部群組
     """
     if project.parts_output_mode != PartsOutputMode.SECTION:
         return
-    missing = default_sections(_chosen_groups(project, group_ids), project.instrument_sections, english)
+    missing = default_sections(
+        _chosen_groups(project, group_ids), project.instrument_sections, project.orchestra_type,
+    )
     if missing:
         project.update_ensemble(sections=missing)
 

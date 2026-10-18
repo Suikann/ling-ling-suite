@@ -10,6 +10,7 @@
 |------|------|
 | 判斷兩條路徑是否同一個檔（絕對路徑、不分大小寫） | `core/paths.py` 的 `path_key`、`same_path`、`is_inside`；沒有本機路徑的名稱（Drive 檔名）用同一規則的 `name_key` |
 | 判斷兩個聲部名稱是否同一聲部（結尾編號互通）或同一樂器（去掉結尾編號） | `core/voice_names.py` 的 `same_voice`、`voice_key`、`same_instrument`、`instrument_key`；規則寫死在模組 docstring。依名稱配對分譜、同一份樂器表不重名、發譜對到 HuaXia 聲部、舊專案人數展開、複製編制、自動完成的同名標記都經它，同一樂器只用在聲部組對照的鍵。只用於比對，各處保留自己的寫法；檔名與路徑用上一列的 `name_key`、`path_key` |
+| 聲部的聲部組（以樂器為鍵的對照，沒存的依樂團類型偵測） | `core/sections.py` 的 `section_for`（專案裡經 `Project.section_of`）；寫入經 `Project.set_section`、`update_ensemble`（見 [project.md](project.md)） |
 | 依介面語言挑選中英文版本 | `core/locale.py` 的 `is_english`、`localized` |
 | 檔名清理（非法字元換底線、空名回退） | `core/filename.py`，重新命名與分割共用 |
 | 一格（總譜或第 N 份分譜）的檔名與資料夾 | `core/naming.py`（見 [naming.md](naming.md)） |

@@ -8,7 +8,7 @@ import os
 from typing import Any, Callable, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog,
+    QLabel, QLineEdit, QCheckBox, QComboBox, QPushButton, QFileDialog,
     QMessageBox, QTabWidget, QMenu, QProgressBar,
 )
 from PySide6.QtCore import Qt, Signal
@@ -16,10 +16,10 @@ from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
-    LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind,
+    LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
 from core.launch_env import app_version, current_build
-from core.locale import t, get_locale, is_english, localized, set_locale
+from core.locale import t, get_locale, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
 from services.activity_log import ActivityLog
@@ -239,12 +239,21 @@ class MainWindow(QMainWindow):
         self._rebuild_tabs()
 
     def _build_bottom_panel(self, parent_layout):
-        """底部：總譜命名格式、狀態列、背景工作的進度與取消鈕、預覽並重新命名"""
+        """底部：樂團類型、總譜命名格式、狀態列、背景工作的進度與取消鈕、預覽並重新命名"""
         bottom = QWidget()
         bl = QVBoxLayout(bottom)
         bl.setContentsMargins(8, 4, 8, 8)
         bl.setSpacing(4)
         template_row = QHBoxLayout()
+        template_row.addWidget(QLabel(t("panel.orchestra_type")))
+        self._orchestra_combo = QComboBox()
+        for orchestra_type in OrchestraType:
+            self._orchestra_combo.addItem(t(f"orchestra.{orchestra_type.value}"), orchestra_type.value)
+        self._show_orchestra_type()
+        self._orchestra_combo.currentIndexChanged.connect(
+            lambda _index: self.project.set_orchestra_type(self._orchestra_combo.currentData()),
+        )
+        template_row.addWidget(self._orchestra_combo)
         template_row.addWidget(QLabel(t("panel.master_template")))
         self._master_template_entry = QLineEdit(self.project.master_template)
         self._master_template_entry.textEdited.connect(lambda text: self.project.set_master_template(text))
@@ -472,9 +481,16 @@ class MainWindow(QMainWindow):
         self._show_access_status(t("status.saved", path=path), result)
         return True
 
+    def _show_orchestra_type(self):
+        """樂團類型選單改為顯示目前專案的值，不寫回專案"""
+        self._orchestra_combo.blockSignals(True)
+        self._orchestra_combo.setCurrentIndex(self._orchestra_combo.findData(self.project.orchestra_type))
+        self._orchestra_combo.blockSignals(False)
+
     def _sync_ui_from_project(self):
         """畫面改為顯示目前的專案"""
         self._instrument_editor.set_project(self.project)
+        self._show_orchestra_type()
         self._master_template_entry.setText(self.project.master_template)
         self._rebuild_tabs()
         if self.project.groups:
@@ -496,7 +512,7 @@ class MainWindow(QMainWindow):
                 return
         from ui.preview_dialog import PreviewDialog
         def check() -> RenameVerdict:
-            assign_default_sections(self.project, is_english(), selected_ids)
+            assign_default_sections(self.project, selected_ids)
             return self._history.check_rename(self.project, selected_ids)
         dialog = PreviewDialog(self.project, check, self._execute_rename, self)
         dialog.exec()

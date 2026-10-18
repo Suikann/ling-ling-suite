@@ -15,7 +15,7 @@ from core.constants import TEMPLATE_VARIABLES, PartsOutputMode, VariableLevel
 from core.models import FileInfo, Group, Project
 from core.naming import (
     SCORE_SLOT, NamingSettings, UnsafeFolderNameError, default_sections, name_group, name_slot, named_voices,
-    section_for, settings_for, unknown_variables, variable_level, variables_in,
+    settings_for, unknown_variables, variable_level, variables_in,
 )
 
 
@@ -272,20 +272,20 @@ class TestVariableLevel(unittest.TestCase):
 
 
 class TestSections(unittest.TestCase):
-    """聲部組：專案設定了（不是空白）就用設定的，否則依指定的語言偵測預設值"""
+    """聲部組資料夾讀以樂器為鍵的對照；沒存的聲部依樂團類型補上預設值，同一樂器只補一次"""
 
-    def test_section_set_in_the_project_wins(self):
-        self.assertEqual(section_for("Flute", {"Flute": "Wind"}, english=True), "Wind")
+    def test_section_folder_reads_the_section_stored_for_the_instrument(self):
+        group = _group(["二胡 I", "二胡 II", "中胡"])
+        settings = NamingSettings(
+            "{樂器}.pdf", parts_mode=PartsOutputMode.SECTION, sections={"二胡1": "低音", "中胡": "拉弦"},
+        )
+        self.assertEqual(
+            [named.name.folders for named in name_group(group, settings).files], [("低音",), ("低音",), ("拉弦",)],
+        )
 
-    def test_missing_or_blank_section_falls_back_to_the_default_in_the_given_language(self):
-        for sections in ({}, {"Flute": "  "}):
-            with self.subTest(sections=sections):
-                self.assertEqual(section_for("Flute", sections, english=True), "Woodwinds")
-                self.assertEqual(section_for("Flute", sections, english=False), "木管")
-
-    def test_defaults_are_listed_only_for_named_voices_without_a_section(self):
-        group = _group(["Flute", "Horn", "Tuba"], files=_files("fl.pdf", "hn.pdf"))
-        self.assertEqual(default_sections([group], {"Flute": "Wind"}, english=True), {"Horn": "Brass"})
+    def test_defaults_are_listed_once_per_instrument_for_named_voices_without_a_section(self):
+        group = _group(["Flute 1", "Flute 2", "Horn 1", "Horn 2", "Tuba"], files=_files(*"abcd"))
+        self.assertEqual(default_sections([group], {"Flute": "木管"}, "western"), {"Horn 1": "銅管"})
 
 
 class TestSettingsFor(unittest.TestCase):

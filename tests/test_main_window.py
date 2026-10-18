@@ -25,8 +25,8 @@ from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox,
-    QPushButton, QRadioButton, QTabWidget, QWidget,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox,
+    QPushButton, QRadioButton, QTabWidget, QTableWidget, QWidget,
 )
 
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CompressionStatus, PartsOutputMode
@@ -45,6 +45,7 @@ from services.project_service import ProjectService
 from services.workspace_service import WorkspaceService
 from ui.background_task import BackgroundTask
 from ui.compression_compare import CompressionCompareDialog
+from ui.instrument_list import EnsembleDialog
 from ui.main_window import MainWindow
 from ui.preview_dialog import PreviewDialog
 from tests.failing_writes import FailingWrites
@@ -808,8 +809,94 @@ class TestMainWindowInstrumentListRefusesDuplicateVoices(InstrumentListTestCase)
         return self.save_from_menu(self.path).groups[0].instruments
 
 
+
+@contextmanager
+def editing_ensemble(operate: Callable[[EnsembleDialog], None]):
+    """模擬使用者在「編輯人數」對話框操作後按下儲存
+
+    替換 EnsembleDialog.exec：對話框開啟時呼叫 operate 操作它，接著按儲存。
+    operate 拋出的例外（在 Qt 事件裡會被吞掉）與對話框沒有開啟，都在離開區塊時判定失敗。
+    """
+    opened = []
+    errors = []
+
+    def fake_exec(dialog):
+        opened.append(dialog)
+        try:
+            operate(dialog)
+        except Exception as e:
+            errors.append(e)
+        dialog.accept()
+        return dialog.result()
+
+    with mock.patch.object(EnsembleDialog, "exec", fake_exec):
+        yield
+    if errors:
+        raise errors[0]
+    if not opened:
+        raise AssertionError("編輯人數對話框沒有開啟")
+
+
+class TestMainWindowOrchestraTypeAndSections(InstrumentListTestCase):
+    """專案設定可改樂團類型，聲部組的選項跟著換；聲部組以樂器為單位，改一列時同一樂器的其他編號跟著改"""
+
+    def setUp(self):
+        super().setUp()
+        self.open_from_menu(Project(groups=[Group(name="g", instruments=["二胡 I", "二胡 II", "中胡"])]))
+
+    def _orchestra_combo(self) -> QComboBox:
+        return next(
+            c for c in self.window.findChildren(QComboBox)
+            if [c.itemText(i) for i in range(c.count())] == [t("orchestra.chinese"), t("orchestra.western")]
+        )
+
+    @staticmethod
+    def _section_combos(dialog: QDialog) -> List[QComboBox]:
+        table = dialog.findChild(QTableWidget)
+        return [table.cellWidget(row, 1) for row in range(table.rowCount())]
+
+    def _options_shown(self) -> List[str]:
+        seen = []
+
+        def read(dialog):
+            combo = self._section_combos(dialog)[0]
+            seen.extend(combo.itemData(i) for i in range(combo.count()))
+
+        with editing_ensemble(read):
+            self.click_button(t("instrument.headcount"))
+        return seen
+
+    def test_changing_the_orchestra_type_swaps_the_section_options(self):
+        self.assertEqual(self._orchestra_combo().currentText(), t("orchestra.chinese"))
+        self.assertEqual(self._options_shown(), ["吹管", "拉弦", "彈撥", "打擊", "低音", "其他"])
+        self._orchestra_combo().setCurrentIndex(1)
+        self.assertEqual(self.window.project.orchestra_type, "western")
+        self.assertTrue(self.is_marked_unsaved())
+        self.assertEqual(self._options_shown(), ["木管", "銅管", "打擊", "鍵盤", "弦樂", "其他"])
+
+    def test_changing_one_number_changes_the_others_and_says_so(self):
+        seen = {}
+
+        def change_first(dialog):
+            table = dialog.findChild(QTableWidget)
+            seen["notes"] = [table.item(row, 2).text() for row in range(table.rowCount())]
+            combos = self._section_combos(dialog)
+            combos[0].setCurrentIndex(combos[0].findData("低音"))
+            seen["shown"] = [combo.currentData() for combo in combos]
+
+        with editing_ensemble(change_first):
+            self.click_button(t("instrument.headcount"))
+        self.assertEqual(seen["notes"], [
+            t("instrument.section_follows", voices="二胡 II"), t("instrument.section_follows", voices="二胡 I"), "",
+        ])
+        self.assertEqual(seen["shown"], ["低音", "低音", "拉弦"])
+        self.assertEqual(
+            [self.window.project.section_of(v) for v in ("二胡 I", "二胡 II", "中胡")], ["低音", "低音", "拉弦"],
+        )
+
+
 class TestMainWindowPreviewNaming(MainWindowTestCase):
-    """預覽的命名：聲部組名稱第一次用到時依當時的介面語言定下；資料夾名稱為 .. 時擋下"""
+    """預覽的命名：聲部組資料夾一律用中文的聲部組名稱，不隨介面語言；資料夾名稱為 .. 時擋下"""
 
     def _switch_language(self, lang_code: str):
         self.trigger_menu(t(f"menu.view.language.{lang_code}"))
@@ -833,9 +920,9 @@ class TestMainWindowPreviewNaming(MainWindowTestCase):
             self.click_button(t("panel.preview_rename"))
         return shown
 
-    def test_section_folders_named_in_english_stay_after_switching_to_chinese(self):
+    def test_section_folders_use_chinese_section_names_in_either_language(self):
         self.addCleanup(set_locale, get_locale())
-        self._open_group()
+        self._open_group(orchestra_type="western")
         self._switch_language("en")
         in_english = self._preview(
             lambda dialog: button_in(dialog, QRadioButton, t("panel.parts_mode_section")).click(),
@@ -843,7 +930,7 @@ class TestMainWindowPreviewNaming(MainWindowTestCase):
         self._switch_language("zh_TW")
         in_chinese = self._preview()
         expected = [
-            os.path.join(self.temp_dir, "Woodwinds", "Flute.pdf"), os.path.join(self.temp_dir, "Brass", "Horn.pdf"),
+            os.path.join(self.temp_dir, "木管", "Flute.pdf"), os.path.join(self.temp_dir, "銅管", "Horn.pdf"),
         ]
         self.assertEqual(in_english, expected)
         self.assertEqual(in_chinese, expected)

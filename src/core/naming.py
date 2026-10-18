@@ -16,11 +16,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 from core.constants import (
-    MIN_NUMBER_WIDTH, RELATIVE_DIR_NAMES, SCORE_NUMBER, TEMPLATE_SLOT_SOURCES, TEMPLATE_VARIABLES, PartsOutputMode,
-    TemplateVariable, VariableLevel, detect_instrument_section,
+    MIN_NUMBER_WIDTH, RELATIVE_DIR_NAMES, SCORE_NUMBER, TEMPLATE_SLOT_SOURCES, TEMPLATE_VARIABLES, OrchestraType,
+    PartsOutputMode, TemplateVariable, VariableLevel,
 )
 from core.filename import ensure_pdf_extension, sanitize_filename
 from core.models import FileInfo, Group, Project
+from core.sections import detect_section, stored_section
+from core.voice_names import instrument_key
 
 # 總譜所在的格；分譜依序為第 1、2…格
 SCORE_SLOT = 0
@@ -53,7 +55,8 @@ class NamingSettings:
         subfolder_template: 子資料夾模板，總譜與分譜都放進它的結果；空字串表示不放子資料夾
         parts_mode: 分譜存放模式；分譜資料夾與聲部組資料夾只放分譜，總譜不進去
         parts_folder: 分譜存放模式為分譜資料夾時的資料夾名稱；空字串表示不另放
-        sections: 聲部名稱到聲部組名稱；分譜存放模式為聲部組資料夾時，每個要命名的聲部都必須有
+        sections: 以樂器為鍵的聲部組對照（core/sections.py）；分譜存放模式為聲部組資料夾時，
+            每個要命名的聲部的樂器都必須有
     """
     template: str
     subfolder_template: str = ""
@@ -130,7 +133,7 @@ def name_slot(
 
     Raises:
         ValueError: slot 超出聲部數
-        KeyError: 聲部組資料夾模式下，這一格的聲部沒有聲部組
+        KeyError: 聲部組資料夾模式下，這一格的聲部的樂器沒有聲部組
         UnsafeFolderNameError: 某一層資料夾名稱清理後是 . 或 ..
     """
     voices = _effective_voices(group, voices)
@@ -149,7 +152,7 @@ def name_slot(
         if settings.parts_mode == PartsOutputMode.PARTS and settings.parts_folder:
             folders.append(settings.parts_folder)
         elif settings.parts_mode == PartsOutputMode.SECTION:
-            folders.append(settings.sections[voice])
+            folders.append(_section_folder(voice, settings.sections))
     file_name = ensure_pdf_extension(sanitize_filename(_substitute(settings.template, variables)))
     return SlotName(file_name, tuple(name for name in map(_folder_name, folders) if name))
 
@@ -183,36 +186,40 @@ def named_voices(group: Group, voices: Optional[Sequence[str]] = None) -> List[s
     return _effective_voices(group, voices)[:len(group.files)]
 
 
-def section_for(voice: str, sections: Mapping[str, str], english: bool) -> str:
-    """聲部的聲部組：專案已設定（不是空白）就用設定的，否則是依指定語言偵測的預設值
-
-    Args:
-        voice: 聲部名稱
-        sections: 專案的聲部名稱到聲部組名稱
-        english: 預設值用英文名稱
-
-    Returns:
-        聲部組名稱
-    """
-    stored = sections.get(voice, "")
-    return stored if stored.strip() else detect_instrument_section(voice, english)
-
-
-def default_sections(groups: Iterable[Group], sections: Mapping[str, str], english: bool) -> Dict[str, str]:
-    """這些群組會被命名的聲部中，還沒有聲部組（或留空）的聲部到它的預設聲部組
+def default_sections(
+    groups: Iterable[Group], sections: Mapping[str, str], orchestra_type: OrchestraType,
+) -> Dict[str, str]:
+    """這些群組會被命名的聲部中，樂器還沒有聲部組（或留空）的，各樂器第一個聲部到它的預設聲部組
 
     Args:
         groups: 群組
-        sections: 專案的聲部名稱到聲部組名稱
-        english: 預設值用英文名稱
+        sections: 以樂器為鍵的聲部組對照
+        orchestra_type: 樂團類型，預設值依它偵測
 
     Returns:
-        聲部名稱到依指定語言偵測的聲部組；都已設定時為空
+        聲部名稱（同一樂器只列第一次出現的寫法）到偵測的聲部組；都已設定時為空
     """
-    return {
-        voice: section_for(voice, sections, english)
-        for group in groups for voice in named_voices(group) if not sections.get(voice, "").strip()
-    }
+    missing: Dict[str, str] = {}
+    seen = set()
+    for group in groups:
+        for voice in named_voices(group):
+            key = instrument_key(voice)
+            if key not in seen and not stored_section(voice, sections).strip():
+                missing[voice] = detect_section(voice, orchestra_type)
+            seen.add(key)
+    return missing
+
+
+def _section_folder(voice: str, sections: Mapping[str, str]) -> str:
+    """聲部組資料夾模式下這個聲部的資料夾：它的樂器存的聲部組
+
+    Raises:
+        KeyError: 它的樂器沒有聲部組（或留空）
+    """
+    section = stored_section(voice, sections)
+    if not section.strip():
+        raise KeyError(voice)
+    return section
 
 
 def _effective_voices(group: Group, voices: Optional[Sequence[str]]) -> List[str]:

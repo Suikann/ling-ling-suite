@@ -10,6 +10,14 @@
 - 同一份樂器表不重名：新增（`add_instrument`）或改名（`rename_instrument`）成與其他列同一聲部的名稱（`core/voice_names.py` 的規則，例如已有「二胡 I」時的「二胡1」）時丟出 `DuplicateVoiceError`、樂器表不變，樂器表編輯器顯示說明並還原名稱；改成自己的另一種寫法不算重名。整份換掉樂器表（`set_instruments`：拖動、刪除、預設樂器表）不檢查，舊專案已有的重名原樣保留
 - 樂器表顯示目前分頁那個群組的樂器表；目前分頁不是群組（未分組）時清空並停用，輸入的樂器才不會沒有地方寫入（`InstrumentListEditor.show_group`）
 
+### 樂團類型與聲部組
+
+- 樂團類型（`Project.orchestra_type`，`OrchestraType`）是專案層級：國樂團（吹管、拉弦、彈撥、打擊、低音）或管弦樂團（木管、銅管、打擊、鍵盤、弦樂），兩套都另有「其他」（`ORCHESTRA_SECTIONS`）。新專案是國樂團；主視窗底部的「樂團類型」選單以 `set_orchestra_type` 改它
+- 聲部組對照（`instrument_sections`）以樂器為鍵：同一樂器（`core/voice_names.py` 的 `instrument_key`，去掉結尾編號）的各個聲部共用一個值，鍵保留第一次寫入的寫法。改聲部組一律經 `set_section(group, voice, section)` 或 `update_ensemble(sections=…)`，同一樂器已有鍵就改它的值；`set_section` 回傳這個群組裡跟著改的其他編號，`same_instrument_voices` 在改之前列出它們，編輯人數對話框寫在選單旁（例如「二胡 II 也會跟著改」）
+- 值一律是中文的聲部組名稱，介面為英文時只在顯示時換成英文（`SECTION_NAMES_EN`）
+- 沒有存值的樂器依樂團類型以關鍵字偵測（`core/sections.py` 的 `detect_section`、`SECTION_KEYWORDS`）：國樂團的胡類歸拉弦，大提琴、低音提琴、革胡歸低音，偵測不到的歸「其他」。`section_of` 取存值或偵測值；改樂團類型時已存的值不變，只有沒存的改依新的那套偵測
+- 選單的選項是專案樂團類型那一套（`section_options`）；已存的值不在選項裡時另外列出
+
 ### 未存檔狀態
 
 - 未存檔＝快照比對：`is_modified()` 比對目前內容（`to_data()`，即專案檔會存的內容，不含版本號）與上次存檔或開啟時的快照；改回原值就回到已存檔

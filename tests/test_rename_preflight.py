@@ -220,7 +220,7 @@ class TestOutputBoundary(PreflightTestCase):
                             use_subfolders=use_subfolders, subfolder_template="{曲名} - {樂章編號}",
                             parts_output_mode=mode, parts_subfolder_name="Parts", groups=[group],
                         )
-                        assign_default_sections(project, english=True)
+                        assign_default_sections(project)
                         verdict = self.history.check_rename(project)
                         self.assertEqual(len(verdict.plan), 3)
                         self.assertEqual(verdict.problems, {})

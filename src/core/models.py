@@ -7,14 +7,15 @@
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional
+from typing import Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional, Tuple
 from core.constants import (
-    DEFAULT_MASTER_TEMPLATE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE, LEGACY_PROJECT_FILE_VERSIONS,
-    OperationKind, PartsOutputMode, WorkspaceStatus,
+    DEFAULT_MASTER_TEMPLATE, DEFAULT_ORCHESTRA_TYPE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE,
+    LEGACY_PROJECT_FILE_VERSIONS, OperationKind, OrchestraType, PartsOutputMode, WorkspaceStatus,
 )
 from core.paths import path_key
+from core.sections import put_section, section_for, section_options
 from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
-from core.voice_names import voice_key
+from core.voice_names import same_instrument, same_voice, voice_key
 
 
 class DuplicateVoiceError(ValueError):
@@ -435,6 +436,7 @@ class Project:
     output_directory: str = ""
     instrument_headcounts: Dict[str, int] = field(default_factory=dict)
     instrument_sections: Dict[str, str] = field(default_factory=dict)
+    orchestra_type: str = DEFAULT_ORCHESTRA_TYPE
     OUTPUT_SETTINGS: ClassVar[FrozenSet[str]] = frozenset({
         "output_directory", "use_subfolders", "subfolder_template", "parts_output_mode", "parts_subfolder_name",
     })
@@ -473,6 +475,7 @@ class Project:
             "output_directory": self.output_directory,
             "instrument_headcounts": dict(self.instrument_headcounts),
             "instrument_sections": dict(self.instrument_sections),
+            "orchestra_type": self.orchestra_type,
             "ungrouped_files": [f.to_data() for f in self.ungrouped_files],
             "groups": [g.to_data() for g in self.groups],
         }
@@ -502,6 +505,7 @@ class Project:
             output_directory=data.get("output_directory", ""),
             instrument_headcounts=data.get("instrument_headcounts", {}),
             instrument_sections=data.get("instrument_sections", {}),
+            orchestra_type=data.get("orchestra_type", DEFAULT_ORCHESTRA_TYPE),
             ungrouped_files=[FileInfo.from_data(f) for f in data.get("ungrouped_files", [])],
             groups=[Group.from_data(g) for g in data.get("groups", [])],
         )
@@ -556,15 +560,50 @@ class Project:
     def update_ensemble(
         self, headcounts: Optional[Dict[str, int]] = None, sections: Optional[Dict[str, str]] = None,
     ) -> None:
-        """寫入編制設定：逐聲部更新建議人數與聲部組，沒提到的聲部不變
+        """寫入編制設定：逐聲部更新建議人數，聲部組寫進以樂器為鍵的對照（見 set_section），沒提到的不變
 
         Args:
             headcounts: 聲部名稱到建議人數
             sections: 聲部名稱到聲部組名稱
         """
         self.instrument_headcounts.update(headcounts or {})
-        self.instrument_sections.update(sections or {})
+        for voice, section in (sections or {}).items():
+            put_section(self.instrument_sections, voice, section)
         self._changed()
+
+    # --- 樂團類型與聲部組 ---
+
+    def set_orchestra_type(self, orchestra_type: str) -> None:
+        """設定樂團類型（OrchestraType 的值）；已存的聲部組不變，沒存的聲部改依新的樂團類型偵測"""
+        self.orchestra_type = OrchestraType(orchestra_type).value
+        self._changed()
+
+    def section_options(self) -> Tuple[str, ...]:
+        """這個專案的樂團類型的聲部組選項，「其他」在最後"""
+        return section_options(self.orchestra_type)
+
+    def section_of(self, voice: str) -> str:
+        """聲部的聲部組：它的樂器存了就用存的，否則依樂團類型偵測"""
+        return section_for(voice, self.instrument_sections, self.orchestra_type)
+
+    def same_instrument_voices(self, group: Group, voice: str) -> List[str]:
+        """群組樂器表裡與聲部同一樂器的其他編號（改這個聲部的聲部組時跟著改的），依樂器表順序"""
+        return [other for other in group.instruments if same_instrument(other, voice) and not same_voice(other, voice)]
+
+    def set_section(self, group: Group, voice: str, section: str) -> List[str]:
+        """改聲部所屬樂器的聲部組；對照以樂器為鍵，同一樂器的各個聲部（各群組都是）一起改
+
+        Args:
+            group: 聲部所在的群組
+            voice: 聲部名稱
+            section: 聲部組名稱
+
+        Returns:
+            這個群組裡跟著改的其他編號（same_instrument_voices）
+        """
+        put_section(self.instrument_sections, voice, section)
+        self._changed()
+        return self.same_instrument_voices(group, voice)
 
     def convert_template_language(self, locale: str) -> None:
         """切換介面語言時，把大模板、子資料夾模板與各群組小模板的變數名稱換成該語言"""

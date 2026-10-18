@@ -3,10 +3,9 @@
 樂器表編輯器（PySide6）
 
 使用 QListWidget 內建拖拉排序，效能遠優於逐一建立元件。
-支援雙擊直接編輯樂器名稱、匯出編制表、編輯建議人數。
+支援雙擊直接編輯樂器名稱、匯出編制表、編輯建議人數與聲部組（EnsembleDialog，聲部組以樂器為單位）。
 顯示目前群組的樂器表；使用者的修改立即透過專案的編輯操作寫入，再發出 instruments_changed。
 """
-import os
 from collections import OrderedDict
 from typing import Dict, List, Optional, TYPE_CHECKING
 from PySide6.QtWidgets import (
@@ -22,8 +21,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from core.constants import DEFAULT_HEADCOUNT, INSTRUMENT_PRESETS, SECTION_NAMES_EN, TEXT_EXTENSION
 from core.locale import is_english, localized, t
 from core.models import DuplicateVoiceError
-from core.naming import section_for
-from core.voice_names import distinct_voices
+from core.voice_names import distinct_voices, same_instrument
 
 if TYPE_CHECKING:
     from core.models import Group, Project
@@ -212,64 +210,12 @@ class InstrumentListEditor(QWidget):
             self._commit()
 
     def _edit_headcount(self):
-        """開啟編制設定（人數、聲部組）對話框；按下儲存後寫入專案
-
-        還沒有聲部組的聲部，預設值依目前介面語言偵測，儲存後定下。
-        """
-        instruments = self.get_instruments()
-        if not instruments:
+        """開啟編輯人數與聲部組的對話框；按下儲存後寫入專案"""
+        if not self.get_instruments() or self._project is None or self._group is None:
             return
-        headcounts = {}
-        sections = {}
-        if self._project:
-            headcounts = dict(self._project.instrument_headcounts)
-            sections = dict(self._project.instrument_sections)
-        dlg = QDialog(self)
-        dlg.setWindowTitle(t("instrument.headcount_title"))
-        dlg.resize(500, 400)
-        lay = QVBoxLayout(dlg)
-        table = QTableWidget(len(instruments), 3)
-        table.setHorizontalHeaderLabels([
-            t("instrument.headcount_instrument"),
-            t("instrument.headcount_section"),
-            t("instrument.headcount_column"),
-        ])
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        table.verticalHeader().setVisible(False)
-        spinboxes = []
-        section_items = []
-        for row, inst in enumerate(instruments):
-            name_item = QTableWidgetItem(inst)
-            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
-            table.setItem(row, 0, name_item)
-            section_item = QTableWidgetItem(section_for(inst, sections, is_english()))
-            table.setItem(row, 1, section_item)
-            section_items.append(section_item)
-            spin = QSpinBox()
-            spin.setMinimum(0)
-            spin.setMaximum(99)
-            spin.setValue(headcounts.get(inst, DEFAULT_HEADCOUNT))
-            table.setCellWidget(row, 2, spin)
-            spinboxes.append(spin)
-        lay.addWidget(table)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        ok_btn = QPushButton(t("catalog.save"))
-        ok_btn.clicked.connect(dlg.accept)
-        btn_row.addWidget(ok_btn)
-        cancel_btn = QPushButton(t("catalog.cancel"))
-        cancel_btn.clicked.connect(dlg.reject)
-        btn_row.addWidget(cancel_btn)
-        lay.addLayout(btn_row)
-        if dlg.exec() != QDialog.Accepted:
-            return
-        if self._project:
-            self._project.update_ensemble(
-                headcounts={inst: spinboxes[row].value() for row, inst in enumerate(instruments)},
-                sections={inst: section_items[row].text().strip() for row, inst in enumerate(instruments)},
-            )
+        dialog = EnsembleDialog(self._project, self._group, self)
+        if dialog.exec() == QDialog.Accepted:
+            dialog.apply()
 
     def _export_instruments(self):
         """匯出編制表為文字檔；以 \n 分行，寫檔時換成這個平台的換行"""
@@ -282,16 +228,10 @@ class InstrumentListEditor(QWidget):
         )
         if not path:
             return
-        headcounts = {}
-        sections_map = {}
-        if self._project:
-            headcounts = self._project.instrument_headcounts
-            sections_map = self._project.instrument_sections
+        headcounts = self._project.instrument_headcounts if self._project else {}
         grouped: Dict[str, List[tuple]] = OrderedDict()
         for inst in instruments:
-            section = section_for(inst, sections_map, is_english())
-            if is_english():
-                section = SECTION_NAMES_EN.get(section, section)
+            section = _section_label(self._project.section_of(inst)) if self._project else ""
             if section not in grouped:
                 grouped[section] = []
             count = headcounts.get(inst, DEFAULT_HEADCOUNT)
@@ -347,3 +287,104 @@ class InstrumentListEditor(QWidget):
         if self._project and self._group is not None:
             self._project.set_instruments(self._group, instruments)
         self.instruments_changed.emit(instruments)
+
+
+def _section_label(section: str) -> str:
+    """聲部組在介面上的名稱：介面為英文時換成英文名稱，自訂的值原樣顯示"""
+    return SECTION_NAMES_EN.get(section, section) if is_english() else section
+
+
+class EnsembleDialog(QDialog):
+    """編輯一個群組各聲部的建議人數與聲部組
+
+    聲部組以樂器為單位：改一列時，同一樂器的其他編號跟著改，選單旁寫出會跟著改的編號。
+    選項是專案樂團類型的那一套；已存的值不在選項裡（例如舊專案的自訂值）時另外列出。
+    """
+
+    def __init__(self, project: "Project", group: "Group", parent=None):
+        """
+        Args:
+            project: 目前的專案
+            group: 要編輯的群組
+            parent: 父元件
+        """
+        super().__init__(parent)
+        self._project = project
+        self._group = group
+        self._voices = list(group.instruments)
+        self.setWindowTitle(t("instrument.headcount_title"))
+        self.resize(560, 400)
+        layout = QVBoxLayout(self)
+        self._table = QTableWidget(len(self._voices), 4)
+        self._table.setHorizontalHeaderLabels([
+            t("instrument.headcount_instrument"), t("instrument.headcount_section"), "",
+            t("instrument.headcount_column"),
+        ])
+        header = self._table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for column in (1, 2, 3):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        self._table.verticalHeader().setVisible(False)
+        self._combos: List[QComboBox] = []
+        self._spins: List[QSpinBox] = []
+        for row, voice in enumerate(self._voices):
+            self._table.setItem(row, 0, self._read_only_item(voice))
+            self._table.setCellWidget(row, 1, self._section_combo(row, voice))
+            follows = project.same_instrument_voices(group, voice)
+            note = t("instrument.section_follows", voices="、".join(follows)) if follows else ""
+            self._table.setItem(row, 2, self._read_only_item(note))
+            spin = QSpinBox()
+            spin.setRange(0, 99)
+            spin.setValue(project.instrument_headcounts.get(voice, DEFAULT_HEADCOUNT))
+            self._table.setCellWidget(row, 3, spin)
+            self._spins.append(spin)
+        layout.addWidget(self._table)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        ok_btn = QPushButton(t("catalog.save"))
+        ok_btn.clicked.connect(self.accept)
+        buttons.addWidget(ok_btn)
+        cancel_btn = QPushButton(t("catalog.cancel"))
+        cancel_btn.clicked.connect(self.reject)
+        buttons.addWidget(cancel_btn)
+        layout.addLayout(buttons)
+
+    @staticmethod
+    def _read_only_item(text: str) -> QTableWidgetItem:
+        """不能編輯的儲存格"""
+        item = QTableWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        return item
+
+    def _section_combo(self, row: int, voice: str) -> QComboBox:
+        """一列的聲部組選單：顯示介面語言的名稱，資料是專案存的中文名稱"""
+        combo = QComboBox()
+        current = self._project.section_of(voice)
+        options = list(self._project.section_options())
+        if current not in options:
+            options.append(current)
+        for section in options:
+            combo.addItem(_section_label(section), section)
+        combo.setCurrentIndex(options.index(current))
+        combo.currentIndexChanged.connect(lambda _index, r=row: self._follow(r))
+        self._combos.append(combo)
+        return combo
+
+    def _follow(self, row: int):
+        """改了一列的聲部組後，同一樂器的其他列跟著改"""
+        section = self._combos[row].currentData()
+        for other, voice in enumerate(self._voices):
+            if other != row and same_instrument(voice, self._voices[row]):
+                combo = self._combos[other]
+                combo.blockSignals(True)
+                combo.setCurrentIndex(combo.findData(section))
+                combo.blockSignals(False)
+
+    def apply(self):
+        """把對話框的內容寫進專案：人數逐聲部寫入，聲部組只寫改過的樂器"""
+        self._project.update_ensemble(
+            headcounts={voice: spin.value() for voice, spin in zip(self._voices, self._spins)},
+        )
+        for voice, combo in zip(self._voices, self._combos):
+            if combo.currentData() != self._project.section_of(voice):
+                self._project.set_section(self._group, voice, combo.currentData())

@@ -666,5 +666,43 @@ class TestProjectSettingEdits(unittest.TestCase):
         self.assertEqual(self.heard, [True, True])
 
 
+
+class TestSectionsByInstrument(unittest.TestCase):
+    """聲部組以樂器為單位：改一個聲部的聲部組，同一首裡同一樂器的其他編號跟著改，並回報影響範圍"""
+
+    def setUp(self):
+        self.group = Group(name="g", instruments=["高胡", "二胡 I", "二胡 II", "中胡"])
+        self.project = Project(groups=[self.group])
+        self.heard = []
+        self.project.subscribe(lambda: self.heard.append(self.project.is_modified()))
+
+    def test_changing_one_voice_changes_the_other_numbers_and_reports_them(self):
+        affected = self.project.set_section(self.group, "二胡 I", "低音")
+        self.assertEqual(affected, ["二胡 II"])
+        self.assertEqual(
+            [self.project.section_of(v) for v in ("二胡 I", "二胡 II", "二胡1", "二胡", "中胡")],
+            ["低音", "低音", "低音", "低音", "拉弦"],
+        )
+        self.assertEqual(self.heard, [True])
+
+    def test_voices_that_would_change_too_are_listed_before_changing(self):
+        self.assertEqual(self.project.same_instrument_voices(self.group, "二胡 II"), ["二胡 I"])
+        self.assertEqual(self.project.same_instrument_voices(self.group, "中胡"), [])
+
+    def test_the_key_keeps_the_spelling_written_first(self):
+        self.project.set_section(self.group, "二胡 II", "低音")
+        self.project.set_section(self.group, "二胡 I", "拉弦")
+        self.project.update_ensemble(sections={"二胡1": "彈撥"})
+        self.assertEqual(self.project.instrument_sections, {"二胡 II": "彈撥"})
+
+    def test_voices_without_a_stored_section_are_detected_for_the_orchestra_type(self):
+        self.assertEqual(Project().orchestra_type, "chinese")
+        self.assertEqual(self.project.section_of("Cello"), "低音")
+        self.project.set_orchestra_type("western")
+        self.assertEqual(self.project.section_of("Cello"), "弦樂")
+        self.assertEqual(self.project.section_options(), ("木管", "銅管", "打擊", "鍵盤", "弦樂", "其他"))
+        self.assertEqual(self.heard, [True])
+
+
 if __name__ == '__main__':
     unittest.main()
