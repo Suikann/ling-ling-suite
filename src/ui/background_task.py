@@ -3,19 +3,29 @@
 背景工作
 
 在背景執行緒執行一件可取消的長工作（例如壓縮 PDF），進度、結果與錯誤都回到主執行緒通知；
-主視窗據此鎖住會動到檔案的操作、顯示進度與取消鈕，關閉時詢問要不要取消。
 關閉時等不到工作停下就放棄它（abandon）：背景執行緒之後不再碰這個物件，物件可以隨父物件一起刪掉。
+
+一個視窗一次一件的長工作經 TaskSlot：狀態列的進度、取消、拋出例外時的錯誤框與關閉時詢問要不要取消都在這裡，
+主視窗（存入、清除、下載回原位、撤銷存入、壓縮）與譜庫視窗（一般下載）共用；各種工作的字串鍵是 TaskTexts。
 
 使用範例：
     task = BackgroundTask(lambda should_cancel, report: service.compress(path, should_cancel, report), window)
     task.progressed.connect(show_progress)
     task.finished.connect(show_result)
     task.start()
+
+    slot = TaskSlot(window, status_bar.showMessage, show_state)
+    slot.run(work, TaskTexts.of("download"), finished)   # finished(結果, 是否要求過取消)
+    if not slot.confirm_close(): event.ignore()           # closeEvent
 """
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple, Optional, Tuple
 
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtWidgets import QMessageBox, QWidget
+
+from core.constants import CLOSE_WAIT_SECONDS
+from core.locale import t
 
 # 工作函式：接收「是否已要求取消」與「回報進度」兩個函式，回傳結果
 Work = Callable[[Callable[[], bool], Callable[[Any], None]], Any]
@@ -154,3 +164,136 @@ class BackgroundTask(QObject):
         """在主執行緒交回工作拋出的錯誤訊息"""
         self._running = False
         self.failed.emit(message)
+
+
+class TaskTexts(NamedTuple):
+    """一種背景工作的字串鍵：取消鈕、取消中的狀態列、拋出例外時的錯誤訊息（以 error 帶入）、進行中關閉時的詢問，
+    與逐份進度的狀態列（以 done、total、name 帶入）"""
+    cancel: str
+    cancelling: str
+    failure: str
+    close_message: str
+    progress: str
+
+    @classmethod
+    def of(cls, prefix: str) -> "TaskTexts":
+        """以字串鍵的開頭組出全部的鍵（例如 "deposit" → "deposit.cancel"…）"""
+        return cls(
+            f"{prefix}.cancel", f"{prefix}.cancelling", f"{prefix}.error", f"{prefix}.close.message",
+            f"{prefix}.progress",
+        )
+
+    def describe(self, progress: Any) -> Tuple[str, int, int]:
+        """逐份進度（有 done、total、file_name 的進度）轉成（狀態列文字，已完成數，總數）"""
+        text = t(self.progress, done=progress.done, total=progress.total, name=progress.file_name)
+        return text, progress.done, progress.total
+
+
+class TaskSlot:
+    """一個視窗一次一件、可取消的背景長工作：進度、取消、錯誤框與關閉時詢問"""
+
+    def __init__(
+        self, parent: QWidget, show_status: Callable[[str], None], changed: Callable[[], None],
+        show_progress: Optional[Callable[[int, int], None]] = None,
+    ):
+        """
+        Args:
+            parent: 工作物件的父物件與錯誤框、詢問框的父視窗
+            show_status: 在狀態列寫一段文字
+            changed: 開始、交回、要求取消時呼叫（視窗據此停用或恢復操作、顯示取消鈕）
+            show_progress: 進度條的（已完成數，總數）；沒有進度條時省略
+        """
+        self._parent = parent
+        self._show_status = show_status
+        self._changed = changed
+        self._show_progress = show_progress
+        self.task: Optional[BackgroundTask] = None
+        self.texts: Optional[TaskTexts] = None
+        # 進行中的狀態列文字（要求取消之後不再寫到狀態列）
+        self.status = ""
+
+    @property
+    def busy(self) -> bool:
+        """有沒有工作在跑"""
+        return self.task is not None
+
+    @property
+    def cancel_requested(self) -> bool:
+        """進行中的工作是否已要求取消"""
+        return self.task is not None and self.task.cancel_requested
+
+    def run(
+        self, work: Work, texts: TaskTexts, finished: Callable[[Any, bool], None],
+        describe: Optional[Callable[[Any], Tuple[str, int, int]]] = None,
+    ) -> None:
+        """在背景執行一件工作；呼叫端先確認沒有工作在跑
+
+        Args:
+            work: 在背景執行緒呼叫的工作（見 BackgroundTask）
+            texts: 這種工作的字串鍵
+            finished: 工作交回結果時在主執行緒呼叫，參數為結果與使用者是否要求過取消
+            describe: 把回報的進度轉成（狀態列文字，已完成數，總數）；省略時照 texts.describe
+        """
+        task = BackgroundTask(work, self._parent)
+        self.task, self.texts, self.status = task, texts, ""
+        describe = describe or texts.describe
+
+        def progressed(progress):
+            """寫進度條；沒要求取消時也寫到狀態列"""
+            text, done, total = describe(progress)
+            self.status = text
+            if self._show_progress is not None:
+                self._show_progress(done, total)
+            if not task.cancel_requested:
+                self._show_status(text)
+
+        def settle():
+            """交回了：在主執行緒延後刪掉工作物件"""
+            self.task = None
+            task.deleteLater()
+            self._changed()
+
+        def on_finished(result):
+            """交回結果"""
+            settle()
+            finished(result, task.cancel_requested)
+
+        def on_failed(message: str):
+            """工作拋出例外：錯誤框"""
+            settle()
+            self._show_status(t("status.ready"))
+            QMessageBox.critical(self._parent, t("dialog.error"), t(texts.failure, error=message))
+
+        task.progressed.connect(progressed)
+        task.finished.connect(on_finished)
+        task.failed.connect(on_failed)
+        task.start()
+        self._changed()
+
+    def cancel(self) -> None:
+        """要求取消；工作在下一個停頓點停下後照常交回結果"""
+        if self.task is not None:
+            self.task.cancel()
+            self._show_status(t(self.texts.cancelling))
+            self._changed()
+
+    def confirm_close(self) -> bool:
+        """關閉視窗時有工作就問要不要取消；選取消就要求取消、等它停下（最多 CLOSE_WAIT_SECONDS 秒），再放棄它
+
+        等不到它停下也照樣關閉：放棄之後背景執行緒不再送回任何結果，工作物件隨視窗刪掉也安全。
+
+        Returns:
+            可以關閉時為 True（沒有工作在跑，或選了取消）
+        """
+        task = self.task
+        if task is None:
+            return True
+        if QMessageBox.question(self._parent, t("dialog.close"), t(self.texts.close_message)) != QMessageBox.Yes:
+            return False
+        task.finished.disconnect()
+        task.failed.disconnect()
+        task.cancel()
+        task.wait(CLOSE_WAIT_SECONDS)
+        task.abandon()
+        self.task = None
+        return True

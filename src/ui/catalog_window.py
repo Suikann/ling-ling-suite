@@ -30,13 +30,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCursor
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLOSE_WAIT_SECONDS, DEFAULT_ORCHESTRA_TYPE, OrchestraType
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_ORCHESTRA_TYPE, OrchestraType
 from core.locale import t
 from core.catalog_constants import (
     PerformanceStatus, SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PERFORMANCES, SHEET_PIECES,
 )
 from core.catalog_download import DownloadItem, folder_items
-from core.catalog_errors import CatalogError, CatalogFailure, as_catalog_error
+from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import Composer, DepositLogEntry, DriveFile, FolderPdf, Piece, Edition, PieceDetail
 from core.deposit_revert import Deposit, RevertChoice, RevertPreview, deposits
 from core.catalog_sync import Decision, SyncField, SyncItem, SyncOutcome
@@ -51,8 +51,8 @@ from services.huaxia_auth_service import HuaXiaAuthService
 from services.google_catalog import open_google_catalog
 from services.preferences_service import PreferencesService
 from ui.catalog_error_bar import CatalogErrorBar
-from ui.background_task import BackgroundTask
-from ui.catalog_tasks import CatalogTasks
+from ui.background_task import BackgroundTask, TaskSlot, TaskTexts
+from ui.catalog_tasks import CatalogTasks, catalog_work
 from ui.section_map_editor import SectionMapEditor
 from ui.widgets import not_downloaded_text
 
@@ -114,8 +114,6 @@ class CatalogWindow(QMainWindow):
         self._downloads = downloads
         self._reverter = reverter
         self._orchestra_type = orchestra_type
-        # 進行中的一般下載（一次一件）
-        self._download_task: Optional[BackgroundTask] = None
         self._pieces: List[Piece] = []
         self._piece_by_folder: Dict[str, Piece] = {}
         self._current_detail: Optional[PieceDetail] = None
@@ -129,11 +127,13 @@ class CatalogWindow(QMainWindow):
         self.setWindowTitle(t("catalog.title"))
         self.resize(1200, 750)
         self._build_ui()
+        # 一般下載（一次一件）：進度寫在狀態列，取消鈕在狀態列右邊
+        self._downloading = TaskSlot(self, self._status_bar.showMessage, self._show_download_state)
         QTimer.singleShot(100, self._refresh_all)
 
     def closeEvent(self, event):
         """關閉視窗：下載進行中先問要不要取消（不取消就不關）；放棄還在跑的背景讀取，之後它們不再碰這個視窗"""
-        if not self._confirm_cancel_download():
+        if not self._downloading.confirm_close():
             event.ignore()
             return
         self._tasks.abandon_all()
@@ -344,7 +344,7 @@ class CatalogWindow(QMainWindow):
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
         self._download_cancel_btn = QPushButton(t("download.cancel"))
-        self._download_cancel_btn.clicked.connect(self._cancel_download)
+        self._download_cancel_btn.clicked.connect(lambda: self._downloading.cancel())
         self._download_cancel_btn.setVisible(False)
         self._status_bar.addPermanentWidget(self._download_cancel_btn)
 
@@ -1162,7 +1162,7 @@ class CatalogWindow(QMainWindow):
             pdfs: 版本資料夾裡全部的 PDF
             piece_title: 曲名，記進紀錄檔
         """
-        if self._download_task is not None:
+        if self._downloading.busy:
             return
         if not pdfs:
             QMessageBox.information(self, t("download.title"), t("catalog.download.no_files"))
@@ -1178,56 +1178,34 @@ class CatalogWindow(QMainWindow):
         if folder:
             self._run_download(folder_items(chosen, folder, whole, piece_title), piece_title)
 
+    @property
+    def _download_task(self) -> Optional[BackgroundTask]:
+        """進行中的一般下載；沒有時為 None"""
+        return self._downloading.task
+
     def _run_download(self, items: List[DownloadItem], piece_title: str):
-        """在背景下載到自選的資料夾，狀態列顯示進度與取消鈕
+        """在背景下載到自選的資料夾（TaskSlot，與主視窗的長工作同一套），狀態列顯示進度與取消鈕
 
         Args:
             items: 要下載的檔與放的位置
             piece_title: 曲名，失敗時記進詳細資料與紀錄檔
         """
         service = self._downloads
+        work = catalog_work(
+            self._connected, lambda catalog, cancel, report: service.download(items, catalog, cancel, report),
+            lambda error: DownloadOutcome(total=len(items), error=error),
+        )
+        self._downloading.run(
+            work, TaskTexts.of("download"),
+            lambda outcome, _cancelled: self._download_finished(
+                outcome, lambda: self._run_download(items, piece_title), piece_title,
+            ),
+        )
 
-        def work(should_cancel, report) -> DownloadOutcome:
-            """在背景接譜庫、下載"""
-            try:
-                catalog = self._connected()
-            except Exception as e:
-                return DownloadOutcome(total=len(items), error=as_catalog_error(e))
-            return service.download(items, catalog, should_cancel, report)
-
-        task = BackgroundTask(work, self)
-        self._download_task = task
-
-        def progressed(progress):
-            """沒要求取消時把進度寫到狀態列"""
-            if not task.cancel_requested:
-                self._status_bar.showMessage(
-                    t("download.progress", done=progress.done, total=progress.total, name=progress.file_name),
-                )
-
-        def settle():
-            """下載交回了：收起取消鈕，在主執行緒延後刪掉工作物件"""
-            self._download_task = None
-            self._download_cancel_btn.setVisible(False)
-            task.deleteLater()
-
-        def finished(outcome: DownloadOutcome):
-            """下載結束（做完、取消或中途失敗）"""
-            settle()
-            self._download_finished(outcome, lambda: self._run_download(items, piece_title), piece_title)
-
-        def failed(message: str):
-            """工作拋出例外：提示錯誤"""
-            settle()
-            self._status_bar.clearMessage()
-            QMessageBox.critical(self, t("dialog.error"), t("download.error", error=message))
-
-        task.progressed.connect(progressed)
-        task.finished.connect(finished)
-        task.failed.connect(failed)
-        self._download_cancel_btn.setEnabled(True)
-        self._download_cancel_btn.setVisible(True)
-        task.start()
+    def _show_download_state(self):
+        """依有沒有一般下載在跑，顯示取消鈕（要求取消後按不下去）"""
+        self._download_cancel_btn.setVisible(self._downloading.busy)
+        self._download_cancel_btn.setEnabled(self._downloading.busy and not self._downloading.cancel_requested)
 
     def _download_finished(self, outcome: DownloadOutcome, retry: Callable[[], None], piece_title: str):
         """一般下載結束：狀態列寫出完成幾份；中途失敗時頂端提示列寫出已完成幾份、按「重試」補齊；沒下載好的列出來"""
@@ -1241,32 +1219,6 @@ class CatalogWindow(QMainWindow):
         text = not_downloaded_text(outcome)
         if text:
             QMessageBox.warning(self, t("download.title"), text)
-
-    def _cancel_download(self):
-        """要求取消進行中的下載；做完目前這一份就停"""
-        if self._download_task is not None:
-            self._download_task.cancel()
-            self._download_cancel_btn.setEnabled(False)
-            self._status_bar.showMessage(t("download.cancelling"))
-
-    def _confirm_cancel_download(self) -> bool:
-        """關閉視窗時有下載在跑就問要不要取消；選取消就要求取消、等它停下，再放棄它
-
-        Returns:
-            可以關閉時為 True（沒有下載在跑，或選了取消）
-        """
-        task = self._download_task
-        if task is None:
-            return True
-        if QMessageBox.question(self, t("dialog.close"), t("download.close.message")) != QMessageBox.Yes:
-            return False
-        task.finished.disconnect()
-        task.failed.disconnect()
-        task.cancel()
-        task.wait(CLOSE_WAIT_SECONDS)
-        task.abandon()
-        self._download_task = None
-        return True
 
     def _open_drive_rename(self, edition: Edition, detail: PieceDetail):
         """經譜庫服務讀版本資料夾的群組，再開啟 Drive 重新命名對話框；改好後重新顯示曲目"""

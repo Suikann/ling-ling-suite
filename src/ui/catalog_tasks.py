@@ -6,19 +6,49 @@
 BackgroundTask 失敗時只交回例外的訊息，這裡把例外本身當成結果交回，呼叫端才拿得到錯誤類別；
 不是 CatalogError 的例外（程式的錯）歸為「其他」，也照樣交回，不會被吞掉。
 視窗關閉時以 abandon_all 放棄還在跑的工作：背景執行緒之後不再碰視窗。
+要接譜庫的背景長工作（下載、撤銷存入）以 catalog_work 包起來：接不上譜庫時把錯誤交回成結果，不拋出。
 
 使用範例：
     from ui.catalog_tasks import CatalogTasks
     tasks = CatalogTasks(window)
     tasks.run(lambda: catalog.overview(root_id), show_overview, show_failure)
     tasks.abandon_all()   # closeEvent
+    work = catalog_work(connect, lambda catalog, cancel, report: service.restore(groups, catalog, cancel, report),
+                        lambda error: DownloadOutcome(error=error))
 """
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable, List, Tuple, TypeVar
 
 from PySide6.QtCore import QObject
 
 from core.catalog_errors import CatalogError, as_catalog_error
-from ui.background_task import BackgroundTask
+from services.catalog_service import CatalogService
+from ui.background_task import BackgroundTask, Work
+
+T = TypeVar("T")
+
+
+def catalog_work(
+    connect: Callable[[], CatalogService], run: Callable[[CatalogService, Callable[[], bool], Callable[[Any], None]], T],
+    unreachable: Callable[[CatalogError], T],
+) -> Work:
+    """要接譜庫的背景長工作：先接譜庫，接上了才 run；接不上時以 unreachable(錯誤) 的結果交回，不拋出
+
+    Args:
+        connect: 取得譜庫服務（背景執行緒呼叫，拿不到時丟出例外）
+        run: 以譜庫服務、是否已要求取消、回報進度執行工作
+        unreachable: 接不上譜庫時交回的結果（例如帶著錯誤的下載結果）
+
+    Returns:
+        交給 BackgroundTask 的工作
+    """
+    def work(should_cancel: Callable[[], bool], report: Callable[[Any], None]) -> T:
+        """接譜庫，再執行"""
+        try:
+            catalog = connect()
+        except Exception as e:
+            return unreachable(as_catalog_error(e))
+        return run(catalog, should_cancel, report)
+    return work
 
 
 class CatalogTasks:

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QEvent, QStandardPaths, Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
-    CATALOG_ROOT_FOLDER_ID_KEY, CLOSE_WAIT_SECONDS, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
+    CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
@@ -31,13 +31,13 @@ from core.paths import same_path
 from core.voice_names import duplicate_rows
 from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
-from services.clear_local_service import ClearLocalService, ClearOutcome, ClearProgress
+from services.clear_local_service import ClearLocalService, ClearOutcome
 from services.club_settings_service import ClubSettingsService
 from services.compression_output_service import CompressionBatch, CompressionOutputService
 from services.compression_service import CompressionResult, CompressionService
-from services.deposit_revert_service import DepositRevertService, RevertOutcome, RevertProgress
-from services.deposit_service import DepositOutcome, DepositProgress, DepositService
-from services.download_service import DownloadOutcome, DownloadProgress, DownloadService
+from services.deposit_revert_service import DepositRevertService, RevertOutcome
+from services.deposit_service import DepositOutcome, DepositService
+from services.download_service import DownloadOutcome, DownloadService
 from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
@@ -53,8 +53,9 @@ from services.publish_service import (
 )
 from services.rename_service import assign_default_sections
 from services.split_service import SplitService
-from ui.background_task import BackgroundTask, Work
+from ui.background_task import BackgroundTask, TaskSlot, TaskTexts, Work
 from ui.catalog_error_bar import CatalogErrorBar
+from ui.catalog_tasks import catalog_work
 from ui.compress_pdf import size_text
 from ui.instrumentation_table import InstrumentationTable
 from ui.waiting_dialog import run_while_waiting
@@ -71,51 +72,18 @@ class _WriteBack(Enum):
     CANCELLED = "cancelled"  # 在衝突畫面取消
 
 
-class _BackgroundTexts(NamedTuple):
-    """一種背景工作的字串鍵：取消鈕、取消中的狀態列、拋出例外時的錯誤訊息（以 error 帶入）、進行中關閉時的詢問"""
-    cancel: str
-    cancelling: str
-    failure: str
-    close_message: str
-
-
-_COMPRESS_TEXTS = _BackgroundTexts("compress.cancel", "compress.cancelling", "compress.error", "compress.close.message")
-_DEPOSIT_TEXTS = _BackgroundTexts("deposit.cancel", "deposit.cancelling", "deposit.error", "deposit.close.message")
-_CLEAR_TEXTS = _BackgroundTexts("clear.cancel", "clear.cancelling", "clear.error", "clear.close.message")
-_DOWNLOAD_TEXTS = _BackgroundTexts(
-    "download.cancel", "download.cancelling", "download.error", "download.close.message",
-)
-_REVERT_TEXTS = _BackgroundTexts("revert.cancel", "revert.cancelling", "revert.error", "revert.close.message")
+# 各種背景工作的字串鍵
+_COMPRESS_TEXTS = TaskTexts.of("compress")
+_DEPOSIT_TEXTS = TaskTexts.of("deposit")
+_CLEAR_TEXTS = TaskTexts.of("clear")
+_DOWNLOAD_TEXTS = TaskTexts.of("download")
+_REVERT_TEXTS = TaskTexts.of("revert")
 # 清除本機檔案不刪的系統標準使用者資料夾（含在地化的名稱，例如 Linux 的「桌面」）
 _STANDARD_LOCATIONS = (
     QStandardPaths.HomeLocation, QStandardPaths.DesktopLocation, QStandardPaths.DocumentsLocation,
     QStandardPaths.DownloadLocation, QStandardPaths.MusicLocation, QStandardPaths.PicturesLocation,
     QStandardPaths.MoviesLocation, QStandardPaths.PublicShareLocation, QStandardPaths.TemplatesLocation,
 )
-
-
-def _describe_deposit(progress: DepositProgress) -> tuple:
-    """存入的進度轉成（狀態列文字，已完成數，總數）"""
-    text = t("deposit.progress", done=progress.done, total=progress.total, name=progress.file_name)
-    return text, progress.done, progress.total
-
-
-def _describe_clear(progress: ClearProgress) -> tuple:
-    """清除的進度轉成（狀態列文字，已完成數，總數）"""
-    text = t("clear.progress", done=progress.done, total=progress.total, name=progress.file_name)
-    return text, progress.done, progress.total
-
-
-def _describe_download(progress: DownloadProgress) -> tuple:
-    """下載的進度轉成（狀態列文字，已完成數，總數）"""
-    text = t("download.progress", done=progress.done, total=progress.total, name=progress.file_name)
-    return text, progress.done, progress.total
-
-
-def _describe_revert(progress: RevertProgress) -> tuple:
-    """撤銷存入的進度轉成（狀態列文字，已完成數，總數）"""
-    text = t("revert.progress", done=progress.done, total=progress.total, name=progress.file_name)
-    return text, progress.done, progress.total
 
 
 def _standard_folders() -> List[str]:
@@ -240,10 +208,8 @@ class MainWindow(QMainWindow):
         # 「關於」顯示的版號：打包版讀資源目錄的版號檔，開發版為 None
         build = current_build()
         self._version = app_version(build.frozen, build.resource_dir, self.file_service.read_text)
-        # 背景工作（一次一件）、它的字串鍵與進行中時的狀態列文字
-        self._task: Optional[BackgroundTask] = None
-        self._task_texts = _COMPRESS_TEXTS
-        self._task_status = ""
+        # 背景工作（一次一件）：進度條與取消鈕在 _create_ui 建好後才接上
+        self._tasks = TaskSlot(self, self._set_status, self._show_background_state, self._show_task_progress)
         # 進行中的背景工作是否連專案編輯也鎖住（存入譜庫、清除本機檔案、下載回原位、撤銷存入：結束時要把指紋寫回專案並存檔）
         self._task_locks_project = False
         self._project_path: Optional[str] = None
@@ -706,11 +672,11 @@ class MainWindow(QMainWindow):
         def work() -> list:
             """在背景接譜庫並讀出各處"""
             return self._catalog_factory().read_places(targets, orchestra_type)
-        try:
-            places = run_while_waiting(self, t("catalog.refresh.title"), t("catalog.refresh.waiting"), work, lambda: None)
-        except Exception as e:
-            failure = CatalogFailure.from_error(as_catalog_error(e), t("catalog.refresh.title"))
-            self._catalog_error_bar.show_failure(t("catalog.refresh.heading"), failure, self._refresh_from_catalog)
+        read, places = self._wait_for_catalog(
+            t("catalog.refresh.title"), t("catalog.refresh.waiting"), work, t("catalog.refresh.heading"),
+            self._refresh_from_catalog,
+        )
+        if not read:
             return
         self._catalog_error_bar.clear()
         modified = self.project.is_modified()
@@ -732,6 +698,31 @@ class MainWindow(QMainWindow):
             self._catalog_error_bar.show_failure(
                 t("catalog.refresh.gone", groups=names), failure, self._refresh_from_catalog,
             )
+
+    def _wait_for_catalog(
+        self, title: str, waiting: str, work: Callable[[], Any], heading: str, retry: Callable[[], Any],
+        stop: Callable[[], None] = lambda: None, action: str = "",
+    ) -> Tuple[bool, Any]:
+        """在等待視窗裡於背景做一件碰譜庫的事；失敗時頂端顯示提示列（寫進紀錄檔），按處理按鈕呼叫 retry
+
+        Args:
+            title: 等待視窗的標題（也是失敗時記下的動作，除非另給 action）
+            waiting: 等待視窗的說明
+            work: 在背景執行緒呼叫的工作
+            heading: 失敗時提示列的開頭
+            retry: 提示列按「重試」時呼叫
+            stop: 等待視窗按取消時呼叫
+            action: 失敗時記進詳細資料與紀錄檔的動作；省略時為 title
+
+        Returns:
+            （成功與否，work 的結果；失敗時為 None）
+        """
+        try:
+            return True, run_while_waiting(self, title, waiting, work, stop)
+        except Exception as e:
+            failure = CatalogFailure.from_error(as_catalog_error(e), action or title)
+            self._catalog_error_bar.show_failure(heading, failure, retry)
+            return False, None
 
     def _confirm_unsynced(self) -> bool:
         """專案還有未同步的群組時提醒一次（關閉專案或程式前），回傳可不可以繼續關閉"""
@@ -785,13 +776,10 @@ class MainWindow(QMainWindow):
                 return self._catalog_factory().sync_instrumentation(
                     writes, orchestra_type, operator, WriteSource.SAVE, chosen, review_only=review,
                 )
-            try:
-                outcome = run_while_waiting(
-                    self, t("catalog.sync.title"), t("catalog.sync.waiting"), work, lambda: None,
-                )
-            except Exception as e:
-                failure = CatalogFailure.from_error(as_catalog_error(e), t("catalog.sync.title"))
-                self._catalog_error_bar.show_failure(t("catalog.unsynced.heading"), failure, retry)
+            sent, outcome = self._wait_for_catalog(
+                t("catalog.sync.title"), t("catalog.sync.waiting"), work, t("catalog.unsynced.heading"), retry,
+            )
+            if not sent:
                 return _WriteBack.FAILED
             if outcome.written:
                 break
@@ -1121,7 +1109,7 @@ class MainWindow(QMainWindow):
                 return
             self._deliver_compressed(batch, results)
 
-        self._run_in_background(work, compress_pdf.describe_progress, finished, _COMPRESS_TEXTS)
+        self._run_in_background(work, finished, _COMPRESS_TEXTS, describe=compress_pdf.describe_progress)
 
     def _deliver_compressed(self, batch: CompressionBatch, results: Sequence[CompressionResult]):
         """整批壓完、檢查完後先開比較畫面逐份確認，再把留下的一次交到輸出位置，最後丟掉暫存的壓縮檔
@@ -1160,77 +1148,54 @@ class MainWindow(QMainWindow):
 
     # --- 背景工作 ---
 
+    @property
+    def _task(self) -> Optional[BackgroundTask]:
+        """進行中的背景工作；沒有時為 None"""
+        return self._tasks.task
+
     def _run_in_background(
-        self, work: Work, describe: Callable[[Any], tuple], finished: Callable[[Any, bool], None],
-        texts: _BackgroundTexts, locks_project: bool = False,
+        self, work: Work, finished: Callable[[Any, bool], None], texts: TaskTexts, locks_project: bool = False,
+        describe: Optional[Callable[[Any], tuple]] = None,
     ):
-        """在背景執行一件可取消的工作；期間停用會動到檔案的操作，狀態列顯示進度與取消鈕
+        """在背景執行一件可取消的工作（ui/background_task.py 的 TaskSlot）；期間停用會動到檔案的操作，狀態列顯示進度與取消鈕
 
         一次只執行一件：進行中時另開背景工作的動作也停用。
 
         Args:
             work: 在背景執行緒呼叫的工作（見 BackgroundTask）
-            describe: 把工作回報的進度轉成（狀態列文字，已完成數，總數）
             finished: 工作交回結果時在主執行緒呼叫，參數為結果與使用者是否要求過取消
-            texts: 這種工作的取消鈕、取消中、錯誤訊息與關閉時詢問的字串鍵
+            texts: 這種工作的字串鍵
             locks_project: 期間是否連專案編輯與存檔也停用（工作讀寫的是專案裡的檔，結束時還要改專案並存檔）
+            describe: 把工作回報的進度轉成（狀態列文字，已完成數，總數）；省略時照 texts 的逐份進度
         """
-        task = BackgroundTask(work, self)
-        self._task = task
-        self._task_texts = texts
-        self._task_status = ""
-        self._task_locks_project = locks_project
-
-        def progressed(progress):
-            """把進度寫到進度條；沒要求取消時也寫到狀態列"""
-            text, done, total = describe(progress)
-            self._task_status = text
-            self._task_progress.setRange(0, max(total, 1))
-            self._task_progress.setValue(done)
-            if not task.cancel_requested:
-                self._set_status(text)
-
-        def settle():
-            """工作交回了：恢復會動到檔案的操作，在主執行緒延後刪掉工作物件"""
-            self._task = None
+        def done(result, cancelled: bool):
+            """交回了：解除專案的鎖，再交給 finished"""
             self._task_locks_project = False
-            task.deleteLater()
             self._show_background_state()
+            finished(result, cancelled)
 
-        def on_finished(result):
-            """交回結果：交給 finished"""
-            settle()
-            finished(result, task.cancel_requested)
+        self._task_locks_project = locks_project
+        self._tasks.run(work, texts, done, describe)
 
-        def on_failed(message: str):
-            """工作拋出例外：提示錯誤"""
-            settle()
-            self._set_status(t("status.ready"))
-            QMessageBox.critical(self, t("dialog.error"), t(texts.failure, error=message))
-
-        task.progressed.connect(progressed)
-        task.finished.connect(on_finished)
-        task.failed.connect(on_failed)
-        task.start()
-        self._show_background_state()
+    def _show_task_progress(self, done: int, total: int):
+        """背景工作的進度條"""
+        self._task_progress.setRange(0, max(total, 1))
+        self._task_progress.setValue(done)
 
     def _cancel_background(self):
         """要求取消進行中的背景工作；工作在下一個停頓點停下後照常交回結果"""
-        if self._task is not None:
-            self._task.cancel()
-            self._set_status(t(self._task_texts.cancelling))
-            self._show_background_state()
+        self._tasks.cancel()
 
     def _show_background_state(self):
         """依有沒有背景工作，停用或恢復會動到檔案的操作，顯示或隱藏進度與取消鈕"""
-        busy = self._task is not None
+        busy = self._tasks.busy
         self._show_enabled_state()
         self._task_progress.setVisible(busy)
-        self._task_cancel_btn.setText(t(self._task_texts.cancel))
+        self._task_cancel_btn.setText(t((self._tasks.texts or _COMPRESS_TEXTS).cancel))
         self._task_cancel_btn.setVisible(busy)
-        self._task_cancel_btn.setEnabled(busy and not self._task.cancel_requested)
-        if busy and self._task_status and not self._task.cancel_requested:
-            self._set_status(self._task_status)
+        self._task_cancel_btn.setEnabled(busy and not self._tasks.cancel_requested)
+        if busy and self._tasks.status and not self._tasks.cancel_requested:
+            self._set_status(self._tasks.status)
 
     def _show_enabled_state(self):
         """依專案唯不唯讀與有沒有背景工作，停用或恢復各個操作（唯讀與背景工作的判斷都只在這裡）
@@ -1253,26 +1218,12 @@ class MainWindow(QMainWindow):
         self._instrumentation_table.set_editable(editable)
 
     def _confirm_cancel_background(self) -> bool:
-        """關閉程式時有背景工作就詢問要不要取消；選取消就要求取消、等它停下，再放棄它
-
-        等不到它停下（逾時）也照樣關閉：放棄之後背景執行緒不再送回任何結果，工作物件隨主視窗刪掉也安全。
+        """關閉程式時有背景工作就詢問要不要取消（見 TaskSlot.confirm_close）
 
         Returns:
             可以關閉時為 True（沒有背景工作，或選了取消）
         """
-        task = self._task
-        if task is None:
-            return True
-        answer = QMessageBox.question(self, t("dialog.close"), t(self._task_texts.close_message))
-        if answer != QMessageBox.Yes:
-            return False
-        task.finished.disconnect()
-        task.failed.disconnect()
-        task.cancel()
-        task.wait(CLOSE_WAIT_SECONDS)
-        task.abandon()
-        self._task = None
-        return True
+        return self._tasks.confirm_close()
 
     def _set_language(self, lang_code: str):
         """切換介面語言並記進偏好，轉換命名格式的語言後重建選單與畫面"""
@@ -1374,16 +1325,13 @@ class MainWindow(QMainWindow):
             """在背景接譜庫並算出計畫"""
             catalog = self._catalog_factory()
             return catalog, service.preview(project, catalog)
-        try:
-            catalog, plan = run_while_waiting(
-                self, t("deposit.title"), t("deposit.reading"), read, lambda: stopped.append(True),
-            )
-        except Exception as e:
-            failure = CatalogFailure.from_error(as_catalog_error(e), t("deposit.title"))
-            self._catalog_error_bar.show_failure(t("catalog.error.cannot_read"), failure, self._deposit_to_catalog)
+        done, result = self._wait_for_catalog(
+            t("deposit.title"), t("deposit.reading"), read, t("catalog.error.cannot_read"), self._deposit_to_catalog,
+            lambda: stopped.append(True),
+        )
+        if not done or stopped:
             return
-        if stopped:
-            return
+        catalog, plan = result
         self._catalog_error_bar.clear()
         from ui.deposit_dialog import DepositDialog
         unsaved = project.is_modified() or not self._project_path
@@ -1394,20 +1342,24 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
         operator = self._auth_service.account_email or ""
+        clean = not project.is_modified()
 
         def work(should_cancel, report) -> DepositOutcome:
             """在背景照計畫存入"""
             return service.deposit(plan, catalog, operator, should_cancel, report)
 
-        self._run_in_background(work, _describe_deposit, self._deposit_finished, _DEPOSIT_TEXTS, locks_project=True)
+        self._run_in_background(
+            work, lambda outcome, _cancelled: self._deposit_finished(outcome, clean), _DEPOSIT_TEXTS,
+            locks_project=True,
+        )
 
-    def _deposit_finished(self, outcome: DepositOutcome, _cancelled: bool):
-        """存入結束（做完、取消或中途失敗）：存進去的指紋交回專案並只存專案檔，中途失敗時頂端提示列寫出已完成幾份"""
+    def _deposit_finished(self, outcome: DepositOutcome, clean: bool):
+        """存入結束（做完、取消或中途失敗）：存進去的指紋交回專案並只存專案檔（_save_after_task），
+        中途失敗時頂端提示列寫出已完成幾份"""
         if outcome.records:
             self.project.record_deposit(outcome.records)
             self._instrumentation_table.refresh()
-            if self._project_path and not self.project.read_only:
-                self._write_project_file(self._project_path)
+            self._save_after_task(clean)
         if outcome.error is not None:
             failure = CatalogFailure.from_error(outcome.error, t("deposit.title"))
             self._catalog_error_bar.show_failure(
@@ -1435,16 +1387,13 @@ class MainWindow(QMainWindow):
             """在背景接譜庫並核對出計畫"""
             catalog = self._catalog_factory()
             return catalog, service.preview(project, catalog)
-        try:
-            catalog, plan = run_while_waiting(
-                self, t("clear.title"), t("clear.reading"), read, lambda: stopped.append(True),
-            )
-        except Exception as e:
-            failure = CatalogFailure.from_error(as_catalog_error(e), t("clear.title"))
-            self._catalog_error_bar.show_failure(t("catalog.error.cannot_read"), failure, self._clear_local_copies)
+        done, result = self._wait_for_catalog(
+            t("clear.title"), t("clear.reading"), read, t("catalog.error.cannot_read"), self._clear_local_copies,
+            lambda: stopped.append(True),
+        )
+        if not done or stopped:
             return
-        if stopped:
-            return
+        catalog, plan = result
         self._catalog_error_bar.clear()
         from ui.clear_dialog import ClearDialog
         dialog = ClearDialog(plan, project.is_modified() or not self._project_path, self)
@@ -1454,11 +1403,26 @@ class MainWindow(QMainWindow):
         if not accepted or not self._confirm_clear(plan, group_ids):
             return
 
+        clean = not project.is_modified()
+
         def work(should_cancel, report) -> ClearOutcome:
             """在背景重讀譜庫核對後永久刪除"""
             return service.clear(plan, group_ids, catalog, should_cancel, report)
 
-        self._run_in_background(work, _describe_clear, self._clear_finished, _CLEAR_TEXTS, locks_project=True)
+        self._run_in_background(
+            work, lambda outcome, _cancelled: self._clear_finished(outcome, clean), _CLEAR_TEXTS, locks_project=True,
+        )
+
+    def _save_after_task(self, clean: bool):
+        """鎖住專案的背景工作把指紋交回專案之後只存專案檔（不經寫回譜庫）：存入、清除、下載回原位與撤銷存入共用
+
+        開始前就有未存檔的改動時不替使用者存檔；沒有專案檔、唯讀或專案沒變時也不存。
+
+        Args:
+            clean: 開始前專案是否沒有未存檔的改動
+        """
+        if clean and self._project_path and not self.project.read_only and self.project.is_modified():
+            self._write_project_file(self._project_path)
 
     def _confirm_clear(self, plan: ClearPlan, group_ids: List[str]) -> bool:
         """清除前的確認框：寫出哪些群組、幾份、多大、不進回收處、清空的資料夾一併刪除與怎麼找回"""
@@ -1473,13 +1437,12 @@ class MainWindow(QMainWindow):
         box.exec()
         return box.clickedButton() is delete
 
-    def _clear_finished(self, outcome: ClearOutcome, _cancelled: bool):
-        """清除結束（做完或取消）：清除了的指紋交回專案並只存專案檔，重畫分頁標出只在譜庫的檔；沒刪的列出來；
-        刪之前重讀譜庫讀不到時頂端顯示提示列（什麼都沒刪）"""
+    def _clear_finished(self, outcome: ClearOutcome, clean: bool):
+        """清除結束（做完或取消）：清除了的指紋交回專案並只存專案檔（_save_after_task），重畫分頁標出只在譜庫的檔；
+        沒刪的列出來；刪之前重讀譜庫讀不到時頂端顯示提示列（什麼都沒刪）"""
         if outcome.cleared:
             self.project.record_fingerprints(outcome.fingerprints)
-            if self._project_path and not self.project.read_only and self.project.is_modified():
-                self._write_project_file(self._project_path)
+            self._save_after_task(clean)
             self._rebuild_tabs()
         if outcome.error is not None:
             failure = CatalogFailure.from_error(outcome.error, t("clear.title"))
@@ -1508,22 +1471,17 @@ class MainWindow(QMainWindow):
         if not groups or not self._catalog_ready():
             return
         service = self._download_service
-        factory = self._catalog_factory
         clean = not project.is_modified()
-
-        def work(should_cancel, report) -> DownloadOutcome:
-            """在背景接譜庫、下載回原位"""
-            try:
-                catalog = factory()
-            except Exception as e:
-                return DownloadOutcome(total=sum(len(g.sources) for g in groups), error=as_catalog_error(e))
-            return service.restore(groups, catalog, should_cancel, report)
+        work = catalog_work(
+            self._catalog_factory, lambda catalog, cancel, report: service.restore(groups, catalog, cancel, report),
+            lambda error: DownloadOutcome(total=sum(len(g.sources) for g in groups), error=error),
+        )
 
         def finished(outcome: DownloadOutcome, _cancelled: bool):
             """下載結束"""
             self._download_back_finished(outcome, clean, lambda: self.download_back(group_ids))
 
-        self._run_in_background(work, _describe_download, finished, _DOWNLOAD_TEXTS, locks_project=True)
+        self._run_in_background(work, finished, _DOWNLOAD_TEXTS, locks_project=True)
 
     def _download_back_finished(self, outcome: DownloadOutcome, clean: bool, retry: Callable[[], None]):
         """下載回原位結束（做完、取消或中途失敗）：新的指紋交回專案，開始前沒有未存檔的改動時只存專案檔；
@@ -1536,8 +1494,7 @@ class MainWindow(QMainWindow):
         """
         if outcome.fingerprints:
             self.project.record_fingerprints(outcome.fingerprints)
-            if clean and self._project_path and not self.project.read_only and self.project.is_modified():
-                self._write_project_file(self._project_path)
+            self._save_after_task(clean)
         self._show_undeposited()
         if outcome.error is not None:
             failure = CatalogFailure.from_error(outcome.error, t("download.title"))
@@ -1587,25 +1544,23 @@ class MainWindow(QMainWindow):
         if self._task is not None:
             return False
         service = self._revert_service
-        factory = self._catalog_factory
         operator = self._auth_service.account_email or ""
         orchestra_type = self.project.orchestra_type
         clean = not self.project.is_modified()
-
-        def work(should_cancel, report) -> RevertOutcome:
-            """在背景接譜庫、撤銷"""
-            try:
-                catalog = factory()
-            except Exception as e:
-                return RevertOutcome(error=as_catalog_error(e))
-            return service.revert(preview, choices, catalog, operator, orchestra_type, should_cancel, report)
+        work = catalog_work(
+            self._catalog_factory,
+            lambda catalog, cancel, report: service.revert(
+                preview, choices, catalog, operator, orchestra_type, cancel, report,
+            ),
+            lambda error: RevertOutcome(error=error),
+        )
 
         def finished(outcome: RevertOutcome, _cancelled: bool):
             """撤銷結束：交回專案，再交給譜庫視窗"""
             self._revert_finished(outcome, clean)
             done(outcome)
 
-        self._run_in_background(work, _describe_revert, finished, _REVERT_TEXTS, locks_project=True)
+        self._run_in_background(work, finished, _REVERT_TEXTS, locks_project=True)
         return True
 
     def _revert_finished(self, outcome: RevertOutcome, clean: bool):
@@ -1617,8 +1572,7 @@ class MainWindow(QMainWindow):
         """
         self.project.record_fingerprints(outcome.fingerprints)
         self.project.forget_deposits(outcome.reverted_paths)
-        if clean and self._project_path and not self.project.read_only and self.project.is_modified():
-            self._write_project_file(self._project_path)
+        self._save_after_task(clean)
         self._show_undeposited()
         if outcome.error is not None:
             self._set_status(t("status.ready"))
@@ -1690,11 +1644,11 @@ class MainWindow(QMainWindow):
         def read():
             """在背景接譜庫並讀社團設定"""
             return self._club_settings.read(self._catalog_factory())
-        try:
-            platform = run_while_waiting(self, t("publish.title"), t("publish.checking"), read, lambda: None)
-        except Exception as e:
-            failure = CatalogFailure.from_error(as_catalog_error(e), t("catalog.action.read_club_settings"))
-            self._catalog_error_bar.show_failure(t("publish.club_settings_failed"), failure, self._publish)
+        done, platform = self._wait_for_catalog(
+            t("publish.title"), t("publish.checking"), read, t("publish.club_settings_failed"), self._publish,
+            action=t("catalog.action.read_club_settings"),
+        )
+        if not done:
             return False
         self._catalog_error_bar.clear()
         self._show_publish_button()
