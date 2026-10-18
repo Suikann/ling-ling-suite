@@ -3,8 +3,9 @@
 存檔時寫回譜庫的接線測試（offscreen）
 
 主視窗按儲存時，連到譜庫的群組的改動經譜庫服務寫進假 Google，再存專案檔；譜庫被別人改過時開衝突畫面，
-列出這次會寫進譜庫的全部改動、衝突的標紅要選邊；寫不進去時頂端出現提示列。編制表在連到譜庫的群組刪除聲部時
-確認框寫明從樂譜刪除，已有 Drive 檔案的聲部擋下；聲部組旁寫出其他曲目的影響範圍。不測畫面。
+列出這次會寫進譜庫的全部改動、衝突的標紅要選邊（寫不進去見 test_catalog_unsynced_window.py）。
+編制表在連到譜庫的群組刪除聲部時確認框寫明從樂譜刪除，已有 Drive 檔案的聲部擋下；聲部組旁寫出其他曲目的影響範圍。
+不測畫面。
 """
 import os
 import sys
@@ -16,10 +17,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PySide6.QtWidgets import QComboBox, QLabel, QMessageBox, QPushButton, QTableWidget, QTabWidget
+from PySide6.QtWidgets import QComboBox, QMessageBox, QPushButton, QTableWidget, QTabWidget
 
 from core.catalog_constants import SHEET_DURATIONS, SHEET_EDITIONS, SHEET_PARTS, SHEET_PIECES, SHEET_SECTIONS
-from core.catalog_errors import CatalogErrorKind
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
 from core.locale import t
 from core.models import Headcount, Project
@@ -32,7 +32,6 @@ from test_catalog_link_dialog import fake_catalog
 from tests.test_catalog_service import add_row
 from tests.test_main_window import MainWindowTestCase, answering_prompts
 from ui.catalog_conflict_dialog import CatalogConflictDialog
-from ui.catalog_error_bar import CatalogErrorBar
 from ui.instrumentation_table import InstrumentationTable
 
 
@@ -133,16 +132,6 @@ class TestSavingWritesBack(WriteBackWindowTestCase):
         self.save()
         self.assertEqual(self.google.requests, before)
         self.assertFalse(self.is_marked_unsaved())
-
-    def test_unwritable_catalog_shows_the_bar_and_keeps_the_project_unsaved(self):
-        self.window.project.set_headcount(self.group, 1, Headcount(3))
-        self.google.fail_next(CatalogErrorKind.OFFLINE)
-        self.save()
-        bar = self.window.findChild(CatalogErrorBar)
-        self.assertFalse(bar.isHidden())
-        self.assertIn(t("catalog.error.cannot_write"), bar.findChild(QLabel).text())
-        self.assertTrue(self.is_marked_unsaved())
-        self.assertEqual(self.headcount_in_catalog("琵琶"), "")
 
 
 class TestConflictScreen(WriteBackWindowTestCase):

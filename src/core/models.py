@@ -245,6 +245,7 @@ class CatalogLink:
         snapshot: 那處的快照，待寫入的改動相對於它計算（Project.catalog_changes）
         other_pieces: 群組各樂器在譜庫裡被其他曲目用到幾首（樂器的一個聲部寫法 → 曲目數），聲部組旁寫影響範圍用；
             讀到那處時更新
+        unsynced: 上次存檔時寫不進譜庫（未同步）；下次寫回成功時清掉
     """
     edition_id: str
     movement_id: str = ""
@@ -253,6 +254,7 @@ class CatalogLink:
     movement_name: str = ""
     snapshot: CatalogSnapshot = field(default_factory=CatalogSnapshot)
     other_pieces: Dict[str, int] = field(default_factory=dict)
+    unsynced: bool = False
 
     def other_pieces_using(self, voice: str) -> int:
         """聲部的樂器在譜庫裡被其他曲目用到幾首（同一樂器的規則）；不知道時為 0"""
@@ -269,6 +271,7 @@ class CatalogLink:
             "movement_name": self.movement_name,
             "snapshot": self.snapshot.to_data(),
             "other_pieces": dict(self.other_pieces),
+            "unsynced": self.unsynced,
         }
 
     @classmethod
@@ -282,6 +285,7 @@ class CatalogLink:
             movement_name=data.get("movement_name", ""),
             snapshot=CatalogSnapshot.from_data(data.get("snapshot") or {}),
             other_pieces={str(k): int(v) for k, v in (data.get("other_pieces") or {}).items()},
+            unsynced=bool(data.get("unsynced")),
         )
 
 
@@ -1451,12 +1455,36 @@ class Project:
                 changes.append(CatalogChange(CatalogChangeKind.SECTION, voice, old, new))
         return changes
 
+    def unsynced_changes(self, group: Group) -> List[CatalogChange]:
+        """群組未同步的值：上次存檔寫不進譜庫時，群組待寫入的改動（catalog_changes）；沒標未同步時為空清單
+
+        改動的原值是譜庫最後一次讀到或寫進去的值。
+        """
+        link = group.catalog_link
+        return self.catalog_changes(group) if link is not None and link.unsynced else []
+
+    def unsynced_groups(self) -> List[Group]:
+        """有未同步的值的群組（依群組順序）"""
+        return [group for group in self.groups if self.unsynced_changes(group)]
+
+    def mark_catalog_unsynced(self, group_ids: Iterable[str]) -> None:
+        """存檔時寫不進譜庫：這些群組標成未同步（記在專案檔），下次寫回成功時清掉
+
+        Args:
+            group_ids: 寫不進去的群組 ID；沒連到譜庫的略過
+        """
+        for group_id in group_ids:
+            group = self._group_by_id(group_id)
+            if group is not None and group.catalog_link is not None:
+                group.catalog_link = replace(group.catalog_link, unsynced=True)
+        self._changed()
+
     def mark_catalog_synced(self, outcome: "SyncOutcome") -> None:
         """編制寫回譜庫之後：選「用譜庫的」的格子改成譜庫的值，快照改成寫完後的那處
 
         選「用譜庫的」的人數、時長、聲部組與順序照譜庫的值改群組（聲部組改的是專案的對照）；人數衝突而譜庫已刪掉那個聲部時，
         群組也拿掉它，分譜移到未分組。快照改成群組現在的編制、時長與聲部組，加上無法寫回、還留在譜庫的聲部，
-        之後 catalog_changes 只剩無法寫回的改動。
+        之後 catalog_changes 只剩無法寫回的改動；未同步的標記清掉。
 
         Args:
             outcome: 已寫入的結果（CatalogService.sync_instrumentation）
@@ -1490,7 +1518,8 @@ class Project:
             }
             blocked = {voice_key(r.item.voice) for r in place.items if r.verdict is Verdict.BLOCKED}
             other_pieces = _other_pieces(group.instruments, place.other_pieces)
-            group.catalog_link = replace(group.catalog_link, other_pieces=other_pieces, snapshot=CatalogSnapshot(
+            link = replace(group.catalog_link, other_pieces=other_pieces, unsynced=False)
+            group.catalog_link = replace(link, snapshot=CatalogSnapshot(
                 voices=_with_blocked(
                     list(zip(group.instruments, group.headcounts)), group.catalog_link.snapshot.voices, blocked,
                 ),

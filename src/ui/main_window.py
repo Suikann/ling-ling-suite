@@ -5,6 +5,7 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
@@ -19,7 +20,7 @@ from core.constants import (
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
 from core.catalog_errors import CatalogFailure, as_catalog_error
-from core.catalog_sync import SyncOutcome, WriteSource, place_writes
+from core.catalog_sync import PlaceWrite, SyncOutcome, WriteSource, place_writes
 from core.launch_env import app_version, current_build
 from core.locale import t, get_locale, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
@@ -53,6 +54,13 @@ if TYPE_CHECKING:
 # 關閉程式時選了取消背景工作，最多等它停下幾秒（停在頁與頁之間，通常不到一秒）；
 # 逾時就放棄它（之後不再送回任何結果）再關閉，暫存檔留待下次啟動清掉
 _CLOSE_WAIT_SECONDS = 10
+
+
+class _WriteBack(Enum):
+    """存檔或開啟專案時寫回譜庫的結果"""
+    WRITTEN = "written"      # 已寫入（或已完成），快照已更新
+    FAILED = "failed"        # 寫不進去（斷網、API 失敗）
+    CANCELLED = "cancelled"  # 在衝突畫面取消
 
 
 class _BackgroundTexts(NamedTuple):
@@ -230,7 +238,7 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(4, 4, 4, 4)
         main_layout.setSpacing(4)
-        # 存檔時寫不進譜庫的提示列；按「重試」等處理按鈕時再存一次
+        # 存檔或開啟專案時寫不進譜庫的提示列；按「重試」等處理按鈕時再試一次
         self._catalog_error_bar = CatalogErrorBar(log=self._log)
         self._catalog_error_bar.connect_remedies(self._sign_in_google, self._open_catalog_settings)
         main_layout.addWidget(self._catalog_error_bar)
@@ -428,6 +436,7 @@ class MainWindow(QMainWindow):
         self.project.subscribe(self._update_title)
         self._project_path = path
         self._suggested_name = ""
+        self._catalog_error_bar.clear()
         self._sync_ui_from_project()
 
     def _new_project(self):
@@ -470,6 +479,7 @@ class MainWindow(QMainWindow):
                 self, t("dialog.warning"),
                 t("missing.on_load", count=len(result.missing_files), files="\n".join(result.missing_files)),
             )
+        self._retry_unsynced()
 
     def _show_access_status(self, done: str, result: AccessResult):
         """開啟或存檔成功後的狀態列：附帶動作有失敗時改顯示失敗的提示
@@ -508,8 +518,8 @@ class MainWindow(QMainWindow):
     def _do_save(self, path: str) -> bool:
         """存檔：連到譜庫的群組有改動時先寫回譜庫，再寫專案檔
 
-        寫不進譜庫、或在衝突畫面取消時不存專案檔。專案檔寫不成才顯示「儲存失敗」，
-        最近清單或 meta 寫不進去只在狀態列提示。
+        寫不進譜庫時照樣存專案檔，這些群組標未同步（下次存檔或開啟專案時重試）；在衝突畫面取消時不存。
+        專案檔寫不成才顯示「儲存失敗」，最近清單或 meta 寫不進去只在狀態列提示。
 
         Args:
             path: 專案檔路徑
@@ -517,8 +527,18 @@ class MainWindow(QMainWindow):
         Returns:
             專案檔是否寫成
         """
-        if not self._write_back_to_catalog():
-            return False
+        writes = place_writes(self.project)
+        if writes:
+            synced = self._write_back_to_catalog(writes, self._save_project)
+            if synced is _WriteBack.CANCELLED:
+                return False
+            if synced is _WriteBack.FAILED:
+                self.project.mark_catalog_unsynced(write.group_id for write in writes)
+            self._instrumentation_table.refresh()
+        return self._write_project_file(path)
+
+    def _write_project_file(self, path: str) -> bool:
+        """只寫專案檔（不寫回譜庫）；寫不成時顯示「儲存失敗」，回傳是否寫成"""
         result = self._project_access.save(self.project, path)
         if result.error is not None:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.save_failed", error=result.error))
@@ -529,19 +549,50 @@ class MainWindow(QMainWindow):
         self._show_access_status(t("status.saved", path=path), result)
         return True
 
-    def _write_back_to_catalog(self) -> bool:
-        """把連到譜庫的群組的改動寫回譜庫（ADR 0002），回傳可不可以接著存專案檔
+    def _retry_unsynced(self):
+        """開啟專案後重試未同步的群組：寫回成功時再存一次專案檔，清掉檔裡的未同步標記
+
+        開啟時就有未存檔的改動（例如套用了中斷還原的路徑）時不自動存，交給使用者存檔。唯讀的專案不重試。
+        寫不進去時頂端顯示提示列，按「重試」再試一次。
+        """
+        if self.project.read_only or not self._project_path:
+            return
+        unsynced = {group.id for group in self.project.unsynced_groups()}
+        writes = [write for write in place_writes(self.project) if write.group_id in unsynced]
+        if not writes:
+            return
+        modified = self.project.is_modified()
+        if self._write_back_to_catalog(writes, self._retry_unsynced) is not _WriteBack.WRITTEN:
+            return
+        self._sync_ui_from_project()
+        if not modified:
+            self._write_project_file(self._project_path)
+
+    def _confirm_unsynced(self) -> bool:
+        """專案還有未同步的群組時提醒一次（關閉專案或程式前），回傳可不可以繼續關閉"""
+        groups = self.project.unsynced_groups()
+        if not groups:
+            return True
+        answer = QMessageBox.question(
+            self, t("catalog.unsynced.title"), t("catalog.unsynced.close", groups="、".join(g.name for g in groups)),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
+    def _write_back_to_catalog(self, writes: List[PlaceWrite], retry: Callable[[], Any]) -> _WriteBack:
+        """把連到譜庫的群組的改動寫回譜庫（ADR 0002）
 
         在背景寫入，期間顯示等待視窗。有衝突時開衝突畫面選邊後再寫一次（寫入前又重讀，選邊之後又被改的格子再問）；
-        寫完把結果交回專案（選「用譜庫的」的值與新的快照），有無法寫回的聲部時說明。
-        寫不進去時在頂端顯示提示列，按「重試」再存一次。
+        寫完把結果交回專案（選「用譜庫的」的值與新的快照，清掉未同步），有無法寫回的聲部時說明。
+        寫不進去時在頂端顯示提示列，按「重試」呼叫 retry。
+
+        Args:
+            writes: 要寫回的改動（place_writes）
+            retry: 提示列按「重試」時呼叫
 
         Returns:
-            沒有要寫的、或已寫入時為 True；寫不進去或在衝突畫面取消時為 False
+            已寫入、寫不進去、或在衝突畫面取消
         """
-        writes = place_writes(self.project)
-        if not writes:
-            return True
         operator = self._auth_service.account_email or ""
         orchestra_type = self.project.orchestra_type
         decisions: dict = {}
@@ -557,14 +608,14 @@ class MainWindow(QMainWindow):
                 )
             except Exception as e:
                 failure = CatalogFailure.from_error(as_catalog_error(e), t("catalog.sync.title"))
-                self._catalog_error_bar.show_failure(t("catalog.error.cannot_write"), failure, self._save_project)
-                return False
+                self._catalog_error_bar.show_failure(t("catalog.unsynced.heading"), failure, retry)
+                return _WriteBack.FAILED
             if outcome.written:
                 break
             from ui.catalog_conflict_dialog import CatalogConflictDialog
             dialog = CatalogConflictDialog(outcome, self)
             if dialog.exec() != CatalogConflictDialog.Accepted:
-                return False
+                return _WriteBack.CANCELLED
             for group_id, chosen in dialog.decisions().items():
                 decisions[group_id] = {**decisions.get(group_id, {}), **chosen}
         self._catalog_error_bar.clear()
@@ -572,7 +623,7 @@ class MainWindow(QMainWindow):
         if outcome.blocked:
             voices = "、".join(review.item.voice for _, review in outcome.blocked)
             QMessageBox.warning(self, t("catalog.sync.title"), t("catalog.sync.blocked_saved", voices=voices))
-        return True
+        return _WriteBack.WRITTEN
 
     def _show_orchestra_type(self):
         """樂團類型選單改為顯示目前專案的值，不寫回專案"""
@@ -1204,12 +1255,15 @@ class MainWindow(QMainWindow):
         self._status_label.setText(text)
 
     def _confirm_unsaved(self) -> bool:
-        """有未存檔的修改時詢問是否儲存（開新專案、開啟專案、開啟最近專案）；唯讀的專案存不了，不問
+        """有未存檔的修改時詢問是否儲存（開新專案、開啟專案、開啟最近專案），還有未同步的群組時再提醒一次
+
+        唯讀的專案存不了，不問是否儲存。
 
         Returns:
-            可以繼續原本的操作時為 True；選「取消」或選「儲存」但沒存成時為 False
+            可以繼續原本的操作時為 True；選「取消」、選「儲存」但沒存成、或在未同步的提醒選「否」時為 False
         """
-        return self.project.read_only or not self.project.is_modified() or self._ask_to_save()
+        saved = self.project.read_only or not self.project.is_modified() or self._ask_to_save()
+        return saved and self._confirm_unsynced()
 
     def _differs_from_project_file(self) -> bool:
         """目前內容是否與磁碟上的專案檔不同；還沒存過檔時沒有可比對的檔案，交給未存檔判定"""
@@ -1266,12 +1320,16 @@ class MainWindow(QMainWindow):
         self._do_open_project(path)
 
     def closeEvent(self, event):
-        """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次，任一不同就詢問是否儲存；有背景工作時再問要不要取消
+        """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次，任一不同就詢問是否儲存；還有未同步的群組時提醒一次；
+        有背景工作時再問要不要取消
 
         唯讀的專案存不了，不詢問是否儲存。
         """
         unsaved = not self.project.read_only and (self.project.is_modified() or self._differs_from_project_file())
         if unsaved and not self._ask_to_save(t("dialog.close"), t("dialog.close.message")):
+            event.ignore()
+            return
+        if not self._confirm_unsynced():
             event.ignore()
             return
         if not self._confirm_cancel_background():

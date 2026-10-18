@@ -737,6 +737,14 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.sync.delete_voices": "群組連到譜庫，刪除「{voices}」等於從樂譜刪除。\n只是這場沒有這份分譜時，請取消勾選「本專案有」。\n\n要刪除嗎？",
         "catalog.sync.filed_voices": "「{voices}」在譜庫已有 Drive 檔案，不能從群組刪除，請到譜庫視窗處理。",
         "catalog.sync.other_pieces": "其他 {count} 首的{instrument}也會跟著改",
+        # 譜庫 - 未同步（寫不進譜庫的編制改動）
+        "catalog.unsynced.heading": "寫不進譜庫，改動標為未同步",
+        "catalog.unsynced.bar": "未同步：{items}。下次存檔或開啟專案時再試。",
+        "catalog.unsynced.voices": "聲部清單",
+        "catalog.unsynced.catalog_now": "譜庫現在是 {value}",
+        "catalog.unsynced.blank": "空白",
+        "catalog.unsynced.title": "未同步",
+        "catalog.unsynced.close": "「{groups}」的編制還沒同步到譜庫，下次開啟專案時再試。\n\n仍要關閉嗎？",
     },
     LOCALE_EN: {
         # 應用程式
@@ -1445,6 +1453,13 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.sync.delete_voices": "This group is linked to the catalog, so deleting \"{voices}\" deletes it from the score.\nIf this concert just lacks the part, uncheck \"In Project\" instead.\n\nDelete?",
         "catalog.sync.filed_voices": "\"{voices}\" already has Drive files in the catalog and can't be deleted from the group. Handle it in the catalog window.",
         "catalog.sync.other_pieces": "{count} other pieces' {instrument} will change too",
+        "catalog.unsynced.heading": "Couldn't write to the catalog; changes marked unsynced",
+        "catalog.unsynced.bar": "Unsynced: {items}. Will retry on the next save or open.",
+        "catalog.unsynced.voices": "Voice list",
+        "catalog.unsynced.catalog_now": "Catalog has {value}",
+        "catalog.unsynced.blank": "blank",
+        "catalog.unsynced.title": "Unsynced",
+        "catalog.unsynced.close": "The instrumentation of \"{groups}\" isn't synced to the catalog yet. It will retry when the project is opened.\n\nClose anyway?",
     },
 }
 

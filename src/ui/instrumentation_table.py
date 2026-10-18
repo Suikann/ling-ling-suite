@@ -15,13 +15,14 @@
 上方顯示群組連到譜庫的哪裡（曲目 › 版本 › 樂章）；沒連線時是「連到譜庫…」按鈕，按下發出 link_requested，
 由主視窗開啟連線對話框，連上後以 show_linked 標出依位置猜的聲部。連到譜庫的群組刪除聲部前先確認（等於從樂譜刪除），
 已有 Drive 檔案的聲部不刪；聲部組旁另寫出譜庫裡用到這種樂器的其他曲目數。
+群組有未同步的值（存檔時寫不進譜庫）時，頂端的提示列寫出是哪些，人數與時長旁寫出譜庫現在的值。
 
 使用範例：
     table = InstrumentationTable(project)
     table.instruments_changed.connect(refresh_parts)
     table.show_group(group)
 """
-from typing import List, Optional, Set, TYPE_CHECKING
+from typing import Dict, List, Optional, Set, TYPE_CHECKING
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QComboBox, QLabel, QMessageBox,
     QAbstractItemView, QMenu, QTableWidget, QTableWidgetItem, QSpinBox, QHeaderView,
@@ -31,9 +32,12 @@ from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from core.constants import INSTRUMENT_PRESETS, TEXT_EXTENSION
 from core.instrument_list import instrument_list_text
 from core.locale import localized, t
-from core.models import CatalogLink, DuplicateVoiceError, FiledVoicesError, FileInfo, Headcount, LinkResult
+from core.models import (
+    CatalogChange, CatalogChangeKind, CatalogLink, DuplicateVoiceError, FiledVoicesError, FileInfo, Headcount,
+    LinkResult, format_duration,
+)
 from core.sections import section_label
-from core.voice_names import distinct_voices, duplicate_rows, instrument_name
+from core.voice_names import VoiceKey, distinct_voices, duplicate_rows, instrument_name, voice_key
 from core.voice_suggestions import VoiceCandidates
 from services.file_service import FileService
 from ui.voice_completer import VoiceNameDelegate, attach_voice_completer
@@ -62,6 +66,8 @@ _DUPLICATE_COLOR = QColor("#e74c3c")
 _ABSENT_COLOR = QColor("#888888")
 # 連線時依位置猜的聲部的底色
 _GUESSED_COLOR = QColor("#fff3b0")
+# 未同步的提示與值的文字顏色
+_UNSYNCED_COLOR = QColor("#e67e22")
 
 
 class VoiceRowsTable(QTableWidget):
@@ -141,6 +147,8 @@ class InstrumentationTable(QWidget):
         self._copy_sources: List["Group"] = []
         # 連線時依位置猜的聲部（標黃），換顯示別的群組時清掉
         self._guessed: Set[str] = set()
+        # 人數未同步的聲部（同一聲部的鍵 → 譜庫現在的人數），重畫時更新
+        self._unsynced_headcounts: Dict[VoiceKey, Optional[Headcount]] = {}
         self._build_ui()
 
     @staticmethod
@@ -158,6 +166,12 @@ class InstrumentationTable(QWidget):
         layout.addWidget(title)
         self.header = QVBoxLayout()
         self.header.addLayout(self._build_link_row())
+        self._unsynced_bar = QLabel()
+        self._unsynced_bar.setObjectName("unsynced_bar")
+        self._unsynced_bar.setWordWrap(True)
+        self._unsynced_bar.setStyleSheet(f"color: {_UNSYNCED_COLOR.name()};")
+        self._unsynced_bar.hide()
+        self.header.addWidget(self._unsynced_bar)
         layout.addLayout(self.header)
         layout.addLayout(self._build_duration_row())
         self._preset_combo = QComboBox()
@@ -238,6 +252,11 @@ class InstrumentationTable(QWidget):
             spin.valueChanged.connect(self._on_duration_edited)
             row.addWidget(spin)
             row.addWidget(QLabel(t(unit)))
+        self._duration_catalog_now = QLabel()
+        self._duration_catalog_now.setObjectName("duration_catalog_now")
+        self._duration_catalog_now.setStyleSheet(f"color: {_UNSYNCED_COLOR.name()};")
+        self._duration_catalog_now.hide()
+        row.addWidget(self._duration_catalog_now)
         row.addStretch()
         return row
 
@@ -277,6 +296,11 @@ class InstrumentationTable(QWidget):
         """依群組重畫整張表與時長（由程式填值，不觸發編輯操作）"""
         self._filling = True
         self._show_link()
+        unsynced = self._project.unsynced_changes(self._group) if self._group else []
+        self._show_unsynced(unsynced)
+        self._unsynced_headcounts = {
+            voice_key(change.voice): change.old for change in unsynced if change.kind is CatalogChangeKind.HEADCOUNT
+        }
         self._table.clearContents()
         voices = list(self._group.instruments) if self._group else []
         self._table.setRowCount(len(voices))
@@ -295,6 +319,18 @@ class InstrumentationTable(QWidget):
         self._link_label.setText(_link_text(link) if link else "")
         self._link_label.setVisible(link is not None)
         self._link_button.setVisible(self._group is not None and link is None)
+
+    def _show_unsynced(self, changes: List[CatalogChange]):
+        """群組頂端寫出未同步的值，時長未同步時旁邊寫出譜庫現在的值；沒有時收起"""
+        self._unsynced_bar.setText(
+            t("catalog.unsynced.bar", items="、".join(_change_text(change) for change in changes)) if changes else "",
+        )
+        self._unsynced_bar.setVisible(bool(changes))
+        duration = next((change for change in changes if change.kind is CatalogChangeKind.DURATION), None)
+        self._duration_catalog_now.setText(
+            t("catalog.unsynced.catalog_now", value=_catalog_value(format_duration(duration.old))) if duration else "",
+        )
+        self._duration_catalog_now.setVisible(duration is not None)
 
     def _fill_row(self, row: int, voice: str, duplicate: bool):
         """填一列：本專案有的勾選框、聲部名稱（重名標紅、本專案沒有的變灰、依位置猜的標黃）、聲部組選單與影響範圍"""
@@ -315,10 +351,18 @@ class InstrumentationTable(QWidget):
             name.setBackground(QBrush(_GUESSED_COLOR))
             if not duplicate:
                 name.setToolTip(t("catalog.link.guessed"))
+        unsynced = voice_key(voice) in self._unsynced_headcounts
+        catalog_now = ""
+        if unsynced:
+            old = self._unsynced_headcounts[voice_key(voice)]
+            catalog_now = t("catalog.unsynced.catalog_now", value=_catalog_value(old.text() if old else ""))
+            if not duplicate:
+                name.setForeground(QBrush(_UNSYNCED_COLOR))
+                name.setToolTip(catalog_now)
         self._table.setItem(row, self.column("voice"), name)
         for column, tip in (("minimum", "instrumentation.minimum_tip"), ("maximum", "instrumentation.maximum_tip")):
             spin = _count_spin(_MAX_HEADCOUNT)
-            spin.setToolTip(t(tip))
+            spin.setToolTip(t(tip) + (f"\n{catalog_now}" if unsynced else ""))
             spin.valueChanged.connect(lambda _value, r=row: self._on_headcount_edited(r))
             self._table.setCellWidget(row, self.column(column), spin)
         open_ended = QTableWidgetItem()
@@ -577,6 +621,22 @@ class InstrumentationTable(QWidget):
             QMessageBox.critical(self, t("dialog.error"), str(e))
             return
         QMessageBox.information(self, t("dialog.info"), t("instrument.export_done", path=path))
+
+
+def _catalog_value(text: str) -> str:
+    """「譜庫現在是…」裡的值：空的寫「空白」"""
+    return text or t("catalog.unsynced.blank")
+
+
+def _change_text(change: CatalogChange) -> str:
+    """未同步提示列裡一項改動的寫法（與衝突畫面的項目同一套）"""
+    if change.kind is CatalogChangeKind.VOICES:
+        return t("catalog.unsynced.voices")
+    if change.kind is CatalogChangeKind.HEADCOUNT:
+        return t("catalog.sync.headcount", voice=change.voice)
+    if change.kind is CatalogChangeKind.DURATION:
+        return t("catalog.sync.duration")
+    return t("catalog.sync.section", instrument=instrument_name(change.voice))
 
 
 def _link_text(link: CatalogLink) -> str:
