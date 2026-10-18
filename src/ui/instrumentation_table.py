@@ -133,6 +133,7 @@ class InstrumentationTable(QWidget):
         return COLUMNS.index(name)
 
     def _build_ui(self):
+        """排出標題、連線的預留版面、時長、預設樂器表與複製編制選單、表格、提示、輸入欄與按鈕"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -398,6 +399,7 @@ class InstrumentationTable(QWidget):
         self._fill()
 
     def _on_preset_selected(self, index: int):
+        """選了預設樂器表：整份換掉目前群組的樂器表，選單回到提示列"""
         if index <= 0:
             return
         preset_idx = index - 1
@@ -428,6 +430,7 @@ class InstrumentationTable(QWidget):
         )
 
     def _selected_rows(self) -> List[int]:
+        """選取的列（從 0 起算，依順序）"""
         return sorted({index.row() for index in self._table.selectedIndexes()})
 
     def _remove_selected(self):
@@ -438,6 +441,7 @@ class InstrumentationTable(QWidget):
         self._changed(self._project.remove_instruments(self._group, rows))
 
     def _show_context_menu(self, pos):
+        """在列上按右鍵：選單提供移除選取的列"""
         if self._table.itemAt(pos) is None:
             return
         menu = QMenu(self)
@@ -446,6 +450,7 @@ class InstrumentationTable(QWidget):
             self._remove_selected()
 
     def _auto_extract(self):
+        """從群組分譜的檔名擷取聲部，確認後整份換掉樂器表；擷取不到時說明"""
         if not self._group or not self._group.files:
             QMessageBox.information(self, t("dialog.info"), t("instrument.auto_extract.empty"))
             return

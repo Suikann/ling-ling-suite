@@ -135,7 +135,7 @@ def format_duration(seconds: Optional[int]) -> str:
 
 @dataclass
 class Group:
-    """群組：代表一首曲目的一個樂章
+    """群組：一首曲目，或其中一個樂章，及其分譜與總譜
 
     樂器表（instruments）與逐列對應的「本專案有」（present）、人數（headcounts）是聲部的有序清單；
     分譜依序配給本專案有的聲部，第 N 份分譜配第 N 個本專案有的聲部（pairing），本專案沒有的聲部配對時跳過。
