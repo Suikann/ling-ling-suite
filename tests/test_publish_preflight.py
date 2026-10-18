@@ -15,9 +15,26 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.constants import HuaXiaEnsemble
-from core.models import HuaXiaLink, NewHuaXiaPiece, Project
+from core.constants import HuaXiaEnsemble, OrchestraType
+from core.models import CatalogChangeKind, CatalogLink, CatalogSnapshot, FileInfo, Headcount, HuaXiaLink, NewHuaXiaPiece, Project
 from services.project_service import ProjectService
+from services.publish_service import ProjectBlock, check_groups, project_blocks
+
+OUT_DIR = os.path.abspath("out")
+IN_DIR = os.path.abspath("in")
+
+
+def renamed_project() -> Project:
+    """已存檔、國樂團的專案：一個已重新命名到輸出位置的群組（總譜、二胡 I、琵琶，人數都已填）"""
+    project = Project(master_template="{序號}-{樂器}.pdf", output_directory=OUT_DIR)
+    group = project.add_group("烽火操", "總譜")
+    project.set_instruments(group, ["二胡 I", "琵琶"])
+    names = ("00-總譜.pdf", "01-二胡 I.pdf", "02-琵琶.pdf")
+    project.add_files([FileInfo(os.path.join(OUT_DIR, n), n) for n in names], group)
+    project.set_headcount(group, 0, Headcount(6, 8))
+    project.set_headcount(group, 1, Headcount(2))
+    project.mark_saved()
+    return project
 
 
 class TestHuaXiaLinkIsSaved(unittest.TestCase):
@@ -91,6 +108,92 @@ class TestNewPieceDefaults(unittest.TestCase):
         for seconds, minutes in ((None, None), (420, 7.0), (440, 7.5), (425, 7.0), (465, 8.0)):
             project.set_duration(group, seconds)
             self.assertEqual(NewHuaXiaPiece.for_group(group).duration_min, minutes, seconds)
+
+
+class TestProjectBlocks(unittest.TestCase):
+    """擋下整個發譜的專案層級檢查：未存檔、不是國樂團"""
+
+    def test_a_saved_chinese_orchestra_project_passes(self):
+        self.assertEqual(project_blocks(renamed_project()), [])
+
+    def test_unsaved_changes_block(self):
+        project = renamed_project()
+        project.update_group(project.groups[0], composer="劉文金")
+        self.assertEqual(project_blocks(project), [ProjectBlock.UNSAVED])
+
+    def test_a_western_orchestra_project_is_blocked(self):
+        project = renamed_project()
+        project.set_orchestra_type(OrchestraType.WESTERN)
+        project.mark_saved()
+        self.assertEqual(project_blocks(project), [ProjectBlock.NOT_CHINESE_ORCHESTRA])
+
+
+class TestGroupChecks(unittest.TestCase):
+    """擋下個別群組的檢查：還沒重新命名、人數沒填最少、樂器表重名；未同步的值只標出"""
+
+    def setUp(self):
+        self.project = renamed_project()
+        self.group = self.project.groups[0]
+
+    def check(self):
+        """唯一一個群組的檢查結果"""
+        checks = check_groups(self.project)
+        self.assertEqual([c.group for c in checks], [self.group])
+        return checks[0]
+
+    def test_a_renamed_group_with_headcounts_is_not_blocked(self):
+        check = self.check()
+        self.assertFalse(check.blocked)
+        self.assertFalse(check.not_renamed)
+        self.assertEqual(check.unfilled, [])
+        self.assertEqual(check.duplicate_rows, [])
+
+    def test_files_not_yet_at_the_output_location_are_not_renamed(self):
+        part = self.group.files[1]
+        self.project.remove_paths([part.original_path])
+        self.project.add_files([FileInfo(os.path.join(IN_DIR, "pipa.pdf"), "pipa.pdf")], self.group)
+        check = self.check()
+        self.assertTrue(check.not_renamed)
+        self.assertTrue(check.blocked)
+
+    def test_a_template_change_after_renaming_means_not_renamed(self):
+        self.project.set_master_template("{樂器}.pdf")
+        self.assertTrue(self.check().not_renamed)
+
+    def test_a_group_without_files_is_not_renamed(self):
+        group = self.project.add_group("空的", "總譜")
+        checks = check_groups(self.project)
+        self.assertTrue(next(c for c in checks if c.group is group).not_renamed)
+
+    def test_voices_without_a_minimum_are_listed(self):
+        self.project.set_headcount(self.group, 1, Headcount())
+        check = self.check()
+        self.assertEqual(check.unfilled, ["琵琶"])
+        self.assertTrue(check.blocked)
+
+    def test_absent_voices_need_no_headcount(self):
+        self.project.add_instrument(self.group, "古箏")
+        self.project.set_present(self.group, 2, False)
+        self.assertEqual(self.check().unfilled, [])
+
+    def test_duplicate_rows_are_listed(self):
+        self.group.instruments.append("二胡1")
+        self.group.present.append(True)
+        self.group.headcounts.append(Headcount(1))
+        check = self.check()
+        self.assertEqual(check.duplicate_rows, [0, 2])
+        self.assertTrue(check.blocked)
+
+    def test_unsynced_values_are_marked_but_do_not_block(self):
+        self.group.catalog_link = CatalogLink(
+            "e1", snapshot=CatalogSnapshot(
+                [("二胡 I", Headcount(6, 8)), ("琵琶", Headcount(3))], sections={"二胡 I": "拉弦", "琵琶": "彈撥"},
+            ),
+            unsynced=True,
+        )
+        check = self.check()
+        self.assertEqual([(c.kind, c.voice) for c in check.unsynced], [(CatalogChangeKind.HEADCOUNT, "琵琶")])
+        self.assertFalse(check.blocked)
 
 
 if __name__ == "__main__":
