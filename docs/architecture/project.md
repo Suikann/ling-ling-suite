@@ -96,6 +96,7 @@
 - **寫完交回專案**：`Project.mark_catalog_synced(outcome)` 套用選「用譜庫的」的值，把快照改成群組現在的編制、時長與聲部組，加上無法寫回、還留在譜庫的聲部，所以之後 `catalog_changes` 只剩無法寫回的改動。快照另記那處已有 Drive 檔案的聲部（`CatalogSnapshot.filed`）
 - **已有 Drive 檔案的聲部**：在連到譜庫的群組，`remove_instruments` 與改名成別的聲部（`rename_instrument`）遇到快照記著已有 Drive 檔案的聲部時丟出 `FiledVoicesError`、樂器表不變，因為這等於從樂譜刪除；這場缺這份分譜時取消勾選「本專案有」
 - **聲部組的影響範圍**：讀到那處（連線、寫回）時一併記下群組各樂器被譜庫其他曲目用到幾首（`CatalogLink.other_pieces`，`other_pieces_using(voice)` 查詢，總譜列與同一首曲目的其他版本不算）
+- **譜庫視窗編輯聲部組對照**：`CatalogService.section_map` 讀出國樂團、管弦樂團兩套（`SectionMapEntry`：社團對照的樂器保留第一次寫入的寫法，接著是分譜工作表用到、對照還沒有的樂器，聲部組空白；各標出譜庫裡用到幾首，總譜列不算）。按儲存時 `core/catalog_sync.py` 的 `section_map_items` 只列改過的樂器（移回未歸類＝聲部組改成空白，讀取時當成沒有），`CatalogService.sync_section_map` 走上面同一套比對與寫入：每個樂團類型一處（`PlaceWrite.group_id` 是樂團類型的值、沒有版本），只比對社團對照，別人同時改過同一個樂器就是衝突；編制寫入紀錄的來源記譜庫視窗，版本、樂章與群組空白
 
 ### 未同步
 

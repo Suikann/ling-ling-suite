@@ -21,8 +21,9 @@
 """
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple
 
+from core.catalog_models import SectionMapEntry
 from core.models import CatalogChangeKind, Headcount, Project, format_duration
 from core.sections import stored_section
 from core.voice_names import VoiceKey, instrument_key, voice_key
@@ -179,6 +180,22 @@ def place_writes(project: Project) -> List[PlaceWrite]:
                 group.id, group.name, link.edition_id, link.movement_id, list(group.instruments), items,
             ))
     return writes
+
+
+def section_map_items(entries: Sequence[SectionMapEntry], chosen: Mapping[str, str]) -> List[SyncItem]:
+    """譜庫視窗編輯聲部組對照時改過的樂器，一種樂器一格（依 entries 的順序）
+
+    Args:
+        entries: 讀到的這一套對照（CatalogService.section_map）
+        chosen: 編輯後的聲部組：樂器（entries 的寫法）→ 聲部組，還沒歸類為空字串；沒列出的樂器不變
+
+    Returns:
+        聲部組的格子：原值為讀到的聲部組，新值為編輯後的
+    """
+    return [
+        SyncItem(SyncField.SECTION, entry.instrument, entry.section, chosen[entry.instrument])
+        for entry in entries if chosen.get(entry.instrument, entry.section) != entry.section
+    ]
 
 
 def _split_changes(changes: Iterable) -> List[SyncItem]:

@@ -41,7 +41,7 @@ from core.catalog_models import (
     Part, Performance, Piece, PieceDetail, SectionMapEntry, sort_order_key,
 )
 from core.catalog_sync import (
-    CurrentPlace, Decision, ItemReview, PlaceReview, PlaceWrite, SyncField, SyncOutcome, Verdict, WriteSource,
+    CurrentPlace, Decision, ItemReview, PlaceReview, PlaceWrite, SyncField, SyncItem, SyncOutcome, Verdict, WriteSource,
     final_voices, review_items, value_text,
 )
 from core.log_entry import now
@@ -283,6 +283,13 @@ class _PlaceTables:
             duration_seconds=_count(duration[1]["seconds"]) if duration else None,
             sections=_club_sections([record for _, record in self._sections], self._orchestra_type),
             filed=[part.instrument_name for _, part in parts if part.drive_file_id.strip()],
+        )
+
+    def club(self) -> CurrentPlace:
+        """只有社團對照的「一處」：譜庫視窗編輯聲部組對照時，寫入前比對用"""
+        return CurrentPlace(
+            voices=[], duration_seconds=None,
+            sections=_club_sections([record for _, record in self._sections], self._orchestra_type), filed=[],
         )
 
     def other_pieces(self, edition_id: str) -> Dict[str, int]:
@@ -795,6 +802,46 @@ class CatalogService:
             CatalogError: 讀不到或寫不進去（沒有任何一格被寫入，以同樣的參數再呼叫一次即可）；
                 連到的版本或樂章已不在譜庫時為已經不在譜庫
         """
+        return self._sync([(write, orchestra_type) for write in writes], operator, source, decisions)
+
+    def sync_section_map(
+        self, items: Mapping[OrchestraType, Sequence[SyncItem]], operator: str,
+        decisions: Mapping[str, Mapping[Tuple[SyncField, object], Decision]],
+    ) -> SyncOutcome:
+        """把譜庫視窗改過的聲部組對照寫回譜庫：與存檔寫回同一套比對與寫入（見 sync_instrumentation）
+
+        每個樂團類型是一處（PlaceWrite 的 group_id 為樂團類型的值、沒有版本），只比對社團對照；
+        樂器已在對照裡就只改聲部組（寫法不變），沒有就新增一列。編制寫入紀錄的來源記譜庫視窗。
+
+        Args:
+            items: 樂團類型 → 改過的樂器（core/catalog_sync.py 的 section_map_items）
+            operator: 操作者（登入的 email），寫進編制寫入紀錄
+            decisions: 衝突的選擇：樂團類型的值 → （SyncItem.key → Decision）
+
+        Returns:
+            比對結果，與是否已寫入
+
+        Raises:
+            CatalogError: 讀不到或寫不進去（沒有任何一格被寫入，以同樣的參數再呼叫一次即可）
+        """
+        writes = [
+            (PlaceWrite(orchestra.value, "", "", "", [], list(changed)), orchestra)
+            for orchestra, changed in items.items() if changed
+        ]
+        return self._sync(writes, operator, WriteSource.CATALOG_WINDOW, decisions)
+
+    def _sync(
+        self, writes: Sequence[Tuple[PlaceWrite, OrchestraType]], operator: str, source: WriteSource,
+        decisions: Mapping[str, Mapping[Tuple[SyncField, object], Decision]],
+    ) -> SyncOutcome:
+        """寫入前一刻重讀、逐格比對，沒有待選邊的衝突才以一個請求寫入（sync_instrumentation、sync_section_map 共用）
+
+        Args:
+            writes: 各處要寫的改動與它的樂團類型；沒有版本 ID 的只比對、寫入社團對照
+            operator: 操作者，寫進編制寫入紀錄
+            source: 來源，寫進編制寫入紀錄
+            decisions: 衝突的選擇：PlaceWrite.group_id → （SyncItem.key → Decision）
+        """
         titles = set(self._call(self._sheets.sheet_titles))
         sheets = _place_sheets(titles)
         ranges = [_whole_sheet(sheet) for sheet in sheets]
@@ -807,10 +854,11 @@ class CatalogService:
         if has_log:
             header, ids = values[-2:]
             tables[SHEET_INSTRUMENTATION_LOG] = header[:1] + ids[1:]
-        catalog = _PlaceTables(tables, orchestra_type)
+        catalogs = {orchestra: _PlaceTables(tables, orchestra) for orchestra in {o for _, o in writes}}
         places = []
-        for write in writes:
-            current = catalog.current(write.edition_id, write.movement_id)
+        for write, orchestra in writes:
+            catalog = catalogs[orchestra]
+            current = catalog.current(write.edition_id, write.movement_id) if write.edition_id else catalog.club()
             reviews = review_items(write, current, dict(decisions.get(write.group_id, {})))
             places.append(PlaceReview(write, reviews, list(current.filed), catalog.other_pieces(write.edition_id)))
         outcome = SyncOutcome(places, written=False)
@@ -818,9 +866,9 @@ class CatalogService:
             return outcome
         batch = _Batch({sheet: rows for sheet, rows in tables.items()}, self._draw_ids)
         stamp = now().strftime("%Y-%m-%d %H:%M:%S")
-        written_sections: Set[str] = set()
-        for place in places:
-            for review in catalog.write_place(batch, place, written_sections):
+        written_sections: Dict[OrchestraType, Set[str]] = {orchestra: set() for orchestra in catalogs}
+        for place, (_, orchestra) in zip(places, writes):
+            for review in catalogs[orchestra].write_place(batch, place, written_sections[orchestra]):
                 batch.add(SHEET_INSTRUMENTATION_LOG, _log_record(stamp, operator, source, place.write, review))
         if batch.cells:
             for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
