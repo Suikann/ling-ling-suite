@@ -33,6 +33,12 @@
   - 移除聲部（`remove_instruments`）：被移除的聲部的分譜移到未分組尾端，其他的不動，回傳移走的分譜
   - 整份換掉樂器表（`set_instruments`）與分割的結果（`apply_split`）照位置配對，每個聲部都有。復原分割時連同「本專案有」退回（`SplitPlacement.present`）
 
+### 人數與時長
+
+- 人數是群組層級：樂器表逐列帶人數範圍（`Group.headcounts`，`Headcount(minimum, maximum, open_ended)`，與 `instruments` 逐列對應，存進專案檔），所以整首與各樂章分開記。改它只經 `set_headcount(group, index, headcount)`
+- 寫入前經 `Headcount.normalized` 整理：最少留空（None，0 也算）＝未填；最多留空＝等於最少，最多不大於最少時也留空；「以上」沒有最多。`text()` 是 HuaXia 的記法（`6`、`6-8`、`2↑`，未填為空字串），`filled` 判斷有沒有填最少。人數可以先不填，分割與重新命名不檢查；只有發譜要求填最少
+- 人數跟著聲部：移動、取消勾選、移除其他列、改名都留在原本那個聲部（`_VoiceRow` 連同人數一起重排）；新增的聲部未填。整份換掉樂器表（`set_instruments`、分割的結果）時，與原樂器表同一聲部的列沿用原本的人數，其餘未填；復原分割時連同人數退回（`SplitPlacement.headcounts`）
+
 ### 樂團類型與聲部組
 
 - 樂團類型（`Project.orchestra_type`，`OrchestraType`）是專案層級：國樂團（吹管、拉弦、彈撥、打擊、低音）或管弦樂團（木管、銅管、打擊、鍵盤、弦樂），兩套都另有「其他」（`ORCHESTRA_SECTIONS`）。新專案是國樂團；主視窗底部的「樂團類型」選單以 `set_orchestra_type` 改它

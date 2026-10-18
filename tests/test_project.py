@@ -19,7 +19,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from core.constants import PROJECT_FILE_VERSION
-from core.models import DuplicateVoiceError, FileInfo, Group, Project, SplitResult, UndoMapping
+from core.models import (
+    DuplicateVoiceError, FileInfo, Group, Headcount, Project, SplitPlacement, SplitResult, UndoMapping,
+)
 from services.project_service import ProjectService
 from path_spellings import spellings
 
@@ -100,7 +102,8 @@ def _rich_group(name: str, parts: list) -> Group:
     """每個會存進專案檔的欄位都有非空值的群組"""
     return Group(
         name=name, files=[_info(_path(name, f"{p}.pdf")) for p in parts],
-        instruments=list(parts), selected_instruments=list(range(len(parts))),
+        instruments=list(parts), headcounts=[Headcount(2, 3)] * len(parts), duration_seconds=465,
+        selected_instruments=list(range(len(parts))),
         piece_name="命運", movement_number="1", movement_name="Allegro", composer="Beethoven",
         genre="交響曲", score_file=_info(_path(name, "Score.pdf")), score_label="總譜",
         use_small_template=True, small_template="{樂器}.pdf",
@@ -141,6 +144,8 @@ def _changed(value):
     """與原值不同的新值（不改動原值本身）"""
     if isinstance(value, bool):
         return not value
+    if isinstance(value, int):
+        return value + 1
     if isinstance(value, str):
         return value + "x"
     if isinstance(value, list):
@@ -617,6 +622,103 @@ class TestVoicesCarryTheirParts(unittest.TestCase):
         self.project.set_present(self.group, 1, False)
         self.project.set_instruments(self.group, ["Violin", "Viola", "Cello"])
         self.assertEqual(self.pairs(), [("Violin", "fl.pdf"), ("Viola", "hn.pdf"), ("Cello", None)])
+
+
+class TestHeadcountRanges(unittest.TestCase):
+    """每個群組各自記每個聲部的人數範圍：最少留空＝未填，最多留空＝等於最少，「以上」記成 n↑"""
+
+    def setUp(self):
+        self.group = Group(name="g", instruments=["二胡 I", "二胡 II", "大提琴"])
+        self.other = Group(name="h", instruments=["二胡 I"])
+        self.project = Project(groups=[self.group, self.other])
+        self.heard = []
+        self.project.subscribe(lambda: self.heard.append(self.project.is_modified()))
+
+    def test_headcounts_start_unfilled(self):
+        self.assertEqual(self.group.headcounts, [Headcount()] * 3)
+        self.assertFalse(Headcount().filled)
+        self.assertEqual(Headcount().text(), "")
+
+    def test_a_range_a_single_count_and_an_open_ended_count_are_kept(self):
+        self.project.set_headcount(self.group, 0, Headcount(6, 8))
+        self.project.set_headcount(self.group, 1, Headcount(4))
+        self.project.set_headcount(self.group, 2, Headcount(2, open_ended=True))
+        self.assertEqual([h.text() for h in self.group.headcounts], ["6-8", "4", "2↑"])
+        self.assertTrue(all(h.filled for h in self.group.headcounts))
+        self.assertEqual(self.heard, [True, True, True])
+
+    def test_each_group_keeps_its_own_headcounts(self):
+        self.project.set_headcount(self.group, 0, Headcount(6, 8))
+        self.assertEqual(self.other.headcounts, [Headcount()])
+
+    def test_a_blank_maximum_equals_the_minimum(self):
+        self.project.set_headcount(self.group, 0, Headcount(6, 6))
+        self.project.set_headcount(self.group, 1, Headcount(6, 5))
+        self.assertEqual(self.group.headcounts[:2], [Headcount(6), Headcount(6)])
+
+    def test_open_ended_has_no_maximum(self):
+        self.project.set_headcount(self.group, 0, Headcount(2, 4, open_ended=True))
+        self.assertEqual(self.group.headcounts[0], Headcount(2, open_ended=True))
+
+    def test_zero_is_blank(self):
+        self.project.set_headcount(self.group, 0, Headcount(0, 0))
+        self.assertEqual(self.group.headcounts[0], Headcount())
+        self.assertFalse(self.group.headcounts[0].filled)
+
+    def test_a_maximum_without_a_minimum_is_kept_but_unfilled(self):
+        self.project.set_headcount(self.group, 0, Headcount(None, 8))
+        self.assertEqual(self.group.headcounts[0], Headcount(None, 8))
+        self.assertFalse(self.group.headcounts[0].filled)
+
+
+class TestHeadcountsFollowTheirVoices(unittest.TestCase):
+    """人數跟著聲部：移動、取消勾選、改名都不換人；整份換掉樂器表時同一聲部沿用原本的人數"""
+
+    def setUp(self):
+        self.group = Group(
+            name="g", instruments=["Flute", "Oboe", "Horn"], files=_infos("fl.pdf", "ob.pdf", "hn.pdf"),
+            headcounts=[Headcount(1), Headcount(2), Headcount(4, 6)],
+        )
+        self.project = Project(groups=[self.group])
+
+    def counts(self):
+        """（聲部、人數記法），依樂器表順序"""
+        return list(zip(self.group.instruments, [h.text() for h in self.group.headcounts]))
+
+    def test_moving_a_voice_takes_its_headcount_along(self):
+        self.project.move_instruments(self.group, [2], 0)
+        self.assertEqual(self.counts(), [("Horn", "4-6"), ("Flute", "1"), ("Oboe", "2")])
+
+    def test_unchecking_and_removing_keep_the_other_headcounts(self):
+        self.project.set_present(self.group, 0, False)
+        self.project.remove_instruments(self.group, [1])
+        self.assertEqual(self.counts(), [("Flute", "1"), ("Horn", "4-6")])
+
+    def test_renaming_keeps_the_headcount_and_a_new_voice_is_unfilled(self):
+        self.project.rename_instrument(self.group, 1, "English Horn")
+        self.project.add_instrument(self.group, "Tuba")
+        self.assertEqual(self.counts(), [("Flute", "1"), ("English Horn", "2"), ("Horn", "4-6"), ("Tuba", "")])
+
+    def test_duplicate_rows_of_an_old_project_keep_their_own_headcounts(self):
+        self.project.set_instruments(self.group, ["二胡 I", "二胡1", "Horn"])
+        self.project.set_headcount(self.group, 0, Headcount(3))
+        self.project.set_headcount(self.group, 1, Headcount(5))
+        self.project.move_instruments(self.group, [0], 3)
+        self.project.set_present(self.group, 0, True)
+        self.assertEqual(self.counts(), [("二胡1", "5"), ("Horn", "4-6"), ("二胡 I", "3")])
+
+    def test_replacing_the_whole_list_keeps_the_headcounts_of_the_same_voices(self):
+        self.project.set_instruments(self.group, ["horn", "Violin", "Flute"])
+        self.assertEqual(self.counts(), [("horn", "4-6"), ("Violin", ""), ("Flute", "1")])
+
+    def test_undoing_a_split_brings_the_headcounts_back(self):
+        result = SplitResult(
+            source_path=self.group.files[0].original_path, parts=_infos("vn.pdf"), voices=["Violin"], replaced=[],
+        )
+        placement = self.project.apply_split(result, score_label="總譜")
+        self.assertEqual(self.counts(), [("Violin", "")])
+        self.project.revert_split(result.record(SplitPlacement.from_data(placement.to_data())))
+        self.assertEqual(self.counts(), [("Flute", "1"), ("Oboe", "2"), ("Horn", "4-6")])
 
 
 class TestApplySplit(unittest.TestCase):
