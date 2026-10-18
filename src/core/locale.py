@@ -819,7 +819,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "deposit.done": "已存入譜庫 {count} 份。",
         "deposit.cancelled": "已取消存入：完成 {count} 份，再按一次「存入譜庫」就補齊。",
         "deposit.stopped": "存入到一半停下：已完成 {count} 份，再按一次「存入譜庫」就補齊",
-        "deposit.save_failed": "已存入譜庫，但記下指紋時存檔失敗：\n{error}",
     },
     LOCALE_EN: {
         # 應用程式
@@ -1608,7 +1607,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "deposit.done": "Archived {count} files to the catalog.",
         "deposit.cancelled": "Archiving cancelled after {count} files. Archive again to finish the rest.",
         "deposit.stopped": "Archiving stopped after {count} files; archive again to finish the rest",
-        "deposit.save_failed": "Archived, but saving the fingerprints failed:\n{error}",
     },
 }
 

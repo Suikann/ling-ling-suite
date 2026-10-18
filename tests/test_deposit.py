@@ -33,16 +33,12 @@ def md5(content: bytes) -> str:
     return hashlib.md5(content).hexdigest()
 
 
-class DepositTestCase(unittest.TestCase):
+class DepositFixture:
     """假 Google 有「春江花月夜」版本 e1（Drive 資料夾）第一樂章 m1 的二胡 I、琵琶；
-    專案的群組連到那裡，已依「{樂器}」重新命名到輸出位置下的「春江花月夜」子資料夾，分譜放在「分譜」資料夾"""
+    專案的群組連到那裡，已依「{樂器}」重新命名到輸出位置下的「春江花月夜」子資料夾，分譜放在「分譜」資料夾。
+    用的測試要先設好臨時目錄 self.temp"""
 
     VOICES = ("二胡 I", "琵琶")
-
-    def setUp(self):
-        self.temp = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.temp)
-        self.build(self.VOICES)
 
     def build(self, voices) -> None:
         """建出假 Google 與專案：第一樂章有 voices 這些聲部，各有一份已重新命名的分譜（內容是聲部名稱）"""
@@ -83,11 +79,6 @@ class DepositTestCase(unittest.TestCase):
             f.write(content)
         return FileInfo(path, os.path.basename(path))
 
-    def deposit(self, operator: str = "office@example.com", should_cancel=lambda: False):
-        """預覽後存入，回傳（預覽，結果）"""
-        plan = self.service.preview(self.project, self.catalog)
-        return plan, self.service.deposit(plan, self.catalog, operator, should_cancel, lambda progress: None)
-
     def drive_path(self, file_id: str) -> str:
         """Drive 上的檔在版本資料夾下的路徑（資料夾以 / 分隔）"""
         names = []
@@ -105,6 +96,20 @@ class DepositTestCase(unittest.TestCase):
                 key = "總譜" if record["is_score"] else record["instrument_name"]
                 result[key] = (self.drive_path(record["drive_file_id"]), record["file_name"])
         return result
+
+
+class DepositTestCase(DepositFixture, unittest.TestCase):
+    """存入服務對假 Google 與臨時目錄（情境見 DepositFixture）"""
+
+    def setUp(self):
+        self.temp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp)
+        self.build(self.VOICES)
+
+    def deposit(self, operator: str = "office@example.com", should_cancel=lambda: False):
+        """預覽後存入，回傳（預覽，結果）"""
+        plan = self.service.preview(self.project, self.catalog)
+        return plan, self.service.deposit(plan, self.catalog, operator, should_cancel, lambda progress: None)
 
 
 class TestNewUpload(DepositTestCase):

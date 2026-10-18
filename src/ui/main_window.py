@@ -30,6 +30,7 @@ from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
 from services.compression_output_service import CompressionBatch, CompressionOutputService
 from services.compression_service import CompressionResult, CompressionService
+from services.deposit_service import DepositOutcome, DepositProgress, DepositService
 from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
@@ -72,6 +73,13 @@ class _BackgroundTexts(NamedTuple):
 
 
 _COMPRESS_TEXTS = _BackgroundTexts("compress.cancel", "compress.cancelling", "compress.error", "compress.close.message")
+_DEPOSIT_TEXTS = _BackgroundTexts("deposit.cancel", "deposit.cancelling", "deposit.error", "deposit.close.message")
+
+
+def _describe_deposit(progress: DepositProgress) -> tuple:
+    """存入的進度轉成（狀態列文字，已完成數，總數）"""
+    text = t("deposit.progress", done=progress.done, total=progress.total, name=progress.file_name)
+    return text, progress.done, progress.total
 
 
 class _PendingMoveTexts(NamedTuple):
@@ -151,6 +159,9 @@ class MainWindow(QMainWindow):
         self._compressor = compressor or CompressionService(self.file_service)
         self._compression_output = CompressionOutputService(self.file_service, self._compressor)
         self._log = log or ActivityLog(self.file_service)
+        self._deposit_service = DepositService(self.file_service, self._log)
+        # 上次存入中斷（取消或中途失敗）前完成了幾份；0 表示上次沒有中斷，存入預覽據此提示
+        self._deposit_interrupted = 0
         # 聲部名稱自動完成的候選全程式一份：譜庫視窗讀到的聲部名稱，編制表與分割視窗都用
         self._voice_candidates = VoiceCandidates()
         # 「關於」顯示的版號：打包版讀資源目錄的版號檔，開發版為 None
@@ -160,6 +171,8 @@ class MainWindow(QMainWindow):
         self._task: Optional[BackgroundTask] = None
         self._task_texts = _COMPRESS_TEXTS
         self._task_status = ""
+        # 進行中的背景工作是否連專案編輯也鎖住（存入譜庫：結束時要把指紋寫回專案並存檔）
+        self._task_locks_project = False
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
         # 紀錄寫不進去而留下進行中紀錄的那批搬移，其路徑變動已套用到的專案（之後保留結果時不再套用一次）
@@ -198,11 +211,12 @@ class MainWindow(QMainWindow):
         catalog_menu = mb.addMenu(t("menu.catalog"))
         self._add_action(catalog_menu, t("menu.catalog.open"), self._open_catalog)
         self._add_action(catalog_menu, t("menu.catalog.settings"), self._open_catalog_settings)
+        deposit = self._add_action(catalog_menu, t("menu.catalog.deposit"), self._deposit_to_catalog)
         tools_menu = mb.addMenu(t("menu.tools"))
         split = self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf)
         # 唯讀的專案停用的動作：會改專案，或搬動、產生專案引用的檔案（之後存不了檔，專案檔就對不上）
-        self._edit_actions = [undo, redo, import_files, import_folder, split]
-        self._file_actions.extend([undo, redo, split])
+        self._edit_actions = [undo, redo, import_files, import_folder, split, deposit]
+        self._file_actions.extend([undo, redo, split, deposit])
         tools_menu.addSeparator()
         self._file_actions.append(self._add_action(tools_menu, t("menu.tools.rotate_pdf"), self._open_rotate_pdf))
         self._file_actions.append(self._add_action(tools_menu, t("menu.tools.compress_pdf"), self._compress_files))
@@ -1019,7 +1033,7 @@ class MainWindow(QMainWindow):
 
     def _run_in_background(
         self, work: Work, describe: Callable[[Any], tuple], finished: Callable[[Any, bool], None],
-        texts: _BackgroundTexts,
+        texts: _BackgroundTexts, locks_project: bool = False,
     ):
         """在背景執行一件可取消的工作；期間停用會動到檔案的操作，狀態列顯示進度與取消鈕
 
@@ -1030,11 +1044,13 @@ class MainWindow(QMainWindow):
             describe: 把工作回報的進度轉成（狀態列文字，已完成數，總數）
             finished: 工作交回結果時在主執行緒呼叫，參數為結果與使用者是否要求過取消
             texts: 這種工作的取消鈕、取消中、錯誤訊息與關閉時詢問的字串鍵
+            locks_project: 期間是否連專案編輯與存檔也停用（工作讀寫的是專案裡的檔，結束時還要改專案並存檔）
         """
         task = BackgroundTask(work, self)
         self._task = task
         self._task_texts = texts
         self._task_status = ""
+        self._task_locks_project = locks_project
 
         def progressed(progress):
             """把進度寫到進度條；沒要求取消時也寫到狀態列"""
@@ -1048,6 +1064,7 @@ class MainWindow(QMainWindow):
         def settle():
             """工作交回了：恢復會動到檔案的操作，在主執行緒延後刪掉工作物件"""
             self._task = None
+            self._task_locks_project = False
             task.deleteLater()
             self._show_background_state()
 
@@ -1091,10 +1108,10 @@ class MainWindow(QMainWindow):
 
         唯讀的專案（較新版本建立的專案檔）存不了檔，所以停用存檔、另存，以及所有會改專案或搬動、
         產生它引用的檔案的操作：關閉時才不會有存不了的修改。分頁仍可切換，只停用內容。
-        背景工作進行中停用會動到檔案的操作。
+        背景工作進行中停用會動到檔案的操作；鎖住專案的背景工作（存入譜庫）進行中，比照唯讀停用專案編輯與存檔。
         """
-        editable = not self.project.read_only
         busy = self._task is not None
+        editable = not self.project.read_only and not (busy and self._task_locks_project)
         for action in self._save_actions:
             action.setEnabled(editable)
         for action in set(self._file_actions + self._edit_actions):
@@ -1211,6 +1228,73 @@ class MainWindow(QMainWindow):
         dialog.linked.connect(self._instrumentation_table.show_linked)
         dialog.finished.connect(dialog.deleteLater)
         dialog.open()
+
+    def _deposit_to_catalog(self):
+        """「存入譜庫…」：在等待視窗裡讀出存入計畫，開預覽，按「存入譜庫」後在背景存入
+
+        讀不到譜庫時頂端顯示提示列，按「重試」再開一次。專案沒存過檔或有未存檔的改動時，預覽寫明原因、不能存入。
+        """
+        if self._task is not None or not self._catalog_ready():
+            return
+        project = self.project
+        service = self._deposit_service
+        stopped = []
+
+        def read() -> tuple:
+            """在背景接譜庫並算出計畫"""
+            catalog = self._catalog_factory()
+            return catalog, service.preview(project, catalog)
+        try:
+            catalog, plan = run_while_waiting(
+                self, t("deposit.title"), t("deposit.reading"), read, lambda: stopped.append(True),
+            )
+        except Exception as e:
+            failure = CatalogFailure.from_error(as_catalog_error(e), t("deposit.title"))
+            self._catalog_error_bar.show_failure(t("catalog.error.cannot_read"), failure, self._deposit_to_catalog)
+            return
+        if stopped:
+            return
+        self._catalog_error_bar.clear()
+        from ui.deposit_dialog import DepositDialog
+        unsaved = project.is_modified() or not self._project_path
+        dialog = DepositDialog(plan, unsaved, self._deposit_interrupted, self)
+        dialog.link_requested.connect(self._link_group_by_id)
+        accepted = dialog.exec() == DepositDialog.Accepted
+        dialog.deleteLater()
+        if not accepted:
+            return
+        operator = self._auth_service.account_email or ""
+
+        def work(should_cancel, report) -> DepositOutcome:
+            """在背景照計畫存入"""
+            return service.deposit(plan, catalog, operator, should_cancel, report)
+
+        self._run_in_background(work, _describe_deposit, self._deposit_finished, _DEPOSIT_TEXTS, locks_project=True)
+
+    def _deposit_finished(self, outcome: DepositOutcome, _cancelled: bool):
+        """存入結束（做完、取消或中途失敗）：存進去的指紋交回專案並只存專案檔，中途失敗時頂端提示列寫出已完成幾份"""
+        if outcome.records:
+            self.project.record_deposit(outcome.records)
+            self._instrumentation_table.refresh()
+            if self._project_path and not self.project.read_only:
+                self._write_project_file(self._project_path)
+        interrupted = outcome.error is not None or outcome.cancelled
+        self._deposit_interrupted = outcome.completed if interrupted else 0
+        if outcome.error is not None:
+            failure = CatalogFailure.from_error(outcome.error, t("deposit.title"))
+            self._catalog_error_bar.show_failure(
+                t("deposit.stopped", count=outcome.completed), failure, self._deposit_to_catalog,
+            )
+            self._set_status(t("status.ready"))
+        elif outcome.cancelled:
+            self._set_status(t("deposit.cancelled", count=outcome.completed))
+        else:
+            self._set_status(t("deposit.done", count=outcome.completed))
+
+    def _link_group_by_id(self, group_id: str):
+        """存入預覽的「連到譜庫…」：切到那個群組，開連線對話框"""
+        self._show_group(group_id)
+        self._link_group_to_catalog()
 
     def _sign_in_google(self) -> bool:
         """提示列的「重新登入 Google」：開瀏覽器登入，回傳是否登入成功"""

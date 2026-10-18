@@ -33,7 +33,7 @@
 | 使用 PyMuPDF（算繪、壓縮、檢查） | `services/pdf_service.py` 裡掛 `_exclusive` 的函式：全部經同一把鎖，一次只有一個在執行（PyMuPDF 不能多執行緒同時使用，壓縮檢查讀的 MuPDF 警告也是全程式一份）。新的 PyMuPDF 呼叫也要掛上 |
 | 壓縮的比較畫面：逐份對照原檔與壓縮後、決定留下或不要、開啟壓縮檔 | `ui/compression_compare.py` 的 `CompressionCompareDialog`：只接（顯示名稱，壓縮結果），由 `kept()` 交回要交出的結果；目前只有獨立壓縮由 `MainWindow._deliver_compressed` 開啟；設計成發譜預覽（spec #82）也能沿用 |
 | 壓縮的批次（多選檔、整個資料夾、另存單一檔）、輸出位置規則（預設位置、一批擋下輸入的資料夾、另存單一檔只擋原檔、會被覆蓋的檔）、整批壓縮與交出 | `services/compression_output_service.py` 的 `CompressionOutputService`；單一檔是只有一份的一批。主視窗整批壓完後由 `MainWindow._deliver_compressed` 先開比較畫面，再交出留下的 |
-| 在背景執行可取消的長工作：進度與取消鈕、期間鎖住重新命名、分割、旋轉、復原、重做，關閉時詢問要不要取消 | `MainWindow._run_in_background`（各種工作的字串鍵由 `_BackgroundTexts` 傳入），背景執行緒由 `ui/background_task.py` 的 `BackgroundTask` 管：工作交回後在主執行緒刪掉；關閉時等不到它停下就 `abandon`，背景執行緒之後不再碰它 |
+| 在背景執行可取消的長工作：進度與取消鈕、期間鎖住重新命名、分割、旋轉、復原、重做（存入譜庫另以 `locks_project` 連專案編輯與存檔也鎖住），關閉時詢問要不要取消 | `MainWindow._run_in_background`（各種工作的字串鍵由 `_BackgroundTexts` 傳入），背景執行緒由 `ui/background_task.py` 的 `BackgroundTask` 管：工作交回後在主執行緒刪掉；關閉時等不到它停下就 `abandon`，背景執行緒之後不再碰它 |
 | OAuth 登入時開瀏覽器、在 `127.0.0.1` 的隨機埠等回呼（Google 與 Discord 共用） | `services/local_callback.py` 的 `LocalCallback`：回傳回呼的 query 參數，逾時、取消都關掉本機伺服器；兌換權杖與檢查 `state` 由各登入服務做 |
 | 這次執行是否為打包版、打包版的資源目錄（`sys.frozen`、`sys._MEIPASS`） | `core/launch_env.py` 的 `current_build`，呼叫當下讀；repo 根目錄是 `core/constants.py` 的 `REPO_ROOT`。不在別處直接讀 `sys.frozen`、`sys._MEIPASS` 或以 `__file__` 推 repo 根目錄 |
 | 內附 Google 用戶端檔的位置 | `core/launch_env.py` 的 `bundled_client_secrets_path`：打包版讀資源目錄，從原始碼執行讀 repo 根目錄 |

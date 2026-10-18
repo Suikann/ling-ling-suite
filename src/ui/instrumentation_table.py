@@ -448,7 +448,7 @@ class InstrumentationTable(QWidget):
     def _show_link(self):
         """顯示群組連到譜庫的哪裡；沒連線時顯示「連到譜庫…」按鈕，不是群組時兩者都收起"""
         link = self._group.catalog_link if self._group else None
-        self._link_label.setText(_link_text(link) if link else "")
+        self._link_label.setText(link_text(link) if link else "")
         self._link_label.setVisible(link is not None)
         self._link_button.setVisible(self._group is not None and link is None)
 
@@ -836,7 +836,7 @@ def _read_only_item(text: str) -> QTableWidgetItem:
     return item
 
 
-def _link_text(link: CatalogLink) -> str:
+def link_text(link: CatalogLink) -> str:
     """連線的顯示：曲目 › 版本 › 樂章（整首時寫整首；版本沒有標示時寫未命名版本）"""
     return t(
         "catalog.link.path", piece=link.piece_title, edition=link.edition_label or t("catalog.link.unnamed_edition"),
