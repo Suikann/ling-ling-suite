@@ -18,6 +18,7 @@
     detail = catalog.piece_detail(piece_id)
     platform = catalog.publishing_platform()         # 社團設定啟用的發譜平台，沒有時為 None
     place = catalog.read_place(edition_id, movement_id, OrchestraType.CHINESE)  # 群組要連的一處
+    outcome = catalog.sync_instrumentation(place_writes(project), project.orchestra_type, email, WriteSource.SAVE, {})
     rows = catalog.new_rows(SHEET_PIECES, [{"title": "春江花月夜"}])
     ids = catalog.add_rows(rows)                     # 失敗時以同一個 rows 重送，不會重複新增
 """
@@ -27,9 +28,10 @@ from dataclasses import fields
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Type, TypeVar
 
 from core.catalog_constants import (
-    CATALOG_TRUE_VALUES, CLUB_SETTING_PUBLISHING_PLATFORM, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME, DRIVE_SPREADSHEET_MIME,
-    PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, SHEET_COMPOSERS, SHEET_DURATIONS, SHEET_EDITIONS, SHEET_HEADERS,
-    SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, SHEET_SECTIONS, PublishingPlatform,
+    CATALOG_TRUE, CATALOG_TRUE_VALUES, CLUB_SETTING_PUBLISHING_PLATFORM, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME,
+    DRIVE_SPREADSHEET_MIME, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, SHEET_COMPOSERS, SHEET_DURATIONS,
+    SHEET_EDITIONS, SHEET_HEADERS, SHEET_INSTRUMENTATION_LOG, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES,
+    SHEET_PIECES, SHEET_SECTIONS, PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, OrchestraType
@@ -38,8 +40,13 @@ from core.catalog_models import (
     CatalogOverview, CatalogPlace, Composer, DriveFile, Edition, EditionFiles, FolderContents, LinkTargets, Movement,
     Part, Performance, Piece, PieceDetail, sort_order_key,
 )
+from core.catalog_sync import (
+    CurrentPlace, Decision, ItemReview, PlaceReview, PlaceWrite, SyncField, SyncOutcome, Verdict, WriteSource,
+    final_voices, review_items, value_text,
+)
+from core.log_entry import now
 from core.models import Headcount
-from core.voice_names import instrument_key, voice_key
+from core.voice_names import instrument_key, instrument_name, voice_key
 from services.catalog_ports import CellWrite, DrivePort, SheetsPort, sheet_range
 
 T = TypeVar("T")
@@ -109,20 +116,33 @@ def _count(value: str) -> Optional[int]:
     return int(value) if value.isdigit() and int(value) > 0 else None
 
 
-def _place_voices(parts: List[Part]) -> List[Tuple[str, Headcount]]:
-    """一處的聲部與人數：依排序欄排，略過總譜列；同一聲部有兩列時只認排在前面那一列"""
+def _voice_parts(parts: List[Tuple[int, Part]]) -> List[Tuple[int, Part]]:
+    """一處認得的聲部列（連同列號）：依排序欄排，略過總譜列與沒有名稱的列；同一聲部有兩列時只認排在前面那一列"""
     seen = set()
     voices = []
-    for part in sorted(parts, key=lambda p: sort_order_key(p.sort_order)):
+    for row, part in sorted(parts, key=lambda pair: sort_order_key(pair[1].sort_order)):
         key = voice_key(part.instrument_name)
         if _is_true(part.is_score) or not part.instrument_name.strip() or key in seen:
             continue
         seen.add(key)
-        headcount = Headcount(
-            _count(part.headcount_min), _count(part.headcount_max), _is_true(part.headcount_open_ended),
-        )
-        voices.append((part.instrument_name, headcount.normalized()))
+        voices.append((row, part))
     return voices
+
+
+def _headcount(part: Part) -> Headcount:
+    """分譜列記的人數（整理過）"""
+    return Headcount(
+        _count(part.headcount_min), _count(part.headcount_max), _is_true(part.headcount_open_ended),
+    ).normalized()
+
+
+def _headcount_cells(headcount: Headcount) -> Dict[str, str]:
+    """人數寫進分譜列的三欄：最少、最多（留空＝未填或等於最少）、是否「以上」"""
+    return {
+        "headcount_min": str(headcount.minimum) if headcount.minimum else "",
+        "headcount_max": str(headcount.maximum) if headcount.maximum else "",
+        "headcount_open_ended": CATALOG_TRUE if headcount.open_ended else "",
+    }
 
 
 def _used_voice_names(part_rows: List[List[str]]) -> List[str]:
@@ -144,6 +164,18 @@ def _club_sections(records: List[Dict[str, str]], orchestra_type: OrchestraType)
     return sections
 
 
+def _numbered(rows: List[List[str]], sheet: str, model_class: Type[T]) -> List[Tuple[int, T]]:
+    """把工作表讀到的列（含標題列）轉成資料模型，連同從 1 起算的列號；標題列與空列略過"""
+    headers = SHEET_HEADERS[sheet]
+    names = {f.name for f in fields(model_class)}
+    return [
+        (index + 1, model_class(**{
+            header: (row[i] if i < len(row) else "") for i, header in enumerate(headers) if header in names
+        }))
+        for index, row in enumerate(rows) if index > 0 and any(row)
+    ]
+
+
 def _records(rows: List[List[str]], sheet: str) -> List[Dict[str, str]]:
     """把工作表讀到的列（含標題列）轉成欄位名稱對值；標題列與空列略過"""
     headers = SHEET_HEADERS[sheet]
@@ -151,6 +183,224 @@ def _records(rows: List[List[str]], sheet: str) -> List[Dict[str, str]]:
         {header: (row[i] if i < len(row) else "") for i, header in enumerate(headers)}
         for row in rows[1:] if any(row)
     ]
+
+
+class _Batch:
+    """一次寫回要送出的全部格子：改既有列的格子、接在各工作表最後的新列與缺的標題，最後以一個請求送出"""
+
+    def __init__(self, tables: Dict[str, List[List[str]]], draw: Callable[[Set[str], int], List[str]]):
+        """
+        Args:
+            tables: 寫入前一刻讀到的各工作表（含標題列；沒有的工作表不在裡面）
+            draw: 抽新 ID 的函式，參數為不可用的 ID 與要抽幾個
+        """
+        self._tables = tables
+        self._draw = draw
+        self._next_row = {sheet: max(len(rows), 1) + 1 for sheet, rows in tables.items()}
+        self._taken = {sheet: {row[0] for row in rows[1:] if row} for sheet, rows in tables.items()}
+        self.cells: List[CellWrite] = []
+        self.touched: Set[str] = set()
+
+    def set(self, sheet: str, row: int, column: str, value: str) -> None:
+        """改既有一列的一格"""
+        self._touch(sheet)
+        self.cells.append((sheet_range(sheet, f"{_column_letter(SHEET_HEADERS[sheet].index(column))}{row}"), [[value]]))
+
+    def clear(self, sheet: str, row: int) -> None:
+        """清空既有的一列（刪掉這筆紀錄，不刪列，其他列的列號不變）"""
+        self._touch(sheet)
+        self.cells.append((sheet_range(sheet, f"A{row}"), [[""] * len(SHEET_HEADERS[sheet])]))
+
+    def add(self, sheet: str, record: Mapping[str, str]) -> int:
+        """在工作表最後新增一列（抽一個不撞號的 ID），回傳列號"""
+        self._touch(sheet)
+        taken = self._taken.setdefault(sheet, set())
+        record_id = self._draw(taken, 1)[0]
+        taken.add(record_id)
+        row = self._next_row.setdefault(sheet, 2)
+        self._next_row[sheet] = row + 1
+        values = [record_id if header == "id" else str(record.get(header, "")) for header in SHEET_HEADERS[sheet]]
+        self.cells.append((sheet_range(sheet, f"A{row}"), [values]))
+        return row
+
+    def _touch(self, sheet: str) -> None:
+        """第一次寫到這張工作表時補上缺的標題（工作表還沒建立，或分譜工作表還沒有新增的欄）"""
+        if sheet in self.touched:
+            return
+        self.touched.add(sheet)
+        headers = SHEET_HEADERS[sheet]
+        existing = self._tables.get(sheet, [])
+        present = existing[0] if existing else []
+        if len(present) < len(headers):
+            start = len(present)
+            self.cells.append((sheet_range(sheet, f"{_column_letter(start)}1"), [headers[start:]]))
+
+
+class _PlaceTables:
+    """讀一處或寫回時讀到的各工作表：找出一處現在的編制與列號，把一處要寫的格子放進 _Batch"""
+
+    def __init__(self, tables: Dict[str, List[List[str]]], orchestra_type: OrchestraType):
+        """
+        Args:
+            tables: 寫入前一刻讀到的各工作表（含標題列；還沒建立的工作表不在裡面）
+            orchestra_type: 專案的樂團類型
+        """
+        self._orchestra_type = orchestra_type
+        self.pieces = {p.id: p for p in _models(tables[SHEET_PIECES], SHEET_PIECES, Piece)}
+        self.editions = {e.id: e for e in _models(tables[SHEET_EDITIONS], SHEET_EDITIONS, Edition)}
+        self.movements = {m.id: m for m in _models(tables[SHEET_MOVEMENTS], SHEET_MOVEMENTS, Movement)}
+        self._parts = _numbered(tables[SHEET_PARTS], SHEET_PARTS, Part)
+        self._durations = [
+            (row, record) for row, record in _numbered_records(tables.get(SHEET_DURATIONS, []), SHEET_DURATIONS)
+        ]
+        self._sections = [
+            (row, record) for row, record in _numbered_records(tables.get(SHEET_SECTIONS, []), SHEET_SECTIONS)
+            if record["orchestra_type"].strip() == orchestra_type.value and record["instrument"].strip()
+        ]
+
+    def current(self, edition_id: str, movement_id: str) -> CurrentPlace:
+        """一處現在的編制、時長、社團對照與已有 Drive 檔案的聲部
+
+        Raises:
+            CatalogError: 版本或樂章已不在譜庫
+        """
+        if edition_id not in self.editions:
+            raise CatalogError(CatalogErrorKind.GONE, f"edition {edition_id} is no longer in the catalog")
+        if movement_id and movement_id not in self.movements:
+            raise CatalogError(CatalogErrorKind.GONE, f"movement {movement_id} is no longer in the catalog")
+        parts = self._voice_rows(edition_id, movement_id)
+        duration = self._duration_row(edition_id, movement_id)
+        return CurrentPlace(
+            voices=[(part.instrument_name, _headcount(part)) for _, part in parts],
+            duration_seconds=_count(duration[1]["seconds"]) if duration else None,
+            sections=_club_sections([record for _, record in self._sections], self._orchestra_type),
+            filed=[part.instrument_name for _, part in parts if part.drive_file_id.strip()],
+        )
+
+    def other_pieces(self, edition_id: str) -> Dict[str, int]:
+        """譜庫裡每種樂器（第一次出現的寫法）被這個版本的曲目以外的幾首曲目用到（總譜列不算）"""
+        piece_id = self.editions[edition_id].piece_id if edition_id in self.editions else ""
+        pieces: Dict[str, Set[str]] = {}
+        names: Dict[str, str] = {}
+        for _, part in self._parts:
+            edition = self.editions.get(part.edition_id)
+            if edition is None or _is_true(part.is_score) or not part.instrument_name.strip():
+                continue
+            key = instrument_key(part.instrument_name)
+            names.setdefault(key, instrument_name(part.instrument_name))
+            pieces.setdefault(key, set()).add(edition.piece_id)
+        return {names[key]: len(used - {piece_id}) for key, used in pieces.items()}
+
+    def write_place(self, batch: "_Batch", place: PlaceReview, written_sections: Set[str]) -> List[ItemReview]:
+        """把一處要寫的格子放進 batch，回傳真的寫了的格子（每格一列編制寫入紀錄）
+
+        Args:
+            batch: 要送出的格子
+            place: 這處的比對結果（沒有待選邊的衝突）
+            written_sections: 這次已經寫過的樂器（instrument_key）；同一樂器在別的群組又出現時不再寫
+        """
+        write = place.write
+        written = []
+        parts = {voice_key(part.instrument_name): (row, part) for row, part in
+                 self._voice_rows(write.edition_id, write.movement_id)}
+        headcounts = {
+            voice_key(r.item.voice): r.item.new for r in place.items if r.item.field is SyncField.HEADCOUNT
+        }
+        writing = [r for r in place.items if r.verdict is Verdict.WRITE]
+        created = []
+        for review in writing:
+            item = review.item
+            key = voice_key(item.voice)
+            if item.field is SyncField.VOICE and not item.new:
+                batch.clear(SHEET_PARTS, parts[key][0])
+            elif item.field in (SyncField.VOICE, SyncField.HEADCOUNT) and key not in parts:
+                created.append(key)
+            elif item.field is SyncField.HEADCOUNT:
+                row, part = parts[key]
+                for column, value in _headcount_cells(item.new).items():
+                    if getattr(part, column).strip() != value:
+                        batch.set(SHEET_PARTS, row, column, value)
+            elif item.field is SyncField.DURATION:
+                self._write_duration(batch, write, item.new)
+            elif item.field is SyncField.SECTION:
+                if instrument_key(item.voice) in written_sections:
+                    continue
+                written_sections.add(instrument_key(item.voice))
+                self._write_section(batch, item.voice, item.new)
+            written.append(review)
+        renumber = bool(created) or any(r.item.field is SyncField.ORDER for r in writing)
+        if renumber:
+            for order, name in enumerate(final_voices(write, place.items), start=1):
+                key = voice_key(name)
+                if key in created:
+                    batch.add(SHEET_PARTS, {
+                        "edition_id": write.edition_id, "movement_id": write.movement_id, "instrument_name": name,
+                        "sort_order": str(order), **_headcount_cells(headcounts.get(key, Headcount())),
+                    })
+                elif key in parts and parts[key][1].sort_order.strip() != str(order):
+                    batch.set(SHEET_PARTS, parts[key][0], "sort_order", str(order))
+        return written
+
+    def _write_duration(self, batch: "_Batch", write: PlaceWrite, seconds: Optional[int]) -> None:
+        """時長：這處已有一列就改秒數，沒有就新增一列"""
+        value = str(seconds) if seconds else ""
+        existing = self._duration_row(write.edition_id, write.movement_id)
+        if existing is not None:
+            batch.set(SHEET_DURATIONS, existing[0], "seconds", value)
+        else:
+            batch.add(SHEET_DURATIONS, {
+                "edition_id": write.edition_id, "movement_id": write.movement_id, "seconds": value,
+            })
+
+    def _write_section(self, batch: "_Batch", voice: str, section: str) -> None:
+        """聲部組：社團對照已有這種樂器（同一樂器）就改它的值（樂器的寫法不變），沒有就以去掉編號的樂器名稱新增"""
+        key = instrument_key(voice)
+        existing = next((row for row, record in self._sections if instrument_key(record["instrument"]) == key), None)
+        if existing is not None:
+            batch.set(SHEET_SECTIONS, existing, "section", section)
+        else:
+            batch.add(SHEET_SECTIONS, {
+                "orchestra_type": self._orchestra_type.value, "instrument": instrument_name(voice), "section": section,
+            })
+
+    def _voice_rows(self, edition_id: str, movement_id: str) -> List[Tuple[int, Part]]:
+        """一處認得的聲部列與列號"""
+        return _voice_parts([
+            (row, part) for row, part in self._parts
+            if part.edition_id == edition_id and part.movement_id == movement_id
+        ])
+
+    def _duration_row(self, edition_id: str, movement_id: str) -> Optional[Tuple[int, Dict[str, str]]]:
+        """一處的時長列與列號；有幾列時只認第一列"""
+        return next((
+            (row, record) for row, record in self._durations
+            if record["edition_id"] == edition_id and record["movement_id"] == movement_id
+        ), None)
+
+
+def _numbered_records(rows: List[List[str]], sheet: str) -> List[Tuple[int, Dict[str, str]]]:
+    """把工作表讀到的列（含標題列）轉成欄位名稱對值，連同從 1 起算的列號；標題列與空列略過"""
+    headers = SHEET_HEADERS[sheet]
+    return [
+        (index + 1, {header: (row[i] if i < len(row) else "") for i, header in enumerate(headers)})
+        for index, row in enumerate(rows) if index > 0 and any(row)
+    ]
+
+
+def _log_record(
+    stamp: str, operator: str, source: WriteSource, write: PlaceWrite, review: ItemReview,
+) -> Dict[str, str]:
+    """編制寫入紀錄的一列：一格改動的原值（寫入前譜庫的值）與新值"""
+    item = review.item
+    if item.field is SyncField.VOICE:
+        old, new = (item.voice if review.theirs else ""), (item.voice if item.new else "")
+    else:
+        old, new = value_text(item.field, review.theirs), value_text(item.field, item.new)
+    return {
+        "time": stamp, "operator": operator, "source": source.value, "edition_id": write.edition_id,
+        "movement_id": write.movement_id, "voice": item.voice, "field": item.field.value, "old_value": old,
+        "new_value": new, "group": write.group_name,
+    }
 
 
 class PendingRows:
@@ -457,38 +707,82 @@ class CatalogService:
         sheets = [SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS] + [
             sheet for sheet in (SHEET_DURATIONS, SHEET_SECTIONS) if sheet in titles
         ]
-        tables = dict(zip(sheets, self._read_sheets(*sheets)))
-        editions = _models(tables[SHEET_EDITIONS], SHEET_EDITIONS, Edition)
-        edition = next((e for e in editions if e.id == edition_id), None)
-        if edition is None:
-            raise CatalogError(CatalogErrorKind.GONE, f"edition {edition_id} is no longer in the catalog")
-        movement = None
-        if movement_id:
-            movement = next(
-                (m for m in _models(tables[SHEET_MOVEMENTS], SHEET_MOVEMENTS, Movement) if m.id == movement_id), None,
-            )
-            if movement is None:
-                raise CatalogError(CatalogErrorKind.GONE, f"movement {movement_id} is no longer in the catalog")
-        pieces = _models(tables[SHEET_PIECES], SHEET_PIECES, Piece)
-        piece = next((p for p in pieces if p.id == edition.piece_id), Piece())
-        parts = [
-            p for p in _models(tables[SHEET_PARTS], SHEET_PARTS, Part)
-            if p.edition_id == edition_id and p.movement_id == movement_id
-        ]
-        duration = next((
-            _count(r["seconds"]) for r in _records(tables.get(SHEET_DURATIONS, []), SHEET_DURATIONS)
-            if r["edition_id"] == edition_id and r["movement_id"] == movement_id
-        ), None)
+        catalog = _PlaceTables(dict(zip(sheets, self._read_sheets(*sheets))), orchestra_type)
+        current = catalog.current(edition_id, movement_id)
+        edition = catalog.editions[edition_id]
+        movement = catalog.movements.get(movement_id)
+        piece = catalog.pieces.get(edition.piece_id, Piece())
         return CatalogPlace(
             edition_id=edition_id,
             movement_id=movement_id,
             piece_title=piece.title,
             edition_label=edition.edition_label or edition.publisher,
             movement_name=(movement.name or movement.movement_number) if movement else "",
-            voices=_place_voices(parts),
-            duration_seconds=duration,
-            sections=_club_sections(_records(tables.get(SHEET_SECTIONS, []), SHEET_SECTIONS), orchestra_type),
+            voices=current.voices,
+            duration_seconds=current.duration_seconds,
+            sections=current.sections,
+            filed=current.filed,
+            other_pieces=catalog.other_pieces(edition_id),
         )
+
+    def sync_instrumentation(
+        self, writes: Sequence[PlaceWrite], orchestra_type: OrchestraType, operator: str, source: WriteSource,
+        decisions: Mapping[str, Mapping[Tuple[SyncField, object], Decision]],
+    ) -> SyncOutcome:
+        """把群組的編制改動寫回譜庫：寫入前一刻重讀、逐格比對，沒有待選邊的衝突才以一個請求寫入
+
+        每一格依譜庫現在的值處理（core/catalog_sync.py 的 review_items）：等於快照的原值就寫、等於要寫的新值就略過、
+        兩者都不是就是衝突；有衝突（或選邊時看到的譜庫值之後又變了）時什麼都不寫，交回比對結果讓使用者選邊後再呼叫。
+        要刪掉的聲部在譜庫已有 Drive 檔案時不寫（無法寫回），其餘照寫。
+
+        寫入的格子、新增的列、刪掉的聲部（清空那一列）、缺的標題與每一格一列的編制寫入紀錄，全部以同一個
+        values.batchUpdate 送出（全成或全不成）。請求數固定：列出工作表名稱、讀取各一次，還沒建立的時長、
+        聲部組對照、編制寫入紀錄每張建一次，寫入一次；不隨聲部數或群組數增加。
+
+        Args:
+            writes: 各群組要寫回的改動（core/catalog_sync.py 的 place_writes）
+            orchestra_type: 專案的樂團類型（聲部組對照寫這一套）
+            operator: 操作者（登入的 email），寫進編制寫入紀錄
+            source: 來源，寫進編制寫入紀錄
+            decisions: 衝突的選擇：群組 ID → （SyncItem.key → Decision）
+
+        Returns:
+            比對結果，與是否已寫入
+
+        Raises:
+            CatalogError: 讀不到或寫不進去（沒有任何一格被寫入，以同樣的參數再呼叫一次即可）；
+                連到的版本或樂章已不在譜庫時為已經不在譜庫
+        """
+        titles = set(self._call(self._sheets.sheet_titles))
+        sheets = [SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS] + [
+            sheet for sheet in (SHEET_DURATIONS, SHEET_SECTIONS) if sheet in titles
+        ]
+        ranges = [_whole_sheet(sheet) for sheet in sheets]
+        if SHEET_INSTRUMENTATION_LOG in titles:
+            sheets.append(SHEET_INSTRUMENTATION_LOG)
+            ranges.append(sheet_range(SHEET_INSTRUMENTATION_LOG, "A:A"))
+        tables = dict(zip(sheets, self._call(lambda: self._sheets.read_ranges(ranges))))
+        catalog = _PlaceTables(tables, orchestra_type)
+        places = []
+        for write in writes:
+            current = catalog.current(write.edition_id, write.movement_id)
+            reviews = review_items(write, current, dict(decisions.get(write.group_id, {})))
+            places.append(PlaceReview(write, reviews, list(current.filed), catalog.other_pieces(write.edition_id)))
+        outcome = SyncOutcome(places, written=False)
+        if outcome.conflicts:
+            return outcome
+        batch = _Batch({sheet: rows for sheet, rows in tables.items()}, self._draw_ids)
+        stamp = now().strftime("%Y-%m-%d %H:%M:%S")
+        written_sections: Set[str] = set()
+        for place in places:
+            for review in catalog.write_place(batch, place, written_sections):
+                batch.add(SHEET_INSTRUMENTATION_LOG, _log_record(stamp, operator, source, place.write, review))
+        if batch.cells:
+            for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
+                self._call(lambda: self._sheets.add_sheet(sheet))
+            self._call(lambda: self._sheets.write_cells(batch.cells))
+        outcome.written = True
+        return outcome
 
     def subfolders(self, folder_id: str) -> List[DriveFile]:
         """列出 Drive 資料夾裡的子資料夾（依名稱排序，不含垃圾桶裡的）

@@ -34,6 +34,8 @@ SHEET_CLUB_SETTINGS = "社團設定"
 SHEET_DURATIONS = "時長"
 # 聲部組對照：（樂團類型、樂器）→ 聲部組，全社團共用；樂團類型寫 OrchestraType 的值
 SHEET_SECTIONS = "聲部組對照"
+# 編制寫入紀錄：每次寫回譜庫的每一格改動一列，只新增、不修改；來源與欄位寫 WriteSource、SyncField 的值
+SHEET_INSTRUMENTATION_LOG = "編制寫入紀錄"
 
 SHEET_HEADERS = {
     SHEET_COMPOSERS: [
@@ -67,6 +69,10 @@ SHEET_HEADERS = {
     SHEET_CLUB_SETTINGS: ["鍵", "值"],
     SHEET_DURATIONS: ["id", "edition_id", "movement_id", "seconds"],
     SHEET_SECTIONS: ["id", "orchestra_type", "instrument", "section"],
+    SHEET_INSTRUMENTATION_LOG: [
+        "id", "time", "operator", "source", "edition_id", "movement_id", "voice", "field", "old_value", "new_value",
+        "group",
+    ],
 }
 
 # 是非欄（是否「以上」、是否為總譜列）寫入時的「是」；讀取時這些寫法都算是，其餘（含空白）算否

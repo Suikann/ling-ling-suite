@@ -61,6 +61,19 @@ def instrument_key(name: str) -> str:
     return voice_key(name)[0]
 
 
+def instrument_name(name: str) -> str:
+    """聲部名稱去掉結尾編號後的樂器名稱，保留原本的寫法：「二胡 I」→「二胡」；沒有編號時原樣（去掉前後空白）"""
+    name = name.strip()
+    stem, number = voice_key(name)
+    if number is None:
+        return name
+    for end in range(len(name) - 1, 0, -1):
+        prefix = _TRAILING_SEPARATORS.sub("", name[:end])
+        if prefix and voice_key(prefix) == (stem, None):
+            return prefix
+    return name
+
+
 def same_instrument(a: str, b: str) -> bool:
     """兩個聲部名稱是否為同一樂器（只用在聲部組對照的鍵）"""
     return instrument_key(a) == instrument_key(b)

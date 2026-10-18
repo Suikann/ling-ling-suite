@@ -111,7 +111,8 @@ def _rich_group(name: str, parts: list) -> Group:
         use_small_template=True, small_template="{樂器}.pdf",
         catalog_link=CatalogLink(
             edition_id="e1", movement_id="m1", piece_title="命運", edition_label="Bärenreiter", movement_name="Allegro",
-            snapshot=CatalogSnapshot([(p, Headcount(2)) for p in parts], 470, {parts[0]: "木管"}),
+            snapshot=CatalogSnapshot([(p, Headcount(2)) for p in parts], 470, {parts[0]: "木管"}, [parts[0]]),
+            other_pieces={parts[0]: 3},
         ),
     )
 

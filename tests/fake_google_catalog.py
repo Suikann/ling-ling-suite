@@ -4,7 +4,7 @@
 
 實作試算表關口與 Drive 關口（services/catalog_ports.py），注入給譜庫服務。每次呼叫計為一次請求（requests），
 可以設定在第 N 次請求時丟出某類錯誤（fail_at，可選擇在請求已經生效之後才丟出，扮演回應沒收到），
-或在第 N 次請求之前讓「另一台電腦」改動譜庫（before_request）。
+或在第 N 次請求之前讓「另一台電腦」改動譜庫（before_request）。每次寫入多格送出的內容依序記在 sheets.writes。
 
 試算表照 Google 的行為：讀取時每列結尾的空格與結尾的空列不回傳；batchUpdate 全成或全不成；
 範圍的工作表不存在時整個請求失敗。Drive 解析查詢字串裡的字串值（反斜線跳脫），沒跳脫好的查詢會失敗。
@@ -147,6 +147,8 @@ class FakeSheets:
         self._sheet_ids: Dict[str, int] = {}
         self._next_sheet_id = itertools.count(1)
         self._frozen: Dict[str, int] = {}
+        # 每次 write_cells 送出的（範圍，值），依送出順序；失敗的請求不記
+        self.writes: List[List[Tuple[str, List[List[str]]]]] = []
 
     # --- 測試直接操作（不算請求）---
 
@@ -154,6 +156,11 @@ class FakeSheets:
         """建立一張工作表並放進 rows（第一列通常是標題列）；已有這張時換掉內容"""
         self._tabs[title] = [[str(value) for value in row] for row in rows]
         self._sheet_ids.setdefault(title, next(self._next_sheet_id))
+
+    def delete_tab(self, title: str) -> None:
+        """拿掉一張工作表（例如還沒有這張工作表的舊譜庫）"""
+        self._tabs.pop(title)
+        self._sheet_ids.pop(title)
 
     def rows(self, title: str) -> List[List[str]]:
         """工作表目前的內容（含標題列；去掉結尾的空格與空列）"""
@@ -189,6 +196,7 @@ class FakeSheets:
                 for i, line in enumerate(values):
                     for j, value in enumerate(line):
                         self._put(self._tabs[sheet], row + i, col + j, str(value))
+            self.writes.append([(text, [list(line) for line in values]) for text, values in data])
         self._google.request(handle)
 
     def append_rows(self, sheet: str, rows: Sequence[List[str]]) -> None:

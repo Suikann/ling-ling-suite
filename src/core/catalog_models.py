@@ -189,6 +189,8 @@ class CatalogPlace:
         voices: 聲部名稱與人數，依分譜工作表的順序；不含總譜列
         duration_seconds: 時長（秒）；未填為 None
         sections: 社團的聲部組對照裡這個樂團類型的部分：樂器（第一次寫入的寫法）→ 聲部組
+        filed: 已有 Drive 檔案的聲部
+        other_pieces: 譜庫裡每種樂器被這首曲目以外的幾首曲目用到（樂器名稱 → 曲目數）
     """
     edition_id: str
     movement_id: str = ""
@@ -198,3 +200,5 @@ class CatalogPlace:
     voices: List[Tuple[str, Headcount]] = field(default_factory=list)
     duration_seconds: Optional[int] = None
     sections: Dict[str, str] = field(default_factory=dict)
+    filed: List[str] = field(default_factory=list)
+    other_pieces: Dict[str, int] = field(default_factory=dict)

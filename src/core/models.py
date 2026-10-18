@@ -6,9 +6,11 @@
 """
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional, Tuple
+from typing import (
+    TYPE_CHECKING, Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional, Set, Tuple,
+)
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_ORCHESTRA_TYPE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE,
     INSTRUMENTATION_FILE_VERSION, LEGACY_PROJECT_FILE_VERSIONS, PROJECT_FILE_VERSION, OperationKind,
@@ -22,12 +24,13 @@ from core.template_engine import (
     convert_template_language, detect_piece_name, detect_score_index, extract_instruments_from_filenames,
 )
 from core.voice_names import (
-    distinct_voices, duplicate_rows, instrument_key, match_by_voice, same_instrument, same_voice, voice_index,
-    voice_key,
+    VoiceKey, distinct_voices, duplicate_rows, instrument_key, match_by_voice, same_instrument, same_voice,
+    voice_index, voice_key,
 )
 
 if TYPE_CHECKING:
     from core.catalog_models import CatalogPlace
+    from core.catalog_sync import SyncOutcome
 
 
 class DuplicateVoiceError(ValueError):
@@ -52,6 +55,18 @@ class DuplicateVoicesError(ValueError):
     def __init__(self, rows: List[int]):
         super().__init__(f"樂器表有重名的列：{rows}")
         self.rows = rows
+
+
+class FiledVoicesError(ValueError):
+    """在連到譜庫的群組刪除（或改名成別的聲部）已有 Drive 檔案的聲部：等於從樂譜刪掉它的檔，要到譜庫視窗處理"""
+
+    def __init__(self, voices: List[str]):
+        """
+        Args:
+            voices: 已有 Drive 檔案、不能刪除的聲部，依樂器表順序
+        """
+        super().__init__("、".join(voices))
+        self.voices = voices
 
 
 class ReadOnlyProjectError(Exception):
@@ -188,10 +203,12 @@ class CatalogSnapshot:
         voices: 聲部名稱與人數，依譜庫的順序
         duration_seconds: 時長（秒）；未填為 None
         sections: 社團對照裡有的、群組樂器表裡各樂器的聲部組（樂器的一個聲部寫法 → 聲部組）；沒有的樂器不列
+        filed: 那處已有 Drive 檔案的聲部（不能從群組刪除）
     """
     voices: List[Tuple[str, Headcount]] = field(default_factory=list)
     duration_seconds: Optional[int] = None
     sections: Dict[str, str] = field(default_factory=dict)
+    filed: List[str] = field(default_factory=list)
 
     def to_data(self) -> Dict[str, Any]:
         """專案檔中存的內容"""
@@ -199,6 +216,7 @@ class CatalogSnapshot:
             "voices": [{"name": name, "headcount": headcount.to_data()} for name, headcount in self.voices],
             "duration_seconds": self.duration_seconds,
             "sections": dict(self.sections),
+            "filed": list(self.filed),
         }
 
     @classmethod
@@ -208,6 +226,7 @@ class CatalogSnapshot:
             voices=[(v["name"], Headcount.from_data(v.get("headcount") or {})) for v in data.get("voices", [])],
             duration_seconds=data.get("duration_seconds") or None,
             sections=dict(data.get("sections") or {}),
+            filed=list(data.get("filed") or []),
         )
 
 
@@ -224,6 +243,8 @@ class CatalogLink:
         edition_label: 版本的標示
         movement_name: 樂章名稱；整首為空字串
         snapshot: 那處的快照，待寫入的改動相對於它計算（Project.catalog_changes）
+        other_pieces: 群組各樂器在譜庫裡被其他曲目用到幾首（樂器的一個聲部寫法 → 曲目數），聲部組旁寫影響範圍用；
+            讀到那處時更新
     """
     edition_id: str
     movement_id: str = ""
@@ -231,6 +252,12 @@ class CatalogLink:
     edition_label: str = ""
     movement_name: str = ""
     snapshot: CatalogSnapshot = field(default_factory=CatalogSnapshot)
+    other_pieces: Dict[str, int] = field(default_factory=dict)
+
+    def other_pieces_using(self, voice: str) -> int:
+        """聲部的樂器在譜庫裡被其他曲目用到幾首（同一樂器的規則）；不知道時為 0"""
+        key = instrument_key(voice)
+        return next((count for name, count in self.other_pieces.items() if instrument_key(name) == key), 0)
 
     def to_data(self) -> Dict[str, Any]:
         """專案檔中存的內容"""
@@ -241,6 +268,7 @@ class CatalogLink:
             "edition_label": self.edition_label,
             "movement_name": self.movement_name,
             "snapshot": self.snapshot.to_data(),
+            "other_pieces": dict(self.other_pieces),
         }
 
     @classmethod
@@ -253,6 +281,7 @@ class CatalogLink:
             edition_label=data.get("edition_label", ""),
             movement_name=data.get("movement_name", ""),
             snapshot=CatalogSnapshot.from_data(data.get("snapshot") or {}),
+            other_pieces={str(k): int(v) for k, v in (data.get("other_pieces") or {}).items()},
         )
 
 
@@ -1156,9 +1185,12 @@ class Project:
 
         Raises:
             DuplicateVoiceError: 樂器表的其他列已有同一聲部，樂器表不變；改成自己的另一種寫法不算
+            FiledVoicesError: 連到譜庫的群組裡這個聲部已有 Drive 檔案，改成別的聲部等於刪掉它，樂器表不變
         """
         others = group.instruments[:index] + group.instruments[index + 1:]
         _refuse_duplicate_voice(others, name)
+        if not same_voice(group.instruments[index], name):
+            _refuse_filed_voices(group, [index])
         instruments = list(group.instruments)
         instruments[index] = name
         group.assign_instruments(instruments, group.present, group.headcounts)
@@ -1173,8 +1205,12 @@ class Project:
 
         Returns:
             移到未分組的分譜，依原順序
+
+        Raises:
+            FiledVoicesError: 群組連到譜庫，要移除的聲部有的已有 Drive 檔案（等於從樂譜刪除），樂器表不變
         """
         removing = set(rows)
+        _refuse_filed_voices(group, removing)
         current = _voice_rows(group)
         moved = [row.part for i, row in enumerate(current) if i in removing and row.part is not None]
         _place_rows(group, [row for i, row in enumerate(current) if i not in removing])
@@ -1312,7 +1348,8 @@ class Project:
             piece_title=place.piece_title,
             edition_label=place.edition_label,
             movement_name=place.movement_name,
-            snapshot=CatalogSnapshot(list(place.voices), place.duration_seconds, club_sections),
+            snapshot=CatalogSnapshot(list(place.voices), place.duration_seconds, club_sections, list(place.filed)),
+            other_pieces=_other_pieces(group.instruments, place.other_pieces),
         )
         self._changed()
         return result
@@ -1408,6 +1445,58 @@ class Project:
             if old != new:
                 changes.append(CatalogChange(CatalogChangeKind.SECTION, voice, old, new))
         return changes
+
+    def mark_catalog_synced(self, outcome: "SyncOutcome") -> None:
+        """編制寫回譜庫之後：選「用譜庫的」的格子改成譜庫的值，快照改成寫完後的那處
+
+        選「用譜庫的」的人數、時長、聲部組與順序照譜庫的值改群組（聲部組改的是專案的對照）；人數衝突而譜庫已刪掉那個聲部時，
+        群組也拿掉它，分譜移到未分組。快照改成群組現在的編制、時長與聲部組，加上無法寫回、還留在譜庫的聲部，
+        之後 catalog_changes 只剩無法寫回的改動。
+
+        Args:
+            outcome: 已寫入的結果（CatalogService.sync_instrumentation）
+        """
+        from core.catalog_sync import SyncField, Verdict, final_voices
+        for place in outcome.places:
+            group = self._group_by_id(place.write.group_id)
+            if group is None or group.catalog_link is None:
+                continue
+            taken = [review for review in place.items if review.verdict is Verdict.CATALOG]
+            for review in taken:
+                item = review.item
+                if item.field is SyncField.HEADCOUNT and review.theirs is not None:
+                    index = voice_index(group.instruments, item.voice)
+                    if index is not None:
+                        group.headcounts[index] = review.theirs
+                elif item.field is SyncField.DURATION:
+                    group.duration_seconds = review.theirs
+                elif item.field is SyncField.SECTION and review.theirs:
+                    put_section(self.instrument_sections, item.voice, review.theirs)
+            rows = {voice_key(row.name): row for row in _voice_rows(group)}
+            kept = [rows[voice_key(name)] for name in final_voices(place.write, place.items) if voice_key(name) in rows]
+            if [row.name for row in kept] != group.instruments:
+                kept_keys = {voice_key(row.name) for row in kept}
+                _place_rows(group, kept)
+                self.ungrouped_files.extend(
+                    row.part for key, row in rows.items() if key not in kept_keys and row.part is not None
+                )
+            unsynced_sections = {
+                instrument_key(r.item.voice) for r in taken if r.item.field is SyncField.SECTION and not r.theirs
+            }
+            blocked = {voice_key(r.item.voice) for r in place.items if r.verdict is Verdict.BLOCKED}
+            other_pieces = _other_pieces(group.instruments, place.other_pieces)
+            group.catalog_link = replace(group.catalog_link, other_pieces=other_pieces, snapshot=CatalogSnapshot(
+                voices=_with_blocked(
+                    list(zip(group.instruments, group.headcounts)), group.catalog_link.snapshot.voices, blocked,
+                ),
+                duration_seconds=group.duration_seconds,
+                sections={
+                    voice: self.section_of(voice) for voice in _distinct_instruments(group.instruments)
+                    if instrument_key(voice) not in unsynced_sections
+                },
+                filed=list(place.filed),
+            ))
+        self._changed()
 
     def link_movements(self, groups: Iterable[Group], piece_name: str) -> None:
         """把群組連成同一首曲目的各樂章：曲名一致、樂章編號依序，沒有樂章名稱的以群組名稱補上"""
@@ -1670,6 +1759,35 @@ def _take_catalog_voices(group: Group, voices: List[Tuple[str, Headcount]]) -> L
     group.assign_instruments(names, present, [headcount for _, headcount in voices])
     group.files = [slots[i] for i in sorted(slots)]
     return LinkResult(guessed=[names[i] for i in guessed], moved=unmatched[len(free):])
+
+
+def _with_blocked(
+    voices: List[Tuple[str, Headcount]], previous: List[Tuple[str, Headcount]], blocked: Set[VoiceKey],
+) -> List[Tuple[str, Headcount]]:
+    """群組的聲部，加上無法寫回、還留在譜庫的聲部（放回它在舊快照裡的位置）"""
+    result = list(voices)
+    for index, (name, headcount) in enumerate(previous):
+        if voice_key(name) in blocked:
+            result.insert(min(index, len(result)), (name, headcount))
+    return result
+
+
+def _other_pieces(voices: Iterable[str], counts: Dict[str, int]) -> Dict[str, int]:
+    """群組各樂器（第一次出現的寫法）被譜庫其他曲目用到幾首：從譜庫讀到的全部樂器裡挑出群組有的"""
+    by_key = {instrument_key(name): count for name, count in counts.items()}
+    return {
+        voice: by_key[instrument_key(voice)] for voice in _distinct_instruments(voices) if instrument_key(voice) in by_key
+    }
+
+
+def _refuse_filed_voices(group: Group, rows: Iterable[int]) -> None:
+    """群組連到譜庫、rows 裡有已有 Drive 檔案的聲部時丟出 FiledVoicesError"""
+    if group.catalog_link is None:
+        return
+    filed = {voice_key(name) for name in group.catalog_link.snapshot.filed}
+    voices = [group.instruments[i] for i in sorted(set(rows)) if voice_key(group.instruments[i]) in filed]
+    if voices:
+        raise FiledVoicesError(voices)
 
 
 def _distinct_instruments(voices: Iterable[str]) -> List[str]:
