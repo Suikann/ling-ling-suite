@@ -4,6 +4,7 @@
 
 把群組中的一格（總譜，或第 N 份分譜）依命名設定轉成檔名與相對資料夾。
 純函式：不碰磁碟、不讀介面語言；本機重新命名、預覽與 Drive 重新命名都經過這裡。
+群組是否已重新命名（is_renamed，存入譜庫與發譜都只收已重新命名的群組）也以命名結果判定。
 
 使用範例：
     from core.naming import NamingSettings, name_group
@@ -20,6 +21,7 @@ from core.constants import (
     PartsOutputMode, TemplateVariable, VariableLevel,
 )
 from core.filename import ensure_pdf_extension, sanitize_filename
+from core.paths import name_key, same_path
 from core.models import FileInfo, Group, Project
 from core.sections import section_for, stored_section
 from core.voice_names import instrument_key
@@ -179,6 +181,29 @@ def name_group(group: Group, settings: NamingSettings, voices: Optional[Sequence
     return GroupNaming(
         files=[NamedFile(file, slot, name_slot(group, slot, settings, voices)) for slot, file in slots],
         extra_files=group.files[paired:],
+    )
+
+
+def is_named_at(path: str, name: SlotName, output_directory: str) -> bool:
+    """本機的檔是不是在命名結果的位置：有輸出位置時比整條路徑，沒有（就地改名）時比檔名與上層資料夾（不分大小寫）"""
+    if output_directory:
+        return same_path(path, os.path.join(output_directory, name.relative_path()))
+    wanted = [name_key(part) for part in (*name.folders, name.file_name)]
+    parts = [name_key(part) for part in os.path.normpath(os.path.abspath(path)).split(os.sep)]
+    return parts[-len(wanted):] == wanted
+
+
+def is_renamed(project: Project, group: Group) -> bool:
+    """群組是否已重新命名：總譜與每份配到聲部的分譜都在命名結果的位置（is_named_at）
+
+    沒有要命名的檔、或命名不出來（聲部組資料夾缺聲部組、資料夾名稱不安全）時為否；多於聲部數的分譜不算。
+    """
+    try:
+        naming = name_group(group, settings_for(project, group))
+    except (KeyError, UnsafeFolderNameError):
+        return False
+    return bool(naming.files) and all(
+        is_named_at(named.file.original_path, named.name, project.output_directory) for named in naming.files
     )
 
 

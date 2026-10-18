@@ -6,7 +6,7 @@
 
 - 專案層級（project_blocks，擋下整個發譜）：專案有未存檔的改動（只在按下時檢查）、專案不是國樂團
   （HuaXia 的聲部組只接受國樂團那五組）。
-- 群組層級（check_groups，擋下那個群組，預覽裡寫出原因）：還沒重新命名（總譜與分譜不全在命名格式算出的位置，
+- 群組層級（check_groups，擋下那個群組，預覽裡寫出原因）：還沒重新命名（core.naming.is_renamed，與存入譜庫同一條規則；
   發譜從輸出位置讀檔）、本專案有的聲部沒填最少人數、樂器表有重名的列。未同步的值（還沒進譜庫）不擋，只標出。
 - HuaXia 那一側（PublishService.prepare，連網，要在背景執行緒呼叫）：重查幹部身分（不是幹部就登出）、
   HuaXia 發譜函式的介面版本（沒有或不符時整個發譜不能用），兩者都過了才讀可以挑的曲目（未封存的）。
@@ -26,12 +26,10 @@ from typing import List, Optional
 
 from core.constants import OrchestraType
 from core.models import CatalogChange, Group, Project
-from core.naming import UnsafeFolderNameError
-from core.paths import same_path
+from core.naming import is_renamed
 from core.voice_names import duplicate_rows
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
 from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaPiece
-from services.rename_service import generate_rename_plan
 
 
 class ProjectBlock(Enum):
@@ -111,7 +109,7 @@ def check_groups(project: Project) -> List[GroupCheck]:
     return [
         GroupCheck(
             group=group,
-            not_renamed=not _renamed(project, group),
+            not_renamed=not is_renamed(project, group),
             unfilled=[
                 voice for voice, present, headcount in zip(group.instruments, group.present, group.headcounts)
                 if present and not headcount.filled
@@ -121,15 +119,6 @@ def check_groups(project: Project) -> List[GroupCheck]:
         )
         for group in project.groups
     ]
-
-
-def _renamed(project: Project, group: Group) -> bool:
-    """群組的總譜與分譜是否都已在命名格式算出的位置（重新命名過、之後沒改命名設定）；沒有要發的檔時為否"""
-    try:
-        entries = generate_rename_plan(project, {group.id}).entries
-    except (KeyError, UnsafeFolderNameError):
-        return False
-    return bool(entries) and all(same_path(entry.original_path, entry.new_path) for entry in entries)
 
 
 class PublishService:

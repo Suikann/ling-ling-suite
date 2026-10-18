@@ -23,15 +23,14 @@ services/deposit_service.py 與譜庫服務。
         group = plan_group(sources, {path: (md5, size)}, place_files)
         group.counts()
 """
-import os
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from core.catalog_models import DriveFile
 from core.models import CatalogLink, Group, Project
-from core.naming import SlotName, UnsafeFolderNameError, name_group, settings_for
-from core.paths import name_key, same_path
+from core.naming import UnsafeFolderNameError, is_named_at, name_group, settings_for
+from core.paths import name_key
 from core.voice_names import voice_key
 
 # 總譜在存入計畫裡的聲部名稱（分譜工作表的總譜列另以 is_score 標記）
@@ -331,18 +330,9 @@ def _group_sources(project: Project, group: Group) -> GroupSources:
     sources = []
     for named, placed in zip(local.files, drive.files):
         path = named.file.original_path
-        if not _is_at(path, named.name, project.output_directory):
+        if not is_named_at(path, named.name, project.output_directory):
             return base.blocked(DepositBlock.NOT_RENAMED)
         voice = SCORE_VOICE if named.file is group.score_file else voices[path]
         sources.append(DepositSource(voice, path, placed.name.folders, placed.name.file_name))
     return replace(base, sources=sources)
-
-
-def _is_at(path: str, name: SlotName, output_directory: str) -> bool:
-    """本機的檔是不是在命名結果的位置：有輸出位置時比整條路徑，沒有時比檔名與上層資料夾（不分大小寫）"""
-    if output_directory:
-        return same_path(path, os.path.join(output_directory, name.relative_path()))
-    wanted = [name_key(part) for part in (*name.folders, name.file_name)]
-    parts = [name_key(part) for part in os.path.normpath(os.path.abspath(path)).split(os.sep)]
-    return parts[-len(wanted):] == wanted
 

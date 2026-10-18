@@ -168,6 +168,16 @@ class TestGroupChecks(unittest.TestCase):
         self.project.set_master_template("{樂器}.pdf")
         self.assertTrue(self.check().not_renamed)
 
+    def test_renamed_in_place_into_a_subfolder_counts_as_renamed(self):
+        project = Project(master_template="{序號}-{樂器}.pdf", use_subfolders=True, subfolder_template="{曲名}")
+        group = project.add_group("烽火操", "總譜")
+        project.update_group(group, piece_name="烽火操")
+        project.set_instruments(group, ["二胡 I"])
+        folder = os.path.join(IN_DIR, "烽火操")
+        project.add_files([FileInfo(os.path.join(folder, n), n) for n in ("00-總譜.pdf", "01-二胡 I.pdf")], group)
+        project.set_headcount(group, 0, Headcount(6))
+        self.assertFalse(check_groups(project)[0].not_renamed)
+
     def test_a_group_without_files_is_not_renamed(self):
         group = self.project.add_group("空的", "總譜")
         checks = check_groups(self.project)

@@ -17,7 +17,7 @@
 | 人數範圍的整理與 HuaXia 記法（`6`、`6-8`、`2↑`） | `core/models.py` 的 `Headcount`（`normalized`、`text`、`filled`）；合計用 `sum_headcounts`，時長的「分:秒」用 `format_duration` |
 | 依介面語言挑選中英文版本 | `core/locale.py` 的 `is_english`、`localized` |
 | 檔名清理（非法字元換底線、空名回退） | `core/filename.py`，重新命名與分割共用 |
-| 一格（總譜或第 N 份分譜）的檔名與資料夾 | `core/naming.py`（見 [naming.md](naming.md)） |
+| 一格（總譜或第 N 份分譜）的檔名與資料夾；群組是否已重新命名（檔都在命名結果的位置，存入譜庫與發譜共用） | `core/naming.py`（見 [naming.md](naming.md)）；已重新命名是 `is_renamed`，單一份檔是 `is_named_at` |
 | 走訪專案引用的檔案（總譜＋分譜＋未分組）；依路徑取代、移除引用 | `Project.file_refs()`、`Project.replace_paths`、`Project.remove_paths` |
 | 群組欄位的編輯規則 | `Group.update`；不屬於專案的 Drive 群組也用它 |
 | 讀寫譜庫（Google 試算表與 Drive） | `services/catalog_service.py` 的 `CatalogService`：UI 與其他服務只呼叫它，失敗時丟出帶錯誤類別的 `CatalogError`（`core/catalog_errors.py`），不以空值或空清單代表失敗。它對下只經過試算表與 Drive 兩個關口（`services/catalog_ports.py` 的 `SheetsPort`、`DrivePort`，一次呼叫一次請求）；接 Google 的通事是 `services/google_catalog.py`，全程式只有它匯入 `googleapiclient`、把 Google 的例外轉成錯誤類別。寫入的共用規則（值以 RAW 寫入、Drive 名稱搜尋的跳脫、429 退避重試、ID 撞號重抽、新增列重送不重複、建譜庫試算表重送不建第二份）都在服務與通事裡。譜庫視窗、Drive 重新命名、譜庫設定與群組連到譜庫（`read_place`、`create_place`，見 [project.md](project.md) 的連到譜庫）、開啟專案時更新快照（`read_places`，見 [project.md](project.md) 的開啟時更新快照）、存檔時寫回編制（`sync_instrumentation`，格子的拆分與比對在 `core/catalog_sync.py`，見 [project.md](project.md) 的寫回譜庫）、譜庫視窗編輯全社團的聲部組對照（`section_map`、`sync_section_map`，與寫回同一套比對）、版本頁（`edition_page` 讀編制、登記與沒登記的檔，`register_files` 登記檔並把換掉的舊檔丟進 Drive 垃圾桶，見 [project.md](project.md) 的版本頁）、存入譜庫（`deposit_places`、`drive_ids`、`upload_file`、`update_file`、`place_file`、`record_deposits`）的讀寫都經它；要刪改試算表的列時，寫入前一刻才讀列號（`update_record`、`delete_*`） |
