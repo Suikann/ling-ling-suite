@@ -40,7 +40,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.constants import HUAXIA_DURATION_STEP_MINUTES, CompressionStatus, HuaXiaEnsemble
+from core.constants import (
+    HUAXIA_DURATION_STEP_MINUTES, MAX_DURATION_MINUTES, UNSYNCED_COLOR, CompressionStatus, HuaXiaEnsemble,
+)
 from core.locale import t
 from core.models import Group, HuaXiaLink, NewHuaXiaPiece, Project
 from core.sections import section_label
@@ -60,11 +62,8 @@ from ui.instrumentation_table import catalog_change_text
 # 步驟的字串鍵，依順序
 STEPS = ("publish.step.piece", "publish.step.voices", "publish.step.files", "publish.step.events",
          "publish.step.confirm")
-# 時長欄位的上限（分鐘）
-_MAX_DURATION_MINUTES = 999
-# 擋下的原因、未同步與說明的文字顏色
+# 擋下的原因、說明、取代與新增的文字顏色（未同步的是 UNSYNCED_COLOR）
 _BLOCKED_COLOR = "#e74c3c"
-_UNSYNCED_COLOR = "#e67e22"
 _NOTE_COLOR = "#888888"
 _REPLACE_COLOR = "#3498db"
 _NEW_COLOR = "#27ae60"
@@ -217,7 +216,7 @@ class _PieceEditor(QWidget):
         self._title = QLineEdit()
         self._composer = QLineEdit()
         self._duration = QDoubleSpinBox()
-        self._duration.setRange(0, _MAX_DURATION_MINUTES)
+        self._duration.setRange(0, MAX_DURATION_MINUTES)
         self._duration.setDecimals(1)
         self._duration.setSingleStep(HUAXIA_DURATION_STEP_MINUTES)
         self._duration.setSpecialValueText(" ")
@@ -515,7 +514,7 @@ class PublishPreviewDialog(QDialog):
             items = "、".join(catalog_change_text(change) for change in check.unsynced)
             unsynced = QLabel(t("publish.group.unsynced", items=items))
             unsynced.setObjectName("unsynced")
-            unsynced.setStyleSheet(f"color: {_UNSYNCED_COLOR};")
+            unsynced.setStyleSheet(f"color: {UNSYNCED_COLOR};")
             layout.addWidget(unsynced)
         return cell
 
@@ -715,7 +714,7 @@ class PublishPreviewDialog(QDialog):
             for column, text in enumerate(texts):
                 table.setItem(row, column, QTableWidgetItem(text))
             table.item(row, 3).setForeground(QColor(_REPLACE_COLOR if file.replaces else _NEW_COLOR))
-            table.item(row, 4).setForeground(QColor(_UNSYNCED_COLOR))
+            table.item(row, 4).setForeground(QColor(UNSYNCED_COLOR))
             if id(file) in too_large:
                 table.item(row, 2).setForeground(QColor(_BLOCKED_COLOR))
                 table.setCellWidget(row, 5, self._compression_cell(file))
@@ -743,7 +742,7 @@ class PublishPreviewDialog(QDialog):
         state = QLabel(text)
         state.setObjectName("compression_state")
         compressed = result is not None and result.status is CompressionStatus.COMPRESSED
-        state.setStyleSheet(f"color: {_NEW_COLOR if compressed else _UNSYNCED_COLOR};")
+        state.setStyleSheet(f"color: {_NEW_COLOR if compressed else UNSYNCED_COLOR};")
         layout.addWidget(state)
         if compressed:
             open_button = QPushButton(t("publish.files.open"))
@@ -773,7 +772,7 @@ class PublishPreviewDialog(QDialog):
             lines.append(t("publish.files.missing", files="、".join(missing)))
         label = QLabel("\n".join(lines))
         label.setObjectName("files_skipped")
-        label.setStyleSheet(f"color: {_UNSYNCED_COLOR};")
+        label.setStyleSheet(f"color: {UNSYNCED_COLOR};")
         row.addWidget(label)
         if catalog_only and self._download_back is not None:
             download = QPushButton(t("download.back"))

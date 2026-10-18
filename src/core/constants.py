@@ -111,6 +111,8 @@ SECTION_COLORS = (
     "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
     "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
 )
+# 標出還沒進譜庫（未同步、未存入）的值與檔的文字顏色；編制表、群組面板與發譜預覽共用
+UNSYNCED_COLOR = "#e67e22"
 
 
 class OperationKind(str, Enum):
@@ -436,6 +438,8 @@ class HuaXiaEnsemble(str, Enum):
 # HuaXia 曲目時長（pieces.duration_min，numeric）的間隔：HuaXia 編輯曲目的表單以 0.5 分鐘為一格，
 # 寫成別的值會讓幹部在網頁上改曲目時被表單擋下
 HUAXIA_DURATION_STEP_MINUTES = 0.5
+# 時長欄位的上限（分鐘）；編制表與發譜預覽新建曲目的時長共用
+MAX_DURATION_MINUTES = 999
 
 
 # 各樂團類型的聲部組，依選單順序；兩套都另有 OTHER_SECTION
