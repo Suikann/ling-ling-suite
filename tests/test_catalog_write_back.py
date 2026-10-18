@@ -333,7 +333,10 @@ class TestWriteLog(WriteBackTestCase):
         )
         self.assertTrue(all(r["time"] for r in log[1:]))
         self.project.set_duration(self.group, 440)
+        writes_before = len(self.google.sheets.writes)
         self.sync()
+        cells = [cell for write in self.google.sheets.writes[writes_before:] for cell, _ in write]
+        self.assertEqual(sorted(cells), ["'時長'!D2", "'編制寫入紀錄'!A5"])
         log_after = records(self.google, SHEET_INSTRUMENTATION_LOG)
         self.assertEqual(log_after[:3], log)
         self.assertEqual([(r["old_value"], r["new_value"]) for r in log_after[3:]], [("430", "440")])

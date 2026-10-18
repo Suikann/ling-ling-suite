@@ -758,10 +758,15 @@ class CatalogService:
             sheet for sheet in (SHEET_DURATIONS, SHEET_SECTIONS) if sheet in titles
         ]
         ranges = [_whole_sheet(sheet) for sheet in sheets]
-        if SHEET_INSTRUMENTATION_LOG in titles:
-            sheets.append(SHEET_INSTRUMENTATION_LOG)
-            ranges.append(sheet_range(SHEET_INSTRUMENTATION_LOG, "A:A"))
-        tables = dict(zip(sheets, self._call(lambda: self._sheets.read_ranges(ranges))))
+        has_log = SHEET_INSTRUMENTATION_LOG in titles
+        if has_log:
+            # 紀錄只會越來越長：只讀標題列與 ID 欄（找下一列、抽不撞號的 ID）
+            ranges += [sheet_range(SHEET_INSTRUMENTATION_LOG, "1:1"), sheet_range(SHEET_INSTRUMENTATION_LOG, "A:A")]
+        values = self._call(lambda: self._sheets.read_ranges(ranges))
+        tables = dict(zip(sheets, values))
+        if has_log:
+            header, ids = values[-2:]
+            tables[SHEET_INSTRUMENTATION_LOG] = header[:1] + ids[1:]
         catalog = _PlaceTables(tables, orchestra_type)
         places = []
         for write in writes:
