@@ -12,7 +12,7 @@
 元件不依賴主視窗：帶入專案後以 show_group 顯示任何一個群組；修改一律經專案的編輯操作立即寫入，
 只有改了聲部清單（增刪、改名、排序、本專案有）時再發出 instruments_changed。人數、時長、
 複製編制與聲部組不影響配對，不發出：人數與時長只寫入不重畫，複製編制與聲部組只重畫這張表。
-上方顯示群組連到譜庫的哪裡（曲目 › 版本 › 樂章）；沒連線時是「連到譜庫…」按鈕，按下發出 link_requested，
+上方顯示群組連到譜庫的哪裡（曲目 › 版本 › 樂章），其下是群組對到的 HuaXia 曲目（發譜預覽的「曲目」步挑的）；沒連線時是「連到譜庫…」按鈕，按下發出 link_requested，
 由主視窗開啟連線對話框，連上後以 show_linked 標出依位置猜的聲部。連到譜庫的群組刪除聲部前先確認（等於從樂譜刪除），
 已有 Drive 檔案的聲部不刪；聲部組旁另寫出譜庫裡用到這種樂器的其他曲目數。
 群組有未同步的值（存檔時寫不進譜庫）時，頂端的提示列寫出是哪些，人數與時長旁寫出譜庫現在的值。
@@ -38,7 +38,7 @@ from core.instrument_list import instrument_list_text
 from core.locale import localized, t
 from core.models import (
     CatalogChange, CatalogChangeKind, CatalogLink, CatalogListChange, DuplicateVoiceError, FiledVoicesError,
-    FileInfo, Headcount, LinkResult, format_duration,
+    FileInfo, Headcount, HuaXiaLink, LinkResult, format_duration,
 )
 from core.sections import section_label
 from core.voice_names import VoiceKey, distinct_voices, duplicate_rows, instrument_name, voice_key
@@ -195,6 +195,11 @@ class InstrumentationTable(QWidget):
         layout.addWidget(title)
         self.header = QVBoxLayout()
         self.header.addLayout(self._build_link_row())
+        self._huaxia_label = QLabel()
+        self._huaxia_label.setObjectName("huaxia_piece")
+        self._huaxia_label.setWordWrap(True)
+        self._huaxia_label.hide()
+        self.header.addWidget(self._huaxia_label)
         self._unsynced_bar = QLabel()
         self._unsynced_bar.setObjectName("unsynced_bar")
         self._unsynced_bar.setWordWrap(True)
@@ -446,17 +451,19 @@ class InstrumentationTable(QWidget):
         self._list_copy_sources()
 
     def _show_link(self):
-        """顯示群組連到譜庫的哪裡；沒連線時顯示「連到譜庫…」按鈕，不是群組時兩者都收起"""
+        """顯示群組連到譜庫的哪裡與對到的 HuaXia 曲目；沒連線時顯示「連到譜庫…」按鈕，不是群組時都收起"""
         link = self._group.catalog_link if self._group else None
         self._link_label.setText(link_text(link) if link else "")
         self._link_label.setVisible(link is not None)
         self._link_button.setVisible(self._group is not None and link is None)
+        huaxia = self._group.huaxia_link if self._group else None
+        self._huaxia_label.setText(_huaxia_text(huaxia) if huaxia else "")
+        self._huaxia_label.setVisible(huaxia is not None)
 
     def _show_unsynced(self, changes: List[CatalogChange]):
         """群組頂端寫出未同步的值，時長未同步時旁邊寫出譜庫現在的值；沒有時收起"""
-        self._unsynced_bar.setText(
-            t("catalog.unsynced.bar", items="、".join(_change_text(change) for change in changes)) if changes else "",
-        )
+        items = "、".join(catalog_change_text(change) for change in changes)
+        self._unsynced_bar.setText(t("catalog.unsynced.bar", items=items) if changes else "")
         self._unsynced_bar.setVisible(bool(changes))
         duration = next((change for change in changes if change.kind is CatalogChangeKind.DURATION), None)
         self._duration_catalog_now.setText(
@@ -818,8 +825,8 @@ def _catalog_value(text: str) -> str:
     return text or t("catalog.unsynced.blank")
 
 
-def _change_text(change: CatalogChange) -> str:
-    """未同步提示列裡一項改動的寫法（與衝突畫面的項目同一套）"""
+def catalog_change_text(change: CatalogChange) -> str:
+    """未同步提示列裡一項改動的寫法（與衝突畫面的項目同一套；發譜預覽標出未同步的值也用它）"""
     if change.kind is CatalogChangeKind.VOICES:
         return t("catalog.unsynced.voices")
     if change.kind is CatalogChangeKind.HEADCOUNT:
@@ -842,6 +849,11 @@ def link_text(link: CatalogLink) -> str:
         "catalog.link.path", piece=link.piece_title, edition=link.edition_label or t("catalog.link.unnamed_edition"),
         movement=link.movement_name if link.movement_id else t("catalog.link.whole"),
     )
+
+
+def _huaxia_text(link: HuaXiaLink) -> str:
+    """對到的 HuaXia 曲目的顯示：曲名；發譜時才新建的寫明新建"""
+    return t("publish.huaxia_new_piece" if link.new_piece else "publish.huaxia_piece", title=link.piece_title)
 
 
 def _count_spin(maximum: int, blank_zero: bool = True) -> QSpinBox:

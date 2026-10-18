@@ -16,7 +16,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.constants import HuaXiaEnsemble, OrchestraType
-from core.models import CatalogChangeKind, CatalogLink, CatalogSnapshot, FileInfo, Headcount, HuaXiaLink, NewHuaXiaPiece, Project
+from core.models import (
+    CatalogChangeKind, CatalogLink, CatalogSnapshot, FileInfo, Headcount, HuaXiaLink, NewHuaXiaPiece, Project,
+)
 from services.huaxia_auth_service import AccountStanding, HuaXiaAuthService, NotOfficer
 from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaClient, HuaXiaError, HuaXiaErrorKind, HuaXiaPiece
 from services.project_service import ProjectService

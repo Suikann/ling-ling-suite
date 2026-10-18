@@ -12,13 +12,14 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QCheckBox, QComboBox, QPushButton, QFileDialog,
     QMessageBox, QTabWidget, QMenu, QProgressBar,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
+from core.catalog_constants import PublishingPlatform
 from core.catalog_errors import CatalogFailure, as_catalog_error
 from core.catalog_sync import PlaceWrite, SyncOutcome, WriteSource, place_writes
 from core.launch_env import app_version, current_build
@@ -28,6 +29,7 @@ from core.paths import same_path
 from core.voice_names import duplicate_rows
 from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
+from services.club_settings_service import ClubSettingsService
 from services.compression_output_service import CompressionBatch, CompressionOutputService
 from services.compression_service import CompressionResult, CompressionService
 from services.deposit_service import DepositOutcome, DepositProgress, DepositService
@@ -35,11 +37,15 @@ from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
 from services.huaxia_auth_service import HuaXiaAuthService
+from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaError, HuaXiaErrorKind
 from services.import_service import ImportService
 from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVerdict
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from services.project_access import AccessResult, ProjectAccess
+from services.publish_service import (
+    FunctionProblem, ProjectBlock, PublishReadiness, PublishService, check_groups, project_blocks,
+)
 from services.rename_service import assign_default_sections
 from services.split_service import SplitService
 from ui.background_task import BackgroundTask, Work
@@ -105,6 +111,34 @@ _PENDING_MOVE_TEXTS = {
 }
 
 
+# 擋下整個發譜的原因的說明
+_PROJECT_BLOCK_KEYS = {
+    ProjectBlock.UNSAVED: "publish.blocked.unsaved",
+    ProjectBlock.NOT_CHINESE_ORCHESTRA: "publish.blocked.not_chinese_orchestra",
+}
+
+
+def _not_ready_text(readiness: PublishReadiness) -> str:
+    """HuaXia 那一側不能發的說明：不是幹部的分類，或發譜函式缺少、版本不符"""
+    if readiness.not_officer is not None:
+        from ui.catalog_settings_dialog import not_officer_text
+        return not_officer_text(readiness.not_officer)
+    if readiness.function_problem is FunctionProblem.MISSING:
+        return t("publish.function_missing")
+    return t("publish.function_mismatch", found=readiness.function_version, expected=PUBLISH_INTERFACE_VERSION)
+
+
+def _huaxia_error_text(error: HuaXiaError) -> str:
+    """按下發譜時連 HuaXia 失敗的說明"""
+    if error.kind is HuaXiaErrorKind.SESSION_GONE:
+        return t("huaxia.auth.session_gone")
+    if error.kind is HuaXiaErrorKind.UNREACHABLE:
+        return t("publish.unreachable")
+    if error.kind is HuaXiaErrorKind.SIGNED_OUT:
+        return t("huaxia.auth.not_connected")
+    return t("publish.failed", error=str(error))
+
+
 class MainWindow(QMainWindow):
     """應用程式主視窗"""
 
@@ -162,6 +196,9 @@ class MainWindow(QMainWindow):
         self._deposit_service = DepositService(self.file_service, self._log)
         # 上次存入中斷（取消或中途失敗）前完成了幾份；0 表示上次沒有中斷，存入預覽據此提示
         self._deposit_interrupted = 0
+        # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀
+        self._club_settings = ClubSettingsService(preferences, self._log)
+        self._publisher = PublishService(self._huaxia_auth)
         # 聲部名稱自動完成的候選全程式一份：譜庫視窗讀到的聲部名稱，編制表與分割視窗都用
         self._voice_candidates = VoiceCandidates()
         # 「關於」顯示的版號：打包版讀資源目錄的版號檔，開發版為 None
@@ -289,7 +326,7 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([560, 720])
         self._build_bottom_panel(main_layout)
-        self._edit_widgets += [self._orchestra_combo, self._master_template_entry, self._vars_btn]
+        self._edit_widgets += [self._orchestra_combo, self._master_template_entry, self._vars_btn, self._publish_btn]
         self._rebuild_tabs()
 
     def _build_bottom_panel(self, parent_layout):
@@ -324,6 +361,10 @@ class MainWindow(QMainWindow):
         self._task_cancel_btn = QPushButton()
         self._task_cancel_btn.clicked.connect(self._cancel_background)
         action_row.addWidget(self._task_cancel_btn)
+        self._publish_btn = QPushButton(t("publish.button"))
+        self._publish_btn.clicked.connect(self._publish)
+        action_row.addWidget(self._publish_btn)
+        self._show_publish_button()
         self._rename_btn = QPushButton(t("panel.preview_rename"))
         self._rename_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 8px 24px;")
         self._rename_btn.clicked.connect(self._preview_and_rename)
@@ -1307,7 +1348,75 @@ class MainWindow(QMainWindow):
         dialog = CatalogSettingsDialog(
             self._auth_service, self._preferences, self, log=self._log, huaxia_auth=self._huaxia_auth,
         )
-        return dialog.exec() == CatalogSettingsDialog.Accepted
+        accepted = dialog.exec() == CatalogSettingsDialog.Accepted
+        self._show_publish_button()
+        return accepted
+
+    # --- 發譜 ---
+
+    def _show_publish_button(self):
+        """依這台電腦記住的社團設定顯示或隱藏「發譜」"""
+        self._publish_btn.setVisible(self._club_settings.remembered() is PublishingPlatform.HUAXIA)
+
+    def changeEvent(self, event):
+        """回到主視窗時（例如關掉讀過社團設定的譜庫視窗）依記住的社團設定更新「發譜」"""
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._show_publish_button()
+        super().changeEvent(event)
+
+    def _publish(self):
+        """按了「發譜」：檢查能不能發，不能就寫出原因；能就開啟發譜預覽
+
+        依序：專案層級的檢查（未存檔、不是國樂團，不連網）、重讀社團設定（已拿掉 HuaXia 就說明並隱藏按鈕；
+        讀不到時頂端顯示提示列）、沒登入 HuaXia 時先登入、在背景重查幹部身分與發譜函式並讀曲目。
+        """
+        blocks = project_blocks(self.project)
+        if blocks:
+            QMessageBox.warning(self, t("publish.title"), "\n".join(t(_PROJECT_BLOCK_KEYS[b]) for b in blocks))
+            return
+        if not self._club_settings_enable_huaxia():
+            return
+        if not self._huaxia_auth.status().signed_in and not self._sign_in_to_publish():
+            return
+        try:
+            readiness = run_while_waiting(
+                self, t("publish.title"), t("publish.checking"), self._publisher.prepare, lambda: None,
+            )
+        except HuaXiaError as e:
+            QMessageBox.warning(self, t("publish.title"), _huaxia_error_text(e))
+            return
+        if not readiness.ready:
+            QMessageBox.warning(self, t("publish.title"), _not_ready_text(readiness))
+            return
+        from ui.publish_dialog import PublishPreviewDialog
+        PublishPreviewDialog(self.project, check_groups(self.project), readiness, self).exec()
+        self._instrumentation_table.refresh()
+
+    def _club_settings_enable_huaxia(self) -> bool:
+        """在背景重讀譜庫的社團設定；已拿掉 HuaXia 發譜時說明並隱藏「發譜」，讀不到時頂端顯示提示列（重試再按一次）"""
+        def read():
+            """在背景接譜庫並讀社團設定"""
+            return self._club_settings.read(self._catalog_factory())
+        try:
+            platform = run_while_waiting(self, t("publish.title"), t("publish.checking"), read, lambda: None)
+        except Exception as e:
+            failure = CatalogFailure.from_error(as_catalog_error(e), t("catalog.action.read_club_settings"))
+            self._catalog_error_bar.show_failure(t("publish.club_settings_failed"), failure, self._publish)
+            return False
+        self._catalog_error_bar.clear()
+        self._show_publish_button()
+        if platform is not PublishingPlatform.HUAXIA:
+            QMessageBox.information(self, t("publish.title"), t("publish.club_settings_removed"))
+            return False
+        return True
+
+    def _sign_in_to_publish(self) -> bool:
+        """還沒登入 HuaXia：先提醒連結 Discord，同意後以 Discord 登入，回傳是否登入成功"""
+        from ui.catalog_settings_dialog import sign_in_huaxia
+        answer = QMessageBox.question(
+            self, t("publish.title"), t("publish.sign_in_first", reminder=t("huaxia.auth.link_discord_first")),
+        )
+        return answer == QMessageBox.Yes and sign_in_huaxia(self, self._huaxia_auth)
 
     # --- 輔助 ---
 
