@@ -4,6 +4,7 @@
 
 定義專案、群組、檔案資訊等核心資料結構。
 """
+import math
 import os
 import uuid
 from dataclasses import dataclass, field, replace
@@ -13,7 +14,7 @@ from typing import (
 )
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_ORCHESTRA_TYPE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE,
-    INSTRUMENTATION_FILE_VERSION, LEGACY_PROJECT_FILE_VERSIONS, PROJECT_FILE_VERSION, OperationKind,
+    HUAXIA_DURATION_STEP_MINUTES, INSTRUMENTATION_FILE_VERSION, HuaXiaEnsemble, LEGACY_PROJECT_FILE_VERSIONS, PROJECT_FILE_VERSION, OperationKind,
     OrchestraType, PartsOutputMode, WorkspaceStatus,
 )
 from core.paths import path_key
@@ -185,6 +186,14 @@ def format_duration(seconds: Optional[int]) -> str:
     return f"{minutes}:{rest:02d}"
 
 
+def duration_minutes(seconds: Optional[int]) -> Optional[float]:
+    """時長（秒）換算成 HuaXia 的分鐘數，四捨五入到 HUAXIA_DURATION_STEP_MINUTES；未填為 None"""
+    if not seconds:
+        return None
+    steps = math.floor(seconds / 60 / HUAXIA_DURATION_STEP_MINUTES + 0.5)
+    return steps * HUAXIA_DURATION_STEP_MINUTES
+
+
 class CatalogChangeKind(Enum):
     """群組相對於譜庫快照的一種改動"""
     VOICES = "voices"          # 聲部清單（增刪、名稱、順序）
@@ -323,6 +332,81 @@ class CatalogListChange(NamedTuple):
     moved: List[str]
 
 
+class NewHuaXiaPiece(NamedTuple):
+    """發譜時要在 HuaXia 新建的曲目的欄位（pieces 的同名欄位；備註留空）
+
+    Attributes:
+        title: 曲名
+        composer: 作曲家
+        duration_min: 時長（分鐘）；未填為 None
+        ensemble: 合奏或絲竹
+    """
+    title: str
+    composer: str
+    duration_min: Optional[float]
+    ensemble: HuaXiaEnsemble
+
+    @classmethod
+    def for_group(cls, group: "Group") -> "NewHuaXiaPiece":
+        """新建曲目的預設值：曲名＋樂章名稱（沒有樂章名稱用樂章編號，整首只用曲名）、群組的作曲家與時長、合奏
+
+        曲名沒填時用群組名稱；時長由秒換算成分鐘，四捨五入到 HUAXIA_DURATION_STEP_MINUTES。
+        """
+        movement = group.movement_name.strip() or group.movement_number.strip()
+        title = " ".join(part for part in (group.piece_name.strip() or group.name.strip(), movement) if part)
+        return cls(title, group.composer, duration_minutes(group.duration_seconds), HuaXiaEnsemble.TUTTI)
+
+    def to_data(self) -> Dict[str, Any]:
+        """專案檔中存的內容"""
+        return {
+            "title": self.title, "composer": self.composer, "duration_min": self.duration_min,
+            "ensemble": self.ensemble.value,
+        }
+
+    @classmethod
+    def from_data(cls, data: Dict[str, Any]) -> "NewHuaXiaPiece":
+        """由專案檔中的內容還原；不認得的合奏／絲竹當成合奏"""
+        try:
+            ensemble = HuaXiaEnsemble(data.get("ensemble"))
+        except ValueError:
+            ensemble = HuaXiaEnsemble.TUTTI
+        return cls(data.get("title", ""), data.get("composer", ""), data.get("duration_min"), ensemble)
+
+
+@dataclass
+class HuaXiaLink:
+    """群組對到的 HuaXia 曲目：挑選現有的，或發譜時新建的
+
+    只記曲目編號與新建的欄位，不記登入資訊。曲名記下來給群組面板顯示，不必連網。
+
+    Attributes:
+        piece_id: HuaXia 的曲目編號（pieces.id）；新建的曲目在發譜一開始才產生，之前為空字串
+        piece_title: 曲名
+        new_piece: 新建時的欄位；挑選現有曲目時為 None
+    """
+    piece_id: str = ""
+    piece_title: str = ""
+    new_piece: Optional[NewHuaXiaPiece] = None
+
+    def to_data(self) -> Dict[str, Any]:
+        """專案檔中存的內容"""
+        return {
+            "piece_id": self.piece_id,
+            "piece_title": self.piece_title,
+            "new_piece": self.new_piece.to_data() if self.new_piece else None,
+        }
+
+    @classmethod
+    def from_data(cls, data: Dict[str, Any]) -> "HuaXiaLink":
+        """由專案檔中的內容還原"""
+        new_piece = data.get("new_piece")
+        return cls(
+            piece_id=data.get("piece_id", ""),
+            piece_title=data.get("piece_title", ""),
+            new_piece=NewHuaXiaPiece.from_data(new_piece) if new_piece else None,
+        )
+
+
 class LinkChoice(Enum):
     """群組與譜庫那處都已有編制時，合併差異表上整張選用哪一邊"""
     CATALOG = "catalog"    # 用譜庫的：換成譜庫的編制，分譜依聲部名稱帶著走
@@ -412,6 +496,7 @@ class Group:
     use_small_template: bool = False
     small_template: str = ""
     catalog_link: Optional[CatalogLink] = None
+    huaxia_link: Optional[HuaXiaLink] = None
 
     def __post_init__(self):
         self.present = _present_flags(self.present, len(self.instruments))
@@ -438,6 +523,7 @@ class Group:
             "use_small_template": self.use_small_template,
             "small_template": self.small_template,
             "catalog_link": self.catalog_link.to_data() if self.catalog_link else None,
+            "huaxia_link": self.huaxia_link.to_data() if self.huaxia_link else None,
         }
 
     @classmethod
@@ -463,6 +549,7 @@ class Group:
             use_small_template=data.get("use_small_template", False),
             small_template=data.get("small_template", ""),
             catalog_link=CatalogLink.from_data(data["catalog_link"]) if data.get("catalog_link") else None,
+            huaxia_link=HuaXiaLink.from_data(data["huaxia_link"]) if data.get("huaxia_link") else None,
         )
 
     def update(self, **fields: Any) -> None:
@@ -1291,6 +1378,11 @@ class Project:
         group.headcounts = _or_unfilled(matched)
         self._changed()
         return [voice for voice, headcount in zip(group.instruments, matched) if headcount is None]
+
+    def set_huaxia_link(self, group: Group, link: Optional[HuaXiaLink]) -> None:
+        """設定群組對到的 HuaXia 曲目（發譜預覽的「曲目」步）；None 為還沒對到"""
+        group.huaxia_link = link
+        self._changed()
 
     def set_duration(self, group: Group, seconds: Optional[int]) -> None:
         """設定群組的時長（秒）；0 與 None 為未填"""

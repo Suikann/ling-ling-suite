@@ -425,6 +425,17 @@ class OrchestraType(str, Enum):
     WESTERN = "western"
 
 
+class HuaXiaEnsemble(str, Enum):
+    """HuaXia 曲目屬於大團的合奏或絲竹（pieces.ensemble 的值，專案檔存的也是它）：決定誰看得到總譜"""
+    TUTTI = "tutti"
+    SIZHU = "sizhu"
+
+
+# HuaXia 曲目時長（pieces.duration_min，numeric）的間隔：HuaXia 編輯曲目的表單以 0.5 分鐘為一格，
+# 寫成別的值會讓幹部在網頁上改曲目時被表單擋下
+HUAXIA_DURATION_STEP_MINUTES = 0.5
+
+
 # 各樂團類型的聲部組，依選單順序；兩套都另有 OTHER_SECTION
 ORCHESTRA_SECTIONS: Dict[OrchestraType, Tuple[str, ...]] = {
     OrchestraType.CHINESE: ("吹管", "拉弦", "彈撥", "打擊", "低音"),

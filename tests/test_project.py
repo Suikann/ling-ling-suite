@@ -19,9 +19,9 @@ from enum import Enum
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from core.constants import PROJECT_FILE_VERSION, OrchestraType
+from core.constants import PROJECT_FILE_VERSION, HuaXiaEnsemble, OrchestraType
 from core.models import (
-    CatalogLink, CatalogSnapshot, DuplicateVoiceError, FileInfo, Group, Headcount, Project, SplitPlacement, SplitResult, UndoMapping,
+    CatalogLink, CatalogSnapshot, DuplicateVoiceError, FileInfo, Group, Headcount, HuaXiaLink, NewHuaXiaPiece, Project, SplitPlacement, SplitResult, UndoMapping,
     format_duration, sum_headcounts,
 )
 from services.project_service import ProjectService
@@ -114,6 +114,9 @@ def _rich_group(name: str, parts: list) -> Group:
             snapshot=CatalogSnapshot([(p, Headcount(2)) for p in parts], 470, {parts[0]: "木管"}, [parts[0]]),
             other_pieces={parts[0]: 3},
         ),
+        huaxia_link=HuaXiaLink(
+            piece_id="hx-1", piece_title="命運", new_piece=NewHuaXiaPiece("命運", "Beethoven", 7.5, HuaXiaEnsemble.SIZHU),
+        ),
     )
 
 
@@ -161,6 +164,8 @@ def _changed(value):
         return value[:-1]
     if isinstance(value, dict):
         return {**value, "x": 0}
+    if isinstance(value, tuple) and hasattr(value, "_fields"):
+        return None
     if dataclasses.is_dataclass(value):
         try:
             return type(value)()
