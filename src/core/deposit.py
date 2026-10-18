@@ -100,7 +100,7 @@ class GroupSources:
     Attributes:
         group_id: 群組 ID
         group_name: 群組名稱
-        score_label: 總譜標籤（譜庫還沒有總譜列時，新增的那列寫它）
+        score_label: 總譜標籤（存入紀錄裡總譜的聲部欄寫它）
         link: 群組連到譜庫的哪裡；沒連時為 None
         block: 整個群組不存入的原因；可以存入時為 None
         sources: 要存入的檔（總譜在前，接著依序的分譜）
@@ -236,7 +236,7 @@ class DepositRecord:
         group_id: 群組 ID
         group_name: 群組名稱
         voice: 聲部名稱；總譜為 SCORE_VOICE
-        score_label: 總譜標籤（譜庫還沒有總譜列時新增的那列寫它）
+        score_label: 總譜標籤（存入紀錄裡總譜的聲部欄寫它）
         local_path: 本機路徑
         drive_file: 存入後 Drive 上的那份
         action: 做了的事

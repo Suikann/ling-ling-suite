@@ -122,11 +122,21 @@ class TestNewUpload(DepositTestCase):
             "二胡 I": ("分譜/二胡 I.pdf", "二胡 I.pdf"),
             "琵琶": ("分譜/琵琶.pdf", "琵琶.pdf"),
         })
+        score_rows = [r for r in records(self.google, SHEET_PARTS) if r["is_score"]]
+        self.assertEqual([(r["edition_id"], r["movement_id"], r["instrument_name"]) for r in score_rows], [("e1", "m1", "")])
         self.assertEqual(outcome.fingerprints, {
             self.score.original_path: md5(b"score"),
             self.parts[0].original_path: md5("二胡 I".encode()),
             self.parts[1].original_path: md5("琵琶".encode()),
         })
+
+
+    def test_the_score_is_registered_on_the_existing_score_row(self):
+        add_row(self.google, SHEET_PARTS, id="sc", edition_id="e1", movement_id="m1", is_score="TRUE")
+        self.deposit()
+        score_rows = [r for r in records(self.google, SHEET_PARTS) if r["is_score"]]
+        self.assertEqual([r["id"] for r in score_rows], ["sc"])
+        self.assertEqual(self.registered()["總譜"], ("總譜.pdf", "總譜.pdf"))
 
 
 class TestRedeposit(DepositTestCase):

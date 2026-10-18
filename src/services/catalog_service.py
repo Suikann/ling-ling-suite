@@ -136,9 +136,27 @@ def _voice_parts(parts: List[Tuple[int, Part]]) -> List[Tuple[int, Part]]:
 
 
 def _score_part(parts: List[Tuple[int, Part]]) -> Optional[Tuple[int, Part]]:
-    """一處的總譜列與列號：依排序欄排在最前面的總譜列；沒有時為 None"""
-    scores = [pair for pair in parts if _is_true(pair[1].is_score)]
-    return min(scores, key=lambda pair: sort_order_key(pair[1].sort_order)) if scores else None
+    """一處的總譜列與列號：有幾列時只認排在前面那一列；沒有時為 None"""
+    return next(((row, part) for row, part in parts if _is_true(part.is_score)), None)
+
+
+def _register_row(batch: "_Batch", target: Tuple[int, Part], file: DriveFile) -> str:
+    """把分譜列改登記成 file（已經登記這一份時不寫），回傳被換掉的舊檔 ID（沒有時為空字串）"""
+    row, part = target
+    old = part.drive_file_id.strip()
+    if old != file.id:
+        batch.set(SHEET_PARTS, row, "drive_file_id", file.id)
+    if part.file_name.strip() != file.name:
+        batch.set(SHEET_PARTS, row, "file_name", file.name)
+    return old if old != file.id else ""
+
+
+def _add_score_row(batch: "_Batch", edition_id: str, movement_id: str, file: DriveFile) -> None:
+    """一處還沒有總譜列時新增一列登記 file：只以 is_score 標記，聲部名稱留空"""
+    batch.add(SHEET_PARTS, {
+        "edition_id": edition_id, "movement_id": movement_id, "is_score": CATALOG_TRUE,
+        "drive_file_id": file.id, "file_name": file.name,
+    })
 
 
 def _relocation(file: DriveFile, folder_id: str) -> Tuple[str, List[str]]:
@@ -445,10 +463,9 @@ class _PlaceTables:
 
     def _score_row(self, edition_id: str, movement_id: str) -> Optional[Tuple[int, Part]]:
         """一處的總譜列與列號；有幾列時只認排在前面那一列"""
-        return next((
-            (row, part) for row, part in self._parts
-            if part.edition_id == edition_id and part.movement_id == movement_id and _is_true(part.is_score)
-        ), None)
+        return _score_part([
+            (row, part) for row, part in self._parts if part.edition_id == edition_id and part.movement_id == movement_id
+        ])
 
     def _duration_row(self, edition_id: str, movement_id: str) -> Optional[Tuple[int, Dict[str, str]]]:
         """一處的時長列與列號；有幾列時只認第一列"""
@@ -862,13 +879,11 @@ class CatalogService:
         sheets = _place_sheets(self._call(self._sheets.sheet_titles))
         return _PlaceTables(dict(zip(sheets, self._read_sheets(*sheets))), orchestra_type)
 
-    def _pdfs_under(self, folder_id: str, prefix: str = "") -> List[FolderPdf]:
+    def _pdfs_under(self, folder_id: str) -> List[FolderPdf]:
         """資料夾與它所有子資料夾裡的 PDF，連同在資料夾裡的路徑，依路徑排序（每個資料夾一次列出）"""
-        contents = self.folder_contents(folder_id)
-        pdfs = [FolderPdf(pdf, prefix + pdf.name) for pdf in contents.pdfs]
-        for folder in contents.folders:
-            pdfs += self._pdfs_under(folder.id, f"{prefix}{folder.name}/")
-        return sorted(pdfs, key=lambda pdf: pdf.path)
+        return sorted((
+            FolderPdf(pdf, "/".join((*path, pdf.name))) for path, _, pdfs in self._folder_tree(folder_id) for pdf in pdfs
+        ), key=lambda pdf: pdf.path)
 
     @staticmethod
     def _place(catalog: "_PlaceTables", edition_id: str, movement_id: str) -> CatalogPlace:
@@ -1028,13 +1043,20 @@ class CatalogService:
         parts = _numbered(part_rows, SHEET_PARTS, Part)
         claimed = frozenset(part.drive_file_id.strip() for _, part in parts if part.drive_file_id.strip())
         trees: Dict[str, Tuple[Dict[Tuple[str, ...], str], Dict[Tuple[str, ...], List[DriveFile]]]] = {}
+        # 版本資料夾的樹：子資料夾以比對鍵（folder_key）認，同名（不分大小寫）的只認先列到的那個
         result = {}
         for edition_id, movement_id in places:
             if edition_id not in editions:
                 raise CatalogError(CatalogErrorKind.GONE, f"edition {edition_id} is no longer in the catalog")
             folder_id = editions[edition_id].drive_folder_id.strip()
             if folder_id and folder_id not in trees:
-                trees[folder_id] = self._folder_tree(folder_id)
+                folders_by_key: Dict[Tuple[str, ...], str] = {}
+                pdfs_by_key: Dict[Tuple[str, ...], List[DriveFile]] = {}
+                for path, current, pdfs in self._folder_tree(folder_id):
+                    if folder_key(path) not in folders_by_key:
+                        folders_by_key[folder_key(path)] = current
+                        pdfs_by_key[folder_key(path)] = pdfs
+                trees[folder_id] = (folders_by_key, pdfs_by_key)
             folders, files = trees.get(folder_id, ({}, {}))
             here = [(row, part) for row, part in parts if part.edition_id == edition_id and part.movement_id == movement_id]
             voices = _voice_parts(here)
@@ -1056,7 +1078,8 @@ class CatalogService:
     def record_deposits(self, records: Sequence[DepositRecord], operator: str) -> None:
         """存入後登記分譜列並寫存入紀錄：寫入前一刻才讀分譜工作表找列號，全部以一個請求寫入
 
-        每份檔的分譜列（總譜為那處的總譜列，還沒有就新增一列）改登記成存入後的 Drive 檔案與檔名，只送值變了的格子；
+        每份檔的分譜列（總譜為那處的總譜列，還沒有就新增一列，與 register_files 相同）改登記成存入後的 Drive 檔案與檔名，
+        只送值變了的格子，被換掉的舊檔不動（新上傳只在原本登記的檔已不在 Drive 或在垃圾桶裡時發生）；
         聲部的列已被刪掉時不登記。每份檔一列存入紀錄，這一批共用一個新抽的存入編號。請求數固定：
         列出工作表名稱、讀取、寫入各一次，存入紀錄還沒建立時另建一次。
 
@@ -1097,17 +1120,10 @@ class CatalogService:
                 key = voice_key(record.voice)
                 target = next((pair for pair in _voice_parts(here) if voice_key(pair[1].instrument_name) == key), None)
             if target is not None:
-                row, part = target
-                for column, value in (("drive_file_id", file.id), ("file_name", file.name)):
-                    if getattr(part, column).strip() != value:
-                        batch.set(SHEET_PARTS, row, column, value)
+                _register_row(batch, target, file)
             elif record.voice == SCORE_VOICE and (record.edition_id, record.movement_id) not in added_scores:
                 added_scores.add((record.edition_id, record.movement_id))
-                batch.add(SHEET_PARTS, {
-                    "edition_id": record.edition_id, "movement_id": record.movement_id,
-                    "instrument_name": record.score_label, "is_score": CATALOG_TRUE, "drive_file_id": file.id,
-                    "file_name": file.name,
-                })
+                _add_score_row(batch, record.edition_id, record.movement_id, file)
             batch.add(SHEET_DEPOSIT_LOG, {
                 "deposit_id": deposit_id, "time": stamp, "operator": operator, "edition_id": record.edition_id,
                 "movement_id": record.movement_id, "group": record.group_name, "voice": record.voice or record.score_label,
@@ -1286,28 +1302,18 @@ class CatalogService:
                 if part.edition_id == pending.edition_id and part.movement_id == pending.movement_id
             ]
             voices = {voice_key(part.instrument_name): (row, part) for row, part in _voice_parts(here)}
-            score = next(((row, part) for row, part in here if _is_true(part.is_score)), None)
+            score = _score_part(here)
             batch = _Batch({SHEET_PARTS: rows}, self._draw_ids)
-            replaced = []
             targets = []
             for voice, file in pending.voices.items():
                 if voice_key(voice) not in voices:
                     raise CatalogError(CatalogErrorKind.GONE, f"voice {voice} is no longer in the catalog")
                 targets.append((voices[voice_key(voice)], file))
             if pending.score is not None and score is None:
-                batch.add(SHEET_PARTS, {
-                    "edition_id": pending.edition_id, "movement_id": pending.movement_id, "is_score": CATALOG_TRUE,
-                    "drive_file_id": pending.score.id, "file_name": pending.score.name,
-                })
+                _add_score_row(batch, pending.edition_id, pending.movement_id, pending.score)
             elif pending.score is not None:
                 targets.append((score, pending.score))
-            for (row, part), file in targets:
-                if part.drive_file_id.strip() == file.id:
-                    continue
-                if part.drive_file_id.strip():
-                    replaced.append(part.drive_file_id.strip())
-                batch.set(SHEET_PARTS, row, "drive_file_id", file.id)
-                batch.set(SHEET_PARTS, row, "file_name", file.name)
+            replaced = [old for old in (_register_row(batch, target, file) for target, file in targets) if old]
             # 寫入前就記下：回應沒收到而其實已寫入時，重送讀到的已是新登記，舊檔只能從這裡知道
             pending.replaced += [file_id for file_id in replaced if file_id not in pending.replaced]
             if batch.cells:
@@ -1618,24 +1624,19 @@ class CatalogService:
         query = " and ".join([f"{drive_literal(folder_id)} in parents", *conditions, "trashed = false"])
         return self._list_files(query)
 
-    def _folder_tree(
-        self, folder_id: str,
-    ) -> Tuple[Dict[Tuple[str, ...], str], Dict[Tuple[str, ...], List[DriveFile]]]:
-        """列出 Drive 資料夾與底下各層子資料夾：比對鍵（folder_key）→ 資料夾 ID、比對鍵 → 裡面的 PDF；每個資料夾列一次"""
-        folders = {(): folder_id}
-        files: Dict[Tuple[str, ...], List[DriveFile]] = {}
-        pending = [((), folder_id)]
+    def _folder_tree(self, folder_id: str) -> List[Tuple[Tuple[str, ...], str, List[DriveFile]]]:
+        """Drive 資料夾與底下各層子資料夾，每個一項：（在資料夾裡的路徑，ID，裡面的 PDF）；資料夾本身的路徑是空的
+
+        由外而內逐層列出，每個資料夾一次請求；子資料夾依名稱排序。
+        """
+        tree = []
+        pending: List[Tuple[Tuple[str, ...], str]] = [((), folder_id)]
         while pending:
             path, current = pending.pop(0)
-            for child in self._children(current):
-                if child.mime_type == DRIVE_FOLDER_MIME:
-                    key = path + folder_key([child.name])
-                    if key not in folders:
-                        folders[key] = child.id
-                        pending.append((key, child.id))
-                elif child.mime_type == DRIVE_PDF_MIME:
-                    files.setdefault(path, []).append(child)
-        return folders, files
+            contents = self.folder_contents(current)
+            tree.append((path, current, contents.pdfs))
+            pending += [(path + (folder.name,), folder.id) for folder in contents.folders]
+        return tree
 
     def _live_file(self, file_id: str) -> Optional[DriveFile]:
         """Drive 上還在（不在垃圾桶）的檔；已經沒有或在垃圾桶裡時為 None"""
