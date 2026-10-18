@@ -2,8 +2,9 @@
 """
 發譜預覽（PySide6）
 
-照原型 #63 發譜預覽的變體 B：分步驟「曲目 › 聲部 › 檔案 › 公演 › 確認」，每一步列出全部群組，擋下的群組寫出原因
-（發譜前的檢查見 services/publish_service.py）。目前做好前兩步：
+照原型 #63 發譜預覽的變體 B：分步驟「曲目 › 聲部 › 檔案 › 公演 › 確認」（publish_service.PublishStep），
+每一步列出全部群組，擋下的群組寫出原因（發譜前的檢查見 services/publish_service.py）。這次的選擇與各步的規則
+（選好了沒、「下一步」「發譜」按不按得下去）在 publish_service.PublishPreview，這裡只排畫面、把操作交給它：
 
 - 「曲目」：每個群組挑一首 HuaXia 的現有曲目（已封存的不列）或新建一首，新建的曲名、作曲家、時長（分鐘）與
   合奏／絲竹帶入預設值（NewHuaXiaPiece.for_group）、都能改；每次選擇經 Project.set_huaxia_link 立即寫進專案。
@@ -30,7 +31,7 @@
     dialog.exec()
 """
 import os
-from typing import Callable, Dict, List, Optional, Sequence, Set
+from typing import Callable, Dict, List, Optional, Sequence
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -51,17 +52,20 @@ from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.huaxia_client import HuaXiaEvent, HuaXiaPart, HuaXiaPiece, HuaXiaScore
 from services.publish_service import (
-    FilePlan, GroupCheck, GroupPublish, PartMatch, PublishFile, PublishReadiness, VoiceDecisions, VoicePlan, VoiceRow,
-    group_publish, oversized, plan_files, plan_voices,
+    FilePlan, GroupCheck, GroupPublish, PartMatch, PublishFile, PublishPreview, PublishReadiness, PublishStep, VoicePlan,
+    VoiceRow, oversized,
 )
 from ui.background_task import BackgroundTask
 from ui.compress_pdf import result_state, size_text
 from ui.compression_compare import CompressionCompareDialog
 from ui.instrumentation_table import catalog_change_text
 
-# 步驟的字串鍵，依順序
-STEPS = ("publish.step.piece", "publish.step.voices", "publish.step.files", "publish.step.events",
-         "publish.step.confirm")
+# 各步驟的名稱的字串鍵
+STEP_NAMES = {
+    PublishStep.PIECE: "publish.step.piece", PublishStep.VOICES: "publish.step.voices",
+    PublishStep.FILES: "publish.step.files", PublishStep.EVENTS: "publish.step.events",
+    PublishStep.CONFIRM: "publish.step.confirm",
+}
 # 擋下的原因、說明、取代與新增的文字顏色（未同步的是 UNSYNCED_COLOR）
 _BLOCKED_COLOR = "#e74c3c"
 _NOTE_COLOR = "#888888"
@@ -291,39 +295,32 @@ class PublishPreviewDialog(QDialog):
             download_back: 「從譜庫下載回來」：關掉預覽後以群組 ID 呼叫；省略時不顯示這個按鈕
         """
         super().__init__(parent)
-        self._project = project
         self._checks = checks
         self._readiness = readiness
-        self._file_service = file_service or FileService()
-        self._compressor = compressor or CompressionService(self._file_service)
+        file_service = file_service or FileService()
+        self._compressor = compressor or CompressionService(file_service)
+        self._preview = PublishPreview(project, checks, readiness, file_service, self._compressor.size_limit)
         self._opener = opener or ExternalOpener()
         self._download_back = download_back
-        # 壓縮：結果以本機檔的路徑為鍵；正在壓的那份；背景工作（第一次進「檔案」步時開始，一次壓完全部）
-        self._compressed: Dict[str, CompressionResult] = {}
+        # 壓縮：正在壓的那份；背景工作（第一次進「檔案」步時開始，一次壓完全部）
         self._compressing: Optional[str] = None
         self._compress_task: Optional[BackgroundTask] = None
         self._compress_started = False
-        # 選了「不發這份」的本機檔路徑；勾選要掛的公演的編號
-        self._dropped: Set[str] = set()
-        self._chosen_events: Set[str] = set()
         self._file_boxes: List[QWidget] = []
         self._confirm_widgets: List[QWidget] = []
-        self._pages: Dict[int, QWidget] = {}
-        self._current = 0
-        # 開啟預覽時各群組對到的曲目：改選別首再選回來時找回手動挑的聲部配對
-        self._opened_links = {check.group.id: check.group.huaxia_link for check in checks}
-        # 各群組這次在「聲部」步的決定，以群組 ID 為鍵；改選曲目時清掉
-        self._decisions: Dict[str, VoiceDecisions] = {}
+        self._current = PublishStep.PIECE
         self._voice_boxes: Dict[str, QGroupBox] = {}
         self.setWindowTitle(t("publish.preview.title", count=len(checks)))
         self.resize(1100, 600)
         self._build_ui()
-        self.add_step(0, self._build_piece_step())
-        self.add_step(1, self._build_voices_step())
-        self.add_step(2, self._build_files_step())
-        self.add_step(3, self._build_events_step())
-        self.add_step(4, self._build_confirm_step())
-        self._go(0)
+        self._pages = {
+            PublishStep.PIECE: self._build_piece_step(), PublishStep.VOICES: self._build_voices_step(),
+            PublishStep.FILES: self._build_files_step(), PublishStep.EVENTS: self._build_events_step(),
+            PublishStep.CONFIRM: self._build_confirm_step(),
+        }
+        for page in self._pages.values():
+            self._stack.addWidget(page)
+        self._go(PublishStep.PIECE)
 
     def _build_ui(self):
         """排出檢查結果的一行、步驟列、各步的頁面與底部按鈕"""
@@ -333,11 +330,11 @@ class PublishPreviewDialog(QDialog):
         layout.addWidget(checked)
         steps = QHBoxLayout()
         self._step_labels = []
-        for index, key in enumerate(STEPS):
-            label = QLabel(t("publish.step.numbered", number=index + 1, name=t(key)))
+        for number, step in enumerate(PublishStep, start=1):
+            label = QLabel(t("publish.step.numbered", number=number, name=t(STEP_NAMES[step])))
             self._step_labels.append(label)
             steps.addWidget(label)
-            if index < len(STEPS) - 1:
+            if step.offset(1) is not None:
                 steps.addWidget(QLabel("›"))
         steps.addStretch()
         layout.addLayout(steps)
@@ -354,10 +351,10 @@ class PublishPreviewDialog(QDialog):
         buttons.addWidget(self._compress_cancel)
         buttons.addStretch()
         self._back = QPushButton(t("publish.back"))
-        self._back.clicked.connect(lambda: self._go(self._current - 1))
+        self._back.clicked.connect(lambda: self._go(self._current.offset(-1)))
         buttons.addWidget(self._back)
         self._next = QPushButton(t("publish.next"))
-        self._next.clicked.connect(lambda: self._go(self._current + 1))
+        self._next.clicked.connect(lambda: self._go(self._current.offset(1)))
         buttons.addWidget(self._next)
         cancel = QPushButton(t("dialog.cancel_btn"))
         cancel.clicked.connect(self.reject)
@@ -368,34 +365,17 @@ class PublishPreviewDialog(QDialog):
         buttons.addWidget(self._publish)
         layout.addLayout(buttons)
 
-    def add_step(self, index: int, page: QWidget):
-        """接上第 index 步（STEPS 的順序）的頁面"""
-        self._pages[index] = page
-        self._stack.addWidget(page)
-        self._refresh_buttons()
-
     def voice_plan(self, group: Group) -> VoicePlan:
-        """群組目前的聲部配對與要寫的內容（依「曲目」步對到的曲目與「聲部」步的選擇）；群組要已對到曲目"""
-        link = group.huaxia_link
-        parts = self._readiness.parts.get(link.piece_id, []) if link.new_piece is None else []
-        return plan_voices(self._project, group, parts, self._decisions.setdefault(group.id, VoiceDecisions()))
+        """群組目前的聲部配對與要寫的內容（PublishPreview.voice_plan）；群組要已對到曲目"""
+        return self._preview.voice_plan(group)
 
     def file_plan(self, group: Group) -> FilePlan:
-        """群組要發的檔與各自要取代的（依目前的聲部配對）；群組要已對到曲目"""
-        link = group.huaxia_link
-        scores = self._readiness.scores.get(link.piece_id, []) if link.new_piece is None else []
-        return plan_files(group, self.voice_plan(group), scores, self._file_service)
+        """群組要發的檔與各自要取代的（PublishPreview.file_plan）；群組要已對到曲目"""
+        return self._preview.file_plan(group)
 
     def publish_plan(self) -> List[GroupPublish]:
-        """每個沒擋下的群組這次發譜要寫進 HuaXia 的全部內容（依預覽目前的選擇），依專案中的順序"""
-        events = [event for event in self._readiness.concerts if event.id in self._chosen_events]
-        return [
-            group_publish(
-                check.group, self.voice_plan(check.group), self.file_plan(check.group), self._compressed,
-                self._dropped, events, self._compressor.size_limit,
-            )
-            for check in self._checks if not check.blocked
-        ]
+        """每個沒擋下的群組這次發譜要寫進 HuaXia 的全部內容（PublishPreview.publish_plan），依專案中的順序"""
+        return self._preview.publish_plan()
 
     def done(self, code: int):
         """關閉預覽：停下還在跑的壓縮（之後它不再碰這個對話框），丟掉暫存的壓縮檔"""
@@ -403,74 +383,41 @@ class PublishPreviewDialog(QDialog):
             self._compress_task.cancel()
             self._compress_task.abandon()
             self._compress_task = None
-        for result in self._compressed.values():
+        for result in self._preview.compressed.values():
             self._compressor.discard(result)
-        self._compressed = {}
+        self._preview.compressed = {}
         super().done(code)
 
-    def _go(self, index: int):
-        """切到第 index 步：步驟列標出目前這步，還沒接上頁面的步驟變灰；「聲部」「檔案」「確認」步依目前的選擇重排"""
-        self._current = index
-        if index == 1:
+    def _go(self, step: PublishStep):
+        """切到這一步：步驟列標出目前這步；「聲部」「檔案」「確認」步依目前的選擇重排"""
+        self._current = step
+        if step is PublishStep.VOICES:
             self._show_voices()
-        elif index == 2:
+        elif step is PublishStep.FILES:
             self._start_compression()
             self._show_files()
-        elif index == 4:
+        elif step is PublishStep.CONFIRM:
             self._show_confirm()
-        self._stack.setCurrentWidget(self._pages[index])
-        for step, label in enumerate(self._step_labels):
-            if step == index:
+        self._stack.setCurrentWidget(self._pages[step])
+        for other, label in zip(PublishStep, self._step_labels):
+            if other is step:
                 label.setStyleSheet("font-weight: bold;")
             else:
                 label.setStyleSheet(f"color: {_NOTE_COLOR};")
         self._refresh_buttons()
 
     def _refresh_buttons(self):
-        """「上一步」要有上一步的頁面；「下一步」還要這一步都決定好了；最後一步換成「發譜」"""
-        last = self._current == len(STEPS) - 1
-        self._back.setEnabled(self._current - 1 in self._pages)
+        """「上一步」在第一步以外；「下一步」要這一步都決定好了；最後一步換成「發譜」"""
+        last = self._current.offset(1) is None
+        self._back.setEnabled(self._current.offset(-1) is not None)
         self._next.setVisible(not last)
-        self._next.setEnabled(self._current + 1 in self._pages and self._step_ready(self._current))
+        self._next.setEnabled(not last and self._preview.step_ready(self._current))
         self._publish.setVisible(last)
-        self._publish.setEnabled(last and self._can_publish())
-
-    def _can_publish(self) -> bool:
-        """前兩步都決定好、壓縮做完，有群組可以發，而且超過上限的檔都壓縮好或選了不發"""
-        if self._compress_task is not None or not self._step_ready(0) or not self._step_ready(1):
-            return False
-        plans = self.publish_plan()
-        return bool(plans) and not any(plan.too_large for plan in plans)
-
-    def _step_ready(self, index: int) -> bool:
-        """第 index 步是否都決定好了：「曲目」要每個沒擋下的群組都對到曲目，「聲部」要沒有群組還不能發"""
-        groups = [check.group for check in self._checks if not check.blocked]
-        if index == 0:
-            return all(self._has_piece(group) for group in groups)
-        if index == 1:
-            return not any(self.voice_plan(group).blocked for group in groups)
-        return True
-
-    def _has_piece(self, group: Group) -> bool:
-        """群組已對到曲目：可以挑的現有曲目，或有曲名的新建曲目"""
-        link = group.huaxia_link
-        if link is None:
-            return False
-        if link.new_piece is not None:
-            return bool(link.new_piece.title.strip())
-        return any(piece.id == link.piece_id for piece in self._readiness.pieces)
+        self._publish.setEnabled(last and self._preview.can_publish(compressing=self._compress_task is not None))
 
     def _set_piece(self, group: Group, link: Optional[HuaXiaLink]):
-        """「曲目」步的選擇改了：寫進專案；選回同一首現有曲目時沿用手動挑的聲部配對，換了曲目就清掉這次的聲部決定"""
-        previous = group.huaxia_link
-        if link is not None and link.new_piece is None:
-            for before in (previous, self._opened_links.get(group.id)):
-                if before is not None and before.new_piece is None and before.piece_id == link.piece_id:
-                    link.part_ids = dict(before.part_ids)
-                    break
-        if _piece_identity(previous) != _piece_identity(link):
-            self._decisions.pop(group.id, None)
-        self._project.set_huaxia_link(group, link)
+        """「曲目」步的選擇改了：交給 PublishPreview.set_piece，更新按鈕"""
+        self._preview.set_piece(group, link)
         self._refresh_buttons()
 
     def _build_piece_step(self) -> QWidget:
@@ -621,13 +568,13 @@ class PublishPreviewDialog(QDialog):
                 overwrite = QCheckBox(t("publish.voices.overwrite"))
                 overwrite.setObjectName("overwrite")
                 overwrite.setChecked(row.overwrite)
-                overwrite.toggled.connect(lambda on: self._decide(check, row.index, "keep", not on))
+                overwrite.toggled.connect(lambda on: self._set_overwrite(check, row.index, on))
                 layout.addWidget(overwrite)
         elif row.part is None and row.match is not PartMatch.AMBIGUOUS:
             create = QCheckBox(t("publish.voices.create_absent"))
             create.setObjectName("create_absent")
             create.setChecked(row.create)
-            create.toggled.connect(lambda on: self._decide(check, row.index, "create_absent", on))
+            create.toggled.connect(lambda on: self._set_create_absent(check, row.index, on))
             layout.addWidget(create)
         else:
             return None
@@ -635,22 +582,18 @@ class PublishPreviewDialog(QDialog):
         return cell
 
     def _choose_part(self, check: GroupCheck, row: VoiceRow, part_id: Optional[str]):
-        """一個聲部改選了新建或某個 HuaXia 聲部：記進專案（新建是忘掉記過的配對、這次不套名稱規則）"""
-        decisions = self._decisions.setdefault(check.group.id, VoiceDecisions())
-        if part_id is None:
-            decisions.new.add(row.index)
-        else:
-            decisions.new.discard(row.index)
-        self._project.choose_huaxia_part(check.group, row.voice, part_id)
+        """一個聲部改選了新建或某個 HuaXia 聲部：交給 PublishPreview.choose_part，重排那一塊"""
+        self._preview.choose_part(check.group, row, part_id)
         self._refresh_voices(check)
 
-    def _decide(self, check: GroupCheck, index: int, kind: str, on: bool):
-        """勾選改了：kind 是 VoiceDecisions 的欄位（keep、create_absent），on 為加入這一列"""
-        rows = getattr(self._decisions.setdefault(check.group.id, VoiceDecisions()), kind)
-        if on:
-            rows.add(index)
-        else:
-            rows.discard(index)
+    def _set_overwrite(self, check: GroupCheck, index: int, overwrite: bool):
+        """「覆寫」勾選改了：重排那一塊"""
+        self._preview.set_overwrite(check.group, index, overwrite)
+        self._refresh_voices(check)
+
+    def _set_create_absent(self, check: GroupCheck, index: int, create: bool):
+        """「在 HuaXia 建」勾選改了：重排那一塊"""
+        self._preview.set_create_absent(check.group, index, create)
         self._refresh_voices(check)
 
 
@@ -730,7 +673,7 @@ class PublishPreviewDialog(QDialog):
         cell.setObjectName("compression")
         layout = QHBoxLayout(cell)
         layout.setContentsMargins(2, 0, 2, 0)
-        result = self._compressed.get(file.path)
+        result = self._preview.compressed.get(file.path)
         if result is not None:
             text = result_state(result)
         elif file.path == self._compressing:
@@ -754,7 +697,7 @@ class PublishPreviewDialog(QDialog):
         if result is not None or self._compress_task is None:
             drop = QPushButton(t("publish.files.drop"))
             drop.setCheckable(True)
-            drop.setChecked(file.path in self._dropped)
+            drop.setChecked(file.path in self._preview.dropped)
             drop.toggled.connect(lambda on: self._drop(file.path, on))
             layout.addWidget(drop)
         layout.addStretch()
@@ -788,10 +731,7 @@ class PublishPreviewDialog(QDialog):
 
     def _drop(self, path: str, on: bool):
         """「不發這份」切換：on 為不發"""
-        if on:
-            self._dropped.add(path)
-        else:
-            self._dropped.discard(path)
+        self._preview.drop(path, on)
         self._refresh_buttons()
 
     def _open_compressed(self, result: CompressionResult):
@@ -814,10 +754,7 @@ class PublishPreviewDialog(QDialog):
         if self._compress_started:
             return
         self._compress_started = True
-        paths = [
-            file.path for check in self._checks if not check.blocked
-            for file in oversized(self.file_plan(check.group), self._compressor.size_limit)
-        ]
+        paths = self._preview.oversized_paths()
         if not paths:
             return
         compressor = self._compressor
@@ -846,7 +783,7 @@ class PublishPreviewDialog(QDialog):
                     "publish.files.status", name=os.path.basename(path), index=index, total=len(paths),
                 ))
             else:
-                self._compressed[path] = result
+                self._preview.compressed[path] = result
             self._compression_changed()
 
         def finished(_result):
@@ -880,9 +817,9 @@ class PublishPreviewDialog(QDialog):
 
     def _compression_changed(self):
         """壓縮有進展：重排目前顯示的「檔案」或「確認」步，更新「發譜」"""
-        if self._current == 2:
+        if self._current is PublishStep.FILES:
             self._show_files()
-        elif self._current == 4:
+        elif self._current is PublishStep.CONFIRM:
             self._show_confirm()
         self._refresh_buttons()
 
@@ -920,10 +857,7 @@ class PublishPreviewDialog(QDialog):
 
     def _choose_event(self, event_id: str, on: bool):
         """勾選或取消一場公演"""
-        if on:
-            self._chosen_events.add(event_id)
-        else:
-            self._chosen_events.discard(event_id)
+        self._preview.choose_event(event_id, on)
 
     # --- 「確認」步 ---
 
@@ -944,7 +878,7 @@ class PublishPreviewDialog(QDialog):
             _discard(widget)
         plans = self.publish_plan()
         widgets: List[QWidget] = [self._confirm_box(plan) for plan in plans]
-        events = [event.title for event in self._readiness.concerts if event.id in self._chosen_events]
+        events = [event.title for event in self._readiness.concerts if event.id in self._preview.chosen_events]
         widgets.append(_named_label(
             "confirm_events",
             t("publish.confirm.events", events="、".join(events)) if events else t("publish.confirm.no_events"),
@@ -995,13 +929,6 @@ def _named_label(name: str, text: str) -> QLabel:
     label.setObjectName(name)
     label.setWordWrap(True)
     return label
-
-
-def _piece_identity(link: Optional[HuaXiaLink]):
-    """群組對到哪首曲目（新建的都算同一首）；沒對到時為 None"""
-    if link is None:
-        return None
-    return "new" if link.new_piece is not None else link.piece_id
 
 
 def _discard(widget: QWidget):

@@ -14,7 +14,8 @@
 
 發譜預覽各步的規則也在這裡：「聲部」步的配對與要寫的內容（plan_voices），「檔案」步每份檔要取代的
 與別人放的（plan_files）；「只在譜庫」與本機找不到的檔在 plan_files 跳過。各步的結果由 group_publish 合成
-一個群組這次發譜要寫進 HuaXia 的全部內容（GroupPublish）。
+一個群組這次發譜要寫進 HuaXia 的全部內容（GroupPublish）。預覽這次的選擇（對到的曲目、聲部的決定、不發的檔、
+壓縮結果、要掛的公演）與「下一步」「發譜」按不按得下去由 PublishPreview 持有與判斷，步驟是 PublishStep。
 
 使用範例：
     from services.publish_service import PublishService, check_groups, project_blocks
@@ -519,6 +520,172 @@ def group_publish(
     return GroupPublish(
         group, group.huaxia_link, voices, uploads, too_large, files.skipped, skipped_by_choice, list(events),
     )
+
+
+class PublishStep(Enum):
+    """發譜預覽的步驟，依順序"""
+
+    PIECE = "piece"      # 曲目
+    VOICES = "voices"    # 聲部
+    FILES = "files"      # 檔案
+    EVENTS = "events"    # 公演
+    CONFIRM = "confirm"  # 確認
+
+    def offset(self, delta: int) -> Optional["PublishStep"]:
+        """往後（delta 為負時往前）數 delta 步的那一步；超出頭尾時為 None"""
+        steps = list(PublishStep)
+        index = steps.index(self) + delta
+        return steps[index] if 0 <= index < len(steps) else None
+
+
+class PublishPreview:
+    """發譜預覽這次的選擇與各步的規則（不碰畫面）
+
+    記著各群組在「聲部」步的決定、「檔案」步選了不發的檔與壓縮結果、「公演」步勾的公演；「曲目」步的選擇經
+    Project.set_huaxia_link 立即寫進專案。voice_plan、file_plan、publish_plan 依目前的選擇算出各步的內容，
+    step_ready、can_publish 判斷「下一步」「發譜」按不按得下去。
+    """
+
+    def __init__(
+        self, project: Project, checks: List[GroupCheck], readiness: PublishReadiness, file_service: FileService,
+        size_limit: int,
+    ):
+        """
+        Args:
+            project: 專案；「曲目」「聲部」步的選擇經它的編輯操作寫入
+            checks: 各群組發譜前的檢查結果（check_groups）
+            readiness: 按下發譜時 HuaXia 那一側的檢查結果
+            file_service: 讀本機檔案
+            size_limit: 單檔大小上限（位元組）
+        """
+        self.project = project
+        self.checks = checks
+        self.readiness = readiness
+        self.size_limit = size_limit
+        self._file_service = file_service
+        # 開啟預覽時各群組對到的曲目：改選別首再選回來時找回手動挑的聲部配對
+        self._opened_links = {check.group.id: check.group.huaxia_link for check in checks}
+        # 各群組這次在「聲部」步的決定，以群組 ID 為鍵；改選曲目時清掉
+        self._decisions: Dict[str, VoiceDecisions] = {}
+        # 壓縮結果，以本機檔的路徑為鍵；選了「不發這份」的本機檔路徑；勾選要掛的公演的編號
+        self.compressed: Dict[str, CompressionResult] = {}
+        self.dropped: Set[str] = set()
+        self.chosen_events: Set[str] = set()
+
+    @property
+    def groups(self) -> List[Group]:
+        """沒擋下的群組，依專案中的順序"""
+        return [check.group for check in self.checks if not check.blocked]
+
+    def has_piece(self, group: Group) -> bool:
+        """群組已對到曲目：可以挑的現有曲目，或有曲名的新建曲目"""
+        link = group.huaxia_link
+        if link is None:
+            return False
+        if link.new_piece is not None:
+            return bool(link.new_piece.title.strip())
+        return any(piece.id == link.piece_id for piece in self.readiness.pieces)
+
+    def set_piece(self, group: Group, link: Optional[HuaXiaLink]) -> None:
+        """「曲目」步的選擇改了：寫進專案；選回同一首現有曲目時沿用手動挑的聲部配對，換了曲目就清掉這次的聲部決定"""
+        previous = group.huaxia_link
+        if link is not None and link.new_piece is None:
+            for before in (previous, self._opened_links.get(group.id)):
+                if before is not None and before.new_piece is None and before.piece_id == link.piece_id:
+                    link.part_ids = dict(before.part_ids)
+                    break
+        if _piece_identity(previous) != _piece_identity(link):
+            self._decisions.pop(group.id, None)
+        self.project.set_huaxia_link(group, link)
+
+    def decisions(self, group: Group) -> VoiceDecisions:
+        """群組這次在「聲部」步的決定（還沒決定過時是全照預設的一份，之後改它就是改這次的決定）"""
+        return self._decisions.setdefault(group.id, VoiceDecisions())
+
+    def choose_part(self, group: Group, row: "VoiceRow", part_id: Optional[str]) -> None:
+        """一個聲部改選了新建（part_id 為 None）或某個 HuaXia 聲部：記進專案；新建是忘掉記過的配對、這次不套名稱規則"""
+        decisions = self.decisions(group)
+        if part_id is None:
+            decisions.new.add(row.index)
+        else:
+            decisions.new.discard(row.index)
+        self.project.choose_huaxia_part(group, row.voice, part_id)
+
+    def set_overwrite(self, group: Group, index: int, overwrite: bool) -> None:
+        """樂器表第 index 列有差異時要不要以泠靈的值覆寫 HuaXia 的（預設覆寫）"""
+        _toggle(self.decisions(group).keep, index, not overwrite)
+
+    def set_create_absent(self, group: Group, index: int, create: bool) -> None:
+        """樂器表第 index 列（本專案沒有、HuaXia 也沒有）要不要在 HuaXia 建（預設不建）"""
+        _toggle(self.decisions(group).create_absent, index, create)
+
+    def drop(self, path: str, dropped: bool) -> None:
+        """「不發這份」：dropped 為不發這份本機檔"""
+        _toggle(self.dropped, path, dropped)
+
+    def choose_event(self, event_id: str, chosen: bool) -> None:
+        """勾選或取消一場要掛的公演"""
+        _toggle(self.chosen_events, event_id, chosen)
+
+    def voice_plan(self, group: Group) -> VoicePlan:
+        """群組目前的聲部配對與要寫的內容（依「曲目」步對到的曲目與「聲部」步的選擇）；群組要已對到曲目"""
+        link = group.huaxia_link
+        parts = self.readiness.parts.get(link.piece_id, []) if link.new_piece is None else []
+        return plan_voices(self.project, group, parts, self.decisions(group))
+
+    def file_plan(self, group: Group) -> FilePlan:
+        """群組要發的檔與各自要取代的（依目前的聲部配對）；群組要已對到曲目"""
+        link = group.huaxia_link
+        scores = self.readiness.scores.get(link.piece_id, []) if link.new_piece is None else []
+        return plan_files(group, self.voice_plan(group), scores, self._file_service)
+
+    def publish_plan(self) -> List[GroupPublish]:
+        """每個沒擋下的群組這次發譜要寫進 HuaXia 的全部內容（依目前的選擇），依專案中的順序"""
+        events = [event for event in self.readiness.concerts if event.id in self.chosen_events]
+        return [
+            group_publish(
+                group, self.voice_plan(group), self.file_plan(group), self.compressed, self.dropped, events,
+                self.size_limit,
+            )
+            for group in self.groups
+        ]
+
+    def oversized_paths(self) -> List[str]:
+        """沒擋下的群組裡超過大小上限、要先壓縮的本機檔，依群組與檔案計畫的順序"""
+        return [
+            file.path for group in self.groups for file in oversized(self.file_plan(group), self.size_limit)
+        ]
+
+    def step_ready(self, step: PublishStep) -> bool:
+        """這一步是否都決定好了（「下一步」）：「曲目」要每個沒擋下的群組都對到曲目，「聲部」要沒有群組還不能發"""
+        if step is PublishStep.PIECE:
+            return all(self.has_piece(group) for group in self.groups)
+        if step is PublishStep.VOICES:
+            return not any(self.voice_plan(group).blocked for group in self.groups)
+        return True
+
+    def can_publish(self, compressing: bool) -> bool:
+        """「發譜」按得下去：前兩步都決定好、壓縮做完（compressing 為 False），有群組可以發，
+        而且超過上限的檔都壓縮好或選了不發"""
+        if compressing or not self.step_ready(PublishStep.PIECE) or not self.step_ready(PublishStep.VOICES):
+            return False
+        plans = self.publish_plan()
+        return bool(plans) and not any(plan.too_large for plan in plans)
+
+
+def _toggle(items: set, item, on: bool) -> None:
+    """on 時把 item 加進 items，否則拿掉"""
+    if on:
+        items.add(item)
+    else:
+        items.discard(item)
+
+
+def _piece_identity(link: Optional[HuaXiaLink]):
+    """群組對到哪首曲目（新建的都算同一首）；沒對到時為 None"""
+    if link is None:
+        return None
+    return "new" if link.new_piece is not None else link.piece_id
 
 
 def upcoming_concerts(events: List[HuaXiaEvent], now: datetime.datetime) -> List[HuaXiaEvent]:

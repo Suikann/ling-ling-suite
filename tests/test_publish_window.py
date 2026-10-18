@@ -361,7 +361,6 @@ class TestVoicesStep(PublishWindowTestCase):
 
         def operate(dialog):
             self.to_voices(dialog)
-            dialog.add_step(2, QWidget())
             self.assertTrue(button(dialog, "publish.next").isEnabled())
             choose_part(dialog, "烽火操", "二胡 I", "高胡")
             choose_part(dialog, "烽火操", "琵琶", "高胡")
