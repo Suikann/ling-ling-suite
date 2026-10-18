@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from core.catalog_models import CatalogPlace
 from core.locale import get_keys, t
 from core.models import FileInfo, Group, Headcount, LinkResult, Project
-from ui.instrumentation_table import InstrumentationTable
+from ui.instrumentation_table import SCORE_TARGET, InstrumentationTable
 from tests.test_main_window import button_in
 
 # 重名的列的文字顏色
@@ -300,3 +300,72 @@ class TestCatalogLinkAboveTheTable(InstrumentationTableTestCase):
         self.assertNotEqual(self.table.item(0, column).background().color().name(), GUESSED_YELLOW)
         self.editor.show_group(self.group)
         self.assertNotEqual(self.table.item(1, column).background().color().name(), GUESSED_YELLOW)
+
+
+class TestEditionPageMode(unittest.TestCase):
+    """譜庫視窗的版本頁用同一個元件：每列多了推算的狀態與登記的檔，最上面固定一列總譜，沒有本專案有"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.project = Project()
+        self.group = self.project.add_group("春江花月夜", "總譜")
+        self.project.link_group(self.group, CatalogPlace(
+            edition_id="e1", voices=[("二胡 I", Headcount()), ("琵琶", Headcount())],
+        ))
+        self.editor = InstrumentationTable(self.project, edition_page=True)
+        self.addCleanup(self.editor.deleteLater)
+        self.editor.show_group(self.group)
+        tables = self.editor.findChildren(QTableWidget)
+        self.score_table = next(table for table in tables if table.objectName() == "score_row")
+        self.table = next(table for table in tables if table is not self.score_table)
+
+    def cells(self, table: QTableWidget, row: int, *columns: str) -> List[str]:
+        """一列裡幾欄的文字"""
+        return [table.item(row, self.editor.column(name)).text() for name in columns]
+
+    def test_status_follows_the_registered_file_and_cannot_be_edited(self):
+        self.editor.show_files({"二胡 I": "二胡 I.pdf"}, {})
+        self.assertEqual(self.cells(self.table, 0, "voice", "status", "file"), ["二胡 I", t("catalog.page.present"), "二胡 I.pdf"])
+        self.assertEqual(self.cells(self.table, 1, "status", "file"), [t("catalog.page.missing"), t("catalog.page.no_file")])
+        status = self.table.item(0, self.editor.column("status"))
+        self.assertFalse(status.flags() & Qt.ItemIsEditable)
+        self.assertIsNone(self.table.cellWidget(0, self.editor.column("status")))
+
+    def test_an_assigned_file_waits_for_saving(self):
+        self.editor.show_files({}, {"琵琶": "琵琶.pdf"})
+        self.assertEqual(self.cells(self.table, 1, "status", "file"), [
+            t("catalog.page.pending"), t("catalog.page.assigned", name="琵琶.pdf"),
+        ])
+
+    def test_the_score_row_is_fixed_on_top_without_headcount_or_section(self):
+        self.editor.show_files({}, {}, score_registered="總譜.pdf")
+        self.assertEqual(self.cells(self.score_table, 0, "voice", "status", "file"), [
+            t("catalog.page.score"), t("catalog.page.present"), "總譜.pdf",
+        ])
+        for column in ("minimum", "maximum", "section"):
+            self.assertIsNone(self.score_table.cellWidget(0, self.editor.column(column)))
+
+    def test_the_selected_row_is_the_voice_or_the_score(self):
+        self.editor.show_files({}, {})
+        self.table.selectRow(1)
+        self.assertEqual(self.editor.selected_target(), "琵琶")
+        self.score_table.selectRow(0)
+        self.assertIs(self.editor.selected_target(), SCORE_TARGET)
+        self.assertEqual(self.table.selectedItems(), [])
+
+    def test_present_in_this_project_is_hidden(self):
+        self.assertTrue(self.table.isColumnHidden(self.editor.column("present")))
+        self.assertFalse(self.table.isColumnHidden(self.editor.column("status")))
+
+
+class TestFileColumnsOnlyOnTheEditionPage(InstrumentationTableTestCase):
+    """主視窗的編制表沒有狀態與登記的檔"""
+
+    def test_status_and_file_columns_are_hidden(self):
+        self.assertTrue(self.table.isColumnHidden(self.editor.column("status")))
+        self.assertTrue(self.table.isColumnHidden(self.editor.column("file")))
+        self.assertFalse(self.table.isColumnHidden(self.editor.column("present")))
+        self.assertEqual(len(self.editor.findChildren(QTableWidget)), 1)

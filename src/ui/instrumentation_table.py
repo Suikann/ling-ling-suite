@@ -16,13 +16,15 @@
 由主視窗開啟連線對話框，連上後以 show_linked 標出依位置猜的聲部。連到譜庫的群組刪除聲部前先確認（等於從樂譜刪除），
 已有 Drive 檔案的聲部不刪；聲部組旁另寫出譜庫裡用到這種樂器的其他曲目數。
 群組有未同步的值（存檔時寫不進譜庫）時，頂端的提示列寫出是哪些，人數與時長旁寫出譜庫現在的值。
+譜庫視窗的版本頁（ui/edition_page.py）以 edition_page=True 沿用同一個元件：每列多了推算的狀態與登記的檔（show_files），
+最上面固定一列總譜，選取的列以 selected_target 取得；沒有本專案有、從其他群組複製與從檔名擷取。
 
 使用範例：
     table = InstrumentationTable(project)
     table.instruments_changed.connect(refresh_parts)
     table.show_group(group)
 """
-from typing import Dict, List, Optional, Set, TYPE_CHECKING
+from typing import Dict, List, Mapping, Optional, Set, Tuple, TYPE_CHECKING
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QComboBox, QLabel, QMessageBox,
     QAbstractItemView, QMenu, QTableWidget, QTableWidgetItem, QSpinBox, QHeaderView,
@@ -47,7 +49,12 @@ if TYPE_CHECKING:
     from core.models import Group, Project
 
 # 表格的欄，依顯示順序；加欄時在這裡插入，再於 _fill_row 填值、_HEADERS 給標題
-COLUMNS = ("present", "voice", "minimum", "maximum", "open_ended", "section", "follows")
+# 狀態與登記的檔只在譜庫視窗的版本頁顯示，本專案有只在主視窗顯示
+COLUMNS = ("present", "voice", "minimum", "maximum", "open_ended", "section", "follows", "status", "file")
+_EDITION_PAGE_ONLY = ("status", "file")
+_PROJECT_ONLY = ("present",)
+# 版本頁選了總譜列時 selected_target 的值（聲部名稱不會是空字串）
+SCORE_TARGET = ""
 _HEADERS = {
     "present": "instrumentation.present",
     "voice": "instrumentation.voice",
@@ -56,6 +63,8 @@ _HEADERS = {
     "open_ended": "instrumentation.open_ended",
     "section": "instrumentation.section",
     "follows": "",
+    "status": "catalog.page.status",
+    "file": "catalog.page.file",
 }
 # 人數欄的上限（超過的樂譜要求不實際）
 _MAX_HEADCOUNT = 999
@@ -68,6 +77,10 @@ _ABSENT_COLOR = QColor("#888888")
 _GUESSED_COLOR = QColor("#fff3b0")
 # 未同步的提示與值的文字顏色
 _UNSYNCED_COLOR = QColor("#e67e22")
+# 版本頁的狀態：有、缺、指定了檔還沒儲存
+_PRESENT_COLOR = QColor("#27ae60")
+_MISSING_COLOR = QColor("#e74c3c")
+_PENDING_COLOR = QColor("#2980b9")
 
 
 class VoiceRowsTable(QTableWidget):
@@ -128,7 +141,7 @@ class InstrumentationTable(QWidget):
 
     def __init__(
         self, project: Optional["Project"] = None, parent=None, file_service: Optional[FileService] = None,
-        voice_candidates: Optional[VoiceCandidates] = None,
+        voice_candidates: Optional[VoiceCandidates] = None, edition_page: bool = False,
     ):
         """
         Args:
@@ -136,8 +149,15 @@ class InstrumentationTable(QWidget):
             parent: 父元件
             file_service: 檔案服務（寫出匯出的樂器表）；None 時自建
             voice_candidates: 輸入聲部名稱時自動完成的候選來源；None 時自建（沒有譜庫的名稱）
+            edition_page: 是否用在譜庫視窗的版本頁：每列多了狀態與登記的檔（show_files），最上面固定一列總譜，
+                沒有本專案有、從其他群組複製與從檔名擷取
         """
         super().__init__(parent)
+        self._edition_page = edition_page
+        # 版本頁各聲部登記的檔與指定了還沒儲存的檔（以 voice_key 為鍵），以及總譜列的
+        self._registered: Dict[object, str] = {}
+        self._assigned: Dict[object, str] = {}
+        self._score_files: Tuple[str, str] = ("", "")
         self._project = project
         self._file_service = file_service or FileService()
         self._voice_candidates = voice_candidates or VoiceCandidates()
@@ -183,6 +203,9 @@ class InstrumentationTable(QWidget):
         self._copy_combo.about_to_popup.connect(self._list_copy_sources)
         self._copy_combo.currentIndexChanged.connect(self._on_copy_source_chosen)
         layout.addWidget(self._copy_combo)
+        self._copy_combo.setVisible(not self._edition_page)
+        if self._edition_page:
+            layout.addWidget(self._build_score_table())
         self._table = VoiceRowsTable()
         self._table.setColumnCount(len(COLUMNS))
         self._table.setHorizontalHeaderLabels([t(_HEADERS[name]) if _HEADERS[name] else "" for name in COLUMNS])
@@ -192,12 +215,16 @@ class InstrumentationTable(QWidget):
         for index in range(len(COLUMNS)):
             header.setSectionResizeMode(index, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(self.column("voice"), QHeaderView.Stretch)
+        for name in _PROJECT_ONLY if self._edition_page else _EDITION_PAGE_ONLY:
+            self._table.setColumnHidden(self.column(name), True)
         self._table.setItemDelegateForColumn(self.column("voice"), VoiceNameDelegate(self._candidates, self._table))
         self._table.rows_dropped.connect(self._on_rows_dropped)
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self._table)
+        if self._edition_page:
+            self._link_score_table()
         QShortcut(QKeySequence("Delete"), self._table, self._remove_selected)
         self._notice = QLabel()
         self._notice.setWordWrap(True)
@@ -218,6 +245,7 @@ class InstrumentationTable(QWidget):
         btn_row = QHBoxLayout()
         extract_btn = QPushButton(t("instrument.auto_extract"))
         extract_btn.clicked.connect(self._auto_extract)
+        extract_btn.setVisible(not self._edition_page)
         btn_row.addWidget(extract_btn)
         remove_btn = QPushButton(t("instrument.remove"))
         remove_btn.setStyleSheet("background: #6b2030; color: #f0d8d8;")
@@ -227,6 +255,36 @@ class InstrumentationTable(QWidget):
         export_btn = QPushButton(t("instrument.export"))
         export_btn.clicked.connect(self._export_instruments)
         layout.addWidget(export_btn)
+
+    def _build_score_table(self) -> QTableWidget:
+        """版本頁最上面固定的總譜列：只有名稱、狀態與登記的檔，不能拖動、改名，沒有人數與聲部組"""
+        self._score_table = QTableWidget(1, len(COLUMNS))
+        self._score_table.setObjectName("score_row")
+        self._score_table.horizontalHeader().setVisible(False)
+        self._score_table.verticalHeader().setVisible(False)
+        self._score_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._score_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._score_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._score_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._score_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._score_table.setFixedHeight(self._score_table.rowHeight(0) + 2 * self._score_table.frameWidth())
+        for name in _PROJECT_ONLY:
+            self._score_table.setColumnHidden(self.column(name), True)
+        for column in range(len(COLUMNS)):
+            self._score_table.setItem(0, column, _read_only_item(""))
+        self._score_table.item(0, self.column("voice")).setText(t("catalog.page.score"))
+        return self._score_table
+
+    def _link_score_table(self):
+        """總譜列跟著編制表的欄寬；兩張表同時只有一列被選取"""
+        header = self._table.horizontalHeader()
+        header.sectionResized.connect(lambda index, _old, size: self._score_table.setColumnWidth(index, size))
+        self._score_table.itemSelectionChanged.connect(
+            lambda: self._score_table.selectedItems() and self._table.clearSelection(),
+        )
+        self._table.itemSelectionChanged.connect(
+            lambda: self._table.selectedItems() and self._score_table.clearSelection(),
+        )
 
     def _build_link_row(self) -> QHBoxLayout:
         """連線一列：連到哪裡（曲目 › 版本 › 樂章），沒連線時是「連到譜庫…」按鈕"""
@@ -283,6 +341,32 @@ class InstrumentationTable(QWidget):
         self._show_moved([])
         self._fill()
 
+    def show_files(
+        self, registered: Mapping[str, str], assigned: Mapping[str, str], score_registered: str = "",
+        score_assigned: str = "",
+    ):
+        """版本頁：每列寫出推算的狀態與登記的檔（聲部以同一聲部的規則比對）
+
+        登記了檔就是有、沒有就是缺；指定了還沒儲存的檔寫成待儲存。只顯示，不寫入專案。
+
+        Args:
+            registered: 聲部與它在譜庫登記的檔名；沒登記的聲部不在裡面
+            assigned: 聲部與指定給它、還沒儲存的檔名
+            score_registered: 總譜列登記的檔名；沒有時為空字串
+            score_assigned: 指定給總譜列、還沒儲存的檔名；沒有時為空字串
+        """
+        self._registered = {voice_key(name): file for name, file in registered.items()}
+        self._assigned = {voice_key(name): file for name, file in assigned.items()}
+        self._score_files = (score_registered, score_assigned)
+        self._fill()
+
+    def selected_target(self) -> Optional[str]:
+        """版本頁選取的列：聲部名稱，選了總譜列時為 SCORE_TARGET，都沒選時為 None"""
+        if self._edition_page and self._score_table.selectedItems():
+            return SCORE_TARGET
+        rows = self._selected_rows()
+        return self._group.instruments[rows[0]] if rows and self._group is not None else None
+
     def show_linked(self, result: LinkResult):
         """目前的群組剛連到譜庫：重畫、標黃依位置猜的聲部、寫出移到未分組的分譜，發出 instruments_changed"""
         self._guessed = set(result.guessed)
@@ -307,6 +391,8 @@ class InstrumentationTable(QWidget):
         duplicates = set(duplicate_rows(voices))
         for row, voice in enumerate(voices):
             self._fill_row(row, voice, row in duplicates)
+        if self._edition_page:
+            self._fill_files(self._score_table, 0, *self._score_files)
         minutes, seconds = divmod(self._group.duration_seconds or 0, 60) if self._group else (0, 0)
         self._duration_minutes.setValue(minutes)
         self._duration_seconds.setValue(seconds)
@@ -375,6 +461,25 @@ class InstrumentationTable(QWidget):
         note.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled)
         note.setForeground(QBrush(_ABSENT_COLOR))
         self._table.setItem(row, self.column("follows"), note)
+        if self._edition_page:
+            key = voice_key(voice)
+            self._fill_files(self._table, row, self._registered.get(key, ""), self._assigned.get(key, ""))
+
+    def _fill_files(self, table: QTableWidget, row: int, registered: str, assigned: str):
+        """版本頁一列的狀態與登記的檔：指定了檔就是待儲存，否則登記了檔就是有、沒有就是缺（唯讀，不能手改）"""
+        if assigned:
+            status, file, color = t("catalog.page.pending"), t("catalog.page.assigned", name=assigned), _PENDING_COLOR
+        elif registered:
+            status, file, color = t("catalog.page.present"), registered, _PRESENT_COLOR
+        else:
+            status, file, color = t("catalog.page.missing"), t("catalog.page.no_file"), _MISSING_COLOR
+        status_item = _read_only_item(status)
+        status_item.setForeground(QBrush(color))
+        table.setItem(row, self.column("status"), status_item)
+        file_item = _read_only_item(file)
+        if not registered and not assigned:
+            file_item.setForeground(QBrush(_ABSENT_COLOR))
+        table.setItem(row, self.column("file"), file_item)
 
     def _section_impact(self, voice: str) -> str:
         """聲部組旁的影響範圍：連到譜庫時譜庫裡用到這種樂器的其他曲目，以及專案裡同一樂器的其他編號"""
@@ -637,6 +742,13 @@ def _change_text(change: CatalogChange) -> str:
     if change.kind is CatalogChangeKind.DURATION:
         return t("catalog.sync.duration")
     return t("catalog.sync.section", instrument=instrument_name(change.voice))
+
+
+def _read_only_item(text: str) -> QTableWidgetItem:
+    """不能編輯、可以選取與拖動整列的儲存格"""
+    item = QTableWidgetItem(text)
+    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled)
+    return item
 
 
 def _link_text(link: CatalogLink) -> str:

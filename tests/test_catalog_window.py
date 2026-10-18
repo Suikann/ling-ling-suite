@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.catalog_constants import (
-    SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, PublishingPlatform,
+    SHEET_COMPOSERS, SHEET_INSTRUMENTATION_LOG, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, PublishingPlatform,
 )
 from core.catalog_errors import CatalogErrorKind
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY
@@ -45,6 +45,7 @@ from tests.test_catalog_service import add_row, empty_catalog
 from tests.test_main_window import _settle, answering_prompts, wait_until
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.catalog_window import CatalogWindow
+from ui.instrumentation_table import InstrumentationTable
 
 # 各錯誤類別在提示列上的標題與處理按鈕（spec #81「錯誤呈現」）
 EXPECTED = {
@@ -163,19 +164,9 @@ class TestReadsThroughCatalogService(CatalogWindowTestCase):
         wait_until(lambda: window.findChild(QTabWidget) is not None)
         tabs = window.findChild(QTabWidget)
         self.assertEqual(tabs.tabText(0), t("catalog.piece.title"))
-        _settle()
-        self.assertIn("總譜.pdf", self.table_texts(window))
-
-    def table_texts(self, window: CatalogWindow) -> list:
-        """詳細面板裡所有表格的文字"""
-        texts = []
-        for table in window.findChildren(QTableWidget):
-            for row in range(table.rowCount()):
-                for col in range(table.columnCount()):
-                    item = table.item(row, col)
-                    if item is not None:
-                        texts.append(item.text())
-        return texts
+        files = tabs.widget(1).findChild(QListWidget)
+        wait_until(lambda: files.count() > 0)
+        self.assertEqual(files.item(0).text(), "總譜.pdf")
 
 
 class TestErrorBar(CatalogWindowTestCase):
@@ -480,14 +471,6 @@ class TestWrites(WritesTestCase):
         self.assertEqual(self.google.drive.file(stray).parents, (self.subfolder(self.root, "未標記").id,))
         self.assertEqual(shown, [(t("catalog.drive.collect_files"), t("catalog.drive.collect_result", moved=1, total=1))])
 
-    def test_the_parts_tab_has_no_status_dropdown(self):
-        window = self.open_settled()
-        parts = self.open_piece(window).widget(1)
-        self.assertEqual(parts.findChildren(QComboBox), [])
-        self.assertIn("總譜.pdf", [
-            table.item(row, 0).text() for table in parts.findChildren(QTableWidget) for row in range(table.rowCount())
-        ])
-
     def test_applying_a_template_opens_the_drive_rename_with_the_edition_files(self):
         window = self.open_settled()
         parts = self.open_piece(window).widget(1)
@@ -580,3 +563,125 @@ class TestWriteFailures(WritesTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestEditionPage(WritesTestCase):
+    """版本頁：主視窗同一個編制表，狀態由登記推算；沒登記的檔指定給聲部，按儲存才寫進譜庫"""
+
+    def setUp(self):
+        super().setUp()
+        self.old = self.google.drive.add_file("二胡 I 舊.pdf", self.piece_folder)
+        strings = self.google.drive.add_folder("拉弦", self.piece_folder)
+        self.erhu = self.google.drive.add_file("二胡 I.pdf", strings)
+        self.pipa = self.google.drive.add_file("琵琶.pdf", self.piece_folder)
+        add_row(self.google, SHEET_PARTS, id="pt1", edition_id="e1", instrument_name="二胡 I", sort_order="1",
+                drive_file_id=self.old, file_name="二胡 I 舊.pdf")
+        add_row(self.google, SHEET_PARTS, id="pt2", edition_id="e1", instrument_name="琵琶", sort_order="2")
+
+    def open_page(self):
+        """開啟曲目的版本頁，等它讀到那一處；回傳（版本頁、編制表、聲部表）"""
+        window = self.open_settled()
+        page = self.open_piece(window).widget(1)
+        editor = page.findChild(InstrumentationTable)
+        wait_until(lambda: editor.isEnabled())
+        self.idle()
+        table = next(table for table in editor.findChildren(QTableWidget) if table.objectName() != "score_row")
+        return page, editor, table
+
+    def assign(self, page, table, file_name: str, row: int) -> None:
+        """在右欄選檔、在編制表選聲部，按指定"""
+        files = page.findChild(QListWidget)
+        files.setCurrentItem(next(files.item(i) for i in range(files.count()) if files.item(i).text() == file_name))
+        table.selectRow(row)
+        self.button(page, t("catalog.page.assign")).click()
+
+    def save(self, page) -> None:
+        """按版本頁的儲存，等寫完、重新讀取交回"""
+        writes = len(self.google.sheets.writes)
+        self.button(page, t("catalog.save")).click()
+        wait_until(lambda: len(self.google.sheets.writes) > writes)
+        self.idle()
+
+    def part(self, voice: str) -> dict:
+        """分譜工作表裡這個聲部的一列"""
+        return next(r for r in self.rows(SHEET_PARTS) if r["instrument_name"] == voice)
+
+    def test_the_main_window_table_shows_derived_status_without_a_status_dropdown(self):
+        page, editor, table = self.open_page()
+        self.assertIs(type(editor), InstrumentationTable)
+        status = editor.column("status")
+        self.assertEqual([table.item(row, status).text() for row in range(table.rowCount())],
+                         [t("catalog.page.present"), t("catalog.page.missing")])
+        for row in range(table.rowCount()):
+            self.assertIsNone(table.cellWidget(row, status))
+            self.assertFalse(table.item(row, status).flags() & Qt.ItemIsEditable)
+        files = page.findChild(QListWidget)
+        self.assertEqual([files.item(i).text() for i in range(files.count())],
+                         ["拉弦/二胡 I.pdf", "琵琶.pdf", "總譜.pdf"])
+
+    def test_an_assigned_file_is_written_only_when_saved(self):
+        page, editor, table = self.open_page()
+        self.assign(page, table, "琵琶.pdf", 1)
+        self.idle()
+        self.assertEqual(self.google.sheets.writes, [])
+        self.assertEqual(self.part("琵琶")["drive_file_id"], "")
+        self.assertEqual(table.item(1, editor.column("status")).text(), t("catalog.page.pending"))
+        self.save(page)
+        self.assertEqual((self.part("琵琶")["drive_file_id"], self.part("琵琶")["file_name"]), (self.pipa, "琵琶.pdf"))
+        wait_until(lambda: table.item(1, editor.column("status")).text() == t("catalog.page.present"))
+
+    def test_assigning_over_a_registered_file_asks_and_trashes_the_old_one_on_save(self):
+        page, editor, table = self.open_page()
+        with answering_prompts(QMessageBox.Yes) as shown:
+            self.assign(page, table, "拉弦/二胡 I.pdf", 0)
+        self.assertIn("30 天", shown[0][1])
+        self.assertFalse(self.google.drive.is_trashed(self.old))
+        self.save(page)
+        wait_until(lambda: self.google.drive.is_trashed(self.old))
+        self.assertEqual(self.part("二胡 I")["drive_file_id"], self.erhu)
+
+    def test_declining_the_overwrite_keeps_the_registration(self):
+        page, editor, table = self.open_page()
+        with answering_prompts(QMessageBox.No):
+            self.assign(page, table, "拉弦/二胡 I.pdf", 0)
+        self.assertEqual(table.item(0, editor.column("status")).text(), t("catalog.page.present"))
+
+    def test_the_score_row_takes_a_file(self):
+        page, editor, table = self.open_page()
+        files = page.findChild(QListWidget)
+        files.setCurrentItem(files.findItems("總譜.pdf", Qt.MatchExactly)[0])
+        next(t for t in editor.findChildren(QTableWidget) if t.objectName() == "score_row").selectRow(0)
+        self.button(page, t("catalog.page.assign")).click()
+        self.save(page)
+        score = next(r for r in self.rows(SHEET_PARTS) if r["is_score"] == "TRUE")
+        self.assertEqual((score["edition_id"], score["movement_id"], score["file_name"]), ("e1", "", "總譜.pdf"))
+
+    def test_instrumentation_edits_go_through_the_write_back_and_are_logged_as_the_catalog_window(self):
+        page, editor, table = self.open_page()
+        table.cellWidget(1, editor.column("minimum")).setValue(3)
+        self.idle()
+        self.assertEqual(self.google.sheets.writes, [])
+        self.assertEqual(self.part("琵琶")["headcount_min"], "")
+        self.save(page)
+        self.assertEqual(self.part("琵琶")["headcount_min"], "3")
+        log = [r for r in self.rows(SHEET_INSTRUMENTATION_LOG) if r["field"] == "headcount"]
+        self.assertEqual([(r["voice"], r["source"], r["new_value"]) for r in log], [("琵琶", "catalog_window", "3")])
+
+    def test_a_cell_changed_elsewhere_opens_the_conflict_screen_and_cancelling_writes_nothing(self):
+        page, editor, table = self.open_page()
+        table.cellWidget(1, editor.column("minimum")).setValue(3)
+        self.assign(page, table, "琵琶.pdf", 1)
+        self.google.sheets.set_cell(SHEET_PARTS, "J3", "5")
+        opened = []
+
+        def cancel(dialog):
+            """記下開了衝突畫面後取消"""
+            opened.append(type(dialog).__name__)
+            return QDialog.Rejected
+        with mock.patch.object(QDialog, "exec", cancel):
+            self.button(page, t("catalog.save")).click()
+            wait_until(lambda: opened)
+        self.idle()
+        self.assertEqual(opened, ["CatalogConflictDialog"])
+        self.assertEqual(self.google.sheets.writes, [])
+        self.assertEqual(self.part("琵琶")["drive_file_id"], "")

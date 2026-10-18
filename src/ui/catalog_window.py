@@ -30,7 +30,7 @@ from core.catalog_constants import (
     PerformanceStatus, SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PERFORMANCES, SHEET_PIECES,
 )
 from core.catalog_errors import CatalogError, CatalogFailure
-from core.catalog_models import Composer, DriveFile, EditionFiles, Piece, Edition, PieceDetail
+from core.catalog_models import Composer, DriveFile, Piece, Edition, PieceDetail
 from core.catalog_sync import Decision, SyncField, SyncItem, SyncOutcome
 from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
@@ -668,27 +668,17 @@ class CatalogWindow(QMainWindow):
     # --- 曲目詳細（含元資料頁籤） ---
 
     def _show_piece_detail(self, piece_id: str):
-        """經譜庫服務讀取曲目完整資訊與使用中版本資料夾的檔，讀到後顯示"""
+        """經譜庫服務讀取曲目完整資訊，讀到後顯示（版本頁另在背景讀它那一處）"""
         self._clear_detail()
         loading = QLabel(t("catalog.loading"))
         loading.setAlignment(Qt.AlignCenter)
         self._detail_layout.addWidget(loading)
         version = self._detail_version
 
-        def read(catalog: CatalogService):
-            """曲目完整資訊，以及使用中版本資料夾的檔（沒有資料夾時為 None）"""
-            detail = catalog.piece_detail(piece_id)
-            if detail is None:
-                return None, None
-            edition = self._active_edition(detail)
-            folder_id = edition.drive_folder_id if edition else ""
-            return detail, (catalog.edition_files(folder_id) if folder_id else None)
-
-        def on_done(result):
+        def on_done(detail: Optional[PieceDetail]):
             """讀到了：換成曲目的各頁籤"""
             if version == self._detail_version:
-                detail, files = result
-                self._show_piece_tabs(detail, files)
+                self._show_piece_tabs(detail)
 
         def unreadable():
             """讀不到：詳細面板寫「讀不到」"""
@@ -697,7 +687,10 @@ class CatalogWindow(QMainWindow):
                 self._detail_layout.addWidget(self._unreadable_label())
 
         title = next((piece.title for piece in self._pieces if piece.id == piece_id), "")
-        self._read(read, on_done, unreadable, lambda: self._show_piece_detail(piece_id), piece_title=title)
+        self._read(
+            lambda catalog: catalog.piece_detail(piece_id), on_done, unreadable,
+            lambda: self._show_piece_detail(piece_id), piece_title=title,
+        )
 
     @staticmethod
     def _active_edition(detail: PieceDetail) -> Optional[Edition]:
@@ -707,7 +700,7 @@ class CatalogWindow(QMainWindow):
                 return edition
         return detail.editions[0] if detail.editions else None
 
-    def _show_piece_tabs(self, detail: Optional[PieceDetail], files: Optional[EditionFiles]):
+    def _show_piece_tabs(self, detail: Optional[PieceDetail]):
         """顯示曲目的各頁籤；譜庫裡已經沒有這首曲目時回到選取提示"""
         self._clear_detail()
         if detail is None:
@@ -722,7 +715,7 @@ class CatalogWindow(QMainWindow):
             self._build_piece_info_tab(detail), t("catalog.piece.title"),
         )
         tabs.addTab(
-            self._build_parts_tab(detail, files), t("catalog.part.title"),
+            self._build_parts_tab(detail), t("catalog.part.title"),
         )
         tabs.addTab(
             self._build_performances_tab(detail), t("catalog.performance.title"),
@@ -1011,81 +1004,29 @@ class CatalogWindow(QMainWindow):
             lambda _result: self._show_piece_detail(piece_id), piece_title=self._piece_title(piece_id),
         )
 
-    # --- 分譜狀態頁籤 ---
+    # --- 版本頁籤 ---
 
-    def _build_parts_tab(self, detail: PieceDetail, files: Optional[EditionFiles]) -> QWidget:
-        """建立分譜狀態頁籤
-
-        依版本資料夾的結構：
-        - 有子資料夾 → 每個子資料夾視為一個樂章，分段顯示
-        - 無子資料夾 → 直接列出 PDF 檔案
+    def _build_parts_tab(self, detail: PieceDetail) -> QWidget:
+        """建立版本頁（ui/edition_page.py）：編制表加沒登記的檔，按儲存才寫進譜庫；上方另有套用命名格式
 
         Args:
             detail: 曲目完整資訊
-            files: 使用中版本資料夾的檔；版本沒有資料夾時為 None
         """
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
         if not detail.editions:
-            layout.addWidget(QLabel(t("catalog.tree.no_items")))
+            widget = QWidget()
+            QVBoxLayout(widget).addWidget(QLabel(t("catalog.tree.no_items")))
             return widget
-        active_edition = self._active_edition(detail)
-        if files is None:
-            layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
-            return widget
-        rename_btn = QPushButton(t("catalog.drive.apply_template"))
-        rename_btn.clicked.connect(
-            lambda: self._open_drive_rename(active_edition, detail),
+        from ui.edition_page import EditionPagePanel
+        version = self._detail_version
+        page = EditionPagePanel(
+            detail, self._read, self._write, lambda: self._auth.account_email or "",
+            lambda: version == self._detail_version, self._voice_candidates,
         )
-        layout.addWidget(rename_btn)
-        root_pdfs = files.root_pdfs
-        if files.subfolders:
-            scroll_content = QWidget()
-            scroll_layout = QVBoxLayout(scroll_content)
-            scroll_layout.setContentsMargins(0, 0, 0, 0)
-            for sf, sf_pdfs in files.subfolders:
-                group = QGroupBox(f"{sf.name}  ({len(sf_pdfs)} {t('catalog.part.file')})")
-                group_layout = QVBoxLayout(group)
-                if sf_pdfs:
-                    group_layout.addWidget(self._build_file_table(sf_pdfs))
-                else:
-                    empty = QLabel(t("catalog.drive.folder_empty"))
-                    empty.setStyleSheet("color: gray;")
-                    group_layout.addWidget(empty)
-                scroll_layout.addWidget(group)
-            if root_pdfs:
-                root_group = QGroupBox(
-                    t("catalog.drive.root_files", count=len(root_pdfs)),
-                )
-                root_layout = QVBoxLayout(root_group)
-                root_layout.addWidget(self._build_file_table(root_pdfs))
-                scroll_layout.addWidget(root_group)
-            scroll_layout.addStretch()
-            from PySide6.QtWidgets import QScrollArea
-            scroll = QScrollArea()
-            scroll.setWidget(scroll_content)
-            scroll.setWidgetResizable(True)
-            layout.addWidget(scroll, stretch=1)
-        elif root_pdfs:
-            layout.addWidget(self._build_file_table(root_pdfs), stretch=1)
-        else:
-            layout.addWidget(QLabel(t("catalog.drive.no_parts_yet")))
-        return widget
-
-    @staticmethod
-    def _build_file_table(pdfs: List[DriveFile]) -> QTableWidget:
-        """列出版本資料夾裡的檔（唯讀）"""
-        table = QTableWidget()
-        table.setRowCount(len(pdfs))
-        table.setColumnCount(1)
-        table.setHorizontalHeaderLabels([t("catalog.part.file")])
-        table.horizontalHeader().setStretchLastSection(True)
-        for row, pdf in enumerate(pdfs):
-            name_item = QTableWidgetItem(pdf.name)
-            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
-            table.setItem(row, 0, name_item)
-        table.setMaximumHeight(min(len(pdfs) * 35 + 30, 300))
-        return table
+        rename_btn = QPushButton(t("catalog.drive.apply_template"))
+        rename_btn.clicked.connect(lambda: self._open_drive_rename(page.selected_edition(), detail))
+        page.actions.addWidget(rename_btn)
+        page.actions.addStretch()
+        return page
 
     def _open_drive_rename(self, edition: Edition, detail: PieceDetail):
         """經譜庫服務讀版本資料夾的群組，再開啟 Drive 重新命名對話框；改好後重新顯示曲目"""
