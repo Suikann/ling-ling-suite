@@ -38,12 +38,11 @@ from core.constants import HUAXIA_KEYRING_SERVICE
 from services.external_opener import ExternalOpener
 from services.huaxia_client import AuthTokens, HuaXiaClient, HuaXiaError, HuaXiaErrorKind
 from services.local_callback import (
-    DEFAULT_TIMEOUT_SECONDS, BrowserNotOpened, CallbackCancelled, CallbackError, CallbackTimedOut, LocalCallback,
+    ACCESS_DENIED, DEFAULT_TIMEOUT_SECONDS, BrowserNotOpened, CallbackCancelled, CallbackError, CallbackTimedOut,
+    LocalCallback,
 )
 from services.secure_storage import SecureStorage, StorageStatus
 
-# Supabase 帶回本機回呼的 error：使用者在 Discord 拒絕授權
-_ACCESS_DENIED = "access_denied"
 # access token 在到期前這麼多秒就當成過期，續期之後才送的請求不會剛好碰上到期
 _EXPIRY_MARGIN_SECONDS = 60
 # 判定「這次登入才建立的帳號」時，容許 HuaXia 與這台電腦的時鐘差這麼多
@@ -62,7 +61,7 @@ class HuaXiaLoginFailure(Enum):
 
 
 # 本機回呼沒等到回呼的原因對應到登入沒有完成的原因
-_CALLBACK_FAILURES = {
+_CALLBACK_TO_FAILURE = {
     CallbackTimedOut: HuaXiaLoginFailure.TIMED_OUT,
     CallbackCancelled: HuaXiaLoginFailure.CANCELLED,
     BrowserNotOpened: HuaXiaLoginFailure.BROWSER_NOT_OPENED,
@@ -112,7 +111,7 @@ class HuaXiaReason(Enum):
 
 
 # 安全儲存讀寫的結果對應到登入狀態旁的原因；AVAILABLE 沒有原因
-_STORAGE_REASONS = {
+_STORAGE_TO_REASON = {
     StorageStatus.AVAILABLE: None,
     StorageStatus.NO_STORAGE: HuaXiaReason.NO_SECURE_STORAGE,
     StorageStatus.LOCKED: HuaXiaReason.STORAGE_LOCKED,
@@ -159,7 +158,9 @@ class HuaXiaAuthService:
         self._login_timeout = login_timeout
         self._callback: Optional[LocalCallback] = None
         self._not_saved_listeners: List[Callable[[], None]] = []
-        # 以下登入狀態只在持有 _lock 時讀寫：同一時間只有一個續期在進行
+        # 同一時間只有一個續期在進行：續期與登出期間（連網）持有 _refresh_lock；登出時會在持有中再續期一次
+        self._refresh_lock = threading.RLock()
+        # 以下登入狀態只在持有 _lock 時讀寫；_lock 不在連網期間持有，看狀態不會等續期
         self._lock = threading.Lock()
         self._refresh_token: Optional[str] = None
         self._access_token: Optional[str] = None
@@ -203,13 +204,14 @@ class HuaXiaAuthService:
         try:
             params = callback.receive(lambda redirect_uri: self._client.authorization_url(redirect_uri, challenge))
         except CallbackError as e:
-            raise HuaXiaLoginFailed(_CALLBACK_FAILURES[type(e)]) from e
+            raise HuaXiaLoginFailed(_CALLBACK_TO_FAILURE[type(e)]) from e
         except OSError as e:
             raise HuaXiaLoginFailed(HuaXiaLoginFailure.FAILED, str(e)) from e
-        if params.get("error") == _ACCESS_DENIED:
+        if params.get("error") == ACCESS_DENIED:
             raise HuaXiaLoginFailed(HuaXiaLoginFailure.DENIED)
         if "code" not in params:
-            raise HuaXiaLoginFailed(HuaXiaLoginFailure.FAILED, params.get("error_description") or params.get("error", ""))
+            detail = params.get("error_description") or params.get("error", "")
+            raise HuaXiaLoginFailed(HuaXiaLoginFailure.FAILED, detail)
         try:
             tokens = self._client.exchange_code(params["code"], verifier)
         except HuaXiaError as e:
@@ -222,7 +224,7 @@ class HuaXiaAuthService:
         if not_officer is not None:
             self._end_session(tokens.access_token)
             raise HuaXiaLoginFailed(HuaXiaLoginFailure.NOT_OFFICER, not_officer=not_officer)
-        with self._lock:
+        with self._refresh_lock, self._lock:
             self._signed_out = False
             self._reason = None
             self._adopt(tokens)
@@ -241,24 +243,28 @@ class HuaXiaAuthService:
         Raises:
             HuaXiaError: 沒有登入（SIGNED_OUT）、登入已失效（SESSION_GONE，已忘掉這次登入）、連不上 HuaXia
         """
-        with self._lock:
-            if self._access_token is not None and time.monotonic() < self._expires_at:
-                return self._access_token
-            if self._refresh_token is None and not self._signed_out:
-                self._restore()
-            if self._refresh_token is None:
+        with self._refresh_lock:
+            with self._lock:
+                if self._access_token is not None and time.monotonic() < self._expires_at:
+                    return self._access_token
+                if self._refresh_token is None and not self._signed_out:
+                    self._restore()
+                refresh_token = self._refresh_token
+            if refresh_token is None:
                 raise HuaXiaError(HuaXiaErrorKind.SIGNED_OUT)
             try:
-                tokens = self._client.refresh(self._refresh_token)
+                tokens = self._client.refresh(refresh_token)
             except HuaXiaError as e:
                 if e.kind is HuaXiaErrorKind.SESSION_GONE:
                     # 安全儲存那份已作廢：刪不掉時這次執行也不再讀它
-                    self._forget()
-                    self._signed_out = True
-                    self._reason = HuaXiaReason.SESSION_GONE
+                    with self._lock:
+                        self._forget()
+                        self._signed_out = True
+                        self._reason = HuaXiaReason.SESSION_GONE
                     self._storage.delete()
                 raise
-            self._adopt(tokens)
+            with self._lock:
+                self._adopt(tokens)
             return tokens.access_token
 
     def recheck_officer(self) -> Optional[NotOfficer]:
@@ -280,16 +286,17 @@ class HuaXiaAuthService:
 
     def logout(self) -> None:
         """登出：以 scope=local 請 HuaXia 作廢這台的 session，再刪安全儲存那份；請求失敗時只刪本機那份，不拋出"""
-        try:
-            self._end_session(self.access_token())
-        except HuaXiaError:
-            pass
-        with self._lock:
-            self._forget()
-            self._signed_out = True
-            if self._reason in (HuaXiaReason.NOT_SAVED, HuaXiaReason.SESSION_GONE):
-                self._reason = None
-        self._storage.delete()
+        with self._refresh_lock:
+            try:
+                self._end_session(self.access_token())
+            except HuaXiaError:
+                pass
+            with self._lock:
+                self._forget()
+                self._signed_out = True
+                if self._reason in (HuaXiaReason.NOT_SAVED, HuaXiaReason.SESSION_GONE):
+                    self._reason = None
+            self._storage.delete()
 
     def _not_officer(
         self, access_token: str, user_id: str, discord_name: str, login_started: Optional[datetime.datetime],
@@ -351,13 +358,13 @@ class HuaXiaAuthService:
     def _restore(self) -> None:
         """讀安全儲存裡的續期權杖，記下讀不出來的原因（持有 _lock 時呼叫）"""
         refresh_token, status = self._storage.read()
-        self._reason = _STORAGE_REASONS[status]
+        self._reason = _STORAGE_TO_REASON[status]
         self._refresh_token = refresh_token or None
 
     def _save(self, refresh_token: str) -> None:
         """把續期權杖寫進安全儲存，記下沒存成的原因；有安全儲存卻沒寫進去時通知訂閱者"""
         status = self._storage.write(refresh_token)
-        self._reason = _STORAGE_REASONS[status]
+        self._reason = _STORAGE_TO_REASON[status]
         if status in (StorageStatus.LOCKED, StorageStatus.WRITE_FAILED):
             for listener in self._not_saved_listeners:
                 listener()

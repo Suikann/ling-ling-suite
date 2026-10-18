@@ -35,7 +35,8 @@ from core.launch_env import bundled_client_secrets_path, current_build
 from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.local_callback import (
-    DEFAULT_TIMEOUT_SECONDS, BrowserNotOpened, CallbackCancelled, CallbackError, CallbackTimedOut, LocalCallback,
+    ACCESS_DENIED, DEFAULT_TIMEOUT_SECONDS, BrowserNotOpened, CallbackCancelled, CallbackError, CallbackTimedOut,
+    LocalCallback,
 )
 from services.preferences_service import PreferencesService
 from services.secure_storage import SecureStorage, StorageStatus
@@ -68,8 +69,6 @@ _CALLBACK_FAILURES = {
     CallbackCancelled: LoginFailure.CANCELLED,
     BrowserNotOpened: LoginFailure.BROWSER_NOT_OPENED,
 }
-# Google 回呼的 error：使用者在同意畫面拒絕
-_ACCESS_DENIED = "access_denied"
 
 
 class LoginFailed(Exception):
@@ -235,7 +234,7 @@ class GoogleAuthService:
         params = self._receive(callback, authorization_url)
         if params.get("state") != state:
             raise LoginFailed(LoginFailure.FAILED, "state mismatch")
-        if params.get("error") == _ACCESS_DENIED:
+        if params.get("error") == ACCESS_DENIED:
             raise LoginFailed(LoginFailure.DENIED)
         if "code" not in params:
             raise LoginFailed(LoginFailure.FAILED, params.get("error", ""))

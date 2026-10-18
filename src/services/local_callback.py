@@ -29,6 +29,8 @@ DEFAULT_TIMEOUT_SECONDS = 300.0
 _LOOPBACK_HOST = "127.0.0.1"
 # 等待時每隔這麼久檢查一次有沒有被取消
 _POLL_SECONDS = 0.1
+# 回呼的 error：使用者在提供者的同意畫面拒絕授權（OAuth 2.0 的 access_denied，Google 與 Supabase 相同）
+ACCESS_DENIED = "access_denied"
 
 
 class CallbackError(Exception):

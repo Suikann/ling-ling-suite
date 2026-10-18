@@ -256,7 +256,9 @@ class FakeHuaXia:
                 return _auth_error(404, "flow_state_not_found", "invalid flow state, no valid flow state found")
             challenge, user_id = entry
             if _s256(body.get("code_verifier", "")) != challenge:
-                return _auth_error(400, "bad_code_verifier", "code challenge does not match previously saved code verifier")
+                return _auth_error(
+                    400, "bad_code_verifier", "code challenge does not match previously saved code verifier",
+                )
             session_id = str(uuid.uuid4())
             self._sessions[session_id] = user_id
             return self._issue(session_id)
