@@ -7,8 +7,20 @@
 - UI 只表達意圖並立即寫入：修改一律呼叫 `Project` 的公開編輯操作（`update_group`、`add_group`、`move_to_group`、`apply_split`、`guess_piece_name`…，完整清單看 `Project` 的公開方法），不直接指定 `Project`、`Group`、`FileInfo` 的欄位
 - 舊欄位鏡像（`selected_instruments`、`use_parts_subfolder`）由編輯操作與載入流程維持，呼叫端不碰
 - 群組分頁、樂器表、預覽對話框不呼叫主視窗的私有方法：群組分頁以 `groups_changed` 讓主視窗重建分頁（影響其他分頁的修改），樂器表發出 `instruments_changed`，預覽對話框用主視窗注入的 callback（`check`、`on_execute`）
-- 同一份樂器表不重名：新增（`add_instrument`）或改名（`rename_instrument`）成與其他列同一聲部的名稱（`core/voice_names.py` 的規則，例如已有「二胡 I」時的「二胡1」）時丟出 `DuplicateVoiceError`、樂器表不變，樂器表編輯器顯示說明並還原名稱；改成自己的另一種寫法不算重名。整份換掉樂器表（`set_instruments`：拖動、刪除、預設樂器表）不檢查，舊專案已有的重名原樣保留
+- 同一份樂器表不重名：新增（`add_instrument`）或改名（`rename_instrument`）成與其他列同一聲部的名稱（`core/voice_names.py` 的規則，例如已有「二胡 I」時的「二胡1」）時丟出 `DuplicateVoiceError`、樂器表不變，樂器表編輯器顯示說明並還原名稱；改成自己的另一種寫法不算重名。整份換掉樂器表（`set_instruments`：預設樂器表、從檔名擷取）、移動與移除不檢查，舊專案已有的重名原樣保留
 - 樂器表顯示目前分頁那個群組的樂器表；目前分頁不是群組（未分組）時清空並停用，輸入的樂器才不會沒有地方寫入（`InstrumentListEditor.show_group`）
+
+### 聲部與分譜的配對
+
+- 群組的樂器表逐列帶「本專案有」（`Group.present`，與 `instruments` 逐列對應，存進專案檔；沒有這一欄的舊檔全都有）。它只存在專案：這場缺某份分譜時取消勾選，不必刪掉聲部
+- 分譜依序配給本專案有的聲部：第 N 份分譜配第 N 個本專案有的聲部（`Group.pairing`），本專案沒有的聲部跳過；多出的分譜（`Group.extra_files`）沒有聲部、不改名。序號仍是聲部在樂器表中的位置（見 [naming.md](naming.md)）
+- 編輯操作讓分譜跟著聲部：
+  - 移動聲部（`move_instruments`）：分譜跟著各自的聲部走。沒有分譜的聲部移到有分譜的聲部之前時自動改為本專案沒有，後面的分譜才不會錯位
+  - 單獨排分譜（`reorder_files`）：樂器表不動，只改配對
+  - 改名（`rename_instrument`）：分譜留在原位，跟著改名後的聲部；「本專案有」不變
+  - 取消勾選（`set_present(…, False)`）：它的分譜移到未分組尾端，其他聲部的分譜不動，回傳移走的分譜。重新勾選的聲部沒有分譜，依上面的規則配到下一份，後面的各往後配一個聲部
+  - 移除聲部（`remove_instruments`）：被移除的聲部的分譜移到未分組尾端，其他的不動，回傳移走的分譜
+  - 整份換掉樂器表（`set_instruments`）與分割的結果（`apply_split`）照位置配對，每個聲部都有。復原分割時連同「本專案有」退回（`SplitPlacement.present`）
 
 ### 樂團類型與聲部組
 

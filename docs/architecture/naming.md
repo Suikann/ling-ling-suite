@@ -13,7 +13,7 @@
 變數的中英文名稱、層級（`VariableLevel.FILE`／`GROUP`）與值的來源（`source`）都定義在 `core/constants.py` 的 `TEMPLATE_VARIABLES`；命名、變數選單與語言轉換都讀它。
 
 - **逐檔變數**，每一格不同：
-  - `{序號}`：聲部在樂器表中的位置，至少兩位數，位數隨樂器表長度增加（100 個聲部以上用三位）；總譜固定 `00`
+  - `{序號}`：聲部在樂器表中的位置，至少兩位數，位數隨樂器表長度增加（100 個聲部以上用三位）；總譜固定 `00`。本專案沒有的聲部也佔位置，所以跳過它不改變其他聲部的序號
   - `{樂器}`：依排序對應的聲部名稱；總譜代入該群組的總譜標籤
 - **群組層級變數**：其餘變數，值取自 `Group` 的欄位。使用者在群組分頁輸入；`{曲名}` 另會在檔案進入群組時自動偵測（見 [project.md](project.md)），連結樂章（`Project.link_movements`）與 Drive 譜庫的中繼資料也會填入
 - 新增群組層級變數：在 `TEMPLATE_VARIABLES` 加一筆，`source` 指向 `Group` 的欄位。`Group` 還沒有這個欄位時，另要加欄位並更新 `Group.EDITABLE_FIELDS`、`Group.to_data`／`from_data`、群組分頁的輸入欄（`ui/group_panel.py`）、Drive 對話框的中繼資料同步（`ui/drive_rename_dialog.py`）與 `tests/test_naming.py` 的 `EXPECTED`
@@ -21,8 +21,8 @@
 ## 套用命名格式
 
 - `name_slot(group, slot, settings, voices=None)` 把一格（`SCORE_SLOT` 為總譜，N 為第 N 份分譜）轉成 `SlotName(file_name, folders)`；`name_group` 列出整個群組，總譜在前
-- 第 N 份分譜對應樂器表的第 N 個聲部；多於聲部數的分譜放在 `extra_files`，不改名
-- 樂器表：明確傳入的 `voices` 優先，空的視同未傳入；否則用群組自己的樂器表（命名只讀群組的樂器表）
+- 第 N 份分譜對應本專案有的第 N 個聲部（`Group.pairing`，本專案沒有的聲部跳過，見 [project.md](project.md) 的聲部與分譜的配對）；多於這些聲部數的分譜放在 `extra_files`，不改名
+- 樂器表：明確傳入的 `voices` 優先，空的視同未傳入，每個聲部都配；否則用群組自己的樂器表（命名只讀群組的樂器表）
 - 分譜存放模式（`PartsOutputMode`：根目錄／分譜資料夾／聲部組資料夾）只影響分譜，總譜留在子資料夾那一層
 - 命名格式只掃描一次，代入的值不再被替換（曲名是 `{Instrument}` 時原樣保留）
 - 不是模板變數的 `{…}` 從檔名與資料夾名拿掉，`unknown_variables` 列出它們；`variables_in` 列出命名格式裡的全部名稱，配合 `variable_level` 找出子資料夾模板用了哪些逐檔變數

@@ -244,6 +244,18 @@ class TestMigrationOnlyForOldProjectFiles(unittest.TestCase):
         project.set_instruments(project.groups[0], [])
         self.assertEqual(self._reopen(project).groups[0].instruments, [])
 
+    def test_voices_not_in_this_project_stay_unchecked_after_reopening(self):
+        group = Group(name="g", instruments=["Flute", "Oboe", "Horn"])
+        project = Project(groups=[group])
+        project.set_present(group, 1, False)
+        reopened = self._reopen(project)
+        self.assertEqual(reopened.groups[0].present, [True, False, True])
+        self.assertFalse(reopened.is_modified())
+
+    def test_every_voice_of_an_older_file_is_in_this_project(self):
+        self._write_old_file({"groups": [{"name": "a", "score_label": "總譜", "instruments": ["Flute", "Oboe"]}]})
+        self.assertEqual(self.service.load_project(self.path).groups[0].present, [True, True])
+
     def test_file_written_by_the_old_version_still_migrates(self):
         self._write_old_file({
             "instruments": ["Flute", "Oboe", "Horn"],
@@ -482,6 +494,102 @@ class TestInstrumentListWithoutDuplicateVoices(unittest.TestCase):
         self.assertEqual(self.heard, [])
 
 
+class TestVoicesCarryTheirParts(unittest.TestCase):
+    """第 N 份分譜配本專案有的第 N 個聲部；拖聲部時分譜跟著走，單獨拖分譜只改配對，改名時分譜留在原位"""
+
+    def setUp(self):
+        self.group = Group(
+            name="g", instruments=["Flute", "Oboe", "Horn"], files=_infos("fl.pdf", "ob.pdf", "hn.pdf"),
+        )
+        self.project = Project(groups=[self.group], ungrouped_files=_infos("Loose.pdf"))
+        self.heard = []
+        self.project.subscribe(lambda: self.heard.append(self.project.is_modified()))
+
+    def pairs(self):
+        """（聲部、配到的分譜檔名；沒有分譜時為 None），依本專案有的聲部的順序"""
+        return [(p.voice, p.file.display_name if p.file else None) for p in self.group.pairing()]
+
+    def test_moving_a_voice_takes_its_part_along(self):
+        self.project.move_instruments(self.group, [2], 0)
+        self.assertEqual(self.pairs(), [("Horn", "hn.pdf"), ("Flute", "fl.pdf"), ("Oboe", "ob.pdf")])
+        self.assertEqual(self.heard, [True])
+
+    def test_moving_several_voices_down_keeps_their_order_and_parts(self):
+        self.project.move_instruments(self.group, [0, 1], 3)
+        self.assertEqual(self.pairs(), [("Horn", "hn.pdf"), ("Flute", "fl.pdf"), ("Oboe", "ob.pdf")])
+
+    def test_a_voice_without_a_part_moved_before_parts_is_marked_not_in_this_project(self):
+        """分譜依序配給本專案有的聲部；沒有分譜的聲部插進中間，後面的分譜才不會錯位"""
+        self.project.add_instrument(self.group, "Tuba")
+        self.project.move_instruments(self.group, [3], 1)
+        self.assertEqual(self.group.instruments, ["Flute", "Tuba", "Oboe", "Horn"])
+        self.assertEqual(self.group.present, [True, False, True, True])
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", "ob.pdf"), ("Horn", "hn.pdf")])
+
+    def test_voices_without_parts_stay_in_this_project_when_moved_among_themselves(self):
+        self.project.add_instrument(self.group, "Tuba")
+        self.project.add_instrument(self.group, "Harp")
+        self.project.move_instruments(self.group, [4], 3)
+        self.assertEqual(self.pairs()[3:], [("Harp", None), ("Tuba", None)])
+
+    def test_dragging_a_part_alone_only_changes_the_pairing(self):
+        fl, ob, hn = self.group.files
+        self.project.reorder_files(self.group, [ob, fl, hn])
+        self.assertEqual(self.group.instruments, ["Flute", "Oboe", "Horn"])
+        self.assertEqual(self.pairs(), [("Flute", "ob.pdf"), ("Oboe", "fl.pdf"), ("Horn", "hn.pdf")])
+
+    def test_renaming_a_voice_keeps_its_part(self):
+        self.project.rename_instrument(self.group, 1, "Oboe d'amore")
+        self.assertEqual(self.pairs()[1], ("Oboe d'amore", "ob.pdf"))
+
+    def test_unchecking_a_voice_moves_its_part_to_ungrouped_and_reports_it(self):
+        moved = self.project.set_present(self.group, 1, False)
+        self.assertEqual([f.display_name for f in moved], ["ob.pdf"])
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Horn", "hn.pdf")])
+        self.assertEqual([f.display_name for f in self.project.ungrouped_files], ["Loose.pdf", "ob.pdf"])
+        self.assertEqual(self.heard, [True])
+
+    def test_unchecking_a_voice_without_a_part_moves_nothing(self):
+        self.project.add_instrument(self.group, "Tuba")
+        self.assertEqual(self.project.set_present(self.group, 3, False), [])
+        self.assertEqual(self.group.present, [True, True, True, False])
+        self.assertEqual(len(self.project.ungrouped_files), 1)
+
+    def test_rechecking_a_voice_gives_it_the_next_part_in_order(self):
+        """本專案有的聲部依序配分譜：重新勾選的聲部配到下一份，後面的各往後配一個聲部"""
+        self.project.set_present(self.group, 0, False)
+        self.assertEqual(self.project.set_present(self.group, 0, True), [])
+        self.assertEqual(self.pairs(), [("Flute", "ob.pdf"), ("Oboe", "hn.pdf"), ("Horn", None)])
+
+    def test_renaming_keeps_whether_the_voice_is_in_this_project(self):
+        self.project.set_present(self.group, 1, False)
+        self.project.rename_instrument(self.group, 1, "Oboe d'amore")
+        self.assertEqual(self.group.present, [True, False, True])
+
+    def test_adding_a_voice_keeps_whether_the_others_are_in_this_project(self):
+        self.project.set_present(self.group, 1, False)
+        self.project.add_instrument(self.group, "Tuba")
+        self.assertEqual(self.group.present, [True, False, True, True])
+
+    def test_removing_voices_moves_their_parts_to_ungrouped_and_reports_them(self):
+        moved = self.project.remove_instruments(self.group, [0, 2])
+        self.assertEqual([f.display_name for f in moved], ["fl.pdf", "hn.pdf"])
+        self.assertEqual(self.pairs(), [("Oboe", "ob.pdf")])
+        self.assertEqual([f.display_name for f in self.project.ungrouped_files], ["Loose.pdf", "fl.pdf", "hn.pdf"])
+        self.assertEqual(self.heard, [True])
+
+    def test_parts_beyond_the_voices_stay_last(self):
+        self.project.add_files(_infos("extra.pdf"), self.group)
+        self.project.move_instruments(self.group, [0], 3)
+        self.assertEqual([f.display_name for f in self.group.extra_files()], ["extra.pdf"])
+        self.assertEqual(self.pairs()[-1], ("Flute", "fl.pdf"))
+
+    def test_replacing_the_whole_list_pairs_by_position_and_has_every_voice(self):
+        self.project.set_present(self.group, 1, False)
+        self.project.set_instruments(self.group, ["Violin", "Viola", "Cello"])
+        self.assertEqual(self.pairs(), [("Violin", "fl.pdf"), ("Viola", "hn.pdf"), ("Cello", None)])
+
+
 class TestApplySplit(unittest.TestCase):
     """套用分割結果：移除被取代的引用、加入新分譜、把合併譜移出群組；重新分割時由原群組接手"""
 
@@ -620,6 +728,13 @@ class TestRevertSplit(unittest.TestCase):
         project.set_instruments(group, ["Flute 1", "Oboe"])
         project.revert_split(record)
         self.assertEqual((group.piece_name, group.instruments), ("命運交響曲", ["Flute 1", "Oboe"]))
+
+    def test_voices_not_in_this_project_are_unchecked_again_after_undoing(self):
+        group = Group(name="g", files=[_info(self.SOURCE)], instruments=["Flute", "Oboe", "Horn"], score_label="總譜")
+        project = Project(groups=[group])
+        project.set_present(group, 1, False)
+        project.revert_split(self.split(project, "Violin", "Viola"))
+        self.assertEqual((group.instruments, group.present), (["Flute", "Oboe", "Horn"], [True, False, True]))
 
 
 class TestProjectSettingEdits(unittest.TestCase):

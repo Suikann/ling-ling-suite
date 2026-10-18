@@ -123,6 +123,21 @@ class TestVoices(unittest.TestCase):
         self.assertEqual(named_voices(_group(["Flute", "Oboe", "Horn"], files=files)), ["Flute", "Oboe"])
         self.assertEqual(named_voices(_group(["Flute"], files=files), voices=["Violin", "Viola", "Cello"]), ["Violin", "Viola"])
 
+    def test_voices_not_in_this_project_are_skipped_and_numbers_follow_the_list_position(self):
+        """「本專案沒有」的聲部配對時跳過；序號仍是聲部在樂器表中的位置"""
+        files = _files("a.pdf", "b.pdf", "c.pdf")
+        group = _group(["Flute", "Oboe", "Horn", "Tuba"], files=files, present=[True, False, True, True])
+        naming = name_group(group, NamingSettings("{序號}-{樂器}.pdf"))
+        self.assertEqual(_file_names(naming), ["01-Flute.pdf", "03-Horn.pdf", "04-Tuba.pdf"])
+        self.assertEqual(name_slot(group, 2, NamingSettings("{序號}-{樂器}.pdf")).file_name, "03-Horn.pdf")
+        self.assertEqual(named_voices(group), ["Flute", "Horn", "Tuba"])
+
+    def test_parts_beyond_the_voices_in_this_project_are_extra(self):
+        files = _files("a.pdf", "b.pdf")
+        naming = name_group(_group(["Flute", "Oboe"], files=files, present=[True, False]), NamingSettings("{樂器}.pdf"))
+        self.assertEqual(_file_names(naming), ["Flute.pdf"])
+        self.assertEqual(naming.extra_files, files[1:])
+
     def test_slot_beyond_the_voice_count_is_rejected(self):
         with self.assertRaises(ValueError):
             name_slot(_group(["Flute"]), 2, NamingSettings("{樂器}.pdf"))
