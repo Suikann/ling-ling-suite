@@ -2,8 +2,8 @@
 """
 PDF 分割對話框（PySide6）
 
-提供頁面縮圖預覽，讓使用者標記分割點、為各段命名；檢查、確認與執行交給分割模組（services/split_service.py），
-對話框只負責詢問與顯示。
+提供頁面縮圖預覽，讓使用者標記分割點、為各段命名（分段名稱有聲部名稱的自動完成）；檢查、確認與執行交給
+分割模組（services/split_service.py），對話框只負責詢問與顯示。
 """
 import os
 from functools import partial
@@ -19,8 +19,10 @@ from core.constants import SECTION_COLORS
 from core.locale import t
 from core.models import WorkspaceOwner
 from core.voice_names import voice_index, voice_key
+from core.voice_suggestions import VoiceCandidates
 from services.pdf_service import get_page_count, render_page_thumbnails
 from services.split_service import SplitCheck, SplitRequest, SplitSegment, SplitService
+from ui.voice_completer import attach_voice_completer
 from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
 
 _THUMB_WIDTH = 150
@@ -31,7 +33,8 @@ class SplitPdfDialog(QDialog):
     """PDF 分割對話框"""
 
     def __init__(self, project, on_split_complete=None, initial_group=None, parent=None,
-                 splitter: SplitService = None, project_path: str = ""):
+                 splitter: SplitService = None, project_path: str = "",
+                 voice_candidates: Optional[VoiceCandidates] = None):
         """建立分割對話框
 
         Args:
@@ -41,10 +44,12 @@ class SplitPdfDialog(QDialog):
             parent: 父視窗
             splitter: 分割模組
             project_path: 目前專案檔路徑，尚未存檔時為空字串（記為工作區子資料夾的所屬專案）
+            voice_candidates: 分段名稱自動完成的候選來源；None 時自建（沒有譜庫的名稱）
         """
         super().__init__(parent)
         self._splitter = splitter
         self._project_path = project_path or ""
+        self._voice_candidates = voice_candidates or VoiceCandidates()
         self.setWindowTitle(t("split.title"))
         self.resize(1100, 720)
         self.setMinimumSize(900, 520)
@@ -354,6 +359,10 @@ class SplitPdfDialog(QDialog):
         """分段自動帶入的聲部名稱：要分割的合併譜所在群組的樂器表；合併譜在未分組時沒有"""
         return list(self._source_group.instruments) if self._source_group else []
 
+    def _candidates(self) -> List[str]:
+        """分段名稱自動完成的候選：在要分割的合併譜所在群組輸入聲部名稱時的候選"""
+        return self._voice_candidates.for_group(self._project, self._source_group)
+
     def _voice_index(self, name: str) -> Optional[int]:
         """名稱在樂器表裡是第幾個聲部（同一聲部的另一種寫法也算）；不在樂器表時為 None"""
         return voice_index(self._voices(), name)
@@ -416,6 +425,7 @@ class SplitPdfDialog(QDialog):
                 row.addWidget(prev_btn)
             entry = QLineEdit(name)
             entry.setFixedHeight(_h)
+            attach_voice_completer(entry, self._candidates)
             row.addWidget(entry, stretch=1)
             self._section_name_entries[sec_idx] = entry
             if instruments:

@@ -241,6 +241,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "instrument.section_other": "其他",
         "instrument.section_follows": "{voices} 也會跟著改",
         "instrument.duplicate": "樂器表已有「{existing}」，和「{name}」是同一個聲部。",
+        "voice.suggestion.same_voice": "{name}（同一聲部）",
         # 連結樂章
         "group.link_movements": "連結為樂章...",
         "group.link_movements.title": "連結群組為同一曲目的樂章",
@@ -887,6 +888,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "instrument.section_other": "Other",
         "instrument.section_follows": "{voices} will change too",
         "instrument.duplicate": "\"{existing}\" is already in the list and is the same voice as \"{name}\".",
+        "voice.suggestion.same_voice": "{name} (same voice)",
         # 連結樂章
         "group.link_movements": "Link as Movements...",
         "group.link_movements.title": "Link Groups as Movements of One Piece",

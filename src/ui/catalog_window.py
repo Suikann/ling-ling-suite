@@ -29,6 +29,7 @@ from core.catalog_constants import (
 )
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import Composer, DriveFile, EditionFiles, Piece, Edition, PieceDetail
+from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingRows
 from services.club_settings_service import ClubSettingsService
@@ -53,6 +54,7 @@ class CatalogWindow(QMainWindow):
         catalog_factory: Optional[Callable[[], CatalogService]] = None,
         log: Optional[ActivityLog] = None,
         huaxia_auth: Optional[HuaXiaAuthService] = None,
+        voice_candidates: Optional[VoiceCandidates] = None,
     ):
         """
         Args:
@@ -63,10 +65,12 @@ class CatalogWindow(QMainWindow):
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
             log: 紀錄檔，讀寫失敗時寫進去；省略時以使用者資料目錄下的紀錄檔資料夾建立
             huaxia_auth: HuaXia 登入服務，交給譜庫設定的 HuaXia 登入區；省略時譜庫設定沒有 HuaXia 登入區
+            voice_candidates: 聲部名稱自動完成的候選來源，讀到譜庫總覽時記下用過的聲部名稱；省略時不記
         """
         super().__init__(parent)
         self._auth = auth_service
         self._huaxia_auth = huaxia_auth
+        self._voice_candidates = voice_candidates
         self._prefs = preferences
         self._catalog_factory = catalog_factory or self._open_google_catalog
         self._catalog: Optional[CatalogService] = None
@@ -304,7 +308,7 @@ class CatalogWindow(QMainWindow):
         return label
 
     def _refresh_all(self):
-        """經譜庫服務重新讀取曲目、作曲家與譜庫根資料夾的內容"""
+        """經譜庫服務重新讀取曲目、作曲家與譜庫根資料夾的內容；用過的聲部名稱記進自動完成的候選來源"""
         root_id = self._prefs.get(CATALOG_ROOT_FOLDER_ID_KEY) or ""
 
         def on_done(overview):
@@ -314,6 +318,8 @@ class CatalogWindow(QMainWindow):
             self._pieces = overview.pieces
             self._composers = overview.composers
             self._piece_by_folder = overview.folder_pieces
+            if self._voice_candidates is not None:
+                self._voice_candidates.remember_catalog(overview.voice_names)
             self._clear_tree()
             self._populate_tree(None, overview.root.folders, overview.root.pdfs)
             self._status_bar.showMessage(

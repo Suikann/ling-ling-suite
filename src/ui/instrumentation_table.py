@@ -6,6 +6,7 @@
 旁邊寫出會跟著改的其他編號）；上方是群組的時長（分、秒）。
 聲部的增刪與順序只在這張表：拖動列時分譜跟著聲部走，雙擊改名時分譜留在原位，取消勾選「本專案有」時
 那份分譜移到未分組，表格下方寫出移了哪幾份；與另一列是同一聲部（舊專案留下的重名）的列標紅。
+輸入欄與改名的編輯欄有聲部名稱的自動完成（ui/voice_completer.py），候選來源由建立時傳入。
 另有載入預設樂器表、從其他群組複製編制、從檔名擷取與匯出樂器表。
 
 元件不依賴主視窗：帶入專案後以 show_group 顯示任何一個群組；修改一律經專案的編輯操作立即寫入，
@@ -31,7 +32,9 @@ from core.locale import localized, t
 from core.models import DuplicateVoiceError, FileInfo, Headcount
 from core.sections import section_label
 from core.voice_names import distinct_voices, duplicate_rows
+from core.voice_suggestions import VoiceCandidates
 from services.file_service import FileService
+from ui.voice_completer import VoiceNameDelegate, attach_voice_completer
 from ui.widgets import ask_save_path
 
 if TYPE_CHECKING:
@@ -113,16 +116,19 @@ class InstrumentationTable(QWidget):
 
     def __init__(
         self, project: Optional["Project"] = None, parent=None, file_service: Optional[FileService] = None,
+        voice_candidates: Optional[VoiceCandidates] = None,
     ):
         """
         Args:
             project: 目前的專案（編輯操作與聲部組）
             parent: 父元件
             file_service: 檔案服務（寫出匯出的樂器表）；None 時自建
+            voice_candidates: 輸入聲部名稱時自動完成的候選來源；None 時自建（沒有譜庫的名稱）
         """
         super().__init__(parent)
         self._project = project
         self._file_service = file_service or FileService()
+        self._voice_candidates = voice_candidates or VoiceCandidates()
         self._group: Optional["Group"] = None
         self._editable = True
         self._filling = False
@@ -164,6 +170,7 @@ class InstrumentationTable(QWidget):
         for index in range(len(COLUMNS)):
             header.setSectionResizeMode(index, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(self.column("voice"), QHeaderView.Stretch)
+        self._table.setItemDelegateForColumn(self.column("voice"), VoiceNameDelegate(self._candidates, self._table))
         self._table.rows_dropped.connect(self._on_rows_dropped)
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -179,6 +186,7 @@ class InstrumentationTable(QWidget):
         self._entry = QLineEdit()
         self._entry.setPlaceholderText(t("instrument.placeholder"))
         self._entry.returnPressed.connect(self._add_instrument)
+        attach_voice_completer(self._entry, self._candidates)
         input_row.addWidget(self._entry)
         add_btn = QPushButton(t("instrument.add"))
         add_btn.setFixedWidth(60)
@@ -213,6 +221,10 @@ class InstrumentationTable(QWidget):
             row.addWidget(QLabel(t(unit)))
         row.addStretch()
         return row
+
+    def _candidates(self) -> List[str]:
+        """在目前群組輸入聲部名稱時的自動完成候選"""
+        return self._voice_candidates.for_group(self._project, self._group)
 
     # --- 顯示 ---
 

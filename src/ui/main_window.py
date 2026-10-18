@@ -22,6 +22,7 @@ from core.launch_env import app_version, current_build
 from core.locale import t, get_locale, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
+from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
 from services.compression_output_service import CompressionBatch, CompressionOutputService
 from services.compression_service import CompressionResult, CompressionService
@@ -131,6 +132,8 @@ class MainWindow(QMainWindow):
         self._compressor = compressor or CompressionService(self.file_service)
         self._compression_output = CompressionOutputService(self.file_service, self._compressor)
         self._log = log or ActivityLog(self.file_service)
+        # 聲部名稱自動完成的候選全程式一份：譜庫視窗讀到的聲部名稱，編制表與分割視窗都用
+        self._voice_candidates = VoiceCandidates()
         # 「關於」顯示的版號：打包版讀資源目錄的版號檔，開發版為 None
         build = current_build()
         self._version = app_version(build.frozen, build.resource_dir, self.file_service.read_text)
@@ -219,7 +222,9 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
         main_layout.addWidget(splitter, stretch=1)
-        self._instrumentation_table = InstrumentationTable(project=self.project, file_service=self.file_service)
+        self._instrumentation_table = InstrumentationTable(
+            project=self.project, file_service=self.file_service, voice_candidates=self._voice_candidates,
+        )
         self._instrumentation_table.setMinimumWidth(300)
         self._instrumentation_table.instruments_changed.connect(self._on_instruments_changed)
         splitter.addWidget(self._instrumentation_table)
@@ -732,6 +737,7 @@ class MainWindow(QMainWindow):
         dialog = SplitPdfDialog(
             self.project, self._on_split_complete, self._current_group(), self,
             splitter=self._splitter, project_path=self._project_path or "",
+            voice_candidates=self._voice_candidates,
         )
         dialog.exec()
 
@@ -1008,7 +1014,10 @@ class MainWindow(QMainWindow):
             if not self._open_catalog_settings():
                 return
         from ui.catalog_window import CatalogWindow
-        self._catalog_window = CatalogWindow(auth, self._preferences, log=self._log, huaxia_auth=self._huaxia_auth)
+        self._catalog_window = CatalogWindow(
+            auth, self._preferences, log=self._log, huaxia_auth=self._huaxia_auth,
+            voice_candidates=self._voice_candidates,
+        )
         self._catalog_window.show()
 
     def _open_catalog_settings(self) -> bool:

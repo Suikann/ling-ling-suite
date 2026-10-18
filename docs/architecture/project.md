@@ -21,6 +21,7 @@
 - 舊的「編制設定」對話框（編輯人數）已拿掉，人數只在這張表填
 - 拖動列：`move_instruments`，分譜跟著聲部走；分譜在群組分頁單獨拖動（`reorder_files`），只改配對
 - 雙擊改聲部名稱：`rename_instrument`；清空名稱等於移除那一列
+- 輸入欄與改名的編輯欄有聲部名稱的自動完成（見 [modules.md](modules.md)）：只提示、不改寫輸入，選到的名稱照樣經 `add_instrument`、`rename_instrument` 的不重名檢查
 - 勾選「本專案有」：`set_present`；取消勾選、移除列（`remove_instruments`）時，表格下方寫出移到未分組的分譜
 - 與另一列是同一聲部的列（舊專案留下的重名，`core/voice_names.py` 的 `duplicate_rows`）標紅；重名不自動改名，重新命名與分割照常可用
 - 元件不依賴主視窗：帶入專案後以 `show_group` 顯示任何一個群組；在別處改了專案設定（例如樂團類型）後以 `refresh` 重畫。上方的 `header` 版面預留給連線
