@@ -76,6 +76,7 @@ After upgrading, do not open project files saved by the new version with an olde
 A group can be linked to a piece, edition and movement in the catalog (the club's Google spreadsheet plus Drive). Once linked, the catalog holds the instrumentation and duration:
 
 - Pressing **Save** on the project also writes the group's changed voices, order, headcounts, duration and sections to the catalog; nothing is written until you save. Only changed cells are written. If someone else changed the same cell in the catalog, every change of this save is listed first, with the conflicts in red for you to choose a side
+- When offline or the catalog can't be written, the project is still saved; the changes not written are marked "Unsynced" in the instrumentation table with the catalog's current value, and retried on the next save or when the project is opened
 - Deleting a voice in a linked group deletes it from the score; if this concert just lacks the part, uncheck "In Project" instead. A voice that already has a Drive file can't be deleted from the group; handle it in the catalog window
 - **After upgrading, do not open the catalog with an older version of Ling Ling**: its part status menu creates fake voices, its deletions shift row numbers, and its updates overwrite the first columns with old data
 
