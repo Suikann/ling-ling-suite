@@ -6,6 +6,7 @@
 preview 讀本機檔案的 MD5 與譜庫那處現在的登記、版本資料夾裡的檔，交回每份檔的動作（規則在 core/deposit.py）；
 deposit 照計畫一份一份上傳、更新或搬移，做完（或取消、中途失敗）後以一次試算表寫入把做好的那些登記到分譜列，
 並各寫一列存入紀錄，所以請求數不隨聲部數增加。碰譜庫一律經譜庫服務（CatalogService）。
+undeposited 拿本機檔案的 MD5 比對存入指紋，找出存入後本機又改過的檔（未存入），不連網。
 
 不會產生重複的檔與列：新上傳以預先向 Drive 要的 ID 建檔，重送時 Drive 回已經存在；中斷後重按時重新預覽，
 已登記且內容相同的跳過，上傳了但還沒登記的是目標資料夾裡的同名檔，內容相同就直接登記。
@@ -18,6 +19,7 @@ deposit 照計畫一份一份上傳、更新或搬移，做完（或取消、中
     plan = service.preview(project, catalog)
     outcome = service.deposit(plan, catalog, email, should_cancel, report)
     project.record_deposit(outcome.records)
+    stale = service.undeposited(project)
 """
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
@@ -29,7 +31,7 @@ from core.deposit import (
 )
 from core.locale import t
 from core.log_entry import LogEntry
-from core.models import Project
+from core.models import FileRef, Project
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.file_service import FileService
@@ -80,6 +82,44 @@ class DepositService:
         """
         self._files = file_service
         self._log = log
+        # 算過的 MD5：本機路徑 → （算的時候的大小與修改時間，MD5）
+        self._md5s: Dict[str, Tuple[Tuple[int, int], str]] = {}
+
+    def undeposited(self, project: Project) -> List[FileRef]:
+        """未存入的檔：存入過（有存入指紋），本機檔案的 MD5 卻跟指紋不一致；只讀本機檔案，不碰譜庫
+
+        大小與修改時間沒變的檔沿用上次算的 MD5，重畫群組面板時不必每份重讀。
+
+        Args:
+            project: 專案
+
+        Returns:
+            依 Project.file_refs 的順序；本機找不到的檔不算
+        """
+        stale = []
+        for ref in project.file_refs():
+            if not ref.file.deposit_md5:
+                continue
+            try:
+                current = self._md5(ref.file.original_path)
+            except OSError:
+                continue
+            if current != ref.file.deposit_md5:
+                stale.append(ref)
+        return stale
+
+    def _md5(self, path: str) -> str:
+        """本機檔案的 MD5；大小與修改時間跟上次算的時候一樣就沿用
+
+        Raises:
+            OSError: 檔案讀不到
+        """
+        stamp = self._files.stamp(path)
+        cached = self._md5s.get(path)
+        if cached is None or cached[0] != stamp:
+            cached = (stamp, self._files.md5(path))
+            self._md5s[path] = cached
+        return cached[1]
 
     def preview(self, project: Project, catalog: CatalogService) -> DepositPlan:
         """算出存入計畫：本機檔案的 MD5 與大小，加上譜庫各處現在的登記與版本資料夾裡的檔

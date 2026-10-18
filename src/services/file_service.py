@@ -10,7 +10,7 @@ import json
 import os
 import shutil
 import time
-from typing import Any, List
+from typing import Any, List, Tuple
 
 from core.constants import (
     ATOMIC_WRITE_RETRIES, ATOMIC_WRITE_RETRY_INTERVAL, ATOMIC_WRITE_TEMP_SUFFIX, PDF_EXTENSION,
@@ -238,6 +238,15 @@ class FileService:
             OSError: 讀不到檔案資訊（例如檔案不存在）
         """
         return os.path.getsize(path)
+
+    def stamp(self, path: str) -> Tuple[int, int]:
+        """檔案的大小（位元組）與修改時間（奈秒）；內容沒改過時兩者都不變，拿來判斷要不要重算 MD5
+
+        Raises:
+            OSError: 讀不到檔案資訊（例如檔案不存在）
+        """
+        info = os.stat(path)
+        return info.st_size, info.st_mtime_ns
 
     def file_exists_exact(self, path: str) -> bool:
         """檢查檔案是否存在且檔名大小寫完全相同

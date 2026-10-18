@@ -418,5 +418,42 @@ class TestFingerprints(DepositTestCase):
         self.assertNotIn("deposit_md5", self.project.to_data()["groups"][0]["files"][0])
 
 
+
+class TestUndeposited(DepositTestCase):
+    """未存入：本機檔案的 MD5 跟存入指紋不一致；只讀本機檔案，不碰譜庫"""
+
+    def setUp(self):
+        super().setUp()
+        _, outcome = self.deposit()
+        self.project.record_deposit(outcome.records)
+        self.requests = self.google.requests
+
+    def write(self, file: FileInfo, content: bytes) -> None:
+        """改寫本機檔案的內容"""
+        with open(file.original_path, "wb") as f:
+            f.write(content)
+
+    def undeposited(self) -> list:
+        """回報未存入的檔案路徑"""
+        return [ref.file.original_path for ref in self.service.undeposited(self.project)]
+
+    def test_a_file_changed_after_archiving_is_undeposited(self):
+        self.write(self.parts[1], b"new pipa")
+        self.assertEqual(self.undeposited(), [self.parts[1].original_path])
+        self.assertEqual(self.google.requests, self.requests)
+
+    def test_changing_the_content_back_is_no_longer_undeposited(self):
+        self.write(self.parts[1], b"new pipa")
+        self.undeposited()
+        self.write(self.parts[1], "琵琶".encode())
+        self.assertEqual(self.undeposited(), [])
+
+    def test_files_never_archived_or_missing_are_not_undeposited(self):
+        extra = self.put("春江花月夜/分譜/揚琴.pdf", b"yangqin")
+        self.project.add_files([extra], self.group)
+        os.remove(self.parts[0].original_path)
+        self.assertEqual(self.undeposited(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
