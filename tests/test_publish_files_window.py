@@ -27,7 +27,7 @@ from services.huaxia_client import lingling_storage_path
 from tests.synthetic_pdfs import scanned_pdf
 from tests.test_main_window import GatedCompressor, button_in, comparing, wait_until
 from tests.test_publish_window import PublishWindowTestCase, button, choose
-from ui.compress_pdf import size_text
+from ui.compress_pdf import result_state, size_text
 from ui.publish_dialog import PublishPreviewDialog
 
 KB = 1000
@@ -167,6 +167,24 @@ class TestCompression(CompressingTestCase):
             self.assertFalse(publish.isEnabled())
             self.finish_compressing()
             self.assertTrue(publish.isEnabled())
+        self.publish(operate=operate)
+
+    def test_compressing_again_after_cancelling(self):
+        def operate(dialog):
+            self.dialog = dialog
+            go_to(dialog, 2)
+            button(dialog, "publish.files.cancel").click()
+            wait_until(lambda: dialog.findChild(QLabel, "compression_status").isHidden())
+            self.assertEqual(self.state_of("二胡 I"), t("publish.files.not_compressed"))
+            again = button(dialog, "publish.files.compress_again")
+            self.assertFalse(again.isHidden())
+            again.click()
+            self.assertTrue(again.isHidden())
+            self.finish_compressing()
+            self.assertEqual(
+                self.state_of("二胡 I"), result_state(next(r for r in self.gated.results if r.output_path)),
+            )
+            self.assertTrue(again.isHidden())
         self.publish(operate=operate)
 
     def test_compare_opens_the_shared_compare_screen_and_dropping_there_drops_the_file(self):

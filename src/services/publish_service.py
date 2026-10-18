@@ -789,10 +789,11 @@ class PublishPreview:
         """沒擋下的群組裡，對到的曲目已經掛著這場公演的"""
         return [group for group in self.groups if self.is_attached(group, event_id)]
 
-    def oversized_paths(self) -> List[str]:
-        """沒擋下的群組裡超過大小上限、要先壓縮的本機檔，依群組與檔案計畫的順序"""
+    def to_compress(self) -> List[str]:
+        """沒擋下的群組裡超過大小上限、還沒壓縮過、也沒選不發的本機檔，依群組與檔案計畫的順序"""
         return [
             file.path for group in self.groups for file in oversized(self.file_plan(group), self.size_limit)
+            if file.path not in self.compressed and file.path not in self.dropped
         ]
 
     def close(self, compressor: CompressionService, publishing: bool) -> None:

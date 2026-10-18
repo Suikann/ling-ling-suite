@@ -17,7 +17,8 @@
 - 「檔案」：每個群組列出要發的分譜與總譜、會被取代的那份（同一個聲部底下、泠靈發的，publish_service.plan_files）
   與同聲部別人放的檔（不動）；HuaXia 上已有內容相同那份的標成不重傳。本機找不到的檔跳過並寫出來，只在譜庫的旁邊放「從譜庫下載回來」（關掉預覽，
   交給主視窗下載回原位）。超過大小上限的檔第一次進這一步時在背景逐份壓縮（壓縮檔在壓縮服務的暫存資料夾，
-  原檔不動），底部顯示進度與「取消壓縮」；每份顯示壓縮狀態與「開啟」「比較」（共用的比較畫面）「不發這份」。
+  原檔不動；經 CompressionOutputService.compress_each，每份壓好就記下），底部顯示進度與「取消壓縮」，取消後可以按
+  「再壓縮」壓還沒壓到的；每份顯示壓縮狀態與「開啟」「比較」（共用的比較畫面）「不發這份」。
 - 「公演」：複選本學期、還沒結束的公演（PublishReadiness.concerts），逐場說明掛上後的影響；可以不掛。
   群組的曲目已掛著的公演寫出是哪些群組，全部群組都已掛著的勾著、不能取消（泠靈不把曲目從場次移除）。
 - 「確認」：每個群組列出曲目、要新掛的公演（已掛著的不算）、要新建與覆寫的聲部、要傳的檔數與大小、要取代的份數、
@@ -50,6 +51,7 @@ from core.constants import (
 from core.locale import t
 from core.models import Group, HuaXiaLink, NewHuaXiaPiece, Project
 from core.sections import section_label
+from services.compression_output_service import BatchProgress, CompressionOutputService
 from services.compression_service import CompressionResult, CompressionService
 from services.external_opener import ExternalOpener
 from services.file_service import FileService
@@ -59,7 +61,7 @@ from services.publish_service import (
     VoiceRow, oversized,
 )
 from ui.background_task import BackgroundTask
-from ui.compress_pdf import result_state, size_text
+from ui.compress_pdf import describe_progress, result_state, size_text
 from ui.compression_compare import CompressionCompareDialog
 from ui.instrumentation_table import catalog_change_text
 
@@ -303,9 +305,10 @@ class PublishPreviewDialog(QDialog):
         file_service = file_service or FileService()
         self._compressor = compressor or CompressionService(file_service)
         self._preview = PublishPreview(project, checks, readiness, file_service, self._compressor.size_limit)
+        self._compression_output = CompressionOutputService(file_service, self._compressor)
         self._opener = opener or ExternalOpener()
         self._download_back = download_back
-        # 壓縮：正在壓的那份；背景工作（第一次進「檔案」步時開始，一次壓完全部）
+        # 壓縮：正在壓的那份；背景工作（第一次進「檔案」步時開始，一次壓完全部；取消後可以再壓沒壓到的）
         self._compressing: Optional[str] = None
         self._compress_task: Optional[BackgroundTask] = None
         self._compress_started = False
@@ -352,6 +355,10 @@ class PublishPreviewDialog(QDialog):
         self._compress_cancel.clicked.connect(self._cancel_compression)
         self._compress_cancel.setVisible(False)
         buttons.addWidget(self._compress_cancel)
+        self._compress_again = QPushButton(t("publish.files.compress_again"))
+        self._compress_again.clicked.connect(lambda: self._compress(self._preview.to_compress()))
+        self._compress_again.setVisible(False)
+        buttons.addWidget(self._compress_again)
         buttons.addStretch()
         self._back = QPushButton(t("publish.back"))
         self._back.clicked.connect(lambda: self._go(self._current.offset(-1)))
@@ -396,7 +403,9 @@ class PublishPreviewDialog(QDialog):
         if step is PublishStep.VOICES:
             self._show_voices()
         elif step is PublishStep.FILES:
-            self._start_compression()
+            if not self._compress_started:
+                self._compress_started = True
+                self._compress(self._preview.to_compress())
             self._show_files()
         elif step is PublishStep.EVENTS:
             self._show_events()
@@ -418,6 +427,9 @@ class PublishPreviewDialog(QDialog):
         self._next.setEnabled(not last and self._preview.step_ready(self._current))
         self._publish.setVisible(last)
         self._publish.setEnabled(last and self._preview.can_publish(compressing=self._compress_task is not None))
+        self._compress_again.setVisible(
+            self._compress_started and self._compress_task is None and bool(self._preview.to_compress()),
+        )
 
     def _set_piece(self, group: Group, link: Optional[HuaXiaLink]):
         """「曲目」步的選擇改了：交給 PublishPreview.set_piece，更新按鈕"""
@@ -759,41 +771,38 @@ class PublishPreviewDialog(QDialog):
             self._show_files()
         dialog.deleteLater()
 
-    def _start_compression(self):
-        """第一次進「檔案」步時，在背景逐份壓縮所有群組裡超過上限的檔"""
-        if self._compress_started:
-            return
-        self._compress_started = True
-        paths = self._preview.oversized_paths()
+    def _compress(self, paths: List[str]):
+        """在背景經 CompressionOutputService.compress_each 逐份壓縮這幾份，每份壓好就記進預覽
+
+        第一次進「檔案」步時壓所有群組裡超過上限的檔；取消後按「再壓縮」壓還沒壓到的。
+        """
         if not paths:
             return
         compressor = self._compressor
+        output = self._compression_output
 
         def work(should_cancel, report):
-            """一份一份壓；每份開始與壓好時回報，取消時丟掉剛壓好的那份"""
-            for index, path in enumerate(paths, start=1):
-                if should_cancel():
-                    return
-                report((path, index, None))
-                result = compressor.compress(path, should_cancel)
+            """一份一份壓，進度與壓好的各份都回報；取消後才壓好的那份丟掉"""
+            def deliver(result: CompressionResult):
+                """壓好一份：還沒取消就交回主執行緒"""
                 if should_cancel():
                     compressor.discard(result)
-                    return
-                report((path, index, result))
+                else:
+                    report(result)
+            output.compress_each(paths, should_cancel, report, deliver)
 
         task = BackgroundTask(work, self)
         self._compress_task = task
 
         def progressed(progress):
-            """一份開始或壓好了：更新狀態與「檔案」步"""
-            path, index, result = progress
-            if result is None:
-                self._compressing = path
-                self._compress_status.setText(t(
-                    "publish.files.status", name=os.path.basename(path), index=index, total=len(paths),
-                ))
+            """進度寫到狀態；一份開始或壓好時更新「檔案」步"""
+            if isinstance(progress, BatchProgress):
+                self._compress_status.setText(describe_progress(progress)[0])
+                if progress.step is not None:
+                    return
+                self._compressing = progress.source
             else:
-                self._preview.compressed[path] = result
+                self._preview.compressed[progress.source] = progress
             self._compression_changed()
 
         def finished(_result):
@@ -817,6 +826,7 @@ class PublishPreviewDialog(QDialog):
         self._compress_status.setVisible(True)
         self._compress_cancel.setEnabled(True)
         self._compress_cancel.setVisible(True)
+        self._compress_again.setVisible(False)
         task.start()
 
     def _cancel_compression(self):

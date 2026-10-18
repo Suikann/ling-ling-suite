@@ -5,6 +5,7 @@
 把要壓縮的 PDF（多選同一資料夾的檔、整個資料夾連同子資料夾，或另存單一檔）排成一批，
 決定各份交到輸出位置的哪裡、擋下會蓋掉原檔的位置、列出會被覆蓋的檔，
 一次一份壓完整批後再一起交出；取消時已壓好的全部丟掉、什麼都不交出。
+不交到輸出位置、每份壓好就交給呼叫端的（發譜預覽「檔案」步壓縮超過上限的檔）用 compress_each，取消時已壓好的照樣交回。
 一批輸出的檔名不加後綴、照原本的子資料夾結構，所以輸入的資料夾（含子資料夾）一律不能當輸出位置；
 另存單一檔時檔名由使用者決定，只擋原檔本身。
 壓縮一份 PDF 在 compression_service，這裡只管批次與輸出，檔案存取經過 FileService。
@@ -242,27 +243,51 @@ class CompressionOutputService:
         Returns:
             各份的壓縮結果，與 batch.jobs 同序；取消時為 None
         """
-        results = []
-        total = len(batch.jobs)
+        results: List[CompressionResult] = []
         try:
-            for index, job in enumerate(batch.jobs, start=1):
-                on_progress(BatchProgress(index, total, job.source, None))
-                if should_cancel():
-                    break
-                result = self._compressor.compress(
-                    job.source, should_cancel,
-                    lambda step, index=index, job=job: on_progress(BatchProgress(index, total, job.source, step)),
-                )
-                results.append(result)
-                if result.status is CompressionStatus.CANCELLED:
-                    break
-            else:
-                return tuple(results)
+            self.compress_each([job.source for job in batch.jobs], should_cancel, on_progress, results.append)
         except BaseException:
             self.discard(results)
             raise
+        if len(results) == len(batch.jobs):
+            return tuple(results)
         self.discard(results)
         return None
+
+    def compress_each(
+        self, sources: Sequence[str], should_cancel: Callable[[], bool] = lambda: False,
+        on_progress: Callable[[BatchProgress], None] = lambda progress: None,
+        on_result: Callable[[CompressionResult], None] = lambda result: None,
+    ) -> List[CompressionResult]:
+        """一次一份壓縮這幾份 PDF，每份壓好就交給 on_result，壓縮檔留在暫存資料夾，由呼叫端丟掉
+
+        可以在背景執行緒呼叫；取消在頁與頁之間生效：被打斷的那份不交出，之後的不壓，已交出的不動。
+
+        Args:
+            sources: 原檔路徑，依壓縮的順序
+            should_cancel: 頁與頁之間呼叫，回傳 True 就停下
+            on_progress: 每一份開始時回報一次（step 為 None），之後轉回報該份的壓縮進度
+            on_result: 每一份壓好（含壓縮失敗、無法壓縮、不到上限）時呼叫
+
+        Returns:
+            壓好的各份，與 sources 的前幾份同序；全部壓完時與 sources 一樣多
+        """
+        results = []
+        total = len(sources)
+        for index, source in enumerate(sources, start=1):
+            on_progress(BatchProgress(index, total, source, None))
+            if should_cancel():
+                break
+            result = self._compressor.compress(
+                source, should_cancel,
+                lambda step, index=index, source=source: on_progress(BatchProgress(index, total, source, step)),
+            )
+            if result.status is CompressionStatus.CANCELLED:
+                self._compressor.discard(result)
+                break
+            results.append(result)
+            on_result(result)
+        return results
 
     def deliver(self, batch: CompressionBatch, results: Sequence[CompressionResult]) -> Dict[str, OSError]:
         """把結果交到各份在輸出位置的檔案；目的地已有檔案時覆蓋
