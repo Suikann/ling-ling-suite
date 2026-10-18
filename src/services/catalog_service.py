@@ -125,6 +125,11 @@ def _place_voices(parts: List[Part]) -> List[Tuple[str, Headcount]]:
     return voices
 
 
+def _used_voice_names(part_rows: List[List[str]]) -> List[str]:
+    """分譜工作表用過的聲部名稱，依使用次數排序（給自動完成）"""
+    return ranked_by_usage(part.instrument_name for part in _models(part_rows, SHEET_PARTS, Part))
+
+
 def _club_sections(records: List[Dict[str, str]], orchestra_type: OrchestraType) -> Dict[str, str]:
     """社團聲部組對照裡這個樂團類型的部分：樂器 → 聲部組；同一樂器有幾列時只認排在前面那一列"""
     sections: Dict[str, str] = {}
@@ -313,7 +318,7 @@ class CatalogService:
             composers=_models(composer_rows, SHEET_COMPOSERS, Composer),
             folder_pieces=folder_pieces,
             root=self.folder_contents(root_folder_id),
-            voice_names=ranked_by_usage(part.instrument_name for part in _models(part_rows, SHEET_PARTS, Part)),
+            voice_names=_used_voice_names(part_rows),
         )
 
     def folder_contents(self, folder_id: str) -> FolderContents:
@@ -417,16 +422,19 @@ class CatalogService:
         return None
 
     def link_targets(self) -> LinkTargets:
-        """讀群組連線時可以挑的曲目、版本與樂章（一次請求）
+        """讀群組連線時可以挑的曲目、版本與樂章，連同用過的聲部名稱（一次請求）
 
         Raises:
             CatalogError: 讀不到
         """
-        piece_rows, edition_rows, movement_rows = self._read_sheets(SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS)
+        piece_rows, edition_rows, movement_rows, part_rows = self._read_sheets(
+            SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS,
+        )
         return LinkTargets(
             pieces=_models(piece_rows, SHEET_PIECES, Piece),
             editions=_models(edition_rows, SHEET_EDITIONS, Edition),
             movements=_models(movement_rows, SHEET_MOVEMENTS, Movement),
+            voice_names=_used_voice_names(part_rows),
         )
 
     def read_place(self, edition_id: str, movement_id: str, orchestra_type: OrchestraType) -> CatalogPlace:

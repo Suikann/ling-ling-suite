@@ -20,6 +20,7 @@ from core.catalog_errors import CatalogErrorKind
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
 from core.locale import t
 from core.models import FileInfo, Group, Project
+from core.voice_suggestions import VoiceCandidates
 from fake_google_catalog import FakeGoogle
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
@@ -57,12 +58,13 @@ class LinkDialogTestCase(unittest.TestCase):
         self.group = self.project.add_group("江樓鐘鼓", "總譜")
         self.project.update_group(self.group, piece_name="春江花月夜", movement_number="1", movement_name="江樓鐘鼓")
         self.results = []
+        self.candidates = VoiceCandidates()
 
     def open_dialog(self) -> CatalogLinkDialog:
         """開啟連線對話框，等曲目讀進來（或提示列出現）"""
         dialog = CatalogLinkDialog(
             lambda: CatalogService(self.google.sheets, self.google.drive, sleep=lambda s: None),
-            self.project, self.group, self.google.root,
+            self.project, self.group, self.google.root, voice_candidates=self.candidates,
         )
         dialog.linked.connect(self.results.append)
         self.addCleanup(dialog.deleteLater)
@@ -93,6 +95,10 @@ class TestPickingAPlace(LinkDialogTestCase):
         self.assertEqual((self.group.catalog_link.edition_id, self.group.catalog_link.movement_id), ("e1", "m1"))
         self.assertEqual(self.group.instruments, ["二胡 I", "琵琶"])
         self.assertEqual(len(self.results), 1)
+
+    def test_voice_names_used_in_the_catalog_become_candidates(self):
+        self.open_dialog()
+        self.assertEqual(self.candidates.for_group(self.project, self.group), ["二胡 I", "琵琶"])
 
     def test_whole_piece_can_be_picked(self):
         dialog = self.open_dialog()

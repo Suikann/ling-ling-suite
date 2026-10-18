@@ -23,6 +23,7 @@ from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import CatalogPlace, Edition, LinkTargets, Movement, Piece
 from core.locale import t
 from core.models import DuplicateVoicesError, Group, Project
+from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingPlace
 from ui.catalog_error_bar import CatalogErrorBar
@@ -37,7 +38,7 @@ class CatalogLinkDialog(QDialog):
     def __init__(
         self, connect: Callable[[], CatalogService], project: Project, group: Group, root_folder_id: str,
         parent=None, log: Optional[ActivityLog] = None, sign_in: Optional[Callable[[], bool]] = None,
-        open_settings: Optional[Callable[[], bool]] = None,
+        open_settings: Optional[Callable[[], bool]] = None, voice_candidates: Optional[VoiceCandidates] = None,
     ):
         """
         Args:
@@ -49,12 +50,14 @@ class CatalogLinkDialog(QDialog):
             log: 紀錄檔，失敗時寫進去；省略時不寫
             sign_in: 提示列「重新登入 Google」時呼叫，回傳是否登入成功；省略時直接重試
             open_settings: 提示列「開啟譜庫設定」時呼叫，回傳是否改了設定；省略時直接重試
+            voice_candidates: 自動完成的候選來源，讀到譜庫時記下用過的聲部名稱；省略時不記
         """
         super().__init__(parent)
         self._connect = connect
         self._project = project
         self._group = group
         self._root_folder_id = root_folder_id
+        self._voice_candidates = voice_candidates
         self._tasks = CatalogTasks(self)
         self._targets = LinkTargets()
         # 新建時要送的一處；選擇改了就換一個，失敗後重送沿用同一個
@@ -110,8 +113,10 @@ class CatalogLinkDialog(QDialog):
         self._tasks.run(lambda: self._connect().link_targets(), self._show_targets, failed)
 
     def _show_targets(self, targets: LinkTargets):
-        """列出曲目（最後一項是新建），預選曲名與群組相同的那首"""
+        """列出曲目（最後一項是新建），預選曲名與群組相同的那首；記下譜庫用過的聲部名稱給自動完成"""
         self._targets = targets
+        if self._voice_candidates is not None:
+            self._voice_candidates.remember_catalog(targets.voice_names)
         self._piece_combo.blockSignals(True)
         self._piece_combo.clear()
         for piece in targets.pieces:

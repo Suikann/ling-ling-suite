@@ -158,10 +158,12 @@ class CatalogOverview:
 
 @dataclass(frozen=True)
 class LinkTargets:
-    """群組連線時可以挑的曲目、版本與樂章（連線對話框依序挑曲目 → 版本 → 樂章或整首）"""
+    """群組連線時可以挑的曲目、版本與樂章（連線對話框依序挑曲目 → 版本 → 樂章或整首），
+    以及各樂器表用過的聲部名稱（依使用次數排序，給自動完成）"""
     pieces: List[Piece] = field(default_factory=list)
     editions: List[Edition] = field(default_factory=list)
     movements: List[Movement] = field(default_factory=list)
+    voice_names: List[str] = field(default_factory=list)
 
     def editions_of(self, piece_id: str) -> List[Edition]:
         """曲目的版本，依工作表的順序"""

@@ -1051,7 +1051,7 @@ class MainWindow(QMainWindow):
             return
         dialog = CatalogLinkDialog(
             self._catalog_factory, self.project, group, self._preferences.get(CATALOG_ROOT_FOLDER_ID_KEY) or "",
-            self, log=self._log, open_settings=self._open_catalog_settings,
+            self, log=self._log, open_settings=self._open_catalog_settings, voice_candidates=self._voice_candidates,
         )
         dialog.linked.connect(self._instrumentation_table.show_linked)
         dialog.finished.connect(dialog.deleteLater)

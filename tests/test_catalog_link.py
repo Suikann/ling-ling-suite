@@ -45,9 +45,13 @@ class LinkTestCase(unittest.TestCase):
 class TestLinkTargets(LinkTestCase):
     """連線對話框挑選的曲目、版本與樂章，一次請求讀出"""
 
-    def test_reads_pieces_editions_and_movements_in_one_request(self):
+    def test_reads_pieces_editions_movements_and_used_voice_names_in_one_request(self):
         add_row(self.google, SHEET_MOVEMENTS, id="m0", piece_id="p1", movement_number="0", name="引子", sort_order="0")
+        self.part("琵琶", "1")
+        self.part("二胡 I", "2")
+        self.part("二胡 I", "1", movement="m0")
         targets = self.catalog.link_targets()
+        self.assertEqual(targets.voice_names, ["二胡 I", "琵琶"])
         self.assertEqual([p.title for p in targets.pieces], ["春江花月夜"])
         self.assertEqual([e.id for e in targets.editions_of("p1")], ["e1"])
         self.assertEqual([m.id for m in targets.movements_of("p1")], ["m0", "m1"])
