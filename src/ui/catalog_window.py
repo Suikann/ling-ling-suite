@@ -10,13 +10,16 @@
 版本頁的「下載…」勾選幾份檔或整個版本，下載到自選的資料夾（ui/catalog_download_dialog.py 挑選，
 services/download_service.py 下載並核對 MD5）：在背景執行，狀態列顯示進度與取消，一次一件，下載到一半失敗時
 提示列寫出已完成幾份、按「重試」補齊。
+版本頁的「存入紀錄…」列出動到這個版本的每次存入與撤銷存入（ui/deposit_revert_dialog.py），選一次存入按「撤銷存入…」，
+在等待中讀出撤銷的預覽、開預覽對話框；按「撤銷存入」後交給主視窗（DepositReverter）在背景撤銷、鎖住專案，
+結束時中途失敗的在這個視窗頂端的提示列寫出已撤掉幾份、按「重試」再開一次預覽，沒撤銷的群組列出原因，版本頁重新讀取。
 工具列的「聲部組對照」在右側面板開聲部組對照的編輯器（ui/section_map_editor.py），按儲存才寫入，
 寫入走存檔寫回的同一套比對，被別人改過時開衝突畫面（ui/catalog_conflict_dialog.py）選邊。
 讀到總覽（連上譜庫）後另在背景讀社團設定，把啟用的發譜平台記在偏好設定（services/club_settings_service.py）；
 這一項讀不到時沿用記住的結果，不顯示提示列。
 """
 import threading
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QStackedWidget,
     QTreeWidget, QTreeWidgetItem, QLabel, QLineEdit, QPushButton,
@@ -34,12 +37,14 @@ from core.catalog_constants import (
 )
 from core.catalog_download import DownloadItem, folder_items
 from core.catalog_errors import CatalogError, CatalogFailure, as_catalog_error
-from core.catalog_models import Composer, DriveFile, FolderPdf, Piece, Edition, PieceDetail
+from core.catalog_models import Composer, DepositLogEntry, DriveFile, FolderPdf, Piece, Edition, PieceDetail
+from core.deposit_revert import Deposit, RevertChoice, RevertPreview, deposits
 from core.catalog_sync import Decision, SyncField, SyncItem, SyncOutcome
 from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingRows
 from services.club_settings_service import ClubSettingsService
+from services.deposit_revert_service import DepositRevertService, RevertOutcome
 from services.download_service import DownloadOutcome, DownloadService
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
@@ -60,6 +65,18 @@ _FOLDER_ICON = "\U0001f4c1 "
 _PDF_ICON = "\U0001f4c4 "
 
 
+class DepositReverter(Protocol):
+    """在背景撤銷存入的一方（主視窗）：判定哪些檔本機已清除，鎖住專案執行撤銷，結束時把指紋交回專案"""
+
+    def catalog_only_paths(self, paths: Sequence[str]) -> List[str]:
+        """這些本機路徑裡本機已清除、只在譜庫的（主執行緒呼叫）"""
+
+    def revert_deposit(
+        self, preview: RevertPreview, choices: Sequence[RevertChoice], done: Callable[[RevertOutcome], None],
+    ) -> bool:
+        """在背景撤銷選了的群組，結束時以結果呼叫 done；已有背景工作在跑時不做，回傳 False"""
+
+
 class CatalogWindow(QMainWindow):
     """譜庫管理主視窗"""
 
@@ -70,6 +87,7 @@ class CatalogWindow(QMainWindow):
         log: Optional[ActivityLog] = None,
         huaxia_auth: Optional[HuaXiaAuthService] = None,
         voice_candidates: Optional[VoiceCandidates] = None,
+        reverter: Optional[DepositReverter] = None,
     ):
         """
         Args:
@@ -81,6 +99,7 @@ class CatalogWindow(QMainWindow):
             log: 紀錄檔，讀寫失敗時寫進去；省略時以使用者資料目錄下的紀錄檔資料夾建立
             huaxia_auth: HuaXia 登入服務，交給譜庫設定的 HuaXia 登入區；省略時譜庫設定沒有 HuaXia 登入區
             voice_candidates: 聲部名稱自動完成的候選來源，讀到譜庫總覽時記下用過的聲部名稱；省略時不記
+            reverter: 撤銷存入在背景執行的一方（主視窗）；省略時版本頁沒有「存入紀錄…」
         """
         super().__init__(parent)
         self._auth = auth_service
@@ -93,6 +112,8 @@ class CatalogWindow(QMainWindow):
         self._log = log or ActivityLog()
         self._club_settings = ClubSettingsService(preferences, self._log)
         self._downloads = DownloadService(FileService(), self._log)
+        self._reverter = reverter
+        self._revert_service = DepositRevertService(self._downloads, self._log)
         # 進行中的一般下載（一次一件）
         self._download_task: Optional[BackgroundTask] = None
         self._pieces: List[Piece] = []
@@ -1049,8 +1070,91 @@ class CatalogWindow(QMainWindow):
         download_btn = QPushButton(t("catalog.download.button"))
         download_btn.clicked.connect(lambda: self._download_files(page.folder_pdfs(), detail.piece.title))
         page.actions.addWidget(download_btn)
+        if self._reverter is not None:
+            log_btn = QPushButton(t("deposit_log.button"))
+            log_btn.clicked.connect(lambda: self._show_deposit_log(page, detail.piece.title, version))
+            page.actions.addWidget(log_btn)
         page.actions.addStretch()
         return page
+
+    # --- 存入紀錄與撤銷存入 ---
+
+    def _show_deposit_log(self, page, piece_title: str, version: int):
+        """版本頁的「存入紀錄…」：讀存入紀錄，列出動到這個版本的存入；選一次按「撤銷存入…」就開撤銷的預覽
+
+        Args:
+            page: 版本頁（EditionPagePanel）
+            piece_title: 曲名，讀不到時記進詳細資料與紀錄檔
+            version: 建出版本頁時的詳細面板版本（頁面已換掉就不再開）
+        """
+        edition = page.selected_edition()
+        if edition is None:
+            return
+
+        def done(entries: List[DepositLogEntry]):
+            """讀到了：開存入紀錄，選了一次存入就接著撤銷"""
+            if version != self._detail_version:
+                return
+            from ui.deposit_revert_dialog import DepositLogDialog
+            dialog = DepositLogDialog(deposits(entries, edition.id), self)
+            accepted = dialog.exec() == QDialog.Accepted
+            chosen = dialog.chosen()
+            dialog.deleteLater()
+            if accepted and chosen is not None:
+                self._revert_deposit(chosen, page, piece_title, version)
+
+        self._read(
+            lambda catalog: catalog.deposit_log(), done, lambda: None,
+            lambda: self._show_deposit_log(page, piece_title, version), piece_title,
+        )
+
+    def _revert_deposit(self, deposit: Deposit, page, piece_title: str, version: int):
+        """讀出撤銷那次存入的預覽、開預覽對話框，按「撤銷存入」後交給主視窗在背景撤銷
+
+        Args:
+            deposit: 要撤銷的那次存入
+            page: 版本頁（撤銷後重新讀取）
+            piece_title: 曲名，失敗時記進詳細資料與紀錄檔
+            version: 建出版本頁時的詳細面板版本
+        """
+        catalog_only = self._reverter.catalog_only_paths([entry.local_path for entry in deposit.entries])
+        service = self._revert_service
+
+        def done(preview: RevertPreview):
+            """讀到了：開預覽，勾了群組按下就交給主視窗"""
+            from ui.deposit_revert_dialog import DepositRevertDialog
+            dialog = DepositRevertDialog(preview, self)
+            accepted = dialog.exec() == QDialog.Accepted
+            choices = dialog.choices()
+            dialog.deleteLater()
+            if not accepted or not choices:
+                return
+
+            def finished(outcome: RevertOutcome):
+                """主視窗的撤銷結束"""
+                self._revert_finished(outcome, lambda: self._revert_deposit(deposit, page, piece_title, version))
+                if version == self._detail_version:
+                    page.reload()
+
+            if not self._reverter.revert_deposit(preview, choices, finished):
+                QMessageBox.information(self, t("revert.confirm"), t("revert.busy"))
+
+        self._read(
+            lambda catalog: service.preview(deposit.deposit_id, catalog, DEFAULT_ORCHESTRA_TYPE, catalog_only),
+            done, lambda: None, lambda: self._revert_deposit(deposit, page, piece_title, version), piece_title,
+        )
+
+    def _revert_finished(self, outcome: RevertOutcome, retry: Callable[[], None]):
+        """撤銷存入結束（進度與完成幾份在主視窗的狀態列）：中途失敗時頂端提示列寫出已撤掉幾份、按「重試」再開一次預覽；
+        沒撤銷的群組列出原因"""
+        if outcome.error is not None:
+            failure = CatalogFailure.from_error(outcome.error, t("revert.confirm"))
+            self._error_bar.show_failure(t("revert.stopped", count=outcome.completed), failure, retry)
+        else:
+            self._error_bar.clear()
+        if outcome.skipped:
+            from ui.deposit_revert_dialog import skipped_text
+            QMessageBox.warning(self, t("revert.confirm"), skipped_text(outcome))
 
     # --- 一般下載 ---
 

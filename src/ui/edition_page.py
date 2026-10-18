@@ -96,7 +96,7 @@ class EditionPagePanel(QWidget):
         selector.addWidget(self._movement_combo)
         selector.addStretch()
         layout.addLayout(selector)
-        # 版本頁的其他入口（套用命名格式，以及之後的一般下載、存入紀錄）
+        # 版本頁的其他入口（套用命名格式、一般下載、存入紀錄）
         self.actions = QHBoxLayout()
         layout.addLayout(self.actions)
         splitter = QSplitter(Qt.Horizontal)
@@ -145,6 +145,10 @@ class EditionPagePanel(QWidget):
     def folder_pdfs(self) -> List[FolderPdf]:
         """版本資料夾（含子資料夾）裡全部的 PDF（一般下載從這裡挑）；還沒讀到時是空的"""
         return list(self._page.pdfs) if self._page is not None else []
+
+    def reload(self):
+        """重新讀這一處（例如撤銷存入之後）；沒儲存的改動丟掉"""
+        self._load()
 
     def _place_ids(self):
         """選單選的版本與樂章（整首為空字串）"""

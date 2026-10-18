@@ -220,8 +220,8 @@ class TestChangedAfterwards(RevertTestCase):
         self.assertEqual(self.google.drive.content(self.registered_ids()["琵琶"]), b"new pipa")
 
 
-class TestClearedLocally(RevertTestCase):
-    """本機已清除的群組先下載回原位並核對；下載失敗的群組不撤銷，其他群組照常"""
+class ClearedTestCase(RevertTestCase):
+    """第二個群組「將軍令」連到另一首曲目；兩個群組一起存入後，本機檔案都清除了"""
 
     def setUp(self):
         super().setUp()
@@ -249,6 +249,10 @@ class TestClearedLocally(RevertTestCase):
         self.project.set_score(group, score)
         self.project.mark_saved()
         return group
+
+
+class TestClearedLocally(ClearedTestCase):
+    """本機已清除的群組先下載回原位並核對；下載失敗的群組不撤銷，其他群組照常"""
 
     def test_cleared_files_come_back_before_the_drive_copies_are_removed(self):
         preview, outcome = self.revert(self.deposit_id, catalog_only=self.cleared)

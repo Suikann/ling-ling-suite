@@ -848,9 +848,14 @@ def _read_only_item(text: str) -> QTableWidgetItem:
 
 def link_text(link: CatalogLink) -> str:
     """連線的顯示：曲目 › 版本 › 樂章（整首時寫整首；版本沒有標示時寫未命名版本）"""
+    return place_text(link.piece_title, link.edition_label, link.movement_id, link.movement_name)
+
+
+def place_text(piece_title: str, edition_label: str, movement_id: str, movement_name: str) -> str:
+    """譜庫裡一處的顯示：曲目 › 版本 › 樂章（整首時寫整首；版本沒有標示時寫未命名版本）"""
     return t(
-        "catalog.link.path", piece=link.piece_title, edition=link.edition_label or t("catalog.link.unnamed_edition"),
-        movement=link.movement_name if link.movement_id else t("catalog.link.whole"),
+        "catalog.link.path", piece=piece_title, edition=edition_label or t("catalog.link.unnamed_edition"),
+        movement=movement_name if movement_id else t("catalog.link.whole"),
     )
 
 

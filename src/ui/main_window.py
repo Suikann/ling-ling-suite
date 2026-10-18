@@ -23,6 +23,7 @@ from core.catalog_constants import PublishingPlatform
 from core.catalog_errors import CatalogFailure, as_catalog_error
 from core.catalog_sync import PlaceWrite, SyncOutcome, WriteSource, place_writes
 from core.clear_local import ClearPlan
+from core.deposit_revert import RevertChoice, RevertPreview
 from core.launch_env import app_version, current_build
 from core.locale import t, get_locale, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
@@ -34,6 +35,7 @@ from services.clear_local_service import ClearLocalService, ClearOutcome, ClearP
 from services.club_settings_service import ClubSettingsService
 from services.compression_output_service import CompressionBatch, CompressionOutputService
 from services.compression_service import CompressionResult, CompressionService
+from services.deposit_revert_service import DepositRevertService, RevertOutcome, RevertProgress
 from services.deposit_service import DepositOutcome, DepositProgress, DepositService
 from services.download_service import DownloadOutcome, DownloadProgress, DownloadService
 from services.external_opener import ExternalOpener
@@ -88,6 +90,7 @@ _CLEAR_TEXTS = _BackgroundTexts("clear.cancel", "clear.cancelling", "clear.error
 _DOWNLOAD_TEXTS = _BackgroundTexts(
     "download.cancel", "download.cancelling", "download.error", "download.close.message",
 )
+_REVERT_TEXTS = _BackgroundTexts("revert.cancel", "revert.cancelling", "revert.error", "revert.close.message")
 # 清除本機檔案不刪的系統標準使用者資料夾（含在地化的名稱，例如 Linux 的「桌面」）
 _STANDARD_LOCATIONS = (
     QStandardPaths.HomeLocation, QStandardPaths.DesktopLocation, QStandardPaths.DocumentsLocation,
@@ -111,6 +114,12 @@ def _describe_clear(progress: ClearProgress) -> tuple:
 def _describe_download(progress: DownloadProgress) -> tuple:
     """下載的進度轉成（狀態列文字，已完成數，總數）"""
     text = t("download.progress", done=progress.done, total=progress.total, name=progress.file_name)
+    return text, progress.done, progress.total
+
+
+def _describe_revert(progress: RevertProgress) -> tuple:
+    """撤銷存入的進度轉成（狀態列文字，已完成數，總數）"""
+    text = t("revert.progress", done=progress.done, total=progress.total, name=progress.file_name)
     return text, progress.done, progress.total
 
 
@@ -227,6 +236,7 @@ class MainWindow(QMainWindow):
         self._deposit_service = DepositService(self.file_service, self._log)
         self._clear_service = ClearLocalService(self.file_service, self._log, standard_folders=_standard_folders())
         self._download_service = DownloadService(self.file_service, self._log)
+        self._revert_service = DepositRevertService(self._download_service, self._log)
         # 上次存入中斷（取消或中途失敗）前完成了幾份；0 表示上次沒有中斷，存入預覽據此提示
         self._deposit_interrupted = 0
         # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀
@@ -241,7 +251,7 @@ class MainWindow(QMainWindow):
         self._task: Optional[BackgroundTask] = None
         self._task_texts = _COMPRESS_TEXTS
         self._task_status = ""
-        # 進行中的背景工作是否連專案編輯也鎖住（存入譜庫、清除本機檔案、下載回原位：結束時要把指紋寫回專案並存檔）
+        # 進行中的背景工作是否連專案編輯也鎖住（存入譜庫、清除本機檔案、下載回原位、撤銷存入：結束時要把指紋寫回專案並存檔）
         self._task_locks_project = False
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
@@ -1218,7 +1228,7 @@ class MainWindow(QMainWindow):
 
         唯讀的專案（較新版本建立的專案檔）存不了檔，所以停用存檔、另存，以及所有會改專案或搬動、
         產生它引用的檔案的操作：關閉時才不會有存不了的修改。分頁仍可切換，只停用內容。
-        背景工作進行中停用會動到檔案的操作；鎖住專案的背景工作（存入譜庫、清除本機檔案、下載回原位）進行中，比照唯讀停用專案編輯與存檔。
+        背景工作進行中停用會動到檔案的操作；鎖住專案的背景工作（存入譜庫、清除本機檔案、下載回原位、撤銷存入）進行中，比照唯讀停用專案編輯與存檔。
         """
         busy = self._task is not None
         editable = not self.project.read_only and not (busy and self._task_locks_project)
@@ -1310,7 +1320,7 @@ class MainWindow(QMainWindow):
         from ui.catalog_window import CatalogWindow
         self._catalog_window = CatalogWindow(
             self._auth_service, self._preferences, log=self._log, huaxia_auth=self._huaxia_auth,
-            voice_candidates=self._voice_candidates,
+            voice_candidates=self._voice_candidates, reverter=self,
         )
         self._catalog_window.show()
 
@@ -1523,6 +1533,75 @@ class MainWindow(QMainWindow):
         text = not_downloaded_text(outcome)
         if text:
             QMessageBox.warning(self, t("download.title"), text)
+
+    def catalog_only_paths(self, paths: Sequence[str]) -> List[str]:
+        """這些本機路徑裡本機已清除、只在譜庫的（譜庫視窗撤銷存入前判定要不要先下載回原位）
+
+        Args:
+            paths: 那次存入的檔的本機路徑
+
+        Returns:
+            本機找不到、專案記著譜庫裡有一份的那些
+        """
+        return self.project.catalog_only_paths(p for p in paths if not self.file_service.file_exists(p))
+
+    def revert_deposit(
+        self, preview: RevertPreview, choices: Sequence[RevertChoice], done: Callable[[RevertOutcome], None],
+    ) -> bool:
+        """譜庫視窗按了「撤銷存入」：同存入在背景撤銷，期間鎖住專案編輯、存檔與檔案操作
+
+        結束後下載回原位的指紋與撤掉的檔交回專案（開始前沒有未存檔的改動時只存專案檔），群組分頁照磁碟現況重新比對，
+        再以結果呼叫 done（譜庫視窗顯示提示列與沒撤銷的群組）。
+
+        Args:
+            preview: 撤銷的預覽
+            choices: 勾了的群組與要不要一起撤掉編制
+            done: 結束時以結果呼叫
+
+        Returns:
+            已開始時為 True；已有背景工作在跑時不做，為 False
+        """
+        if self._task is not None:
+            return False
+        service = self._revert_service
+        factory = self._catalog_factory
+        operator = self._auth_service.account_email or ""
+        orchestra_type = self.project.orchestra_type
+        clean = not self.project.is_modified()
+
+        def work(should_cancel, report) -> RevertOutcome:
+            """在背景接譜庫、撤銷"""
+            try:
+                catalog = factory()
+            except Exception as e:
+                return RevertOutcome(error=as_catalog_error(e))
+            return service.revert(preview, choices, catalog, operator, orchestra_type, should_cancel, report)
+
+        def finished(outcome: RevertOutcome, _cancelled: bool):
+            """撤銷結束：交回專案，再交給譜庫視窗"""
+            self._revert_finished(outcome, clean)
+            done(outcome)
+
+        self._run_in_background(work, _describe_revert, finished, _REVERT_TEXTS, locks_project=True)
+        return True
+
+    def _revert_finished(self, outcome: RevertOutcome, clean: bool):
+        """撤銷存入結束：下載回原位的指紋記下、撤掉的檔拿掉存入指紋，開始前沒有未存檔的改動時只存專案檔
+
+        Args:
+            outcome: 撤銷的結果
+            clean: 開始前專案是否沒有未存檔的改動（有的話不替使用者存檔）
+        """
+        self.project.record_fingerprints(outcome.fingerprints)
+        self.project.forget_deposits(outcome.reverted_paths)
+        if clean and self._project_path and not self.project.read_only and self.project.is_modified():
+            self._write_project_file(self._project_path)
+        self._show_undeposited()
+        if outcome.error is not None:
+            self._set_status(t("status.ready"))
+        else:
+            key = "revert.cancelled" if outcome.cancelled else "revert.done"
+            self._set_status(t(key, count=outcome.completed))
 
     def _link_group_by_id(self, group_id: str):
         """存入預覽的「連到譜庫…」：切到那個群組，開連線對話框"""
