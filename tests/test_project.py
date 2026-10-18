@@ -700,7 +700,7 @@ class TestCopyInstrumentation(unittest.TestCase):
         self.assertEqual(self.heard, [True])
 
     def test_sections_are_shared_by_instrument_already(self):
-        self.project.set_section(self.source, "二胡1", "低音")
+        self.project.set_section("二胡1", "低音")
         self.project.copy_instrumentation(self.group, self.source)
         self.assertEqual([self.project.section_of(v) for v in self.group.instruments], ["低音", "低音", "低音"])
 
@@ -972,7 +972,7 @@ class TestProjectSettingEdits(unittest.TestCase):
 
 
 class TestSectionsByInstrument(unittest.TestCase):
-    """聲部組以樂器為單位：改一個聲部的聲部組，同一首裡同一樂器的其他編號跟著改，並回報影響範圍"""
+    """聲部組以樂器為單位：改一個聲部的聲部組，專案裡同一樂器的其他編號（各群組都是）跟著改，並回報影響範圍"""
 
     def setUp(self):
         self.group = Group(name="g", instruments=["高胡", "二胡 I", "二胡 II", "中胡"])
@@ -981,7 +981,7 @@ class TestSectionsByInstrument(unittest.TestCase):
         self.project.subscribe(lambda: self.heard.append(self.project.is_modified()))
 
     def test_changing_one_voice_changes_the_other_numbers_and_reports_them(self):
-        affected = self.project.set_section(self.group, "二胡 I", "低音")
+        affected = self.project.set_section("二胡 I", "低音")
         self.assertEqual(affected, ["二胡 II"])
         self.assertEqual(
             [self.project.section_of(v) for v in ("二胡 I", "二胡 II", "二胡1", "二胡", "中胡")],
@@ -990,12 +990,17 @@ class TestSectionsByInstrument(unittest.TestCase):
         self.assertEqual(self.heard, [True])
 
     def test_voices_that_would_change_too_are_listed_before_changing(self):
-        self.assertEqual(self.project.same_instrument_voices(self.group, "二胡 II"), ["二胡 I"])
-        self.assertEqual(self.project.same_instrument_voices(self.group, "中胡"), [])
+        self.assertEqual(self.project.same_instrument_voices("二胡 II"), ["二胡 I"])
+        self.assertEqual(self.project.same_instrument_voices("中胡"), [])
+
+    def test_voices_of_other_groups_are_listed_once_each(self):
+        self.project.groups.append(Group(name="第二樂章", instruments=["二胡1", "二胡 2", "二胡 III", "中胡"]))
+        self.assertEqual(self.project.same_instrument_voices("二胡 I"), ["二胡 II", "二胡 III"])
+        self.assertEqual(self.project.set_section("二胡 I", "低音"), ["二胡 II", "二胡 III"])
 
     def test_the_key_keeps_the_spelling_written_first(self):
-        self.project.set_section(self.group, "二胡 II", "低音")
-        self.project.set_section(self.group, "二胡 I", "拉弦")
+        self.project.set_section("二胡 II", "低音")
+        self.project.set_section("二胡 I", "拉弦")
         self.project.update_sections({"二胡1": "彈撥"})
         self.assertEqual(self.project.instrument_sections, {"二胡 II": "彈撥"})
 

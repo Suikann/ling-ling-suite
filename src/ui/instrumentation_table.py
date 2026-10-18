@@ -271,7 +271,7 @@ class InstrumentationTable(QWidget):
         self._table.setItem(row, self.column("open_ended"), open_ended)
         self._show_headcount(row)
         self._table.setCellWidget(row, self.column("section"), self._section_combo(voice))
-        follows = self._project.same_instrument_voices(self._group, voice)
+        follows = self._project.same_instrument_voices(voice)
         note = QTableWidgetItem(t("instrument.section_follows", voices="、".join(follows)) if follows else "")
         note.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled)
         note.setForeground(QBrush(_ABSENT_COLOR))
@@ -392,10 +392,10 @@ class InstrumentationTable(QWidget):
         self._show_notice(t("instrumentation.copy_unmatched", voices="、".join(unmatched)) if unmatched else "")
 
     def _on_section_chosen(self, voice: str, combo: QComboBox):
-        """改聲部組：同一樂器的其他編號一起改"""
+        """改聲部組：專案裡同一樂器的其他編號一起改"""
         if self._filling or self._group is None:
             return
-        self._project.set_section(self._group, voice, combo.currentData())
+        self._project.set_section(voice, combo.currentData())
         self._fill()
 
     def _on_preset_selected(self, index: int):

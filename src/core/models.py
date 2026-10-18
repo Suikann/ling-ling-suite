@@ -16,7 +16,7 @@ from core.constants import (
 from core.paths import path_key
 from core.sections import guess_orchestra_type, migrate_sections, put_section, section_for, section_options
 from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
-from core.voice_names import VoiceKey, same_instrument, same_voice, voice_key
+from core.voice_names import VoiceKey, distinct_voices, same_instrument, same_voice, voice_key
 
 
 class DuplicateVoiceError(ValueError):
@@ -748,24 +748,29 @@ class Project:
         """聲部的聲部組：它的樂器存了就用存的，否則依樂團類型偵測"""
         return section_for(voice, self.instrument_sections, self.orchestra_type)
 
-    def same_instrument_voices(self, group: Group, voice: str) -> List[str]:
-        """群組樂器表裡與聲部同一樂器的其他編號（改這個聲部的聲部組時跟著改的），依樂器表順序"""
-        return [other for other in group.instruments if same_instrument(other, voice) and not same_voice(other, voice)]
+    def same_instrument_voices(self, voice: str) -> List[str]:
+        """專案各群組的樂器表裡與聲部同一樂器的其他編號（改這個聲部的聲部組時跟著改的）
 
-    def set_section(self, group: Group, voice: str, section: str) -> List[str]:
+        同一聲部只列第一次出現的寫法，依群組與樂器表順序；與聲部本身同一聲部的不列。
+        """
+        return distinct_voices(
+            other for group in self.groups for other in group.instruments
+            if same_instrument(other, voice) and not same_voice(other, voice)
+        )
+
+    def set_section(self, voice: str, section: str) -> List[str]:
         """改聲部所屬樂器的聲部組；對照以樂器為鍵，同一樂器的各個聲部（各群組都是）一起改
 
         Args:
-            group: 聲部所在的群組
             voice: 聲部名稱
             section: 聲部組名稱
 
         Returns:
-            這個群組裡跟著改的其他編號（same_instrument_voices）
+            專案裡跟著改的其他編號（same_instrument_voices）
         """
         put_section(self.instrument_sections, voice, section)
         self._changed()
-        return self.same_instrument_voices(group, voice)
+        return self.same_instrument_voices(voice)
 
     def convert_template_language(self, locale: str) -> None:
         """切換介面語言時，把大模板、子資料夾模板與各群組小模板的變數名稱換成該語言"""
