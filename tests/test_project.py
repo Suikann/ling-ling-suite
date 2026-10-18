@@ -494,6 +494,35 @@ class TestInstrumentListWithoutDuplicateVoices(unittest.TestCase):
         self.assertEqual(self.heard, [])
 
 
+class TestDuplicateVoicesOfOldProjects(unittest.TestCase):
+    """舊樂器表裡的重名聲部原樣保留：開檔、移動、取消勾選與改其他列都照常，不自動改名"""
+
+    def setUp(self):
+        temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, temp_dir, True)
+        path = os.path.join(temp_dir, "old.llproj")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"version": 2, "groups": [
+                {"name": "g", "score_label": "總譜", "instruments": ["二胡 I", "二胡1", "中胡"]},
+            ]}, f)
+        self.project = ProjectService().load_project(path)
+        self.group = self.project.groups[0]
+
+    def test_opening_keeps_both_spellings(self):
+        self.assertEqual(self.group.instruments, ["二胡 I", "二胡1", "中胡"])
+        self.assertFalse(self.project.is_modified())
+
+    def test_editing_other_rows_keeps_them(self):
+        self.project.move_instruments(self.group, [2], 0)
+        self.project.set_present(self.group, 1, False)
+        self.project.rename_instrument(self.group, 0, "中胡 I")
+        self.assertEqual(self.group.instruments, ["中胡 I", "二胡 I", "二胡1"])
+
+    def test_renaming_into_another_duplicate_is_still_refused(self):
+        with self.assertRaises(DuplicateVoiceError):
+            self.project.rename_instrument(self.group, 2, "二胡一")
+
+
 class TestVoicesCarryTheirParts(unittest.TestCase):
     """第 N 份分譜配本專案有的第 N 個聲部；拖聲部時分譜跟著走，單獨拖分譜只改配對，改名時分譜留在原位"""
 
