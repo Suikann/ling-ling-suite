@@ -17,6 +17,7 @@
     overview = catalog.overview(root_folder_id)      # 曲目、作曲家、根資料夾內容、用過的聲部名稱
     detail = catalog.piece_detail(piece_id)
     platform = catalog.publishing_platform()         # 社團設定啟用的發譜平台，沒有時為 None
+    place = catalog.read_place(edition_id, movement_id, OrchestraType.CHINESE)  # 群組要連的一處
     rows = catalog.new_rows(SHEET_PIECES, [{"title": "春江花月夜"}])
     ids = catalog.add_rows(rows)                     # 失敗時以同一個 rows 重送，不會重複新增
 """
