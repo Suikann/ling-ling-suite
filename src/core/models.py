@@ -256,6 +256,52 @@ class CatalogLink:
         )
 
 
+class LinkChoice(Enum):
+    """群組與譜庫那處都已有編制時，合併差異表上整張選用哪一邊"""
+    CATALOG = "catalog"    # 用譜庫的：換成譜庫的編制，分譜依聲部名稱帶著走
+    GROUP = "group"        # 用群組的：編制與配對不變，下次存檔覆寫譜庫
+
+
+class MergeDifference(Enum):
+    """合併差異表一列的差異"""
+    SAME = "same"                  # 兩邊都有、人數相同
+    HEADCOUNT = "headcount"        # 兩邊都有、人數不同
+    GROUP_ONLY = "group_only"      # 只在群組
+    CATALOG_ONLY = "catalog_only"  # 只在譜庫
+
+
+class MergeRow(NamedTuple):
+    """合併差異表的一列：一個聲部在兩邊的人數與聲部組，以及用譜庫的時它配到的分譜（Project.merge_rows）
+
+    Attributes:
+        catalog_voice: 譜庫的寫法；只在群組時為空字串
+        group_voice: 群組樂器表的寫法；只在譜庫時為空字串
+        catalog_headcount: 譜庫的人數；只在群組時為 None
+        group_headcount: 群組的人數；只在譜庫時為 None
+        section: 連線後的聲部組（社團對照有就是社團的，否則是專案的）
+        replaced_section: 社團的聲部組蓋掉的專案的值；兩邊相同或社團沒有時為空字串
+        part: 用譜庫的時配到的分譜；只在群組的聲部為會移到未分組的分譜；沒有時為 None
+        present: 用譜庫的時本專案有沒有這個聲部；只在群組的聲部為 False
+    """
+    catalog_voice: str
+    group_voice: str
+    catalog_headcount: Optional[Headcount]
+    group_headcount: Optional[Headcount]
+    section: str
+    replaced_section: str
+    part: Optional[FileInfo]
+    present: bool
+
+    @property
+    def difference(self) -> MergeDifference:
+        """這一列兩邊的差異"""
+        if self.catalog_headcount is None:
+            return MergeDifference.GROUP_ONLY
+        if self.group_headcount is None:
+            return MergeDifference.CATALOG_ONLY
+        return MergeDifference.SAME if self.catalog_headcount == self.group_headcount else MergeDifference.HEADCOUNT
+
+
 class LinkResult(NamedTuple):
     """群組連到譜庫的結果（Project.link_group）
 
@@ -1217,20 +1263,23 @@ class Project:
 
     # --- 連到譜庫 ---
 
-    def link_group(self, group: Group, place: "CatalogPlace") -> LinkResult:
+    def link_group(self, group: Group, place: "CatalogPlace", choice: Optional[LinkChoice] = None) -> LinkResult:
         """把群組連到譜庫的一處（版本的整首或一個樂章）：編制與時長以譜庫為定本，記下連線與那處的快照
 
         - 那處還沒有任何聲部：群組的編制留著，成為下次存檔要寫進去的改動（catalog_changes）
         - 群組還沒有樂器表：樂器表與人數換成譜庫的；分譜依檔名取出的聲部名稱以同一聲部的規則配給譜庫的聲部，
           認不出的依原順序填進剩下的聲部（回報為依位置猜的），聲部不夠配的分譜移到未分組；
           群組有分譜時，沒配到分譜的聲部為本專案沒有
-        - 兩邊都有編制：不連，回報 needs_merge，由合併差異表決定
+        - 兩邊都有編制：沒給 choice 時不連，回報 needs_merge，由合併差異表（merge_rows）決定；
+          用譜庫的（LinkChoice.CATALOG）照 apply_catalog_voices 依名稱配對，
+          對不到的分譜移到未分組；用群組的（LinkChoice.GROUP）編制與配對不變，與快照的差異成為改動
         - 時長：譜庫有就用譜庫的，沒有時群組的成為改動
         - 聲部組：社團對照有的樂器以社團的為準寫進專案的對照；沒有的樂器沿用專案的值，成為改動
 
         Args:
             group: 要連線的群組
             place: 譜庫服務讀到的那一處（CatalogService.read_place）
+            choice: 兩邊都有編制時選用哪一邊；省略時不連、回報 needs_merge
 
         Returns:
             連線結果
@@ -1242,8 +1291,12 @@ class Project:
         if duplicates:
             raise DuplicateVoicesError(duplicates)
         if place.voices and group.instruments:
-            return LinkResult(needs_merge=True)
-        result = _take_catalog_voices(group, place.voices) if place.voices else LinkResult()
+            if choice is None:
+                return LinkResult(needs_merge=True)
+            moved = _follow_voices_by_name(group, place.voices) if choice is LinkChoice.CATALOG else []
+            result = LinkResult(moved=moved)
+        else:
+            result = _take_catalog_voices(group, place.voices) if place.voices else LinkResult()
         self.ungrouped_files.extend(result.moved)
         if place.duration_seconds:
             group.duration_seconds = place.duration_seconds
@@ -1263,6 +1316,70 @@ class Project:
         )
         self._changed()
         return result
+
+    def apply_catalog_voices(self, group: Group, voices: List[Tuple[str, Headcount]]) -> List[FileInfo]:
+        """把群組的樂器表換成譜庫的聲部清單，分譜依聲部名稱帶著走（依名稱配對）
+
+        每份分譜以它在樂器表的聲部名稱，依同一聲部的規則對到新的聲部；新的聲部用譜庫的寫法與人數。
+        樂器表沒有的聲部在群組有分譜時為本專案沒有，後面的分譜才不會錯位；新清單沒有的聲部，它的分譜移到未分組尾端。
+        原本就沒配到聲部的分譜不動。
+
+        Args:
+            group: 群組
+            voices: 譜庫的聲部名稱與人數，依譜庫的順序
+
+        Returns:
+            移到未分組的分譜，依原樂器表的順序
+        """
+        moved = _follow_voices_by_name(group, voices)
+        self.ungrouped_files.extend(moved)
+        self._changed()
+        return moved
+
+    def merge_rows(self, group: Group, place: "CatalogPlace") -> List[MergeRow]:
+        """群組與譜庫那處的合併差異表（不改群組）：依譜庫的順序，只在群組的聲部排在群組裡它前一個聲部之後
+
+        每列的分譜照用譜庫的（link_group 的 LinkChoice.CATALOG）實際套用的結果；聲部組照連線的規則，社團對照有的
+        樂器以社團的為準。
+
+        Args:
+            group: 要連線的群組
+            place: 譜庫服務讀到的那一處
+
+        Returns:
+            每個聲部一列
+        """
+        current = _voice_rows(group)
+        group_names = [row.name for row in current]
+        catalog_names = [name for name, _ in place.voices]
+        rows, _ = _rows_by_name(group, place.voices)
+        after: Dict[int, List[MergeRow]] = {}
+        last = -1
+        for row in current:
+            index = voice_index(catalog_names, row.name)
+            if index is not None:
+                last = index
+                continue
+            after.setdefault(last, []).append(MergeRow(
+                "", row.name, None, row.headcount, *self._merged_section(row.name, place.sections), row.part, False,
+            ))
+        merged = list(after.get(-1, []))
+        for index, (row, present) in enumerate(zip(rows, _settled_present(rows))):
+            own = voice_index(group_names, row.name)
+            merged.append(MergeRow(
+                row.name, group_names[own] if own is not None else "", row.headcount,
+                current[own].headcount if own is not None else None,
+                *self._merged_section(row.name, place.sections), row.part, present,
+            ))
+            merged.extend(after.get(index, []))
+        return merged
+
+    def _merged_section(self, voice: str, club_sections: Dict[str, str]) -> Tuple[str, str]:
+        """連線後聲部的聲部組，與社團的值蓋掉的專案的值（沒蓋掉時為空字串）"""
+        club, own = stored_section(voice, club_sections), self.section_of(voice)
+        if not club:
+            return own, ""
+        return club, own if own != club else ""
 
     def catalog_changes(self, group: Group) -> List[CatalogChange]:
         """群組待寫進譜庫的改動：目前的編制、時長與聲部組相對於連線快照的差異；沒連到譜庫時為空清單
@@ -1485,13 +1602,47 @@ def _place_rows(group: Group, rows: List[_VoiceRow]) -> None:
     否則後面的分譜都會往前錯一位。
     """
     extras = group.extra_files()
-    last_part = max((i for i, row in enumerate(rows) if row.part is not None), default=-1)
-    group.assign_instruments(
-        [row.name for row in rows],
-        [row.present and (row.part is not None or i > last_part) for i, row in enumerate(rows)],
-        [row.headcount for row in rows],
-    )
+    group.assign_instruments([row.name for row in rows], _settled_present(rows), [row.headcount for row in rows])
     group.files = [row.part for row in rows if row.part is not None] + extras
+
+
+def _settled_present(rows: List[_VoiceRow]) -> List[bool]:
+    """依序以這些列為樂器表時逐列的「本專案有」：沒有分譜的聲部排在有分譜的聲部之前時為本專案沒有（見 _place_rows）"""
+    last_part = max((i for i, row in enumerate(rows) if row.part is not None), default=-1)
+    return [row.present and (row.part is not None or i > last_part) for i, row in enumerate(rows)]
+
+
+def _rows_by_name(group: Group, voices: List[Tuple[str, Headcount]]) -> Tuple[List[_VoiceRow], List[FileInfo]]:
+    """換成這份聲部清單時的各列與對不到的分譜：分譜以它在樂器表的聲部名稱、依同一聲部的規則對到新的聲部
+
+    新的聲部用它的寫法與人數；樂器表有同一聲部時沿用它的「本專案有」與分譜，沒有時群組有分譜就是本專案沒有。
+    樂器表裡新清單沒有的聲部，它的分譜就是對不到的分譜（依樂器表順序）；沒配到聲部的分譜不動。
+    """
+    current = _voice_rows(group)
+    names = [row.name for row in current]
+    has_files = bool(group.files)
+    rows = []
+    taken = set()
+    for name, headcount in voices:
+        index = voice_index(names, name)
+        if index is None:
+            rows.append(_VoiceRow(name, not has_files, headcount, None))
+        else:
+            taken.add(index)
+            rows.append(_VoiceRow(name, current[index].present, headcount, current[index].part))
+    unmatched = [row.part for i, row in enumerate(current) if i not in taken and row.part is not None]
+    return rows, unmatched
+
+
+def _follow_voices_by_name(group: Group, voices: List[Tuple[str, Headcount]]) -> List[FileInfo]:
+    """把樂器表換成這份聲部清單，分譜依聲部名稱帶著走，對不到的拿出群組（不發通知）
+
+    Returns:
+        對不到聲部、拿出群組的分譜（呼叫端放進未分組）
+    """
+    rows, unmatched = _rows_by_name(group, voices)
+    _place_rows(group, rows)
+    return unmatched
 
 
 def _take_catalog_voices(group: Group, voices: List[Tuple[str, Headcount]]) -> LinkResult:

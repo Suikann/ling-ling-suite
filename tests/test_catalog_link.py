@@ -16,7 +16,10 @@ from core.catalog_constants import (
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.constants import OrchestraType
-from core.models import CatalogChange, CatalogChangeKind, DuplicateVoicesError, FileInfo, Headcount, Project
+from core.models import (
+    CatalogChange, CatalogChangeKind, DuplicateVoicesError, FileInfo, Headcount, LinkChoice, MergeDifference,
+    Project,
+)
 from fake_google_catalog import FakeGoogle
 from services.catalog_service import CatalogService, PendingPlace
 from test_catalog_service import add_row, empty_catalog
@@ -265,6 +268,145 @@ class TestLinkToFilledPlace(ProjectLinkTestCase):
         self.assertTrue(result.needs_merge)
         self.assertEqual(self.group.instruments, ["笛子", "笙"])
         self.assertIsNone(self.group.catalog_link)
+
+
+class MergeTestCase(ProjectLinkTestCase):
+    """兩邊都有編制：譜庫有二胡 I、二胡 II、琵琶、揚琴；群組沒有揚琴、多一個排鼓，二胡 I 寫成「二胡1」，四份分譜依序配好"""
+
+    def setUp(self):
+        super().setUp()
+        self.fill_catalog()
+        self.project.set_instruments(self.group, ["二胡1", "二胡 II", "排鼓", "琵琶"])
+        self.project.set_headcount(self.group, 0, Headcount(8))
+        self.files = [part_file(n) for n in ("a.pdf", "b.pdf", "c.pdf", "d.pdf")]
+        self.project.add_files(self.files, self.group)
+
+    def place(self):
+        """讀第一樂章"""
+        return self.catalog.read_place("e1", "m1", self.project.orchestra_type)
+
+    def pairs(self):
+        """群組目前每個聲部配到的分譜檔名"""
+        return [(pair.voice, pair.file.display_name if pair.file else None) for pair in self.group.pairing()]
+
+
+class TestMergeRows(MergeTestCase):
+    """合併差異表：兩邊的聲部依譜庫順序排成一張，只在群組的聲部排在群組裡它前一個聲部之後"""
+
+    def test_lists_both_sides_with_the_difference_and_the_part_each_voice_gets(self):
+        rows = self.project.merge_rows(self.group, self.place())
+        self.assertEqual(
+            [(r.catalog_voice, r.group_voice, r.difference) for r in rows],
+            [
+                ("二胡 I", "二胡1", MergeDifference.HEADCOUNT),
+                ("二胡 II", "二胡 II", MergeDifference.HEADCOUNT),
+                ("", "排鼓", MergeDifference.GROUP_ONLY),
+                ("琵琶", "琵琶", MergeDifference.HEADCOUNT),
+                ("揚琴", "", MergeDifference.CATALOG_ONLY),
+            ],
+        )
+        self.assertEqual(
+            [(r.group_headcount, r.catalog_headcount) for r in rows[:1] + rows[2:3] + rows[4:]],
+            [(Headcount(8), Headcount(6, None, True)), (Headcount(), None), (None, Headcount(1))],
+        )
+        self.assertEqual(
+            [(r.part.display_name if r.part else None, r.present) for r in rows],
+            [("a.pdf", True), ("b.pdf", True), ("c.pdf", False), ("d.pdf", True), (None, False)],
+        )
+        self.assertEqual(self.group.instruments, ["二胡1", "二胡 II", "排鼓", "琵琶"])
+        self.assertIsNone(self.group.catalog_link)
+
+    def test_same_headcount_is_no_difference(self):
+        self.project.set_headcount(self.group, 3, Headcount(2))
+        rows = self.project.merge_rows(self.group, self.place())
+        self.assertEqual(next(r for r in rows if r.catalog_voice == "琵琶").difference, MergeDifference.SAME)
+
+    def test_section_column_shows_the_club_value_and_the_project_value_it_replaces(self):
+        self.project.set_section("琵琶", "低音")
+        rows = {r.catalog_voice or r.group_voice: r for r in self.project.merge_rows(self.group, self.place())}
+        self.assertEqual((rows["琵琶"].section, rows["琵琶"].replaced_section), ("彈撥", "低音"))
+        self.assertEqual((rows["二胡 I"].section, rows["二胡 I"].replaced_section), ("拉弦", ""))
+        self.assertEqual(rows["排鼓"].section, self.project.section_of("排鼓"))
+        self.assertEqual(rows["排鼓"].replaced_section, "")
+
+    def test_the_part_column_matches_what_using_the_catalog_does(self):
+        self.project.set_present(self.group, 1, False)
+        rows = self.project.merge_rows(self.group, self.place())
+        expected = [(r.catalog_voice, r.part, r.present) for r in rows if r.catalog_voice]
+        moved = [r.part for r in rows if not r.catalog_voice and r.part is not None]
+        result = self.project.link_group(self.group, self.place(), LinkChoice.CATALOG)
+        parts = {pair.index: pair.file for pair in self.group.pairing()}
+        actual = [(voice, parts.get(i), self.group.present[i]) for i, voice in enumerate(self.group.instruments)]
+        self.assertEqual(actual, expected)
+        self.assertEqual(result.moved, moved)
+
+
+class TestUseCatalogOnMerge(MergeTestCase):
+    """選「用譜庫的」：換成譜庫的編制，分譜依聲部名稱帶著走，不依位置"""
+
+    def test_parts_follow_their_voice_names_and_unmatched_parts_move_to_ungrouped(self):
+        result = self.project.link_group(self.group, self.place(), LinkChoice.CATALOG)
+        self.assertFalse(result.needs_merge)
+        self.assertEqual(self.group.instruments, ["二胡 I", "二胡 II", "琵琶", "揚琴"])
+        self.assertEqual(self.group.headcounts, [Headcount(6, None, True), Headcount(4, 6), Headcount(2), Headcount(1)])
+        self.assertEqual(self.pairs(), [("二胡 I", "a.pdf"), ("二胡 II", "b.pdf"), ("琵琶", "d.pdf")])
+        self.assertEqual(self.group.present, [True, True, True, False])
+        self.assertEqual([f.display_name for f in result.moved], ["c.pdf"])
+        self.assertEqual([f.display_name for f in self.project.ungrouped_files], ["c.pdf"])
+        self.assertEqual(self.group.catalog_link.edition_id, "e1")
+        self.assertEqual(self.project.catalog_changes(self.group), [])
+
+    def test_a_part_that_had_no_voice_stays_in_the_group_without_a_voice(self):
+        self.project.add_files([part_file("e.pdf")], self.group)
+        self.project.link_group(self.group, self.place(), LinkChoice.CATALOG)
+        self.assertEqual([f.display_name for f in self.group.extra_files()], ["e.pdf"])
+        self.assertEqual([f.display_name for f in self.project.ungrouped_files], ["c.pdf"])
+
+
+
+class TestApplyCatalogVoices(MergeTestCase):
+    """依名稱配對是單獨的編輯操作，開啟專案時「套用譜庫的」也用它"""
+
+    def test_parts_follow_their_voice_names_and_unmatched_parts_move_to_ungrouped(self):
+        notified = []
+        self.project.subscribe(lambda: notified.append(True))
+        moved = self.project.apply_catalog_voices(self.group, [("琵琶", Headcount(3)), ("二胡 I", Headcount(6))])
+        self.assertEqual(self.pairs(), [("琵琶", "d.pdf"), ("二胡 I", "a.pdf")])
+        self.assertEqual(self.group.headcounts, [Headcount(3), Headcount(6)])
+        self.assertEqual([f.display_name for f in moved], ["b.pdf", "c.pdf"])
+        self.assertEqual([f.display_name for f in self.project.ungrouped_files], ["b.pdf", "c.pdf"])
+        self.assertTrue(notified)
+
+
+class TestUseGroupOnMerge(MergeTestCase):
+    """選「用群組的」：編制與配對不變，與譜庫的差異記成下次存檔要寫進去的改動"""
+
+    def test_keeps_the_pairing_and_records_the_group_instrumentation_as_pending(self):
+        before = self.pairs()
+        result = self.project.link_group(self.group, self.place(), LinkChoice.GROUP)
+        self.assertEqual(result.moved, [])
+        self.assertEqual(self.pairs(), before)
+        self.assertEqual(self.group.instruments, ["二胡1", "二胡 II", "排鼓", "琵琶"])
+        self.assertEqual(self.group.catalog_link.edition_id, "e1")
+        changes = self.project.catalog_changes(self.group)
+        self.assertIn(
+            CatalogChange(CatalogChangeKind.VOICES, "", ("二胡 I", "二胡 II", "琵琶", "揚琴"), ("二胡1", "二胡 II", "排鼓", "琵琶")),
+            changes,
+        )
+        self.assertIn(CatalogChange(CatalogChangeKind.HEADCOUNT, "二胡1", Headcount(6, None, True), Headcount(8)), changes)
+        self.assertEqual(self.project.ungrouped_files, [])
+
+
+class TestSectionsOnMerge(MergeTestCase):
+    """聲部組不論選哪一邊都以社團的為準"""
+
+    def test_club_value_wins_with_either_choice(self):
+        for choice in LinkChoice:
+            with self.subTest(choice=choice):
+                self.setUp()
+                self.project.set_section("琵琶", "低音")
+                self.project.link_group(self.group, self.place(), choice)
+                self.assertEqual(self.project.section_of("琵琶"), "彈撥")
 
 
 class TestLinkToEmptyPlace(ProjectLinkTestCase):
