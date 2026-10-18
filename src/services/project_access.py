@@ -30,13 +30,15 @@ class AccessResult:
 
     error 是專案檔本身讀寫失敗的原因，為 None 即算成功；
     recent_failed（最近清單寫不進去）與 owner_failed（meta 寫不進去的工作區子資料夾）是附帶動作的失敗，
-    不影響成功與否；missing_files 只在開啟時填，是專案引用、但磁碟上找不到的檔案。
+    不影響成功與否；missing_files 只在開啟時填，是專案引用、但磁碟上找不到的檔案（只在譜庫的不算）；
+    catalog_only_files 也只在開啟時填，是本機找不到、但譜庫裡有一份的檔（只在譜庫，Project.catalog_only_paths）。
     """
     project: Optional[Project] = None
     error: Optional[Exception] = None
     recent_failed: bool = False
     owner_failed: List[str] = field(default_factory=list)
     missing_files: List[str] = field(default_factory=list)
+    catalog_only_files: List[str] = field(default_factory=list)
 
 
 class ProjectAccess:
@@ -59,7 +61,8 @@ class ProjectAccess:
 
         Returns:
             開啟結果；error 為 None 時 project 是讀到的專案（沒有 moved 時判為已存檔），missing_files 是它引用、
-            但磁碟上找不到的檔案（依群組順序）。專案檔已不存在時 error 為 FileNotFoundError，並已從最近清單移除
+            但磁碟上找不到的檔案（依群組順序），只在譜庫的另外列在 catalog_only_files、不算找不到。
+            專案檔已不存在時 error 為 FileNotFoundError，並已從最近清單移除
         """
         try:
             project = self._project_files.load_project(path)
@@ -72,7 +75,13 @@ class ProjectAccess:
         if moved:
             project.replace_paths(moved)
         missing = [p for p in project.all_file_paths() if not self._file_service.file_exists(p)]
-        return self._record_location(AccessResult(project=project, missing_files=missing), path)
+        catalog_only = project.catalog_only_paths(missing)
+        stored = {path_key(p) for p in catalog_only}
+        result = AccessResult(
+            project=project, missing_files=[p for p in missing if path_key(p) not in stored],
+            catalog_only_files=catalog_only,
+        )
+        return self._record_location(result, path)
 
     def save(self, project: Project, path: str) -> AccessResult:
         """寫出專案檔；寫成後專案的快照即為寫出的內容，再更新工作區 meta 的所屬專案與最近清單

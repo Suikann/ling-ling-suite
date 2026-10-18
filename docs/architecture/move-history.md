@@ -12,9 +12,10 @@
 
 `RenameProblem` 每種問題是否阻擋、預覽的訊息、執行前驗證拒絕時的訊息與檢查順序都只記在 `core/constants.py` 的 `RENAME_PROBLEM_RULES`，預檢、預覽與搬移引擎都查它。
 
-不阻擋的只有三種，預覽列出、照常執行：
+不阻擋的只有四種，預覽列出、照常執行：
 
 - 來源已不在（`MISSING_SOURCE`）：從計畫丟掉
+- 只在譜庫（`CATALOG_ONLY`）：來源已不在、但群組記著它在譜庫裡有一份（清除本機檔案之後，見 [project.md](project.md) 的只在譜庫）；同樣從計畫丟掉，預覽另列一則說明是只在譜庫、不是找不到。`generate_rename_plan` 把這些來源記在 `RenamePlan.catalog_copies`，`check_plan` 據此跟找不到的分開
 - 目標重複（`SUFFIXED`）：自動加後綴（只加一次），預覽警告並把執行鈕改為「繼續（自動加後綴）」；加後綴後的計畫再檢查一次，仍重複（例如兩個檔要改成 Same.pdf、第三個要改成 Same (1).pdf）就以 `DUPLICATE_TARGET` 阻擋並列出撞名的檔
 - 多於聲部數的分譜（`EXTRA_FILE`）：不改名
 

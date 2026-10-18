@@ -351,6 +351,19 @@ class FileService:
         """
         os.remove(path)
 
+    def delete_permanently(self, path: str) -> None:
+        """永久刪除使用者的檔案，不進資源回收桶；只有清除本機檔案（確認譜庫裡有內容相同的一份之後）使用
+
+        其他刪除使用者檔案的操作一律走資源回收桶（delete_file）。
+
+        Args:
+            path: 檔案路徑
+
+        Raises:
+            OSError: 刪不掉（檔案不存在時為 FileNotFoundError）
+        """
+        os.remove(path)
+
     def copy_file(self, source: str, target: str) -> None:
         """複製檔案（連同修改日期等中繼資料）；目的地已有檔案時覆蓋
 

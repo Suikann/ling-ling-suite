@@ -32,11 +32,14 @@ class RenamePlan:
         extra_files: 多於聲部數、不改名的分譜（來源路徑，各群組依序）
         folder_variables: 子資料夾模板裡的逐檔變數（不重複，依出現順序）；子資料夾只依群組區分，用了就不能執行
         unknown_variables: 命名格式與子資料夾模板裡不是模板變數的名稱（不重複，依出現順序）；產出時已拿掉
+        catalog_copies: 要改名的項目裡，群組記著在譜庫裡有一份的來源（Group.has_catalog_copy）；
+            本機找不到時是只在譜庫，預檢另列一種
     """
     entries: List[RenameEntry] = field(default_factory=list)
     extra_files: List[str] = field(default_factory=list)
     folder_variables: List[str] = field(default_factory=list)
     unknown_variables: List[str] = field(default_factory=list)
+    catalog_copies: List[str] = field(default_factory=list)
 
 
 def assign_default_sections(project: Project, group_ids: Optional[Collection[str]] = None) -> None:
@@ -82,6 +85,8 @@ def generate_rename_plan(project: Project, group_ids: Optional[Collection[str]] 
             entry = RenameEntry(named.file.original_path, "", group.id, project.output_directory)
             entry.new_path = os.path.join(entry.output_location(), named.name.relative_path())
             plan.entries.append(entry)
+            if group.has_catalog_copy(named.file):
+                plan.catalog_copies.append(entry.original_path)
         plan.extra_files.extend(f.original_path for f in naming.extra_files)
         _add_new(plan.folder_variables, (
             name for name in variables_in(settings.subfolder_template) if variable_level(name) == VariableLevel.FILE

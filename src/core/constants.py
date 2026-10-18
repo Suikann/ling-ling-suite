@@ -135,6 +135,7 @@ class RenameProblem(str, Enum):
     搬移引擎的執行前驗證用同一套規則判定其中與搬移有關的種類（復原、重做沒有輸出位置，不檢查邊界）。
     """
     MISSING_SOURCE = "missing_source"
+    CATALOG_ONLY = "catalog_only"
     SUFFIXED = "suffixed"
     EXTRA_FILE = "extra_file"
     OUTSIDE_OUTPUT = "outside_output"
@@ -214,7 +215,7 @@ class RenameProblemRule:
 
 
 # 每種重新命名問題的處理方式，依執行前驗證的檢查順序（第一種有問題的種類決定拒絕的訊息）。
-# 不阻擋的：來源已不在的從計畫丟掉、重複的目標加後綴、多於聲部數的分譜不改名；其餘一律阻擋
+# 不阻擋的：來源已不在的從計畫丟掉（只在譜庫的另列一種）、重複的目標加後綴、多於聲部數的分譜不改名；其餘一律阻擋
 RENAME_PROBLEM_RULES: Dict[RenameProblem, RenameProblemRule] = {
     RenameProblem.OUTSIDE_OUTPUT: RenameProblemRule(
         True, True, "preview.outside_output_warning", "rename.error.outside_output", ProblemPath.TARGET, ValueError,
@@ -225,6 +226,7 @@ RENAME_PROBLEM_RULES: Dict[RenameProblem, RenameProblemRule] = {
     RenameProblem.MISSING_SOURCE: RenameProblemRule(
         False, False, "preview.missing_warning", "rename.error.source_missing", ProblemPath.SOURCE, FileNotFoundError,
     ),
+    RenameProblem.CATALOG_ONLY: RenameProblemRule(False, False, "preview.catalog_only_note"),
     RenameProblem.DUPLICATE_SOURCE: RenameProblemRule(
         True, True, "preview.duplicate_source_warning", "rename.error.duplicate_source", ProblemPath.SOURCE,
     ),

@@ -10,7 +10,8 @@ import uuid
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import (
-    TYPE_CHECKING, Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional, Set, Tuple,
+    TYPE_CHECKING, Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, Mapping, NamedTuple, Optional, Set,
+    Tuple,
 )
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_ORCHESTRA_TYPE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE,
@@ -649,6 +650,14 @@ class Group:
     def extra_files(self) -> List[FileInfo]:
         """多於本專案有的聲部數、沒有配到聲部的分譜（依原順序）"""
         return self.files[sum(self.present):]
+
+    def has_catalog_copy(self, file: FileInfo) -> bool:
+        """群組記著這份檔在譜庫裡有一份：群組連到譜庫、它是群組的總譜或分譜，而且記著存入指紋
+
+        本機沒有這份檔時就是「只在譜庫」（不另外存，照磁碟現況推算）；不必連網。
+        """
+        in_group = file is self.score_file or any(f is file for f in self.files)
+        return self.catalog_link is not None and in_group and bool(file.deposit_md5)
 
 
 @dataclass
@@ -1874,11 +1883,7 @@ class Project:
             records: 存入了的每份檔（DepositService.deposit 的結果）；本機路徑以 core.paths 判定同一性
         """
         records = list(records)
-        fingerprints = {path_key(record.local_path): record.drive_file.md5 for record in records}
-        for ref in self.file_refs():
-            md5 = fingerprints.get(path_key(ref.file.original_path))
-            if md5:
-                ref.file.deposit_md5 = md5
+        self._put_fingerprints({record.local_path: record.drive_file.md5 for record in records})
         for group in self.groups:
             link = group.catalog_link
             voices = [record.voice for record in records if record.group_id == group.id and record.voice]
@@ -1888,6 +1893,44 @@ class Project:
             filed += [voice for voice in voices if not any(same_voice(voice, known) for known in filed)]
             group.catalog_link = replace(link, snapshot=replace(link.snapshot, filed=filed))
         self._changed()
+
+    def record_fingerprints(self, fingerprints: Mapping[str, str]) -> None:
+        """清除本機檔案之後：每份清除了的檔記下存入指紋（譜庫裡那份的 MD5），沒經過泠靈存入的檔也認得出只在譜庫
+
+        Args:
+            fingerprints: 本機路徑 → 譜庫裡那份的 MD5；路徑以 core.paths 判定同一性
+        """
+        if self._put_fingerprints(fingerprints):
+            self._changed()
+
+    def _put_fingerprints(self, fingerprints: Mapping[str, str]) -> bool:
+        """把存入指紋寫進路徑相符的檔案資訊（不發通知），回傳有沒有改到"""
+        keyed = {path_key(path): md5 for path, md5 in fingerprints.items() if md5}
+        changed = False
+        for ref in self.file_refs():
+            md5 = keyed.get(path_key(ref.file.original_path))
+            if md5 and ref.file.deposit_md5 != md5:
+                ref.file.deposit_md5 = md5
+                changed = True
+        return changed
+
+    def catalog_only_paths(self, missing: Iterable[str]) -> List[str]:
+        """本機找不到的檔裡，只在譜庫的那些：所在群組記著它在譜庫裡有一份（Group.has_catalog_copy）
+
+        只在譜庫不另外存，每次照磁碟現況推算：呼叫端查好哪些檔本機找不到，檔案放回原位就不再列出。
+
+        Args:
+            missing: 本機找不到的檔案路徑；路徑以 core.paths 判定同一性
+
+        Returns:
+            其中只在譜庫的路徑，順序同 missing
+        """
+        missing = list(missing)
+        stored = {
+            path_key(ref.file.original_path) for ref in self._refs_to(missing)
+            if ref.group is not None and ref.group.has_catalog_copy(ref.file)
+        }
+        return [path for path in missing if path_key(path) in stored]
 
     def link_movements(self, groups: Iterable[Group], piece_name: str) -> None:
         """把群組連成同一首曲目的各樂章：曲名一致、樂章編號依序，沒有樂章名稱的以群組名稱補上"""

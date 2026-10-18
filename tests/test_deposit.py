@@ -384,6 +384,27 @@ class TestNotDeposited(DepositTestCase):
         plan, _ = self.deposit()
         self.assertEqual(plan.groups[0].block, DepositBlock.MISSING_FILES)
 
+    def test_files_only_in_the_catalog_are_skipped_and_the_rest_deposited(self):
+        self.project.record_deposit(self.deposit()[1].records)
+        os.remove(self.parts[0].original_path)
+        with open(self.parts[1].original_path, "wb") as f:
+            f.write(b"new pipa")
+        plan, outcome = self.deposit()
+        self.assertIsNone(plan.groups[0].block)
+        self.assertEqual(
+            [(item.source.voice, item.action) for item in plan.groups[0].items],
+            [("", DepositAction.SKIP), ("琵琶", DepositAction.UPDATE)],
+        )
+        self.assertIsNone(outcome.error)
+
+    def test_a_group_whose_files_are_all_only_in_the_catalog_is_not_deposited(self):
+        self.project.record_deposit(self.deposit()[1].records)
+        for file in [self.score] + self.parts:
+            os.remove(file.original_path)
+        plan, outcome = self.deposit()
+        self.assertEqual(plan.groups[0].block, DepositBlock.CATALOG_ONLY)
+        self.assertEqual(outcome.total, 0)
+
     def test_an_edition_without_a_drive_folder_is_not_deposited(self):
         self.google.sheets.set_cell(SHEET_EDITIONS, "G2", "")
         plan, _ = self.deposit()

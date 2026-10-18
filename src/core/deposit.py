@@ -58,7 +58,8 @@ class DepositBlock(Enum):
     NOT_LINKED = "not_linked"        # 沒連到譜庫
     NOT_RENAMED = "not_renamed"      # 還沒照命名格式重新命名
     NO_FILES = "no_files"            # 沒有總譜，也沒有配到聲部的分譜
-    MISSING_FILES = "missing_files"  # 有本機找不到的檔
+    MISSING_FILES = "missing_files"  # 有本機找不到的檔（只在譜庫的不算）
+    CATALOG_ONLY = "catalog_only"    # 檔都只在譜庫，本機沒有
     NO_FOLDER = "no_folder"          # 版本沒有 Drive 資料夾
 
 
@@ -76,11 +77,13 @@ class DepositSource:
         local_path: 本機路徑
         folders: 版本資料夾下的子資料夾（由外而內），空表示直接放在版本資料夾
         file_name: Drive 上的檔名（與本機相同）
+        catalog_copy: 群組記著它在譜庫裡有一份（Group.has_catalog_copy）：本機找不到時是只在譜庫，跳過不存入
     """
     voice: str
     local_path: str
     folders: Tuple[str, ...]
     file_name: str
+    catalog_copy: bool = False
 
     @property
     def is_score(self) -> bool:
@@ -333,6 +336,8 @@ def _group_sources(project: Project, group: Group) -> GroupSources:
         if not is_named_at(path, named.name, project.output_directory):
             return base.blocked(DepositBlock.NOT_RENAMED)
         voice = SCORE_VOICE if named.file is group.score_file else voices[path]
-        sources.append(DepositSource(voice, path, placed.name.folders, placed.name.file_name))
+        sources.append(DepositSource(
+            voice, path, placed.name.folders, placed.name.file_name, group.has_catalog_copy(named.file),
+        ))
     return replace(base, sources=sources)
 

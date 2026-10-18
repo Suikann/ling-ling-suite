@@ -21,13 +21,13 @@ undeposited 拿本機檔案的 MD5 比對存入指紋，找出存入後本機又
     project.record_deposit(outcome.records)
     stale = service.undeposited(project)
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from core.catalog_errors import CatalogError, CatalogErrorKind, exception_message
 from core.deposit import (
-    DepositAction, DepositBlock, DepositItem, DepositPlan, DepositRecord, GroupDeposit, PlaceFiles, deposit_sources,
-    folder_key, plan_group,
+    DepositAction, DepositBlock, DepositItem, DepositPlan, DepositRecord, GroupDeposit, GroupSources, PlaceFiles,
+    deposit_sources, folder_key, plan_group,
 )
 from core.locale import t
 from core.log_entry import LogEntry
@@ -129,7 +129,7 @@ class DepositService:
             catalog: 譜庫服務
 
         Returns:
-            每個群組各一個，依專案的順序；本機有找不到的檔的群組整個不存入
+            每個群組各一個，依專案的順序；只在譜庫的檔跳過，本機有其他找不到的檔的群組整個不存入
 
         Raises:
             CatalogError: 讀不到譜庫
@@ -138,13 +138,7 @@ class DepositService:
         local: Dict[str, Tuple[str, int]] = {}
         for sources in deposit_sources(project):
             if sources.block is None:
-                try:
-                    local.update({
-                        source.local_path: (self._files.md5(source.local_path), self._files.file_size(source.local_path))
-                        for source in sources.sources
-                    })
-                except OSError:
-                    sources = sources.blocked(DepositBlock.MISSING_FILES)
+                sources = self._read_local(sources, local)
             groups.append(sources)
         keys = sorted({(g.link.edition_id, g.link.movement_id) for g in groups if g.block is None})
         places = catalog.deposit_places(keys) if keys else {}
@@ -152,6 +146,26 @@ class DepositService:
             plan_group(g, local, places.get((g.link.edition_id, g.link.movement_id)) if g.link else None)
             for g in groups
         ])
+
+    def _read_local(self, sources: GroupSources, local: Dict[str, Tuple[str, int]]) -> GroupSources:
+        """讀群組每份檔的 MD5 與大小寫進 local；只在譜庫的檔跳過，其他找不到的檔讓整個群組不存入
+
+        Returns:
+            去掉只在譜庫的檔之後的群組；有其他找不到的檔時為 MISSING_FILES，檔都只在譜庫時為 CATALOG_ONLY
+        """
+        kept = []
+        for source in sources.sources:
+            try:
+                path = source.local_path
+                local[path] = (self._files.md5(path), self._files.file_size(path))
+            except OSError:
+                if not source.catalog_copy:
+                    return sources.blocked(DepositBlock.MISSING_FILES)
+                continue
+            kept.append(source)
+        if not kept:
+            return sources.blocked(DepositBlock.CATALOG_ONLY)
+        return replace(sources, sources=kept)
 
     def deposit(
         self, plan: DepositPlan, catalog: CatalogService, operator: str, should_cancel: Callable[[], bool],
