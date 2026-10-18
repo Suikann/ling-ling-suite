@@ -18,17 +18,18 @@
     table.instruments_changed.connect(refresh_parts)
     table.show_group(group)
 """
-from collections import OrderedDict
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QComboBox, QLabel, QMessageBox,
     QAbstractItemView, QMenu, QTableWidget, QTableWidgetItem, QSpinBox, QHeaderView,
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
-from core.constants import INSTRUMENT_PRESETS, SECTION_NAMES_EN, TEXT_EXTENSION
-from core.locale import is_english, localized, t
-from core.models import DuplicateVoiceError, FileInfo, Headcount, format_duration, sum_headcounts
+from core.constants import INSTRUMENT_PRESETS, TEXT_EXTENSION
+from core.instrument_list import instrument_list_text
+from core.locale import localized, t
+from core.models import DuplicateVoiceError, FileInfo, Headcount
+from core.sections import section_label
 from core.voice_names import distinct_voices, duplicate_rows
 from services.file_service import FileService
 from ui.widgets import ask_save_path
@@ -291,7 +292,7 @@ class InstrumentationTable(QWidget):
         if current not in options:
             options.append(current)
         for section in options:
-            combo.addItem(_section_label(section), section)
+            combo.addItem(section_label(section), section)
         combo.setCurrentIndex(options.index(current))
         combo.currentIndexChanged.connect(lambda _index, v=voice, c=combo: self._on_section_chosen(v, c))
         return combo
@@ -484,33 +485,12 @@ class InstrumentationTable(QWidget):
         )
         if not path:
             return
-        grouped: Dict[str, List[tuple]] = OrderedDict()
-        for voice, headcount in zip(self._group.instruments, self._group.headcounts):
-            section = _section_label(self._project.section_of(voice))
-            grouped.setdefault(section, []).append((voice, headcount))
-        lines = [t("instrument.title"), "=" * 40, ""]
-        duration = format_duration(self._group.duration_seconds)
-        if duration:
-            lines.extend([f"{t('instrumentation.duration')}：{duration}", ""])
-        for section, items in grouped.items():
-            lines.append(f"{section}：")
-            for voice, headcount in items:
-                lines.append(f"  {voice:<30s} x {headcount.text()}" if headcount.filled else f"  {voice}")
-            lines.append("")
-        lines.append("=" * 40)
-        total = sum_headcounts(self._group.headcounts).text() or "0"
-        lines.append(f"{len(self._group.instruments)} parts / {total} people")
         try:
-            self._file_service.write_text_atomic(path, "\n".join(lines))
+            self._file_service.write_text_atomic(path, instrument_list_text(self._project, self._group))
         except OSError as e:
             QMessageBox.critical(self, t("dialog.error"), str(e))
             return
         QMessageBox.information(self, t("dialog.info"), t("instrument.export_done", path=path))
-
-
-def _section_label(section: str) -> str:
-    """聲部組在介面上的名稱：介面為英文時換成英文名稱，自訂的值原樣顯示"""
-    return SECTION_NAMES_EN.get(section, section) if is_english() else section
 
 
 def _count_spin(maximum: int, blank_zero: bool = True) -> QSpinBox:

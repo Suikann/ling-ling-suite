@@ -776,7 +776,7 @@ class TestMainWindowInstrumentListFollowsGroup(InstrumentListTestCase):
         self.assertIn("  Flute                          x 2", lines)
         self.assertIn("  Oboe", lines)
         self.assertIn(f"{t('instrumentation.duration')}：7:00", lines)
-        self.assertEqual(lines[-1], "2 parts / 2 people")
+        self.assertEqual(lines[-1], "共 2 個聲部、2 人")
 
     def test_instruments_entered_after_adding_a_group_are_saved(self):
         self.click_button(t("group.add"))

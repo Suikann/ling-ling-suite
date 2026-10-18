@@ -16,6 +16,7 @@
 """
 from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
 from core.constants import ORCHESTRA_SECTIONS, OTHER_SECTION, SECTION_KEYWORDS, SECTION_NAMES_EN, OrchestraType
+from core.locale import is_english
 from core.voice_names import instrument_key
 
 # 舊版存的英文聲部組名稱對回中文
@@ -27,6 +28,11 @@ _CHINESE_ORCHESTRA_MARKS = ("吹管", "彈撥")
 def section_options(orchestra_type: OrchestraType) -> Tuple[str, ...]:
     """樂團類型的聲部組選項，依選單順序，「其他」在最後"""
     return ORCHESTRA_SECTIONS[orchestra_type] + (OTHER_SECTION,)
+
+
+def section_label(section: str) -> str:
+    """聲部組在介面上的名稱：介面為英文時換成英文名稱，自訂的值原樣顯示"""
+    return SECTION_NAMES_EN.get(section, section) if is_english() else section
 
 
 def detect_section(voice: str, orchestra_type: OrchestraType) -> str:
