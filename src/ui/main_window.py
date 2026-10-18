@@ -239,7 +239,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self._tab_widget)
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([380, 900])
+        splitter.setSizes([560, 720])
         self._build_bottom_panel(main_layout)
         self._rebuild_tabs()
 

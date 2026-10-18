@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from core.constants import MAX_RECENT_PROJECTS, WORKSPACE_META_FILE, WorkspaceStatus
-from core.models import FileInfo, Group, Project
+from core.models import FileInfo, Group, Headcount, Project
 from services.preferences_service import PreferencesService
 from services.project_access import ProjectAccess
 from services.project_service import ProjectService
@@ -264,13 +264,14 @@ class TestWorkspaceCleanupScan(ProjectAccessTestCase):
 
 
 class TestOpenOldFormat(ProjectAccessTestCase):
-    """開啟格式 3 以前的專案檔：判定樂團類型，聲部組轉成以樂器為鍵的對照；遷移不算未存檔"""
+    """開啟格式 3 以前的專案檔：判定樂團類型，聲部組轉成以樂器為鍵的對照，人數展開到各群組；遷移不算未存檔"""
 
-    def _open_old(self, groups, sections, version=2) -> Project:
-        """以舊格式（version 為 version）寫一份專案檔再開啟；groups 為各群組的樂器表"""
+    def _open_old(self, groups, sections, version=2, headcounts=None) -> Project:
+        """以舊格式（version 為 version）寫一份專案檔再開啟；groups 為各群組的樂器表，headcounts 為專案層級的人數"""
         path = os.path.join(self.temp_dir, "old.llproj")
         data = {
             "version": version, "master_template": "{樂器}.pdf", "instrument_sections": sections,
+            "instrument_headcounts": headcounts or {},
             "groups": [{"name": f"g{i}", "score_label": "總譜", "instruments": voices} for i, voices in enumerate(groups)],
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -316,9 +317,21 @@ class TestOpenOldFormat(ProjectAccessTestCase):
         self.assertEqual(project.instrument_sections, {"二胡 II": "低音"})
         self.assertEqual(project.section_of("二胡 I"), "低音")
 
+    def test_headcounts_spread_to_every_group_with_the_same_value_for_the_same_voice(self):
+        project = self._open_old(
+            [["二胡 I", "大提琴", "高胡"], ["二胡1", "琵琶"]], {},
+            headcounts={"二胡 I": 6, "大提琴": 0, "琵琶": 1, "笙": 3},
+        )
+        self.assertEqual(
+            [g.headcounts for g in project.groups],
+            [[Headcount(6), Headcount(), Headcount()], [Headcount(6), Headcount(1)]],
+        )
+        self.assertNotIn("instrument_headcounts", project.to_data())
+
     def test_file_written_by_the_oldest_version_migrates_too(self):
-        project = self._open_old([["高胡", "琵琶"]], {"高胡": "Strings"}, version="1.1.0-alpha")
+        project = self._open_old([["高胡", "琵琶"]], {"高胡": "Strings"}, version="1.1.0-alpha", headcounts={"高胡": 4})
         self.assertEqual((project.orchestra_type, project.instrument_sections), ("chinese", {"高胡": "拉弦"}))
+        self.assertEqual(project.groups[0].headcounts, [Headcount(4), Headcount()])
 
     def test_current_format_is_not_migrated(self):
         path = os.path.join(self.temp_dir, "current.llproj")

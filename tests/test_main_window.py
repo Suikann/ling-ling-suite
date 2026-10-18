@@ -26,7 +26,7 @@ from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox,
-    QPushButton, QRadioButton, QSplitter, QTabWidget, QTableWidget, QWidget,
+    QPushButton, QRadioButton, QSpinBox, QSplitter, QTabWidget, QTableWidget, QWidget,
 )
 
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CompressionStatus, PartsOutputMode
@@ -759,18 +759,23 @@ class TestMainWindowInstrumentListFollowsGroup(InstrumentListTestCase):
         self.assertEqual(self._shown_instruments(), [])
 
     def test_exported_list_gets_the_extension_and_platform_newlines(self):
-        """匯出編制表：沒打副檔名就補上 .txt，每行以這個平台的換行結尾、不會多出空行"""
+        """匯出樂器表：沒打副檔名就補上 .txt，每行以這個平台的換行結尾、不會多出空行；寫出人數與時長"""
         self.click_button(t("group.add"))
         for name in ("Flute", "Oboe"):
             QTest.keyClicks(self._instrument_entry(), name)
             QTest.keyClick(self._instrument_entry(), Qt.Key_Return)
+        editor = self._instrumentation_table()
+        editor.findChild(QTableWidget).cellWidget(0, editor.column("minimum")).setValue(2)
+        editor.findChild(QSpinBox, "duration_minutes").setValue(7)
         typed = os.path.join(self.temp_dir, "ensemble")
         with answering_prompts(), saving_as(typed):
             self.click_button(t("instrument.export"))
         with open(typed + ".txt", "rb") as f:
             lines = f.read().decode("utf-8").split(os.linesep)
         self.assertEqual([line for line in lines if "\r" in line or "\n" in line], [])
-        self.assertIn("  Flute                          x 1", lines)
+        self.assertIn("  Flute                          x 2", lines)
+        self.assertIn("  Oboe", lines)
+        self.assertIn(f"{t('instrumentation.duration')}：7:00", lines)
         self.assertEqual(lines[-1], "2 parts / 2 people")
 
     def test_instruments_entered_after_adding_a_group_are_saved(self):

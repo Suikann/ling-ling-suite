@@ -55,7 +55,7 @@ def assign_default_sections(project: Project, group_ids: Optional[Collection[str
         _chosen_groups(project, group_ids), project.instrument_sections, project.orchestra_type,
     )
     if missing:
-        project.update_ensemble(sections=missing)
+        project.update_sections(missing)
 
 
 def generate_rename_plan(project: Project, group_ids: Optional[Collection[str]] = None) -> RenamePlan:

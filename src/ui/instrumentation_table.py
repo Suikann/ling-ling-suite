@@ -2,13 +2,15 @@
 """
 編制表（PySide6）
 
-一個群組的編制逐列列成表格：本專案有、聲部、聲部組（以樂器為單位，旁邊寫出會跟著改的其他編號）。
+一個群組的編制逐列列成表格：本專案有、聲部、人數（最少、最多、以上）、聲部組（以樂器為單位，
+旁邊寫出會跟著改的其他編號）；上方是群組的時長（分、秒）。
 聲部的增刪與順序只在這張表：拖動列時分譜跟著聲部走，雙擊改名時分譜留在原位，取消勾選「本專案有」時
 那份分譜移到未分組，表格下方寫出移了哪幾份；與另一列是同一聲部（舊專案留下的重名）的列標紅。
-另有載入預設樂器表、從檔名擷取、匯出編制表與編輯人數（EnsembleDialog）。
+另有載入預設樂器表、從其他群組複製編制、從檔名擷取與匯出樂器表。
 
 元件不依賴主視窗：帶入專案後以 show_group 顯示任何一個群組；修改一律經專案的編輯操作立即寫入，
-再發出 instruments_changed。上方的 header 版面預留給連線與時長。
+改了聲部清單時再發出 instruments_changed（人數與時長不影響配對，只寫入不重畫）。
+上方的 header 版面預留給連線。
 
 使用範例：
     table = InstrumentationTable(project)
@@ -19,13 +21,13 @@ from collections import OrderedDict
 from typing import Dict, List, Optional, TYPE_CHECKING
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QComboBox, QLabel, QMessageBox,
-    QAbstractItemView, QMenu, QDialog, QTableWidget, QTableWidgetItem, QSpinBox, QHeaderView,
+    QAbstractItemView, QMenu, QTableWidget, QTableWidgetItem, QSpinBox, QHeaderView,
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
-from core.constants import DEFAULT_HEADCOUNT, INSTRUMENT_PRESETS, SECTION_NAMES_EN, TEXT_EXTENSION
+from core.constants import INSTRUMENT_PRESETS, SECTION_NAMES_EN, TEXT_EXTENSION
 from core.locale import is_english, localized, t
-from core.models import DuplicateVoiceError, FileInfo
+from core.models import DuplicateVoiceError, FileInfo, Headcount, format_duration, sum_headcounts
 from core.voice_names import distinct_voices, duplicate_rows
 from services.file_service import FileService
 from ui.widgets import ask_save_path
@@ -34,13 +36,20 @@ if TYPE_CHECKING:
     from core.models import Group, Project
 
 # 表格的欄，依顯示順序；加欄時在這裡插入，再於 _fill_row 填值、_HEADERS 給標題
-COLUMNS = ("present", "voice", "section", "follows")
+COLUMNS = ("present", "voice", "minimum", "maximum", "open_ended", "section", "follows")
 _HEADERS = {
     "present": "instrumentation.present",
     "voice": "instrumentation.voice",
+    "minimum": "instrumentation.minimum",
+    "maximum": "instrumentation.maximum",
+    "open_ended": "instrumentation.open_ended",
     "section": "instrumentation.section",
     "follows": "",
 }
+# 人數欄的上限（超過的樂譜要求不實際）
+_MAX_HEADCOUNT = 999
+# 時長的分鐘欄上限
+_MAX_DURATION_MINUTES = 999
 # 重名的列與本專案沒有的列的文字顏色
 _DUPLICATE_COLOR = QColor("#e74c3c")
 _ABSENT_COLOR = QColor("#888888")
@@ -84,6 +93,17 @@ class VoiceRowsTable(QTableWidget):
         return index.row() + (1 if pos.y() > rect.center().y() else 0)
 
 
+class _RefreshingComboBox(QComboBox):
+    """展開選單前先發出 about_to_popup，讓選項依專案目前的內容重列"""
+
+    about_to_popup = Signal()
+
+    def showPopup(self):
+        """展開選單：先重列選項"""
+        self.about_to_popup.emit()
+        super().showPopup()
+
+
 class InstrumentationTable(QWidget):
     """編制表面板：顯示一個群組的編制，修改經專案的編輯操作寫入"""
 
@@ -94,15 +114,16 @@ class InstrumentationTable(QWidget):
     ):
         """
         Args:
-            project: 目前的專案（編輯操作、聲部組與建議人數）
+            project: 目前的專案（編輯操作與聲部組）
             parent: 父元件
-            file_service: 檔案服務（寫出匯出的編制表）；None 時自建
+            file_service: 檔案服務（寫出匯出的樂器表）；None 時自建
         """
         super().__init__(parent)
         self._project = project
         self._file_service = file_service or FileService()
         self._group: Optional["Group"] = None
         self._filling = False
+        self._copy_sources: List["Group"] = []
         self._build_ui()
 
     @staticmethod
@@ -117,14 +138,19 @@ class InstrumentationTable(QWidget):
         title = QLabel(t("instrumentation.title"))
         title.setStyleSheet("font-size: 14px; font-weight: bold;")
         layout.addWidget(title)
-        # 預留給連線（曲目 › 版本 › 樂章）與時長
+        # 預留給連線（曲目 › 版本 › 樂章）
         self.header = QVBoxLayout()
         layout.addLayout(self.header)
+        layout.addLayout(self._build_duration_row())
         self._preset_combo = QComboBox()
         self._preset_combo.addItem(t("instrument.load_preset"))
         self._preset_combo.addItems([localized(preset.name, preset.name_en) for preset in INSTRUMENT_PRESETS])
         self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
         layout.addWidget(self._preset_combo)
+        self._copy_combo = _RefreshingComboBox()
+        self._copy_combo.about_to_popup.connect(self._list_copy_sources)
+        self._copy_combo.currentIndexChanged.connect(self._on_copy_source_chosen)
+        layout.addWidget(self._copy_combo)
         self._table = VoiceRowsTable()
         self._table.setColumnCount(len(COLUMNS))
         self._table.setHorizontalHeaderLabels([t(_HEADERS[name]) if _HEADERS[name] else "" for name in COLUMNS])
@@ -164,14 +190,25 @@ class InstrumentationTable(QWidget):
         remove_btn.clicked.connect(self._remove_selected)
         btn_row.addWidget(remove_btn)
         layout.addLayout(btn_row)
-        extra_row = QHBoxLayout()
-        headcount_btn = QPushButton(t("instrument.headcount"))
-        headcount_btn.clicked.connect(self._edit_headcount)
-        extra_row.addWidget(headcount_btn)
         export_btn = QPushButton(t("instrument.export"))
         export_btn.clicked.connect(self._export_instruments)
-        extra_row.addWidget(export_btn)
-        layout.addLayout(extra_row)
+        layout.addWidget(export_btn)
+
+    def _build_duration_row(self) -> QHBoxLayout:
+        """時長一列：分、秒兩個欄位"""
+        row = QHBoxLayout()
+        row.addWidget(QLabel(t("instrumentation.duration")))
+        self._duration_minutes = _count_spin(_MAX_DURATION_MINUTES, blank_zero=False)
+        self._duration_minutes.setObjectName("duration_minutes")
+        self._duration_seconds = _count_spin(59, blank_zero=False)
+        self._duration_seconds.setObjectName("duration_seconds")
+        for spin, unit in ((self._duration_minutes, "instrumentation.minutes"),
+                           (self._duration_seconds, "instrumentation.seconds")):
+            spin.valueChanged.connect(self._on_duration_edited)
+            row.addWidget(spin)
+            row.addWidget(QLabel(t(unit)))
+        row.addStretch()
+        return row
 
     # --- 顯示 ---
 
@@ -191,7 +228,7 @@ class InstrumentationTable(QWidget):
         self._fill()
 
     def _fill(self):
-        """依群組重畫整張表（由程式填值，不觸發編輯操作）"""
+        """依群組重畫整張表與時長（由程式填值，不觸發編輯操作）"""
         self._filling = True
         self._table.clearContents()
         voices = list(self._group.instruments) if self._group else []
@@ -199,7 +236,11 @@ class InstrumentationTable(QWidget):
         duplicates = set(duplicate_rows(voices))
         for row, voice in enumerate(voices):
             self._fill_row(row, voice, row in duplicates)
+        minutes, seconds = divmod(self._group.duration_seconds or 0, 60) if self._group else (0, 0)
+        self._duration_minutes.setValue(minutes)
+        self._duration_seconds.setValue(seconds)
         self._filling = False
+        self._list_copy_sources()
 
     def _fill_row(self, row: int, voice: str, duplicate: bool):
         """填一列：本專案有的勾選框、聲部名稱（重名標紅、本專案沒有的變灰）、聲部組選單與影響範圍"""
@@ -217,6 +258,16 @@ class InstrumentationTable(QWidget):
         elif not present:
             name.setForeground(QBrush(_ABSENT_COLOR))
         self._table.setItem(row, self.column("voice"), name)
+        for column, tip in (("minimum", "instrumentation.minimum_tip"), ("maximum", "instrumentation.maximum_tip")):
+            spin = _count_spin(_MAX_HEADCOUNT)
+            spin.setToolTip(t(tip))
+            spin.valueChanged.connect(lambda _value, r=row: self._on_headcount_edited(r))
+            self._table.setCellWidget(row, self.column(column), spin)
+        open_ended = QTableWidgetItem()
+        open_ended.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
+        open_ended.setToolTip(t("instrumentation.open_ended_tip"))
+        self._table.setItem(row, self.column("open_ended"), open_ended)
+        self._show_headcount(row)
         self._table.setCellWidget(row, self.column("section"), self._section_combo(voice))
         follows = self._project.same_instrument_voices(self._group, voice)
         note = QTableWidgetItem(t("instrument.section_follows", voices="、".join(follows)) if follows else "")
@@ -237,12 +288,41 @@ class InstrumentationTable(QWidget):
         combo.currentIndexChanged.connect(lambda _index, v=voice, c=combo: self._on_section_chosen(v, c))
         return combo
 
+    def _show_headcount(self, row: int):
+        """把群組裡那一列的人數填進最少、最多、以上三欄（留空顯示空白；以上時停用最多）"""
+        headcount = self._group.headcounts[row]
+        filling, self._filling = self._filling, True
+        self._table.cellWidget(row, self.column("minimum")).setValue(headcount.minimum or 0)
+        maximum = self._table.cellWidget(row, self.column("maximum"))
+        maximum.setValue(headcount.maximum or 0)
+        maximum.setEnabled(not headcount.open_ended)
+        self._table.item(row, self.column("open_ended")).setCheckState(
+            Qt.Checked if headcount.open_ended else Qt.Unchecked,
+        )
+        self._filling = filling
+
+    def _list_copy_sources(self):
+        """重列「從其他群組複製編制」的選項：專案裡目前群組以外的群組"""
+        groups = self._project.groups if self._project is not None else []
+        self._copy_sources = [g for g in groups if g is not self._group]
+        self._copy_combo.blockSignals(True)
+        self._copy_combo.clear()
+        self._copy_combo.addItem(t("instrumentation.copy_from"))
+        self._copy_combo.addItems([g.name for g in self._copy_sources])
+        self._copy_combo.setCurrentIndex(0)
+        self._copy_combo.blockSignals(False)
+        self._copy_combo.setEnabled(bool(self._copy_sources))
+
     def _show_moved(self, moved: List[FileInfo]):
         """在表格下方寫出移到未分組的分譜；沒有時收起"""
-        self._notice.setText(
+        self._show_notice(
             t("instrumentation.moved_to_ungrouped", files="、".join(f.display_name for f in moved)) if moved else "",
         )
-        self._notice.setVisible(bool(moved))
+
+    def _show_notice(self, text: str):
+        """在表格下方寫出提示；空字串時收起"""
+        self._notice.setText(text)
+        self._notice.setVisible(bool(text))
 
     def _changed(self, moved: Optional[List[FileInfo]] = None):
         """編輯操作完成後：重畫、寫出移到未分組的分譜、發出 instruments_changed"""
@@ -266,6 +346,8 @@ class InstrumentationTable(QWidget):
         if item.column() == self.column("present"):
             moved = self._project.set_present(self._group, item.row(), item.checkState() == Qt.Checked)
             self._changed(moved)
+        elif item.column() == self.column("open_ended"):
+            self._on_headcount_edited(item.row())
         elif item.column() == self.column("voice"):
             self._rename(item.row(), item.text().strip())
 
@@ -281,6 +363,31 @@ class InstrumentationTable(QWidget):
             self._explain_duplicate(name, e)
             return
         self._changed()
+
+    def _on_headcount_edited(self, row: int):
+        """改了最少、最多或以上：整列寫進人數範圍，再顯示整理後的值（不重畫整張表，輸入中的欄位才不會被換掉）"""
+        if self._filling or self._group is None:
+            return
+        self._project.set_headcount(self._group, row, Headcount(
+            self._table.cellWidget(row, self.column("minimum")).value(),
+            self._table.cellWidget(row, self.column("maximum")).value(),
+            self._table.item(row, self.column("open_ended")).checkState() == Qt.Checked,
+        ))
+        self._show_headcount(row)
+
+    def _on_duration_edited(self):
+        """改了時長的分或秒：以秒寫進群組"""
+        if self._filling or self._group is None:
+            return
+        self._project.set_duration(self._group, self._duration_minutes.value() * 60 + self._duration_seconds.value())
+
+    def _on_copy_source_chosen(self, index: int):
+        """選了複製來源的群組：依同一聲部複製人數，寫出對應不到、已留空的聲部"""
+        if index <= 0 or self._group is None or index > len(self._copy_sources):
+            return
+        unmatched = self._project.copy_instrumentation(self._group, self._copy_sources[index - 1])
+        self._changed()
+        self._show_notice(t("instrumentation.copy_unmatched", voices="、".join(unmatched)) if unmatched else "")
 
     def _on_section_chosen(self, voice: str, combo: QComboBox):
         """改聲部組：同一樂器的其他編號一起改"""
@@ -355,18 +462,9 @@ class InstrumentationTable(QWidget):
             self._project.set_instruments(self._group, unique)
             self._changed()
 
-    def _edit_headcount(self):
-        """開啟編輯人數的對話框；按下儲存後寫入專案"""
-        if self._project is None or self._group is None or not self._group.instruments:
-            return
-        dialog = EnsembleDialog(self._project, self._group, self)
-        if dialog.exec() == QDialog.Accepted:
-            dialog.apply()
-
     def _export_instruments(self):
-        """匯出編制表為文字檔；以 \\n 分行，寫檔時換成這個平台的換行"""
-        instruments = list(self._group.instruments) if self._group else []
-        if not instruments:
+        """匯出樂器表（連同人數與時長）為文字檔；以 \\n 分行，寫檔時換成這個平台的換行"""
+        if not self._group or not self._group.instruments:
             return
         path = ask_save_path(
             self, t("filedialog.export_instruments"), "", t("filedialog.text_files"), TEXT_EXTENSION,
@@ -374,23 +472,22 @@ class InstrumentationTable(QWidget):
         )
         if not path:
             return
-        headcounts = self._project.instrument_headcounts
         grouped: Dict[str, List[tuple]] = OrderedDict()
-        for inst in instruments:
-            section = _section_label(self._project.section_of(inst))
-            grouped.setdefault(section, []).append((inst, headcounts.get(inst, DEFAULT_HEADCOUNT)))
+        for voice, headcount in zip(self._group.instruments, self._group.headcounts):
+            section = _section_label(self._project.section_of(voice))
+            grouped.setdefault(section, []).append((voice, headcount))
         lines = [t("instrument.title"), "=" * 40, ""]
-        total_parts = 0
-        total_people = 0
+        duration = format_duration(self._group.duration_seconds)
+        if duration:
+            lines.extend([f"{t('instrumentation.duration')}：{duration}", ""])
         for section, items in grouped.items():
             lines.append(f"{section}：")
-            for inst, count in items:
-                lines.append(f"  {inst:<30s} x {count}")
-                total_parts += 1
-                total_people += count
+            for voice, headcount in items:
+                lines.append(f"  {voice:<30s} x {headcount.text()}" if headcount.filled else f"  {voice}")
             lines.append("")
         lines.append("=" * 40)
-        lines.append(f"{total_parts} parts / {total_people} people")
+        total = sum_headcounts(self._group.headcounts).text() or "0"
+        lines.append(f"{len(self._group.instruments)} parts / {total} people")
         try:
             self._file_service.write_text_atomic(path, "\n".join(lines))
         except OSError as e:
@@ -404,51 +501,17 @@ def _section_label(section: str) -> str:
     return SECTION_NAMES_EN.get(section, section) if is_english() else section
 
 
-class EnsembleDialog(QDialog):
-    """編輯一個群組各聲部的建議人數（聲部組在編制表裡改）"""
+def _count_spin(maximum: int, blank_zero: bool = True) -> QSpinBox:
+    """人數或時長用的數字欄：0 到 maximum；打完（按 Enter 或離開欄位）才發出 valueChanged
 
-    def __init__(self, project: "Project", group: "Group", parent=None):
-        """
-        Args:
-            project: 目前的專案
-            group: 要編輯的群組
-            parent: 父元件
-        """
-        super().__init__(parent)
-        self._project = project
-        self._voices = list(group.instruments)
-        self.setWindowTitle(t("instrument.headcount_title"))
-        self.resize(420, 400)
-        layout = QVBoxLayout(self)
-        self._table = QTableWidget(len(self._voices), 2)
-        self._table.setHorizontalHeaderLabels([t("instrument.headcount_instrument"), t("instrument.headcount_column")])
-        header = self._table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self._table.verticalHeader().setVisible(False)
-        self._spins: List[QSpinBox] = []
-        for row, voice in enumerate(self._voices):
-            item = QTableWidgetItem(voice)
-            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-            self._table.setItem(row, 0, item)
-            spin = QSpinBox()
-            spin.setRange(0, 99)
-            spin.setValue(project.instrument_headcounts.get(voice, DEFAULT_HEADCOUNT))
-            self._table.setCellWidget(row, 1, spin)
-            self._spins.append(spin)
-        layout.addWidget(self._table)
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        ok_btn = QPushButton(t("catalog.save"))
-        ok_btn.clicked.connect(self.accept)
-        buttons.addWidget(ok_btn)
-        cancel_btn = QPushButton(t("catalog.cancel"))
-        cancel_btn.clicked.connect(self.reject)
-        buttons.addWidget(cancel_btn)
-        layout.addLayout(buttons)
-
-    def apply(self):
-        """把對話框的人數逐聲部寫進專案"""
-        self._project.update_ensemble(
-            headcounts={voice: spin.value() for voice, spin in zip(self._voices, self._spins)},
-        )
+    Args:
+        maximum: 上限
+        blank_zero: 0 是否顯示空白（人數的留空）
+    """
+    spin = QSpinBox()
+    spin.setRange(0, maximum)
+    if blank_zero:
+        # 空字串會被 Qt 當成沒有特殊值，所以用一個空格
+        spin.setSpecialValueText(" ")
+    spin.setKeyboardTracking(False)
+    return spin

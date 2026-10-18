@@ -95,7 +95,7 @@ DEFAULT_PREFERENCES = {
 # 檔名不得含有的字元（Windows 最嚴），一律換成底線；Windows 保留名（CON、NUL 等）與尾端點空白不處理，這類名字不應出現
 FILENAME_ILLEGAL_CHARS = '<>:"/\\|?*'
 PDF_EXTENSION = ".pdf"
-# 匯出編制表的文字檔副檔名
+# 匯出樂器表的文字檔副檔名
 TEXT_EXTENSION = ".txt"
 # 不能當資料夾名稱的名字：指向目前或上一層目錄，命名結果是這些時拒絕，檔案才不會落到輸出位置外
 RELATIVE_DIR_NAMES = (".", "..")
@@ -255,8 +255,9 @@ PROJECT_EXTENSION = ".llproj"
 # 專案檔的格式版本（寫在專案檔的 version 欄）；之後改變專案檔內容的意義時遞增。
 # 比它新的專案檔由較新版本的程式建立，唯讀開啟、不能存檔（存檔會丟掉看不懂的欄位）
 PROJECT_FILE_VERSION = 3
-# 聲部組對照改以樂器為鍵、加上樂團類型的格式版本：比它舊的專案檔開啟時遷移聲部組並判定樂團類型
-SECTIONS_BY_INSTRUMENT_FILE_VERSION = 3
+# 編制改版的格式版本（聲部組對照改以樂器為鍵、加上樂團類型、人數改為群組層級的範圍）：
+# 比它舊的專案檔開啟時遷移聲部組、判定樂團類型，並把專案層級的人數展開到各群組
+INSTRUMENTATION_FILE_VERSION = 3
 # 舊版程式寫的 version（當時寫的是應用程式版本；None 為沒有這一欄）：只有開啟這些專案檔時才做舊格式遷移，
 # 遷移結果存檔後就是新版的檔，使用者之後清掉的值不會在下次開啟時又被補回
 LEGACY_PROJECT_FILE_VERSIONS = frozenset({None, "1.1.0-alpha"})
@@ -319,7 +320,7 @@ SCORE_NUMBER = "00"
 
 @dataclass(frozen=True)
 class InstrumentPreset:
-    """預設編制表"""
+    """預設樂器表"""
     name: str
     name_en: str
     instruments: tuple
@@ -476,4 +477,3 @@ SECTION_NAMES_EN = {
     OTHER_SECTION: "Other",
 }
 
-DEFAULT_HEADCOUNT = 1

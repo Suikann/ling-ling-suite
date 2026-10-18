@@ -10,13 +10,13 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional, Tuple
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_ORCHESTRA_TYPE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE,
-    LEGACY_PROJECT_FILE_VERSIONS, PROJECT_FILE_VERSION, SECTIONS_BY_INSTRUMENT_FILE_VERSION, OperationKind,
+    INSTRUMENTATION_FILE_VERSION, LEGACY_PROJECT_FILE_VERSIONS, PROJECT_FILE_VERSION, OperationKind,
     OrchestraType, PartsOutputMode, WorkspaceStatus,
 )
 from core.paths import path_key
 from core.sections import guess_orchestra_type, migrate_sections, put_section, section_for, section_options
 from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
-from core.voice_names import same_instrument, same_voice, voice_key
+from core.voice_names import VoiceKey, same_instrument, same_voice, voice_key
 
 
 class DuplicateVoiceError(ValueError):
@@ -113,6 +113,24 @@ class Headcount(NamedTuple):
     def from_data(cls, data: Dict[str, Any]) -> "Headcount":
         """由專案檔中的內容還原"""
         return cls(data.get("minimum"), data.get("maximum"), bool(data.get("open_ended", False))).normalized()
+
+
+def sum_headcounts(headcounts: Iterable[Headcount]) -> Headcount:
+    """幾個聲部的人數合計：最少相加、最多相加（沒有最多的以最少計），有任一個「以上」就是以上；未填的不算"""
+    filled = [h for h in headcounts if h.filled]
+    if not filled:
+        return Headcount()
+    minimum = sum(h.minimum for h in filled)
+    maximum = sum(h.maximum or h.minimum for h in filled)
+    return Headcount(minimum, maximum, any(h.open_ended for h in filled)).normalized()
+
+
+def format_duration(seconds: Optional[int]) -> str:
+    """時長的「分:秒」寫法（秒補成兩位，例如 7:05）；未填為空字串"""
+    if not seconds:
+        return ""
+    minutes, rest = divmod(seconds, 60)
+    return f"{minutes}:{rest:02d}"
 
 
 @dataclass
@@ -555,7 +573,6 @@ class Project:
     parts_subfolder_name: str = DEFAULT_PARTS_SUBFOLDER_NAME
     parts_output_mode: str = PartsOutputMode.ROOT
     output_directory: str = ""
-    instrument_headcounts: Dict[str, int] = field(default_factory=dict)
     instrument_sections: Dict[str, str] = field(default_factory=dict)
     orchestra_type: str = DEFAULT_ORCHESTRA_TYPE
     OUTPUT_SETTINGS: ClassVar[FrozenSet[str]] = frozenset({
@@ -596,7 +613,6 @@ class Project:
             "parts_subfolder_name": self.parts_subfolder_name,
             "parts_output_mode": self.parts_output_mode,
             "output_directory": self.output_directory,
-            "instrument_headcounts": dict(self.instrument_headcounts),
             "instrument_sections": dict(self.instrument_sections),
             "orchestra_type": self.orchestra_type,
             "ungrouped_files": [f.to_data() for f in self.ungrouped_files],
@@ -609,7 +625,8 @@ class Project:
 
         群組的遷移只在舊版程式寫的專案檔（version 在 LEGACY_PROJECT_FILE_VERSIONS）做，
         新版存的檔裡留空的總譜標籤與樂器表是使用者清掉的，不補回。格式 3 以前的檔（含上述舊版）
-        另把聲部組轉成以樂器為鍵的對照，沒存樂團類型時依聲部組判定。version 比 PROJECT_FILE_VERSION 新時唯讀。
+        另把聲部組轉成以樂器為鍵的對照（沒存樂團類型時依聲部組判定），專案層級的人數展開到各群組。
+        version 比 PROJECT_FILE_VERSION 新時唯讀。
 
         Args:
             data: 專案檔中的內容（含 version）
@@ -627,7 +644,6 @@ class Project:
             parts_subfolder_name=data.get("parts_subfolder_name", DEFAULT_PARTS_SUBFOLDER_NAME),
             parts_output_mode=data.get("parts_output_mode", PartsOutputMode.ROOT),
             output_directory=data.get("output_directory", ""),
-            instrument_headcounts=data.get("instrument_headcounts", {}),
             instrument_sections=data.get("instrument_sections", {}),
             orchestra_type=data.get("orchestra_type", DEFAULT_ORCHESTRA_TYPE),
             ungrouped_files=[FileInfo.from_data(f) for f in data.get("ungrouped_files", [])],
@@ -640,8 +656,9 @@ class Project:
         if legacy:
             for group in project.groups:
                 project._migrate_group(group, score_label)
-        if legacy or (isinstance(version, int) and version < SECTIONS_BY_INSTRUMENT_FILE_VERSION):
+        if legacy or (isinstance(version, int) and version < INSTRUMENTATION_FILE_VERSION):
             project._migrate_sections(guess_type="orchestra_type" not in data)
+            project._migrate_headcounts(data.get("instrument_headcounts") or {})
         project.read_only = isinstance(version, int) and version > PROJECT_FILE_VERSION
         project.mark_saved()
         return project
@@ -652,6 +669,19 @@ class Project:
         if guess_type:
             self.orchestra_type = guess_orchestra_type(voices, self.instrument_sections).value
         self.instrument_sections = migrate_sections(voices, self.instrument_sections, self.orchestra_type)
+
+    def _migrate_headcounts(self, headcounts: Dict[str, Any]) -> None:
+        """格式 3 以前的人數遷移：專案層級的人數 n 以同一聲部的規則展開到每個群組，成為最少＝最多＝n
+
+        同一聲部在所有群組套用同一個值（舊對照裡有幾種寫法時取第一個有值的）；0 與沒有值為未填，
+        樂器表裡已沒有的殘留鍵丟掉。
+        """
+        counts: Dict[VoiceKey, Headcount] = {}
+        for voice, count in headcounts.items():
+            if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+                counts.setdefault(voice_key(voice), Headcount(count))
+        for group in self.groups:
+            group.headcounts = [counts.get(voice_key(voice), Headcount()) for voice in group.instruments]
 
     def _migrate_group(self, group: Group, score_label: str) -> None:
         """舊格式群組的遷移：補上總譜標籤、承接專案層級的樂器表、把勾選的子集收成群組自己的樂器表"""
@@ -693,17 +723,13 @@ class Project:
         self.use_parts_subfolder = self.parts_output_mode == PartsOutputMode.PARTS
         self._changed()
 
-    def update_ensemble(
-        self, headcounts: Optional[Dict[str, int]] = None, sections: Optional[Dict[str, str]] = None,
-    ) -> None:
-        """寫入編制設定：逐聲部更新建議人數，聲部組寫進以樂器為鍵的對照（見 set_section），沒提到的不變
+    def update_sections(self, sections: Dict[str, str]) -> None:
+        """一次寫入多個聲部的聲部組，寫進以樂器為鍵的對照（見 set_section），沒提到的不變
 
         Args:
-            headcounts: 聲部名稱到建議人數
             sections: 聲部名稱到聲部組名稱
         """
-        self.instrument_headcounts.update(headcounts or {})
-        for voice, section in (sections or {}).items():
+        for voice, section in sections.items():
             put_section(self.instrument_sections, voice, section)
         self._changed()
 
@@ -978,6 +1004,31 @@ class Project:
             headcount: 新的人數範圍
         """
         group.headcounts[index] = headcount.normalized()
+        self._changed()
+
+    def copy_instrumentation(self, group: Group, source: Group) -> List[str]:
+        """從另一個群組複製編制：每個聲部以同一聲部的規則（voice_key）對到來源的一列，複製它的人數
+
+        對應不到的聲部人數留空；來源有重名時取第一列。聲部組是專案層級、以樂器為鍵的對照，
+        同一個專案的群組本來就共用，所以不必另外複製。
+
+        Args:
+            group: 要寫入的群組
+            source: 複製來源的群組
+
+        Returns:
+            對應不到、人數已留空的聲部，依樂器表順序
+        """
+        counts: Dict[VoiceKey, Headcount] = {}
+        for voice, headcount in zip(source.instruments, source.headcounts):
+            counts.setdefault(voice_key(voice), headcount)
+        group.headcounts = [counts.get(voice_key(voice), Headcount()) for voice in group.instruments]
+        self._changed()
+        return [voice for voice in group.instruments if voice_key(voice) not in counts]
+
+    def set_duration(self, group: Group, seconds: Optional[int]) -> None:
+        """設定群組的時長（秒）；0 與 None 為未填"""
+        group.duration_seconds = seconds or None
         self._changed()
 
     def set_present(self, group: Group, index: int, present: bool) -> List[FileInfo]:

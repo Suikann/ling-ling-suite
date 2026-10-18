@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from core.constants import PROJECT_FILE_VERSION
 from core.models import (
     DuplicateVoiceError, FileInfo, Group, Headcount, Project, SplitPlacement, SplitResult, UndoMapping,
+    format_duration, sum_headcounts,
 )
 from services.project_service import ProjectService
 from path_spellings import spellings
@@ -118,7 +119,7 @@ def _rich_project() -> Project:
         ungrouped_files=[_info(_path("Loose.pdf")), _info(_path("Extra.pdf"))],
         use_subfolders=True, subfolder_template="{曲名}", use_parts_subfolder=True,
         parts_subfolder_name="Parts", parts_output_mode="parts", output_directory=_path("out"),
-        instrument_headcounts={"Flute": 2}, instrument_sections={"Flute": "木管"},
+        instrument_sections={"Flute": "木管"},
     )
 
 
@@ -665,10 +666,66 @@ class TestHeadcountRanges(unittest.TestCase):
         self.assertEqual(self.group.headcounts[0], Headcount())
         self.assertFalse(self.group.headcounts[0].filled)
 
+    def test_totals_add_the_minimums_and_maximums(self):
+        self.assertEqual(sum_headcounts([Headcount(6, 8), Headcount(4), Headcount()]).text(), "10-12")
+        self.assertEqual(sum_headcounts([Headcount(6, 8), Headcount(2, open_ended=True)]).text(), "8↑")
+        self.assertEqual(sum_headcounts([Headcount()]).text(), "")
+
     def test_a_maximum_without_a_minimum_is_kept_but_unfilled(self):
         self.project.set_headcount(self.group, 0, Headcount(None, 8))
         self.assertEqual(self.group.headcounts[0], Headcount(None, 8))
         self.assertFalse(self.group.headcounts[0].filled)
+
+
+class TestCopyInstrumentation(unittest.TestCase):
+    """從其他群組複製編制：以同一聲部的規則逐聲部對應，對應不到的留空"""
+
+    def setUp(self):
+        self.source = Group(
+            name="第一樂章", instruments=["二胡1", "大提琴", "琵琶", "二胡 1"],
+            headcounts=[Headcount(6, 8), Headcount(4), Headcount(2, open_ended=True), Headcount(1)],
+        )
+        self.group = Group(
+            name="第二樂章", instruments=["二胡 I", "二胡 II", "大提琴"], headcounts=[Headcount(3)] * 3,
+        )
+        self.project = Project(groups=[self.source, self.group])
+        self.heard = []
+        self.project.subscribe(lambda: self.heard.append(self.project.is_modified()))
+
+    def test_headcounts_are_matched_by_voice_and_the_rest_left_blank(self):
+        unmatched = self.project.copy_instrumentation(self.group, self.source)
+        self.assertEqual([h.text() for h in self.group.headcounts], ["6-8", "", "4"])
+        self.assertEqual(unmatched, ["二胡 II"])
+        self.assertEqual([h.text() for h in self.source.headcounts], ["6-8", "4", "2↑", "1"])
+        self.assertEqual(self.heard, [True])
+
+    def test_sections_are_shared_by_instrument_already(self):
+        self.project.set_section(self.source, "二胡1", "低音")
+        self.project.copy_instrumentation(self.group, self.source)
+        self.assertEqual([self.project.section_of(v) for v in self.group.instruments], ["低音", "低音", "低音"])
+
+
+class TestDuration(unittest.TestCase):
+    """群組的時長以秒存、以分:秒呈現；0 與留空都是未填"""
+
+    def setUp(self):
+        self.group = Group(name="g")
+        self.project = Project(groups=[self.group])
+        self.heard = []
+        self.project.subscribe(lambda: self.heard.append(self.project.is_modified()))
+
+    def test_duration_is_stored_in_seconds_and_shown_as_minutes_and_seconds(self):
+        self.project.set_duration(self.group, 7 * 60 + 5)
+        self.assertEqual(self.group.duration_seconds, 425)
+        self.assertEqual(format_duration(self.group.duration_seconds), "7:05")
+        self.assertEqual(format_duration(75 * 60), "75:00")
+        self.assertEqual(self.heard, [True])
+
+    def test_zero_or_blank_is_unfilled(self):
+        self.assertIsNone(self.group.duration_seconds)
+        self.project.set_duration(self.group, 0)
+        self.assertIsNone(self.group.duration_seconds)
+        self.assertEqual(format_duration(None), "")
 
 
 class TestHeadcountsFollowTheirVoices(unittest.TestCase):
@@ -869,7 +926,7 @@ class TestRevertSplit(unittest.TestCase):
 
 
 class TestProjectSettingEdits(unittest.TestCase):
-    """命名格式、輸出設定、編制設定與套用搬移結果：每次都發出「已變更」通知"""
+    """命名格式、輸出設定、聲部組與套用搬移結果：每次都發出「已變更」通知"""
 
     def setUp(self):
         self.project = Project(groups=[Group(name="g", files=_infos("Flute.pdf"), small_template="{樂器}.pdf")])
@@ -888,10 +945,9 @@ class TestProjectSettingEdits(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.project.set_output_settings(master_template="x")
 
-    def test_ensemble_settings_are_merged_per_voice(self):
-        self.project.update_ensemble(headcounts={"Flute": 2}, sections={"Flute": "木管"})
-        self.project.update_ensemble(sections={"Horn": "銅管"})
-        self.assertEqual(self.project.instrument_headcounts, {"Flute": 2})
+    def test_sections_are_merged_per_voice(self):
+        self.project.update_sections({"Flute": "木管"})
+        self.project.update_sections({"Horn": "銅管"})
         self.assertEqual(self.project.instrument_sections, {"Flute": "木管", "Horn": "銅管"})
         self.assertEqual(self.heard, [True, True])
 
@@ -940,7 +996,7 @@ class TestSectionsByInstrument(unittest.TestCase):
     def test_the_key_keeps_the_spelling_written_first(self):
         self.project.set_section(self.group, "二胡 II", "低音")
         self.project.set_section(self.group, "二胡 I", "拉弦")
-        self.project.update_ensemble(sections={"二胡1": "彈撥"})
+        self.project.update_sections({"二胡1": "彈撥"})
         self.assertEqual(self.project.instrument_sections, {"二胡 II": "彈撥"})
 
     def test_voices_without_a_stored_section_are_detected_for_the_orchestra_type(self):
