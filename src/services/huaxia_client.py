@@ -25,10 +25,11 @@ PUBLISH_VERSION_FUNCTION、PUBLISH_INTERFACE_VERSION；介面定案時改這兩�
     tokens = client.exchange_code(code, verifier)
     client.rpc("is_officer", tokens.access_token)
 """
+import datetime
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 from urllib.parse import urlencode
 
 import requests
@@ -44,6 +45,8 @@ PUBLISH_INTERFACE_VERSION = 1
 # 泠靈發的檔在 Storage bucket scores 裡的路徑前綴（#117 定案前的假設）
 LINGLING_STORAGE_PREFIX = "lingling/"
 _LINGLING_PATH = re.compile(re.escape(LINGLING_STORAGE_PREFIX) + r"[^/]+/[0-9a-f]{64}\.pdf")
+# Storage 列出檔案時一次要幾筆（Supabase 的預設）
+_STORAGE_PAGE_SIZE = 100
 # 一個請求最多等這麼久（秒）
 _REQUEST_TIMEOUT = 30
 # PostgREST 回報找不到資料庫函式的錯誤代碼
@@ -149,6 +152,25 @@ class HuaXiaScore(NamedTuple):
     def lingling(self) -> bool:
         """是泠靈發的（路徑是泠靈的 Storage 路徑格式）"""
         return is_lingling_path(self.file_path)
+
+
+class HuaXiaEvent(NamedTuple):
+    """HuaXia 的一個場次（events 的一列）
+
+    Attributes:
+        id: 場次編號
+        title: 名稱
+        starts_at: 開始時間（帶時區）
+        ends_at: 結束時間（帶時區）
+        kinds: 類型（可以複選，例如 dress、concert）
+        location: 地點
+    """
+    id: str
+    title: str
+    starts_at: datetime.datetime
+    ends_at: datetime.datetime
+    kinds: Tuple[str, ...]
+    location: str
 
 
 def lingling_storage_path(piece_id: str, sha256: str) -> str:
@@ -333,6 +355,74 @@ class HuaXiaClient:
             ]
         except (KeyError, TypeError) as e:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected scores: {e}") from e
+
+    def current_semester(self, access_token: str) -> Optional[str]:
+        """本學期（semesters.is_current）的編號；沒有設定本學期時為 None
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        rows = self.select("semesters", access_token, "id", is_current="true")
+        try:
+            return rows[0]["id"] if rows else None
+        except (KeyError, TypeError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected semesters: {e}") from e
+
+    def events(self, access_token: str, semester_id: str) -> List[HuaXiaEvent]:
+        """這個學期看得到的場次，依開始時間
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        rows = self.select(
+            "events", access_token, "id,title,starts_at,ends_at,kinds,location", semester_id=semester_id,
+        )
+        try:
+            events = [
+                HuaXiaEvent(
+                    row["id"], row["title"], datetime.datetime.fromisoformat(row["starts_at"]),
+                    datetime.datetime.fromisoformat(row["ends_at"]), tuple(row.get("kinds") or ()),
+                    row.get("location") or "",
+                )
+                for row in rows
+            ]
+        except (KeyError, TypeError, ValueError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected events: {e}") from e
+        return sorted(events, key=lambda event: event.starts_at)
+
+    # --- Storage ---
+
+    def stored_files(self, access_token: str, folder: str, page_size: int = _STORAGE_PAGE_SIZE) -> Dict[str, int]:
+        """Storage bucket scores 裡某個資料夾底下一層的檔（不含子資料夾），分頁讀完
+
+        Args:
+            access_token: 使用者的 access token
+            folder: 資料夾路徑，例如泠靈發到一首曲目的檔所在的「前綴／曲目編號」
+            page_size: 一次要幾筆
+
+        Returns:
+            檔案的完整路徑對應大小（位元組）
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        folder = folder.strip("/")
+        found: Dict[str, int] = {}
+        offset = 0
+        while True:
+            entries = self._call(
+                "POST", "/storage/v1/object/list/scores", access_token,
+                json={"prefix": folder, "limit": page_size, "offset": offset, "sortBy": {"column": "name"}},
+            )
+            try:
+                for entry in entries:
+                    if entry.get("id") is not None:
+                        found[f"{folder}/{entry['name']}"] = int((entry.get("metadata") or {}).get("size") or 0)
+            except (KeyError, TypeError, ValueError, AttributeError) as e:
+                raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected storage listing: {e}") from e
+            if len(entries) < page_size:
+                return found
+            offset += page_size
 
     # --- 共用 ---
 

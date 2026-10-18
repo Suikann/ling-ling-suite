@@ -6,6 +6,7 @@
 每個聲部要取代的只是同一個聲部底下、泠靈發的那份（以泠靈的 Storage 路徑格式辨認，網頁上改了樂譜名稱也認得），
 總譜是聲部空白、泠靈發的那份；別人放的檔只標出、不取代；只在譜庫與找不到的檔跳過。
 """
+import datetime
 import os
 import shutil
 import sys
@@ -128,6 +129,58 @@ class TestSkipping(FilesTestCase):
     def test_sizes_come_from_the_files(self):
         plan = self.plan()
         self.assertEqual([(f.voice, f.size) for f in plan.publishing], [("二胡 I", 100), ("琵琶", 200), ("", 300)])
+
+
+class TestConcerts(PrepareTestCase):
+    """「公演」步的候選：本學期、還沒結束、類型含公演的場次，依開始時間"""
+
+    def setUp(self):
+        super().setUp()
+        self.now = datetime.datetime.now(datetime.timezone.utc)
+        self.semester = self.huaxia.add_semester("115-1", is_current=True)
+
+    def event(self, title, days, kinds=("concert",), semester=None):
+        """days 天後開始、開始後兩小時結束的場次"""
+        starts = self.now + datetime.timedelta(days=days)
+        return self.huaxia.add_event(
+            semester or self.semester, title, starts, starts + datetime.timedelta(hours=2), kinds=kinds,
+        )
+
+    def concerts(self):
+        """重新按下發譜時讀到的候選場次的名稱"""
+        return [event.title for event in self.service.prepare().concerts]
+
+    def test_only_upcoming_concerts_of_this_semester_are_offered(self):
+        self.event("期末公演", 60)
+        self.event("校慶音樂會", 30, kinds=("dress", "concert"))
+        self.event("期中音樂會", -3)
+        self.event("大團練習", 7, kinds=("tutti",))
+        self.event("上學期的公演", 90, semester=self.huaxia.add_semester("114-2"))
+        self.assertEqual(self.concerts(), ["校慶音樂會", "期末公演"])
+
+    def test_a_concert_still_going_on_is_offered(self):
+        starts = self.now - datetime.timedelta(hours=1)
+        self.huaxia.add_event(self.semester, "正在演", starts, starts + datetime.timedelta(hours=2))
+        self.assertEqual(self.concerts(), ["正在演"])
+
+    def test_no_current_semester_offers_nothing(self):
+        self.event("期末公演", 60)
+        self.huaxia.add_semester("115-2", is_current=True)
+        self.assertEqual(self.concerts(), [])
+
+
+class TestStorageListing(PrepareTestCase):
+    """列出 Storage 裡泠靈發到一首曲目的檔（重發時內容相同的不必再傳）"""
+
+    def test_lists_the_files_under_a_piece_with_their_sizes(self):
+        for n in range(3):
+            self.huaxia.put_object(lingling_storage_path(self.fenghuo, fingerprint(n)), b"x" * (n + 1))
+        self.huaxia.put_object(lingling_storage_path(self.moli, fingerprint(9)))
+        self.huaxia.put_object(f"{self.fenghuo}/full/1760000000000_score.pdf")
+        client = self.auth.client
+        folder = lingling_storage_path(self.fenghuo, fingerprint(0)).rsplit("/", 1)[0]
+        listed = client.stored_files(self.auth.access_token(), folder, page_size=2)
+        self.assertEqual(listed, {f"{folder}/{fingerprint(n)}.pdf": n + 1 for n in range(3)})
 
 
 if __name__ == "__main__":

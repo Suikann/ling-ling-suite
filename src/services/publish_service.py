@@ -9,9 +9,11 @@
 - 群組層級（check_groups，擋下那個群組，預覽裡寫出原因）：還沒重新命名（core.naming.is_renamed，與存入譜庫同一條規則；
   發譜從輸出位置讀檔）、本專案有的聲部沒填最少人數、樂器表有重名的列。未同步的值（還沒進譜庫）不擋，只標出。
 - HuaXia 那一側（PublishService.prepare，連網，要在背景執行緒呼叫）：重查幹部身分（不是幹部就登出）、
-  HuaXia 發譜函式的介面版本（沒有或不符時整個發譜不能用），兩者都過了才讀可以挑的曲目（未封存的）。
+  HuaXia 發譜函式的介面版本（沒有或不符時整個發譜不能用），兩者都過了才讀可以挑的曲目（未封存的）與它們的聲部、
+  樂譜，以及可以掛的公演（本學期、還沒結束、類型含公演，upcoming_concerts）。
 
-「只在譜庫」的檔（清除本機檔案後只剩譜庫那份，#107）還沒有對應的狀態，之後在 check_groups 的群組結果加上跳過的檔。
+發譜預覽各步的規則也在這裡：「聲部」步的配對與要寫的內容（plan_voices），「檔案」步每份檔要取代的
+與別人放的（plan_files）；「只在譜庫」與本機找不到的檔在 plan_files 跳過。
 
 使用範例：
     from services.publish_service import PublishService, check_groups, project_blocks
@@ -20,6 +22,7 @@
         if readiness.ready:
             checks = check_groups(project)
 """
+import datetime
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
@@ -30,7 +33,10 @@ from core.naming import is_renamed
 from core.voice_names import duplicate_rows, same_voice
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
 from services.file_service import FileService
-from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaPart, HuaXiaPiece, HuaXiaScore
+from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaEvent, HuaXiaPart, HuaXiaPiece, HuaXiaScore
+
+# HuaXia 場次類型裡的「公演」（events.kinds）
+CONCERT_KIND = "concert"
 
 
 class ProjectBlock(Enum):
@@ -58,6 +64,7 @@ class PublishReadiness:
         pieces: 可以挑的曲目（未封存，依曲名）；不能發時為空
         parts: 可以挑的曲目上已有的聲部，以曲目編號為鍵（依 HuaXia 的排序）；沒有聲部的曲目不在裡面
         scores: 可以挑的曲目上登記的樂譜，以曲目編號為鍵（依登記的先後）；沒有樂譜的曲目不在裡面
+        concerts: 可以掛的公演：本學期、還沒結束、類型含公演的場次，依開始時間
         discord_name: 登入的 Discord 帳號名稱
     """
 
@@ -67,6 +74,7 @@ class PublishReadiness:
     pieces: List[HuaXiaPiece] = field(default_factory=list)
     parts: Dict[str, List[HuaXiaPart]] = field(default_factory=dict)
     scores: Dict[str, List[HuaXiaScore]] = field(default_factory=dict)
+    concerts: List[HuaXiaEvent] = field(default_factory=list)
     discord_name: str = ""
 
     @property
@@ -423,6 +431,16 @@ def plan_files(group: Group, voices: VoicePlan, scores: List[HuaXiaScore], file_
     return FilePlan(files)
 
 
+def upcoming_concerts(events: List[HuaXiaEvent], now: datetime.datetime) -> List[HuaXiaEvent]:
+    """場次裡可以掛的公演：還沒結束、類型含公演（不含排練與其他類型），順序不變
+
+    Args:
+        events: 本學期的場次
+        now: 現在的時間（帶時區）
+    """
+    return [event for event in events if CONCERT_KIND in event.kinds and event.ends_at > now]
+
+
 class PublishService:
     """發譜到 HuaXia：按下發譜時 HuaXia 那一側的檢查"""
 
@@ -435,7 +453,7 @@ class PublishService:
         self._client = auth.client
 
     def prepare(self) -> PublishReadiness:
-        """重查幹部身分、查發譜函式的版本，都過了才讀可以挑的曲目與它們的聲部；不是幹部時已登出
+        """重查幹部身分、查發譜函式的版本，都過了才讀可以挑的曲目、它們的聲部與樂譜，以及可以掛的公演；不是幹部時已登出
 
         Returns:
             檢查結果；不能發時寫明原因
@@ -461,8 +479,11 @@ class PublishService:
         for score in self._client.scores(token):
             if score.piece_id in scores:
                 scores[score.piece_id].append(score)
+        semester = self._client.current_semester(token)
+        events = self._client.events(token, semester) if semester else []
         return PublishReadiness(
             function_version=version, pieces=pieces, parts={piece: found for piece, found in parts.items() if found},
             scores={piece: found for piece, found in scores.items() if found},
+            concerts=upcoming_concerts(events, datetime.datetime.now(datetime.timezone.utc)),
             discord_name=self._auth.status().discord_name,
         )
