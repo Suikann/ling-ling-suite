@@ -21,7 +21,7 @@ from core.constants import (
 )
 from core.filename import ensure_pdf_extension, sanitize_filename
 from core.models import FileInfo, Group, Project
-from core.sections import detect_section, stored_section
+from core.sections import section_for, stored_section
 from core.voice_names import instrument_key
 
 # 總譜所在的格；分譜依序為第 1、2…格
@@ -205,8 +205,8 @@ def default_sections(
     for group in groups:
         for voice in named_voices(group):
             key = instrument_key(voice)
-            if key not in seen and not stored_section(voice, sections).strip():
-                missing[voice] = detect_section(voice, orchestra_type)
+            if key not in seen and not stored_section(voice, sections):
+                missing[voice] = section_for(voice, sections, orchestra_type)
             seen.add(key)
     return missing
 
@@ -218,7 +218,7 @@ def _section_folder(voice: str, sections: Mapping[str, str]) -> str:
         KeyError: 它的樂器沒有聲部組（或留空）
     """
     section = stored_section(voice, sections)
-    if not section.strip():
+    if not section:
         raise KeyError(voice)
     return section
 

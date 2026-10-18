@@ -53,9 +53,10 @@ def stored_key(voice: str, sections: Mapping[str, str]) -> Optional[str]:
 
 
 def stored_section(voice: str, sections: Mapping[str, str]) -> str:
-    """對照裡聲部所屬樂器存的聲部組；沒有存時為空字串"""
+    """對照裡聲部所屬樂器存的聲部組；沒有存或存的是空白時為空字串（空白一律當成沒存）"""
     name = stored_key(voice, sections)
-    return sections[name] if name is not None else ""
+    value = sections[name] if name is not None else ""
+    return value if value.strip() else ""
 
 
 def section_for(voice: str, sections: Mapping[str, str], orchestra_type: OrchestraType) -> str:
@@ -69,8 +70,7 @@ def section_for(voice: str, sections: Mapping[str, str], orchestra_type: Orchest
     Returns:
         聲部組名稱
     """
-    stored = stored_section(voice, sections)
-    return stored if stored.strip() else detect_section(voice, orchestra_type)
+    return stored_section(voice, sections) or detect_section(voice, orchestra_type)
 
 
 def put_section(sections: Dict[str, str], voice: str, section: str) -> None:
