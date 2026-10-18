@@ -19,6 +19,7 @@
 | 譜庫讀寫失敗的呈現：失敗的那個視窗頂端的提示列（類別、怎麼辦、處理按鈕、可展開的詳細資料） | `ui/catalog_error_bar.py` 的 `CatalogErrorBar`；各類別的標題、怎麼辦與按鈕照 `core/catalog_errors.py` 的 `CATALOG_ERROR_RULES`，詳細資料是 `CatalogFailure.detail_text()`；建立時傳入紀錄檔（`ActivityLog`），顯示的每一次失敗都以同一份寫進紀錄檔。要改的紀錄在寫入前一刻已被另一台電腦刪掉時，`update_record` 丟出「已經不在譜庫」，按鈕是「重新讀取」（重新讀取畫面，不重送寫入）。在背景呼叫譜庫服務經 `ui/catalog_tasks.py` 的 `CatalogTasks`：失敗時交回 `CatalogError` 本身（`BackgroundTask` 只交回訊息），呼叫端才分得出類別 |
 | 社團設定的發譜平台（發譜功能顯示與否） | `services/club_settings_service.py` 的 `ClubSettingsService`：`read` 經 `CatalogService.publishing_platform` 讀譜庫的社團設定工作表並記在偏好設定，讀不到時丟出 `CatalogError`、記住的不變；連上譜庫時改用 `refresh`，讀不到時記住的不變、失敗寫進紀錄檔，不顯示提示列；`remembered` 只看偏好設定，啟動時用它決定顯示與否；譜庫設定按「儲存設定」存了另一份譜庫試算表時以 `forget` 清掉再讀新的 |
 | 寫紀錄檔：譜庫的讀寫失敗與重要動作（存入譜庫、撤銷存入、清除本機檔案、下載、發譜） | `services/activity_log.py` 的 `ActivityLog.record`，一筆是 `core/log_entry.py` 的 `LogEntry`：只有固定欄位，不記權杖、密碼與 HuaXia 傳回的團員資料，原始訊息裡像權杖或密碼的部分遮掉。譜庫失敗以 `CatalogFailure.log_entry()` 取得那一筆，與提示列的詳細資料是同一份。位置與保留天數見 [data-storage.md](data-storage.md) |
+| 碰 HuaXia（Supabase 的 Auth、PostgREST、Storage） | `services/huaxia_client.py` 的 `HuaXiaClient`：全程式只有它送 HuaXia 的請求，以 `requests` 直接打 REST（ADR 0003），HuaXia 的網址與 publishable key 內附在它頂端；失敗丟出帶類別的 `HuaXiaError`（連不上、沒有登入、登入已失效、其他）。它不記登入狀態：Discord 登入與幹部檢查、access token 的續期與輪替（同一時間只有一個續期，新的續期權杖立刻寫回安全儲存）、重查幹部身分與登出都在 `services/huaxia_auth_service.py` 的 `HuaXiaAuthService`，要 access token 的程式經它的 `access_token` |
 | 讀寫系統的安全儲存（keyring） | `services/secure_storage.py` 的 `SecureStorage`；backend 依平台明確指定，不用 keyring 的自動選擇 |
 | 兩階段批次搬移 | `services/move_service.py`，只有 `services/move_history.py` 使用（見 [move-history.md](move-history.md)） |
 | 以預設程式開啟網址或本機的檔案、資料夾（瀏覽器、PDF 閱讀器、檔案管理員） | `services/external_opener.py` 的 `ExternalOpener.open`；Linux 打包版替外部程式還原 `LD_LIBRARY_PATH`（`core/launch_env.py`）。不直接呼叫 `QDesktopServices.openUrl` 或 `xdg-open` |
@@ -48,7 +49,8 @@
   - `tests/memory_keyring.py`：記憶體裡的 keyring backend，注入給 `SecureStorage`；可設成沒有安全儲存、被鎖住、寫入或刪除失敗。測試一律注入它，不碰系統的安全儲存
   - `tests/fake_google.py`：Google 權杖端點的替身（兌換授權碼時回傳指定的續期權杖、範圍與帳號 email；續期時回傳指定權杖、拒絕續期、連不上），以及寫出測試用用戶端檔的 `write_client_secrets`
   - `tests/fake_google_catalog.py`：假 Google，記憶體裡的譜庫試算表加 Drive，實作兩個關口，注入給 `CatalogService`；每次呼叫計為一次請求，可以設定第 N 次請求丟出某類錯誤（可選擇請求生效之後才丟，扮演回應沒收到），或在第 N 次請求之前讓另一台電腦改動譜庫。譜庫讀寫的測試一律用它，不接真的 Google
-  - `tests/fake_browser.py`：開瀏覽器的替身，注入給本機回呼與登入服務；拿到授權網址後在背景真的對其中的 `127.0.0.1` 回呼送 HTTP 請求，帶 `code` 或 `error`，或設成永遠不送
+  - `tests/fake_browser.py`：開瀏覽器的替身，注入給本機回呼與登入服務；拿到授權網址後在背景真的對其中的 `127.0.0.1` 回呼（`redirect_uri`，沒有時 `redirect_to`）送 HTTP 請求，帶 `code` 或 `error`，或設成永遠不送；建立時傳入提供者（例如假 HuaXia 的 `authorize`）時，授權碼由它依授權網址發給
+  - `tests/fake_huaxia.py`：假 HuaXia，記憶體裡的 Supabase，當作 HTTP session 注入 `HuaXiaClient`：Auth（PKCE 兌換、續期與輪替，重用用過的續期權杖會撤銷 session、`scope=local` 與 global 登出）、PostgREST 的讀取（照 HuaXia 的 RLS）與 `rpc/is_officer`；新的 Discord 帳號第一次登入時建立待核准的帳號。可設成連不上，或讓續期卡住直到放行。HuaXia 的測試一律用它，不接真的 HuaXia
   - `tests/synthetic_pdfs.py`：以 PyMuPDF 產生的合成掃描分譜（8-bit 灰階、JPEG、1-bit、未壓縮的串流、加密、宣告錯誤的 JPEG），測壓縮服務與壓縮檢查；壓縮服務的測試不接替身，以注入的大小上限代替 20MB
 
 ## 文件

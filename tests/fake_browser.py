@@ -4,7 +4,9 @@
 
 取代 ExternalOpener，注入給本機回呼與登入服務。不開瀏覽器，而是讀出授權網址裡的 redirect_uri，
 在背景對那個 127.0.0.1 位址送一個 GET，帶上 code 或 error（以及授權網址的 state），
-也可以設成永遠不送，模擬提供者只在瀏覽器顯示錯誤、沒有回呼。
+也可以設成永遠不送，模擬提供者只在瀏覽器顯示錯誤、沒有回呼。回呼網址讀 redirect_uri（Google），
+沒有時讀 redirect_to（Supabase）。建立時傳入 provider（例如假 HuaXia 的 authorize）時，同意授權的回呼參數由它
+依授權網址發給，替身才拿得到提供者記下 code_challenge 後發的授權碼。
 
 使用範例：
     from tests.fake_browser import CallbackBrowser
@@ -25,12 +27,22 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+def _redirect_of(query: Dict[str, List[str]]) -> str:
+    """授權網址的回呼網址：Google 用 redirect_uri，Supabase 用 redirect_to"""
+    return (query.get("redirect_uri") or query["redirect_to"])[0]
+
+
 class CallbackBrowser:
     """開瀏覽器的替身；預設以授權碼 auth-code 回呼"""
 
-    def __init__(self):
-        """建立替身：拿到授權網址時送回 code，不偽造 state"""
+    def __init__(self, provider: Optional[Callable[[str], Dict[str, str]]] = None):
+        """建立替身：拿到授權網址時送回 code，不偽造 state
+
+        Args:
+            provider: 同意授權時以授權網址求出回呼參數的函式；省略時回呼固定的授權碼
+        """
         self.opens = True
+        self._provider = provider
         self.on_open: Optional[Callable[[], None]] = None
         # 設了就以它取代授權網址的 state 回呼，模擬不是這次登入發出的回呼
         self.forged_state: Optional[str] = None
@@ -61,11 +73,13 @@ class CallbackBrowser:
         if self._reply is not None:
             query = parse_qs(urlsplit(target).query)
             params = dict(self._reply)
+            if self._provider is not None and "code" in params:
+                params = self._provider(target)
             if self.forged_state is not None:
                 params["state"] = self.forged_state
             elif "state" in query:
                 params["state"] = query["state"][0]
-            url = query["redirect_uri"][0] + "?" + urlencode(params)
+            url = _redirect_of(query) + "?" + urlencode(params)
             thread = threading.Thread(target=self._send, args=(url,), daemon=True)
             thread.start()
             self._threads.append(thread)
@@ -82,7 +96,8 @@ class CallbackBrowser:
 
     def callback_port(self) -> int:
         """最近一次授權網址的回呼埠"""
-        return urlsplit(self.authorization_query()["redirect_uri"]).port
+        query = {key: [value] for key, value in self.authorization_query().items()}
+        return urlsplit(_redirect_of(query)).port
 
     def _send(self, url: str) -> None:
         """對回呼送 GET，記下回應頁面的內容"""
