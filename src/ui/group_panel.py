@@ -4,6 +4,7 @@
 
 提供群組標籤管理與檔案清單。分頁只表達使用者的意圖，修改一律透過專案的編輯操作立即寫入；
 影響其他分頁的修改（群組新增或刪除、檔案在群組與未分組之間搬動）以 groups_changed 通知主視窗重建分頁。
+群組分頁標出未存入的檔（存入譜庫後本機又改過，推算在存入服務），主視窗切回分頁或視窗時以 show_undeposited 重新比對。
 """
 from typing import List, Optional
 from PySide6.QtWidgets import (
@@ -13,11 +14,15 @@ from PySide6.QtWidgets import (
 )
 from ui.widgets import DragListWidget
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from core.locale import t
 from core.models import FileInfo, Group, Project
+from services.deposit_service import DepositService
 from services.file_service import FileService
 from services.import_service import ImportService
+
+# 未存入的檔（存入後本機又改過）的字色
+_UNDEPOSITED_COLOR = QColor("#e67e22")
 
 
 class UngroupedTab(QWidget):
@@ -112,7 +117,8 @@ class GroupTab(QWidget):
     groups_changed = Signal()
 
     def __init__(
-        self, group: Group, project: Project, file_service: FileService, import_service: ImportService, parent=None,
+        self, group: Group, project: Project, file_service: FileService, import_service: ImportService,
+        deposit_service: DepositService, parent=None,
     ):
         """
         Args:
@@ -120,6 +126,7 @@ class GroupTab(QWidget):
             project: 群組所屬的專案（修改一律透過它的編輯操作）
             file_service: 檔案服務（從磁碟刪除分譜）
             import_service: 匯入服務（加入檔案）
+            deposit_service: 存入服務（找出未存入的檔）
             parent: 父元件
         """
         super().__init__(parent)
@@ -127,6 +134,7 @@ class GroupTab(QWidget):
         self.project = project
         self._file_service = file_service
         self._import_service = import_service
+        self._deposit_service = deposit_service
         self._build_ui()
 
     def _build_ui(self):
@@ -190,6 +198,12 @@ class GroupTab(QWidget):
         self._mismatch_label.setWordWrap(True)
         self._mismatch_label.setStyleSheet("font-size: 12px;")
         layout.addWidget(self._mismatch_label)
+        self._undeposited_bar = QLabel()
+        self._undeposited_bar.setObjectName("undeposited_bar")
+        self._undeposited_bar.setWordWrap(True)
+        self._undeposited_bar.setStyleSheet(f"color: {_UNDEPOSITED_COLOR.name()};")
+        self._undeposited_bar.hide()
+        layout.addWidget(self._undeposited_bar)
         layout.addWidget(QLabel(t("group.file_list")))
         self._file_list = DragListWidget()
         self._file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -255,10 +269,27 @@ class GroupTab(QWidget):
         )
 
     def refresh(self):
-        """依群組重新顯示分譜清單、總譜與檔案數是否符合樂器表"""
+        """依群組重新顯示分譜清單、總譜、檔案數是否符合樂器表與未存入的檔"""
         self._refresh_file_list()
-        self._update_score_display()
         self._check_mismatch()
+        self.show_undeposited()
+
+    def show_undeposited(self):
+        """重新比對群組的檔與存入指紋：未存入的分譜與總譜改用橘字，清單上方寫出是哪幾份"""
+        stale = [ref.file for ref in self._deposit_service.undeposited(self.project) if ref.group is self.group]
+        ids = {id(file) for file in stale}
+        for row in range(self._file_list.count()):
+            item = self._file_list.item(row)
+            index = item.data(Qt.UserRole)
+            undeposited = index is not None and index < len(self.group.files) and id(self.group.files[index]) in ids
+            item.setForeground(_UNDEPOSITED_COLOR if undeposited else self._file_list.palette().text())
+        self._update_score_display()
+        if self.group.score_file is not None and id(self.group.score_file) in ids:
+            self._score_label.setStyleSheet(f"color: {_UNDEPOSITED_COLOR.name()};")
+        self._undeposited_bar.setText(
+            t("deposit.undeposited.bar", files="、".join(file.display_name for file in stale)) if stale else "",
+        )
+        self._undeposited_bar.setVisible(bool(stale))
 
     def _check_mismatch(self):
         """本專案有的聲部數與分譜數是否相同"""

@@ -860,6 +860,12 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "deposit.done": "已存入譜庫 {count} 份。",
         "deposit.cancelled": "已取消存入：完成 {count} 份，再按一次「存入譜庫」就補齊。",
         "deposit.stopped": "存入到一半停下：已完成 {count} 份，再按一次「存入譜庫」就補齊",
+        # 存入譜庫 - 未存入（存入後本機又改過的檔）
+        "deposit.undeposited.bar": "本機較新，還沒存入譜庫：{files}",
+        "deposit.undeposited.title": "未存入",
+        "deposit.undeposited.close": "「{groups}」有本機較新、還沒存入譜庫的檔案。\n\n仍要關閉嗎？",
+        "deposit.undo_archived.title": "已存入譜庫",
+        "deposit.undo_archived": "這些檔案已經存入譜庫，譜庫裡的那份不會跟著撤回，改好之後請重新存入。",
     },
     LOCALE_EN: {
         # 應用程式
@@ -1689,6 +1695,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "deposit.done": "Archived {count} files to the catalog.",
         "deposit.cancelled": "Archiving cancelled after {count} files. Archive again to finish the rest.",
         "deposit.stopped": "Archiving stopped after {count} files; archive again to finish the rest",
+        "deposit.undeposited.bar": "Newer locally, not archived yet: {files}",
+        "deposit.undeposited.title": "Not Archived",
+        "deposit.undeposited.close": "\"{groups}\" has files that are newer locally and not archived yet.\n\nClose anyway?",
+        "deposit.undo_archived.title": "Already Archived",
+        "deposit.undo_archived": "These files are already in the catalog. The catalog copies are not undone; archive again once they are ready.",
     },
 }
 

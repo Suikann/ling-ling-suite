@@ -395,7 +395,7 @@ class MainWindow(QMainWindow):
 
     def _add_group_tab(self, group: Group):
         from ui.group_panel import GroupTab
-        tab = GroupTab(group, self.project, self.file_service, self.import_service)
+        tab = GroupTab(group, self.project, self.file_service, self.import_service, self._deposit_service)
         tab.groups_changed.connect(self._rebuild_tabs)
         self._tab_widget.addTab(tab, group.name or group.id[:8])
 
@@ -432,7 +432,21 @@ class MainWindow(QMainWindow):
         self._rebuild_tabs()
 
     def _on_tab_changed(self, index: int):
+        """切換分頁：編制表改顯示這個群組，群組分頁重新比對未存入的檔"""
         self._instrumentation_table.show_group(self._current_group())
+        self._show_undeposited()
+
+    def _show_undeposited(self):
+        """目前的群組分頁重新比對未存入的檔（本機的檔可能在別的程式裡改過）"""
+        tab = self._tab_widget.currentWidget()
+        if hasattr(tab, "show_undeposited"):
+            tab.show_undeposited()
+
+    def changeEvent(self, event):
+        """切回這個視窗時，目前的群組分頁重新比對未存入的檔"""
+        super().changeEvent(event)
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._show_undeposited()
 
     # --- 編制表回呼 ---
 
@@ -672,6 +686,21 @@ class MainWindow(QMainWindow):
             return True
         answer = QMessageBox.question(
             self, t("catalog.unsynced.title"), t("catalog.unsynced.close", groups="、".join(g.name for g in groups)),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
+    def _confirm_undeposited(self) -> bool:
+        """專案還有未存入的檔時提醒一次（關閉專案或程式前），回傳可不可以繼續關閉；只比對本機檔案，不連網"""
+        groups = []
+        for ref in self._deposit_service.undeposited(self.project):
+            if ref.group is not None and ref.group not in groups:
+                groups.append(ref.group)
+        if not groups:
+            return True
+        answer = QMessageBox.question(
+            self, t("deposit.undeposited.title"),
+            t("deposit.undeposited.close", groups="、".join(group.name for group in groups)),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         return answer == QMessageBox.Yes
@@ -930,6 +959,8 @@ class MainWindow(QMainWindow):
             self._set_status(t("status.undone"))
             self._show_skipped(result)
             self._show_not_restored(result)
+        if self.project.deposited_files(change.renamed for change in result.changes):
+            QMessageBox.information(self, t("deposit.undo_archived.title"), t("deposit.undo_archived"))
 
     def _redo_last(self):
         if not self.prompt_pending_recovery():
@@ -1494,15 +1525,15 @@ class MainWindow(QMainWindow):
         self._status_label.setText(text)
 
     def _confirm_unsaved(self) -> bool:
-        """有未存檔的修改時詢問是否儲存（開新專案、開啟專案、開啟最近專案），還有未同步的群組時再提醒一次
+        """有未存檔的修改時詢問是否儲存（開新專案、開啟專案、開啟最近專案），還有未同步的群組或未存入的檔時再各提醒一次
 
         唯讀的專案存不了，不問是否儲存。
 
         Returns:
-            可以繼續原本的操作時為 True；選「取消」、選「儲存」但沒存成、或在未同步的提醒選「否」時為 False
+            可以繼續原本的操作時為 True；選「取消」、選「儲存」但沒存成、或在未同步、未存入的提醒選「否」時為 False
         """
         saved = self.project.read_only or not self.project.is_modified() or self._ask_to_save()
-        return saved and self._confirm_unsynced()
+        return saved and self._confirm_unsynced() and self._confirm_undeposited()
 
     def _differs_from_project_file(self) -> bool:
         """目前內容是否與磁碟上的專案檔不同；還沒存過檔時沒有可比對的檔案，交給未存檔判定"""
@@ -1559,8 +1590,8 @@ class MainWindow(QMainWindow):
         self._do_open_project(path)
 
     def closeEvent(self, event):
-        """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次，任一不同就詢問是否儲存；還有未同步的群組時提醒一次；
-        有背景工作時再問要不要取消
+        """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次，任一不同就詢問是否儲存；還有未同步的群組、
+        未存入的檔時各提醒一次；有背景工作時再問要不要取消
 
         唯讀的專案存不了，不詢問是否儲存。
         """
@@ -1568,7 +1599,7 @@ class MainWindow(QMainWindow):
         if unsaved and not self._ask_to_save(t("dialog.close"), t("dialog.close.message")):
             event.ignore()
             return
-        if not self._confirm_unsynced():
+        if not self._confirm_unsynced() or not self._confirm_undeposited():
             event.ignore()
             return
         if not self._confirm_cancel_background():

@@ -1886,6 +1886,10 @@ class Project:
         """專案是否引用其中任一路徑（分譜、總譜或未分組），路徑以 core.paths 判定同一性"""
         return bool(self._refs_to(paths))
 
+    def deposited_files(self, paths: Iterable[str]) -> List[FileInfo]:
+        """其中存入過譜庫（有存入指紋）的檔案，順序同 file_refs()；路徑以 core.paths 判定同一性"""
+        return [ref.file for ref in self._refs_to(paths) if ref.file.deposit_md5]
+
     def _refs_to(self, paths: Iterable[str]) -> List[FileRef]:
         """指向其中任一路徑的檔案引用，順序同 file_refs()"""
         keys = {path_key(p) for p in paths}

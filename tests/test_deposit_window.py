@@ -4,7 +4,8 @@
 
 主視窗「譜庫」選單的「存入譜庫…」讀出計畫後開預覽：專案有未存檔的改動時「存入譜庫」按不下去；
 按下後在背景存入假 Google，期間專案編輯與會動到檔案的操作都停用，做完把指紋存進專案檔；
-中途失敗時頂端提示列寫出已完成幾份。不測畫面。
+中途失敗時頂端提示列寫出已完成幾份。存入後本機改過的檔（未存入）在群組面板標出、關閉時提醒一次；
+復原存入過的重新命名照常完成，並提示譜庫裡的那份不會跟著撤回。不測畫面。
 """
 import os
 import sys
@@ -18,13 +19,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QLabel, QPushButton
+from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton
 
 from core.catalog_errors import CatalogErrorKind
 from core.constants import CATALOG_SPREADSHEET_ID_KEY
 from core.locale import t
+from core.models import RenameEntry
 from services.activity_log import ActivityLog
 from services.file_service import FileService
+from services.move_history import RenameVerdict
 from services.project_service import ProjectService
 from test_deposit import DepositFixture, md5
 from tests.test_main_window import MainWindowTestCase, answering_prompts, wait_until
@@ -148,6 +151,84 @@ class TestArchiving(DepositWindowTestCase):
     def action(self, text: str):
         """主視窗選單裡文字相符的動作"""
         return next(a for a in self.window.findChildren(QAction) if a.text() == text)
+
+
+
+class TestUndeposited(DepositWindowTestCase):
+    """存入後本機的琵琶分譜又被改過：群組面板標出、關閉專案時提醒一次"""
+
+    def setUp(self):
+        super().setUp()
+        self.archive()
+        self.finish()
+        self.pipa = self.window.project.groups[0].files[1]
+
+    def tearDown(self):
+        """收尾時未存入的提醒按「是」"""
+        with answering_prompts(QMessageBox.Yes, QMessageBox.Yes, QMessageBox.Yes):
+            self.window.close()
+
+    def change_pipa(self, content: bytes = b"new pipa") -> None:
+        """改寫本機的琵琶分譜"""
+        with open(self.pipa.original_path, "wb") as f:
+            f.write(content)
+
+    def undeposited_bar(self) -> QLabel:
+        """切到別的分頁再切回群組，回傳群組面板的未存入提示"""
+        self.window._tab_widget.setCurrentIndex(0)
+        self.window._tab_widget.setCurrentIndex(1)
+        return self.window._tab_widget.widget(1).findChild(QLabel, "undeposited_bar")
+
+    def test_the_group_panel_marks_the_changed_file(self):
+        self.assertTrue(self.undeposited_bar().isHidden())
+        self.change_pipa()
+        bar = self.undeposited_bar()
+        self.assertFalse(bar.isHidden())
+        self.assertEqual(bar.text(), t("deposit.undeposited.bar", files="琵琶.pdf"))
+
+    def test_closing_reminds_once_and_can_be_cancelled(self):
+        self.change_pipa()
+        reminder = (t("deposit.undeposited.title"), t("deposit.undeposited.close", groups="江樓鐘鼓"))
+        with answering_prompts(QMessageBox.No) as shown:
+            self.assertFalse(self.window.close())
+        self.assertEqual(shown, [reminder])
+        with answering_prompts(QMessageBox.Yes) as shown:
+            self.assertTrue(self.window.close())
+        self.assertEqual(shown, [reminder])
+
+    def test_closing_with_the_content_changed_back_does_not_remind(self):
+        self.change_pipa()
+        self.change_pipa("琵琶".encode())
+        with answering_prompts() as shown:
+            self.assertTrue(self.window.close())
+        self.assertEqual(shown, [])
+
+
+class TestUndoArchivedRename(DepositWindowTestCase):
+    """琵琶分譜是重新命名過來的，存入譜庫後再復原那次重新命名"""
+
+    def setUp(self):
+        super().setUp()
+        self.pipa = self.window.project.groups[0].files[1]
+        self.raw = os.path.join(self.temp, "pipa.pdf")
+        os.rename(self.pipa.original_path, self.raw)
+        self.history.rename(RenameVerdict([RenameEntry(self.raw, self.pipa.original_path)]))
+
+    def test_undo_completes_and_says_the_catalog_copy_stays(self):
+        self.archive()
+        self.finish()
+        with answering_prompts(QMessageBox.Yes) as shown:
+            self.trigger_menu(t("menu.edit.undo"))
+        self.assertIn((t("deposit.undo_archived.title"), t("deposit.undo_archived")), shown)
+        self.assertTrue(os.path.isfile(self.raw))
+        self.assertEqual(self.pipa.original_path, self.raw)
+        self.assertTrue(self.status_shows(t("status.undone")))
+
+    def test_undoing_a_rename_never_archived_does_not_mention_the_catalog(self):
+        with answering_prompts(QMessageBox.Yes) as shown:
+            self.trigger_menu(t("menu.edit.undo"))
+        self.assertNotIn((t("deposit.undo_archived.title"), t("deposit.undo_archived")), shown)
+        self.assertEqual(self.pipa.original_path, self.raw)
 
 
 if __name__ == "__main__":
