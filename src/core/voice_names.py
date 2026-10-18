@@ -25,7 +25,7 @@ from collections import Counter
 from typing import Iterable, List, Optional, Tuple, TypeVar
 
 VoiceKey = Tuple[str, Optional[int]]
-T = TypeVar("T")
+_Value = TypeVar("_Value")
 
 _SEPARATORS = "-_.、()[]{}【】〔〕「」『』《》〈〉"
 _SEPARATOR_RUN = re.compile(f"[\\s{re.escape(_SEPARATORS)}]+")
@@ -91,7 +91,7 @@ def voice_index(names: Iterable[str], name: str) -> Optional[int]:
     return next((i for i, other in enumerate(names) if voice_key(other) == key), None)
 
 
-def match_by_voice(pairs: Iterable[Tuple[str, T]], names: Iterable[str]) -> List[Optional[T]]:
+def match_by_voice(pairs: Iterable[Tuple[str, _Value]], names: Iterable[str]) -> List[Optional[_Value]]:
     """依同一聲部的規則，把 pairs（聲部名稱與值）的值配給 names 的每個名稱
 
     Args:
