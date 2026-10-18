@@ -13,9 +13,14 @@
   以 install_publish_function 裝上指定的版本。
 - 曲目（pieces）與聲部（piece_parts）：以 add_piece、add_part 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider
   （不實作 in_piece 的排人判斷）；聲部組沒給時照 HuaXia 的觸發器以 guess_section 依名稱補上。
+- 樂譜（scores）、學期（semesters）與場次（events）：以 add_score、add_semester、add_event 加入；樂譜的讀取權限
+  簡化成 is_staff（幹部或老師，不實作排到聲部的人），場次照 can_see_event 簡化成幹部全看得到、其他社內成員看得到
+  不是只給幹部的場次，學期是 is_active。rename_score 扮演幹部在網頁上改了樂譜名稱。
+- Storage（bucket scores）：put_object 放檔，列出（POST /storage/v1/object/list/scores）回傳某個資料夾底下一層的
+  檔與子資料夾，讀取權限簡化成 is_staff。
 
 擴充（之後的工單）：新資料表加進 tables 與 _READ_POLICIES；寫入在 _rest 裡依方法分派（POST、PATCH、DELETE）；
-新的 rpc 函式加進 functions（名稱對應以（使用者 ID，參數）求值的函式）；Storage 在 _route 加 /storage/v1/ 的分支。
+新的 rpc 函式加進 functions（名稱對應以（使用者 ID，參數）求值的函式）；Storage 的上傳與刪除在 _storage 依路徑分派。
 每個請求都記在 requests，可以設成連不上（go_offline）或讓續期卡住直到放行（hold_refreshes）。
 
 使用範例：
@@ -99,8 +104,11 @@ class FakeHuaXia:
         self.offline = False
         self.requests: List[Dict[str, Any]] = []
         self.tables: Dict[str, List[Dict[str, Any]]] = {
-            "profiles": [], "user_roles": [], "pieces": [], "piece_parts": [],
+            "profiles": [], "user_roles": [], "pieces": [], "piece_parts": [], "scores": [], "semesters": [],
+            "events": [],
         }
+        # Storage bucket scores 裡的檔：路徑對應內容
+        self.objects: Dict[str, bytes] = {}
         self.functions: Dict[str, Callable[[Optional[str], dict], Any]] = {"is_officer": self._is_officer}
         # Discord 帳號名稱對應 HuaXia 的使用者 ID；使用者 ID 對應 auth.users 的那筆
         self._identities: Dict[str, str] = {}
@@ -178,6 +186,60 @@ class FakeHuaXia:
             for row in self.tables["piece_parts"]:
                 if row["id"] == part_id:
                     row["name"] = name
+
+    def add_score(
+        self, piece_id: str, part_id: Optional[str], file_path: str, title: str = "",
+        section: Optional[str] = None, created_by: Optional[str] = None,
+    ) -> str:
+        """在曲目上登記一份樂譜（scores 的一列），回傳樂譜編號；part_id 為 None 是總譜（section 不為 None 是舊的分組樂譜）"""
+        with self._lock:
+            score_id = str(uuid.uuid4())
+            self.tables["scores"].append({
+                "id": score_id, "piece_id": piece_id, "part_id": part_id, "title": title, "file_path": file_path,
+                "audio_url": "", "section": section, "created_by": created_by, "created_at": _now().isoformat(),
+            })
+            return score_id
+
+    def rename_score(self, score_id: str, title: str) -> None:
+        """改一份樂譜的名稱（幹部在網頁上改了它）"""
+        with self._lock:
+            for row in self.tables["scores"]:
+                if row["id"] == score_id:
+                    row["title"] = title
+
+    def add_semester(self, name: str, is_current: bool = False) -> str:
+        """加入一個學期（semesters 的一列），回傳學期編號；設成本學期時其他學期不再是本學期（同 HuaXia 的唯一索引）"""
+        with self._lock:
+            semester_id = str(uuid.uuid4())
+            if is_current:
+                for row in self.tables["semesters"]:
+                    row["is_current"] = False
+            today = _now().date()
+            self.tables["semesters"].append({
+                "id": semester_id, "name": name, "starts_on": today.isoformat(), "ends_on": today.isoformat(),
+                "is_current": is_current, "created_at": _now().isoformat(),
+            })
+            return semester_id
+
+    def add_event(
+        self, semester_id: Optional[str], title: str, starts_at: datetime.datetime, ends_at: datetime.datetime,
+        kinds: Iterable[str] = ("concert",), location: str = "", audience: str = "insiders",
+    ) -> str:
+        """加入一個場次（events 的一列），回傳場次編號；kind 照觸發器取 kinds 的第一個"""
+        with self._lock:
+            event_id = str(uuid.uuid4())
+            kinds = list(kinds)
+            self.tables["events"].append({
+                "id": event_id, "semester_id": semester_id, "kind": kinds[0], "kinds": kinds, "title": title,
+                "starts_at": starts_at.isoformat(), "ends_at": ends_at.isoformat(), "location": location, "note": "",
+                "audience": audience, "counts_attendance": True,
+            })
+            return event_id
+
+    def put_object(self, path: str, content: bytes = b"pdf") -> None:
+        """在 Storage 的 bucket scores 放一個檔"""
+        with self._lock:
+            self.objects[path] = content
 
     def install_publish_function(self, version: Optional[int]) -> None:
         """HuaXia 的發譜函式：回報這個介面版本；None 為沒有發譜函式（呼叫時回 PGRST202）"""
@@ -299,6 +361,8 @@ class FakeHuaXia:
             return self._rpc(path[len("/rest/v1/rpc/"):], record)
         if path.startswith("/rest/v1/"):
             return self._rest(path[len("/rest/v1/"):], record)
+        if path.startswith("/storage/v1/"):
+            return self._storage(path[len("/storage/v1/"):], record)
         return _Response(404, {"message": "Not found"})
 
     # --- Auth ---
@@ -419,6 +483,45 @@ class FakeHuaXia:
             rows = [{c: row.get(c) for c in columns} for row in rows]
         return _Response(200, rows)
 
+    def _storage(self, path: str, record: Dict[str, Any]) -> _Response:
+        """/storage/v1/...：目前只有列出 bucket scores 某個資料夾底下一層（照 Supabase 的回應格式）"""
+        if path != "object/list/scores" or record["method"] != "POST":
+            return _Response(405, {"message": "Storage request not supported by the fake"})
+        if not self._is_staff(self._caller(record)):
+            return _Response(200, [])
+        body = record["json"] or {}
+        prefix = body.get("prefix", "").strip("/")
+        folder = f"{prefix}/" if prefix else ""
+        files: Dict[str, int] = {}
+        folders = set()
+        for name, content in self.objects.items():
+            if not name.startswith(folder):
+                continue
+            rest = name[len(folder):]
+            if "/" in rest:
+                folders.add(rest.split("/", 1)[0])
+            else:
+                files[rest] = len(content)
+        entries = [{"name": name, "id": None, "metadata": None} for name in sorted(folders)]
+        entries += [
+            {"name": name, "id": str(uuid.uuid5(uuid.NAMESPACE_URL, folder + name)), "metadata": {"size": size}}
+            for name, size in sorted(files.items())
+        ]
+        offset = int(body.get("offset", 0))
+        return _Response(200, entries[offset:offset + int(body.get("limit", 100))])
+
+    def _is_staff(self, user_id: Optional[str]) -> bool:
+        """HuaXia 的 is_staff()：幹部或老師"""
+        return self._is_officer(user_id, {}) or (self._is_active(user_id) and any(
+            r["user_id"] == user_id and r["role"] == "teacher" for r in self.tables["user_roles"]
+        ))
+
+    def _can_see_event(self, user_id: Optional[str], row: Dict[str, Any]) -> bool:
+        """HuaXia 的 can_see_event 簡化：幹部全看得到，其他社內成員看得到不是只給幹部的（不實作排人判斷）"""
+        if self._is_officer(user_id, {}):
+            return True
+        return row["audience"] != "officers" and self._is_insider(user_id)
+
     def _is_active(self, user_id: Optional[str]) -> bool:
         """HuaXia 的 is_active()"""
         return any(p["id"] == user_id and p["status"] == "active" for p in self.tables["profiles"])
@@ -463,4 +566,7 @@ _READ_POLICIES: Dict[str, Callable[[FakeHuaXia, Optional[str], Dict[str, Any]], 
     "user_roles": lambda fake, caller, row: row["user_id"] == caller or fake._is_active(caller),
     "pieces": lambda fake, caller, row: fake._is_insider(caller),
     "piece_parts": lambda fake, caller, row: fake._is_insider(caller),
+    "scores": lambda fake, caller, row: fake._is_staff(caller),
+    "semesters": lambda fake, caller, row: fake._is_active(caller),
+    "events": lambda fake, caller, row: fake._can_see_event(caller, row),
 }

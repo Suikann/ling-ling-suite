@@ -12,6 +12,10 @@ HuaXia 用戶端
 發譜函式的版本查詢（publish_interface_version）：HuaXia 的發譜函式與它的介面由對 HuaXia 的合併請求（#117）定案，
 定案前泠靈這一側只假設「有一個不帶參數、回傳整數介面版本的資料庫函式」，名稱與泠靈要的版本是
 PUBLISH_VERSION_FUNCTION、PUBLISH_INTERFACE_VERSION；介面定案時改這兩個常數，必要時改這一個方法。
+
+泠靈的 Storage 路徑格式（lingling_storage_path、is_lingling_path）同樣由 #117 的依賴說明文件定案，定案前假設為
+「固定前綴 LINGLING_STORAGE_PREFIX／曲目編號／內容的 SHA-256.pdf」。HuaXia 網頁上傳的路徑是
+「曲目編號／聲部編號或 full／時間戳_檔名」，不會以這個前綴開頭，所以只看路徑就分得出哪份是泠靈發的。
 請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
 使用範例：
@@ -21,6 +25,7 @@ PUBLISH_VERSION_FUNCTION、PUBLISH_INTERFACE_VERSION；介面定案時改這兩�
     tokens = client.exchange_code(code, verifier)
     client.rpc("is_officer", tokens.access_token)
 """
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, NamedTuple, Optional
@@ -36,6 +41,9 @@ HUAXIA_PUBLISHABLE_KEY = "sb_publishable_CK-Xpp2OOiaUVh3b1dmgGg_ktahQV_8"
 # HuaXia 回報發譜函式介面版本的資料庫函式（#117 定案前的假設），以及這版泠靈要的介面版本
 PUBLISH_VERSION_FUNCTION = "lingling_publish_version"
 PUBLISH_INTERFACE_VERSION = 1
+# 泠靈發的檔在 Storage bucket scores 裡的路徑前綴（#117 定案前的假設）
+LINGLING_STORAGE_PREFIX = "lingling/"
+_LINGLING_PATH = re.compile(re.escape(LINGLING_STORAGE_PREFIX) + r"[^/]+/[0-9a-f]{64}\.pdf")
 # 一個請求最多等這麼久（秒）
 _REQUEST_TIMEOUT = 30
 # PostgREST 回報找不到資料庫函式的錯誤代碼
@@ -117,6 +125,40 @@ class HuaXiaPart(NamedTuple):
     needed_min: int
     section: str
     sort: int
+
+
+class HuaXiaScore(NamedTuple):
+    """HuaXia 曲目上登記的一份樂譜（scores 的一列）
+
+    Attributes:
+        id: 樂譜編號
+        piece_id: 所屬曲目的編號
+        part_id: 所屬聲部的編號；總譜（與舊的分組樂譜）為 None
+        title: 樂譜名稱（幹部可以在網頁上改）
+        file_path: 檔案在 Storage bucket scores 裡的路徑；沒有檔案時為空字串
+        section: 舊的分組樂譜的聲部組；其他為空字串
+    """
+    id: str
+    piece_id: str
+    part_id: Optional[str]
+    title: str
+    file_path: str
+    section: str
+
+    @property
+    def lingling(self) -> bool:
+        """是泠靈發的（路徑是泠靈的 Storage 路徑格式）"""
+        return is_lingling_path(self.file_path)
+
+
+def lingling_storage_path(piece_id: str, sha256: str) -> str:
+    """泠靈發的一份檔在 Storage bucket scores 裡的路徑：固定前綴、曲目編號與內容的 SHA-256（十六進位小寫）"""
+    return f"{LINGLING_STORAGE_PREFIX}{piece_id}/{sha256}.pdf"
+
+
+def is_lingling_path(path: str) -> bool:
+    """Storage 路徑是不是泠靈的路徑格式（lingling_storage_path），也就是泠靈發的檔"""
+    return bool(_LINGLING_PATH.fullmatch(path or ""))
 
 
 def _discord_name(user: Dict[str, Any]) -> str:
@@ -272,6 +314,25 @@ class HuaXiaClient:
         except (KeyError, TypeError, ValueError) as e:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected piece parts: {e}") from e
         return sorted(parts, key=lambda part: (part.piece_id, part.sort, part.name))
+
+    def scores(self, access_token: str) -> List[HuaXiaScore]:
+        """看得到的所有曲目上登記的樂譜，依曲目與登記的先後
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        rows = self.select("scores", access_token, "id,piece_id,part_id,title,file_path,section,created_at")
+        try:
+            ordered = sorted(rows, key=lambda row: (row["piece_id"], row.get("created_at") or ""))
+            return [
+                HuaXiaScore(
+                    row["id"], row["piece_id"], row.get("part_id"), row.get("title") or "",
+                    row.get("file_path") or "", row.get("section") or "",
+                )
+                for row in ordered
+            ]
+        except (KeyError, TypeError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected scores: {e}") from e
 
     # --- 共用 ---
 

@@ -29,7 +29,8 @@ from core.models import CatalogChange, Group, Headcount, Project
 from core.naming import is_renamed
 from core.voice_names import duplicate_rows, same_voice
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
-from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaPart, HuaXiaPiece
+from services.file_service import FileService
+from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaPart, HuaXiaPiece, HuaXiaScore
 
 
 class ProjectBlock(Enum):
@@ -56,6 +57,7 @@ class PublishReadiness:
         function_version: HuaXia 回報的介面版本；沒有發譜函式或沒查到時為 None
         pieces: 可以挑的曲目（未封存，依曲名）；不能發時為空
         parts: 可以挑的曲目上已有的聲部，以曲目編號為鍵（依 HuaXia 的排序）；沒有聲部的曲目不在裡面
+        scores: 可以挑的曲目上登記的樂譜，以曲目編號為鍵（依登記的先後）；沒有樂譜的曲目不在裡面
         discord_name: 登入的 Discord 帳號名稱
     """
 
@@ -64,6 +66,7 @@ class PublishReadiness:
     function_version: Optional[int] = None
     pieces: List[HuaXiaPiece] = field(default_factory=list)
     parts: Dict[str, List[HuaXiaPart]] = field(default_factory=dict)
+    scores: Dict[str, List[HuaXiaScore]] = field(default_factory=dict)
     discord_name: str = ""
 
     @property
@@ -333,6 +336,93 @@ def plan_voices(
     return VoicePlan(voice_rows, unpaired, conflicts, undecided, unfilled, creates, updates)
 
 
+@dataclass(frozen=True)
+class PublishFile:
+    """群組要發的一份本機檔（總譜或一個聲部的分譜）與它在 HuaXia 上要取代的
+
+    Attributes:
+        voice: 泠靈的聲部名稱；總譜為空字串
+        part: 對到的 HuaXia 聲部；總譜、或聲部要在 HuaXia 新建時為 None
+        path: 本機的檔（輸出位置）
+        size: 檔案大小（位元組）；本機找不到時為 None
+        replaces: 要取代的：同一個聲部（總譜是聲部空白）底下、泠靈發的樂譜
+        others: 同一個聲部底下其他人放的樂譜（一律不動，只標出）
+        catalog_only: 本機找不到、譜庫裡有一份（只在譜庫），這次跳過
+    """
+
+    voice: str
+    part: Optional[HuaXiaPart]
+    path: str
+    size: Optional[int]
+    replaces: List[HuaXiaScore] = field(default_factory=list)
+    others: List[HuaXiaScore] = field(default_factory=list)
+    catalog_only: bool = False
+
+    @property
+    def score(self) -> bool:
+        """是總譜"""
+        return self.voice == ""
+
+    @property
+    def missing(self) -> bool:
+        """本機找不到，這次跳過（只在譜庫的也算）"""
+        return self.size is None
+
+
+@dataclass(frozen=True)
+class FilePlan:
+    """一個群組要發的檔：本專案有的聲部的分譜（依樂器表順序），接著總譜"""
+
+    files: List[PublishFile]
+
+    @property
+    def publishing(self) -> List[PublishFile]:
+        """本機找得到、這次要發的檔"""
+        return [file for file in self.files if not file.missing]
+
+    @property
+    def skipped(self) -> List[PublishFile]:
+        """本機找不到、這次跳過的檔"""
+        return [file for file in self.files if file.missing]
+
+
+def plan_files(group: Group, voices: VoicePlan, scores: List[HuaXiaScore], file_service: FileService) -> FilePlan:
+    """群組每份要發的檔在 HuaXia 上要取代哪份、同聲部有哪些別人放的檔；不改專案
+
+    分譜依本專案有的聲部配到的分譜（Group.pairing），對到 voices 裡那一列的 HuaXia 聲部；要取代的是那個聲部底下、
+    泠靈發的樂譜（以泠靈的 Storage 路徑格式辨認，不看樂譜名稱），總譜是聲部空白（不含舊的分組樂譜）、泠靈發的。
+    要在 HuaXia 新建的聲部沒有要取代的。本機找不到的檔跳過，群組記著譜庫裡有一份的標成只在譜庫。
+
+    Args:
+        group: 群組（已重新命名，檔在輸出位置）
+        voices: 群組的聲部對到 HuaXia 的結果（plan_voices）
+        scores: 群組對到的 HuaXia 曲目上登記的樂譜；新建的曲目為空
+        file_service: 讀本機檔案大小
+
+    Returns:
+        各份檔與要取代的
+    """
+    parts = {row.index: row.part for row in voices.rows}
+    entries = [(voice.voice, parts.get(voice.index), voice.file) for voice in group.pairing() if voice.file]
+    if group.score_file is not None:
+        entries.append(("", None, group.score_file))
+    files = []
+    for voice, part, file in entries:
+        if voice and part is None:
+            under = []
+        elif voice:
+            under = [score for score in scores if score.part_id == part.id]
+        else:
+            under = [score for score in scores if score.part_id is None and not score.section]
+        found = file_service.file_exists(file.original_path)
+        files.append(PublishFile(
+            voice, part, file.original_path, file_service.file_size(file.original_path) if found else None,
+            [score for score in under if score.lingling], [score for score in under if not score.lingling],
+            catalog_only=not found and group.has_catalog_copy(file),
+        ))
+    return FilePlan(files)
+
+
 class PublishService:
     """發譜到 HuaXia：按下發譜時 HuaXia 那一側的檢查"""
 
@@ -367,7 +457,12 @@ class PublishService:
         for part in self._client.piece_parts(token):
             if part.piece_id in parts:
                 parts[part.piece_id].append(part)
+        scores: Dict[str, List[HuaXiaScore]] = {piece.id: [] for piece in pieces}
+        for score in self._client.scores(token):
+            if score.piece_id in scores:
+                scores[score.piece_id].append(score)
         return PublishReadiness(
             function_version=version, pieces=pieces, parts={piece: found for piece, found in parts.items() if found},
+            scores={piece: found for piece, found in scores.items() if found},
             discord_name=self._auth.status().discord_name,
         )
