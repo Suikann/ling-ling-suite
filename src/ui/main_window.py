@@ -1500,7 +1500,7 @@ class MainWindow(QMainWindow):
 
     def _download_back_finished(self, outcome: DownloadOutcome, clean: bool, retry: Callable[[], None]):
         """下載回原位結束（做完、取消或中途失敗）：新的指紋交回專案，開始前沒有未存檔的改動時只存專案檔；
-        重畫分頁，沒放回去的檔列出來
+        目前的群組分頁照磁碟現況重新比對（其他分頁切過去時會比對），沒放回去的檔列出來
 
         Args:
             outcome: 下載的結果
@@ -1511,7 +1511,7 @@ class MainWindow(QMainWindow):
             self.project.record_fingerprints(outcome.fingerprints)
             if clean and self._project_path and not self.project.read_only and self.project.is_modified():
                 self._write_project_file(self._project_path)
-        self._rebuild_tabs()
+        self._show_undeposited()
         if outcome.error is not None:
             failure = CatalogFailure.from_error(outcome.error, t("download.title"))
             self._catalog_error_bar.show_failure(t("download.stopped", count=outcome.completed), failure, retry)

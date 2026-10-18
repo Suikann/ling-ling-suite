@@ -54,7 +54,8 @@ class DownloadBackTestCase(ClearWindowTestCase):
         return next(b for b in self.tab().findChildren(QPushButton) if b.text() == t("download.back"))
 
     def download_back(self, *answers):
-        """按群組分頁的「從譜庫下載回來」，等背景的下載做完，回傳跳出的提示框"""
+        """切到群組分頁按「從譜庫下載回來」，等背景的下載做完，回傳跳出的提示框"""
+        self.window._tab_widget.setCurrentWidget(self.tab())
         with answering_prompts(*answers) as prompts:
             self.download_button().click()
             wait_until(lambda: self.window._task is None)
@@ -69,6 +70,7 @@ class TestDownloadBack(DownloadBackTestCase):
         self.download_back()
         self.assertEqual([read(path) for path in self.paths()], [b"score", "二胡 I".encode(), "琵琶".encode()])
         tab = self.tab()
+        self.assertIs(self.window._tab_widget.currentWidget(), tab)
         self.assertTrue(self.download_button().isHidden())
         self.assertFalse(any(
             label.text() == t("catalog_only.group", count=3) and not label.isHidden()

@@ -205,7 +205,7 @@
 - **下載回原位**（`restore_sources` 在主執行緒找出群組裡只在譜庫的檔，`restore` 在背景下載）：下載的是群組連到的那處現在登記給這個聲部（總譜為總譜列）的 Drive 檔，放回清除前的路徑與檔名（`FileInfo.original_path`，清除沒有改它）。清除之後又重新存入過時下載的就是最新的，交回的指紋（`DownloadOutcome.fingerprints`）是那份的 MD5，經 `Project.record_fingerprints` 換掉記下的存入指紋。原位置已經有內容相同的檔算已經放回去；有別的檔時不覆蓋，列在 `occupied`。那處已經沒登記、或登記的檔已不在 Drive、在垃圾桶裡的列在 `unavailable`
 - **一般下載**（`download`）：整個版本保留版本資料夾底下的子資料夾，只勾幾份時都放在自選的資料夾裡。Drive 上的資料夾名稱與檔名照檔名清理的規則換掉非法字元，「.」「..」換成底線，放的位置不會跑出自選的資料夾。目的資料夾已有同名檔時，內容相同就略過，不同就照重新命名的規則加「 (1)」後綴（`core/filename.py` 的 `numbered`），加了後綴的那份已經有、內容也相同時一樣略過，所以再按一次不會多出一份；絕不覆蓋
 - **一般下載的入口**：譜庫視窗版本頁的「下載…」開挑選視窗（`ui/catalog_download_dialog.py` 的 `CatalogDownloadDialog`），列出版本資料夾裡全部的 PDF（`EditionPagePanel.folder_pdfs`），預設勾「整個版本（保留子資料夾）」；取消它可以逐份勾選。按「下載」後選資料夾，在背景下載（`CatalogWindow._run_download`），狀態列顯示進度與取消鈕，一次一件，關閉視窗時下載進行中先問要不要取消。結束後狀態列寫出完成幾份，沒下載好的依原因列出；中途失敗時頂端提示列寫出已完成幾份，按「重試」以同樣的檔再下載一次（已下載的略過）
-- **下載回原位的入口**：群組分頁有只在譜庫的檔時出現「從譜庫下載回來」（`GroupTab.download_requested`），作用於這個群組；重新命名預覽說明跳過只在譜庫的檔時，旁邊也有這個按鈕（關掉預覽，作用於這次要重新命名的群組）。兩者都經 `MainWindow.download_back(group_ids)`，發譜預覽也可以逐群組呼叫。同存入在背景執行（`_run_in_background`，`locks_project`），狀態列顯示進度與取消，期間鎖住專案編輯、存檔與檔案操作。結束後把指紋交回專案（`record_fingerprints`），開始前沒有未存檔的改動時只存專案檔；重畫分頁，沒放回去的檔依原因列出（`ui/widgets.py` 的 `not_downloaded_text`）。讀不到譜庫或下載到一半失敗時頂端顯示提示列，寫出已完成幾份，按「重試」再下載一次
+- **下載回原位的入口**：群組分頁有只在譜庫的檔時出現「從譜庫下載回來」（`GroupTab.download_requested`），作用於這個群組；重新命名預覽說明跳過只在譜庫的檔時，旁邊也有這個按鈕（關掉預覽，作用於這次要重新命名的群組）。兩者都經 `MainWindow.download_back(group_ids)`，發譜預覽也可以逐群組呼叫。同存入在背景執行（`_run_in_background`，`locks_project`），狀態列顯示進度與取消，期間鎖住專案編輯、存檔與檔案操作。結束後把指紋交回專案（`record_fingerprints`），開始前沒有未存檔的改動時只存專案檔；目前的群組分頁照磁碟現況重新比對（停在原本的分頁），沒放回去的檔依原因列出（`ui/widgets.py` 的 `not_downloaded_text`）。讀不到譜庫或下載到一半失敗時頂端顯示提示列，寫出已完成幾份，按「重試」再下載一次
 
 ### 對到 HuaXia 曲目
 
