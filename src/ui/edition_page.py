@@ -8,14 +8,15 @@
 指定給已登記了檔的聲部時先問：按儲存後改登記新的那份，原本那份丟進 Drive 垃圾桶（30 天內可救回）。
 
 編制的改動與指定都只記在這一頁，按「儲存」才寫進譜庫：編制走存檔時寫回譜庫的同一套比對
-（core/catalog_sync.py，編制寫入紀錄的來源記譜庫視窗，衝突時開衝突畫面選邊），寫完再登記指定的檔
-（CatalogService.register_files）。按「放棄改動」或換版本、樂章時重新讀取，沒儲存的改動丟掉。
+（core/catalog_sync.py，編制寫入紀錄的來源記譜庫視窗，衝突時開衝突畫面選邊，按鈕是「寫入」），寫完再登記指定的檔
+（CatalogService.register_files）。按「放棄改動」或換版本、樂章、樂團類型時重新讀取；有沒儲存的改動時先問，
+選不放棄就留在原處。樂團類型（聲部組對照取哪一套）預設是開著的專案的，可以切換。
 
 編制表以一個只在這一頁的專案顯示：一個連到這一處的群組，快照就是讀到的那處，所以編制表的改動就是待寫入的改動。
 讀寫都經譜庫視窗在背景執行（讀不到、寫不進去時視窗頂端顯示提示列）。
 
 使用範例：
-    page = EditionPagePanel(detail, window._read, window._write, lambda: email, showing, voice_candidates)
+    page = EditionPagePanel(detail, window._read, window._write, lambda: email, showing, voice_candidates, orchestra_type)
     page.actions.addWidget(rename_button)   # 版本頁的其他入口（套用命名格式、下載、存入紀錄）
     pdfs = page.folder_pdfs()               # 版本資料夾裡全部的 PDF（一般下載）
 """
@@ -29,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from core.catalog_models import Edition, EditionPage, FolderPdf, PieceDetail
 from core.catalog_sync import WriteSource, place_writes
-from core.constants import DEFAULT_ORCHESTRA_TYPE
+from core.constants import DEFAULT_ORCHESTRA_TYPE, OrchestraType
 from core.locale import t
 from core.models import Project
 from core.voice_names import voice_key
@@ -46,7 +47,8 @@ class EditionPagePanel(QWidget):
 
     def __init__(
         self, detail: PieceDetail, read: Callable, write: Callable, operator: Callable[[], str],
-        showing: Callable[[], bool], voice_candidates: Optional[VoiceCandidates] = None, parent=None,
+        showing: Callable[[], bool], voice_candidates: Optional[VoiceCandidates] = None,
+        orchestra_type: OrchestraType = DEFAULT_ORCHESTRA_TYPE, parent=None,
     ):
         """
         Args:
@@ -56,6 +58,7 @@ class EditionPagePanel(QWidget):
             operator: 操作者（登入的 email），寫進編制寫入紀錄
             showing: 這一頁是否還在顯示（背景讀寫交回時頁面已換掉就不再填回）
             voice_candidates: 編制表輸入聲部名稱時自動完成的候選來源
+            orchestra_type: 一開始的樂團類型（聲部組對照取哪一套；開著的專案的），之後可以在選單切換
             parent: 父元件
         """
         super().__init__(parent)
@@ -69,11 +72,13 @@ class EditionPagePanel(QWidget):
         # 指定了、還沒儲存的檔：聲部（群組裡的寫法）→ 檔，以及總譜列的
         self._assigned: Dict[str, FolderPdf] = {}
         self._score_assigned: Optional[FolderPdf] = None
-        self._build_ui(voice_candidates)
+        # 目前顯示的版本、樂章、樂團類型在選單裡的位置：有沒儲存的改動、選了不放棄時退回這裡
+        self._shown = (0, 0, 0)
+        self._build_ui(voice_candidates, orchestra_type)
         self._load()
 
-    def _build_ui(self, voice_candidates: Optional[VoiceCandidates]):
-        """排出版本與樂章選單、其他入口、左邊的編制表、右邊沒登記的檔，以及底下的儲存列"""
+    def _build_ui(self, voice_candidates: Optional[VoiceCandidates], orchestra_type: OrchestraType):
+        """排出版本、樂章與樂團類型選單、其他入口、左邊的編制表、右邊沒登記的檔，以及底下的儲存列"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         selector = QHBoxLayout()
@@ -83,7 +88,7 @@ class EditionPagePanel(QWidget):
             self._edition_combo.addItem(edition.edition_label or edition.publisher or edition.id, edition.id)
         active = self._edition_combo.findData(self._detail.piece.active_edition_id)
         self._edition_combo.setCurrentIndex(max(active, 0))
-        self._edition_combo.currentIndexChanged.connect(lambda _index: self._load())
+        self._edition_combo.currentIndexChanged.connect(lambda _index: self._switch())
         selector.addWidget(self._edition_combo)
         selector.addWidget(QLabel(t("catalog.page.movement")))
         self._movement_combo = QComboBox()
@@ -92,8 +97,15 @@ class EditionPagePanel(QWidget):
             self._movement_combo.addItem(
                 " ".join(part for part in (movement.movement_number, movement.name) if part), movement.id,
             )
-        self._movement_combo.currentIndexChanged.connect(lambda _index: self._load())
+        self._movement_combo.currentIndexChanged.connect(lambda _index: self._switch())
         selector.addWidget(self._movement_combo)
+        selector.addWidget(QLabel(t("catalog.page.orchestra")))
+        self._orchestra_combo = QComboBox()
+        for orchestra in OrchestraType:
+            self._orchestra_combo.addItem(t(f"orchestra.{orchestra.value}"), orchestra.value)
+        self._orchestra_combo.setCurrentIndex(self._orchestra_combo.findData(orchestra_type.value))
+        self._orchestra_combo.currentIndexChanged.connect(lambda _index: self._switch())
+        selector.addWidget(self._orchestra_combo)
         selector.addStretch()
         layout.addLayout(selector)
         # 版本頁的其他入口（套用命名格式、一般下載、存入紀錄）
@@ -113,7 +125,7 @@ class EditionPagePanel(QWidget):
         save_row.addWidget(self._unsaved)
         save_row.addStretch()
         discard = QPushButton(t("catalog.page.discard"))
-        discard.clicked.connect(self._load)
+        discard.clicked.connect(self._discard)
         save_row.addWidget(discard)
         self._save_button = QPushButton(t("catalog.save"))
         self._save_button.clicked.connect(lambda: self._save({}))
@@ -150,6 +162,37 @@ class EditionPagePanel(QWidget):
         """重新讀這一處（例如撤銷存入之後）；沒儲存的改動丟掉"""
         self._load()
 
+    def _orchestra_type(self) -> OrchestraType:
+        """選單選的樂團類型"""
+        return OrchestraType(self._orchestra_combo.currentData())
+
+    def _unsaved_changes(self) -> bool:
+        """有沒有還沒儲存的改動（編制或指定了的檔）"""
+        return self._page is not None and (self._project.is_modified() or bool(self._pending_files()))
+
+    def _keep_unsaved(self) -> bool:
+        """有沒儲存的改動時問要不要放棄；選不放棄時為 True"""
+        if not self._unsaved_changes():
+            return False
+        answer = QMessageBox.question(self, t("catalog.page.discard"), t("catalog.page.discard_confirm"))
+        return answer != QMessageBox.Yes
+
+    def _discard(self):
+        """按「放棄改動」：有沒儲存的改動時先問，放棄就重新讀取"""
+        if not self._keep_unsaved():
+            self._load()
+
+    def _switch(self):
+        """換了版本、樂章或樂團類型：有沒儲存的改動時先問，不放棄就把選單退回原本的，放棄就讀新的那處"""
+        if self._keep_unsaved():
+            combos = (self._edition_combo, self._movement_combo, self._orchestra_combo)
+            for combo, index in zip(combos, self._shown):
+                combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(False)
+            return
+        self._load()
+
     def _place_ids(self):
         """選單選的版本與樂章（整首為空字串）"""
         return self._edition_combo.currentData() or "", self._movement_combo.currentData() or _WHOLE
@@ -157,6 +200,10 @@ class EditionPagePanel(QWidget):
     def _load(self):
         """經譜庫服務在背景讀這一處的版本頁；沒儲存的改動丟掉"""
         edition_id, movement_id = self._place_ids()
+        orchestra_type = self._orchestra_type()
+        self._shown = (
+            self._edition_combo.currentIndex(), self._movement_combo.currentIndex(), self._orchestra_combo.currentIndex(),
+        )
         self._page = None
         self._assigned = {}
         self._score_assigned = None
@@ -167,8 +214,8 @@ class EditionPagePanel(QWidget):
 
         def done(page: EditionPage):
             """讀到了：換成這一處"""
-            if self._showing() and self._place_ids() == (edition_id, movement_id):
-                self._show_page(page)
+            if self._showing() and (self._place_ids(), self._orchestra_type()) == ((edition_id, movement_id), orchestra_type):
+                self._show_page(page, orchestra_type)
 
         def unreadable():
             """讀不到：清空沒登記的檔，編制表維持停用"""
@@ -176,14 +223,14 @@ class EditionPagePanel(QWidget):
                 self._files.clear()
 
         self._read(
-            lambda catalog: catalog.edition_page(edition_id, movement_id, DEFAULT_ORCHESTRA_TYPE),
+            lambda catalog: catalog.edition_page(edition_id, movement_id, orchestra_type),
             done, unreadable, self._load, self._detail.piece.title,
         )
 
-    def _show_page(self, page: EditionPage):
+    def _show_page(self, page: EditionPage, orchestra_type: OrchestraType):
         """以讀到的那一處建出只在這一頁的專案（一個連到這處的群組），顯示編制表與沒登記的檔"""
         self._page = page
-        self._project = Project(orchestra_type=DEFAULT_ORCHESTRA_TYPE)
+        self._project = Project(orchestra_type=orchestra_type)
         group = self._project.add_group(page.place.piece_title or self._detail.piece.title, t("group.score_label"))
         self._project.link_group(group, page.place)
         self._project.mark_saved()
@@ -225,8 +272,7 @@ class EditionPagePanel(QWidget):
 
     def _show_unsaved(self):
         """編制改了或有指定了的檔時，儲存列寫出還沒儲存"""
-        unsaved = self._project.is_modified() or bool(self._pending_files())
-        self._unsaved.setText(t("catalog.page.unsaved") if unsaved else "")
+        self._unsaved.setText(t("catalog.page.unsaved") if self._unsaved_changes() else "")
 
     def _on_instruments_changed(self):
         """編制表改了聲部清單：指定給已不在清單裡的聲部的檔放回右欄"""
@@ -297,7 +343,7 @@ class EditionPagePanel(QWidget):
                 return
             if outcome is not None and not outcome.written:
                 from ui.catalog_conflict_dialog import CatalogConflictDialog
-                dialog = CatalogConflictDialog(outcome, self)
+                dialog = CatalogConflictDialog(outcome, self, confirm_text=t("catalog.sections.confirm"))
                 if dialog.exec() != QDialog.Accepted:
                     return
                 merged = {group: dict(chosen) for group, chosen in decisions.items()}

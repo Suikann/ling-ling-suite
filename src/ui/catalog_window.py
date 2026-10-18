@@ -85,6 +85,7 @@ class CatalogWindow(QMainWindow):
         voice_candidates: Optional[VoiceCandidates] = None,
         reverter: Optional[DepositReverter] = None,
         downloads: Optional[DownloadService] = None,
+        orchestra_type: OrchestraType = DEFAULT_ORCHESTRA_TYPE,
     ):
         """
         Args:
@@ -98,6 +99,7 @@ class CatalogWindow(QMainWindow):
             voice_candidates: 聲部名稱自動完成的候選來源，讀到譜庫總覽時記下用過的聲部名稱；省略時不記
             reverter: 撤銷存入在背景執行的一方（主視窗）；省略時版本頁沒有「存入紀錄…」
             downloads: 下載服務（主視窗那一份）；省略時版本頁沒有「下載…」
+            orchestra_type: 開著的專案的樂團類型：版本頁與聲部組對照一開始顯示這一套，可以切換
         """
         super().__init__(parent)
         self._auth = auth_service
@@ -111,6 +113,7 @@ class CatalogWindow(QMainWindow):
         self._club_settings = ClubSettingsService(preferences, self._log)
         self._downloads = downloads
         self._reverter = reverter
+        self._orchestra_type = orchestra_type
         # 進行中的一般下載（一次一件）
         self._download_task: Optional[BackgroundTask] = None
         self._pieces: List[Piece] = []
@@ -302,7 +305,7 @@ class CatalogWindow(QMainWindow):
         refresh_btn.clicked.connect(self._refresh_all)
         self._toolbar.addWidget(refresh_btn)
         section_map_btn = QPushButton(t("catalog.sections.title"))
-        section_map_btn.clicked.connect(lambda: self._show_section_map())
+        section_map_btn.clicked.connect(lambda: self._show_section_map(self._orchestra_type))
         self._toolbar.addWidget(section_map_btn)
         self._toolbar.addSeparator()
         self._search_entry = QLineEdit()
@@ -514,7 +517,7 @@ class CatalogWindow(QMainWindow):
 
     # --- 聲部組對照 ---
 
-    def _show_section_map(self, orchestra_type: OrchestraType = DEFAULT_ORCHESTRA_TYPE):
+    def _show_section_map(self, orchestra_type: OrchestraType):
         """經譜庫服務讀全社團的聲部組對照，讀到後在右側面板顯示編輯器
 
         Args:
@@ -1059,7 +1062,7 @@ class CatalogWindow(QMainWindow):
         version = self._detail_version
         page = EditionPagePanel(
             detail, self._read, self._write, lambda: self._auth.account_email or "",
-            lambda: version == self._detail_version, self._voice_candidates,
+            lambda: version == self._detail_version, self._voice_candidates, self._orchestra_type,
         )
         rename_btn = QPushButton(t("catalog.drive.apply_template"))
         rename_btn.clicked.connect(lambda: self._open_drive_rename(page.selected_edition(), detail))

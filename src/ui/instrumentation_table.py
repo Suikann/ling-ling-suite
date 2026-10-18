@@ -770,8 +770,9 @@ class InstrumentationTable(QWidget):
         return True
 
     def _explain_filed(self, voices: List[str]):
-        """說明這些聲部在譜庫已有 Drive 檔案，不能從群組刪除"""
-        QMessageBox.warning(self, t("dialog.warning"), t("catalog.sync.filed_voices", voices="、".join(voices)))
+        """說明這些聲部在譜庫已有 Drive 檔案，不能刪除（主視窗請到譜庫視窗處理；版本頁本身就在譜庫視窗）"""
+        key = "catalog.page.filed_voices" if self._edition_page else "catalog.sync.filed_voices"
+        QMessageBox.warning(self, t("dialog.warning"), t(key, voices="、".join(voices)))
 
     def _show_context_menu(self, pos):
         """在列上按右鍵：選單提供移除選取的列"""

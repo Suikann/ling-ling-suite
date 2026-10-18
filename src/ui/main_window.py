@@ -1330,6 +1330,7 @@ class MainWindow(QMainWindow):
         self._catalog_window = CatalogWindow(
             self._auth_service, self._preferences, log=self._log, huaxia_auth=self._huaxia_auth,
             voice_candidates=self._voice_candidates, reverter=self, downloads=self._download_service,
+            orchestra_type=self.project.orchestra_type,
         )
         self._catalog_window.show()
 

@@ -28,7 +28,9 @@ from core.catalog_constants import (
     SHEET_COMPOSERS, SHEET_INSTRUMENTATION_LOG, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, PublishingPlatform,
 )
 from core.catalog_errors import CatalogErrorKind
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY
+from core.constants import (
+    CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, OrchestraType,
+)
 from core.locale import t
 from fake_google_catalog import FakeGoogle
 from services.activity_log import ActivityLog
@@ -687,3 +689,70 @@ class TestEditionPage(WritesTestCase):
         self.assertEqual(opened, ["CatalogConflictDialog"])
         self.assertEqual(self.google.sheets.writes, [])
         self.assertEqual(self.part("琵琶")["drive_file_id"], "")
+
+    def test_the_conflict_screen_button_says_write(self):
+        page, editor, table = self.open_page()
+        table.cellWidget(1, editor.column("minimum")).setValue(3)
+        self.google.sheets.set_cell(SHEET_PARTS, "J3", "5")
+        buttons = []
+
+        def look(dialog):
+            """記下確定按鈕的文字後取消"""
+            buttons.append(dialog._confirm.text())
+            return QDialog.Rejected
+        with mock.patch.object(QDialog, "exec", look):
+            self.button(page, t("catalog.save")).click()
+            wait_until(lambda: buttons)
+        self.assertEqual(buttons, [t("catalog.sections.confirm")])
+
+    def test_removing_a_voice_with_a_drive_file_explains_it_for_the_catalog_window(self):
+        page, editor, table = self.open_page()
+        table.selectRow(0)
+        with answering_prompts(QMessageBox.Yes) as shown:
+            editor._remove_selected()
+        self.assertIn(t("catalog.page.filed_voices", voices="二胡 I"), [text for _, text in shown])
+
+    def test_discarding_unsaved_edits_asks_first(self):
+        page, editor, table = self.open_page()
+        table.cellWidget(1, editor.column("minimum")).setValue(3)
+        self.idle()
+        with answering_prompts(QMessageBox.No) as shown:
+            self.button(page, t("catalog.page.discard")).click()
+        self.assertEqual([text for _, text in shown], [t("catalog.page.discard_confirm")])
+        self.assertEqual(table.cellWidget(1, editor.column("minimum")).value(), 3)
+        with answering_prompts(QMessageBox.Yes):
+            self.button(page, t("catalog.page.discard")).click()
+        wait_until(lambda: editor.isEnabled())
+        self.idle()
+        table = next(t_ for t_ in editor.findChildren(QTableWidget) if t_.objectName() != "score_row")
+        self.assertEqual(table.cellWidget(1, editor.column("minimum")).value(), 0)
+
+    def test_switching_the_movement_with_unsaved_edits_asks_and_can_stay(self):
+        add_row(self.google, SHEET_MOVEMENTS, id="m1", piece_id="p1", movement_number="1")
+        page, editor, table = self.open_page()
+        table.cellWidget(1, editor.column("minimum")).setValue(3)
+        self.idle()
+        movement = page._movement_combo
+        with answering_prompts(QMessageBox.No) as shown:
+            movement.setCurrentIndex(1)
+        self.assertEqual([text for _, text in shown], [t("catalog.page.discard_confirm")])
+        self.assertEqual(movement.currentIndex(), 0)
+        self.assertEqual(table.cellWidget(1, editor.column("minimum")).value(), 3)
+
+    def test_the_orchestra_type_starts_as_the_open_projects_and_can_be_switched(self):
+        window = CatalogWindow(
+            self.auth, self.preferences, log=ActivityLog(FileService(), self.log_dir),
+            catalog_factory=lambda: CatalogService(self.google.sheets, self.google.drive, sleep=lambda s: None),
+            orchestra_type=OrchestraType.WESTERN,
+        )
+        self.addCleanup(window.deleteLater)
+        self.addCleanup(window.close)
+        wait_until(lambda: self.tree(window).topLevelItemCount() > 0)
+        self.idle()
+        page = self.open_piece(window).widget(1)
+        editor = page.findChild(InstrumentationTable)
+        wait_until(lambda: editor.isEnabled())
+        self.assertEqual(page._orchestra_combo.currentData(), OrchestraType.WESTERN.value)
+        self.assertIs(page._project.orchestra_type, OrchestraType.WESTERN)
+        page._orchestra_combo.setCurrentIndex(page._orchestra_combo.findData(OrchestraType.CHINESE.value))
+        wait_until(lambda: page._project.orchestra_type is OrchestraType.CHINESE and editor.isEnabled())
