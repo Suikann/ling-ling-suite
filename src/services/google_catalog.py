@@ -114,10 +114,14 @@ class _Gateway:
         self._lock = threading.Lock()
 
     def _execute(self, request) -> dict:
-        """送出一個請求，回傳回應內容；失敗時丟出 CatalogError"""
+        """送出一個請求，回傳回應的 JSON 內容；失敗時丟出 CatalogError"""
+        return self._send(request) or {}
+
+    def _send(self, request) -> Any:
+        """送出一個請求，回傳回應本身（JSON 內容，或下載的原始位元組）；失敗時丟出 CatalogError"""
         with self._lock:
             try:
-                return request.execute() or {}
+                return request.execute()
             except Exception as e:
                 raise catalog_error_from(e) from e
 
@@ -281,6 +285,10 @@ class GoogleDrive(_Gateway):
     def move_to_trash(self, file_id: str) -> None:
         """丟進垃圾桶（files.update）"""
         self._execute(self._api.files().update(fileId=file_id, body={"trashed": True}, fields="id"))
+
+    def download(self, file_id: str) -> bytes:
+        """下載內容（files.get，alt=media），回傳原始位元組"""
+        return self._send(self._api.files().get_media(fileId=file_id)) or b""
 
 
 def _drive_file(item: dict) -> DriveFile:

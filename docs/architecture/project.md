@@ -140,7 +140,7 @@
 
 譜庫視窗的版本頁顯示譜庫裡一處（版本的整首或一個樂章）的編制與登記的檔，把版本資料夾裡還沒登記的 PDF 登記到聲部上：
 
-- **讀取**：`CatalogService.edition_page(edition_id, movement_id, orchestra_type)` 回傳 `EditionPage`：那處（同 `read_place`）、登記了 Drive 檔案的聲部與登記的檔（`registration(voice)`）、總譜列登記的檔，以及沒登記的檔（`FolderPdf`，帶在版本資料夾裡的路徑）。試算表兩次請求，再每個資料夾列出一次
+- **讀取**：`CatalogService.edition_page(edition_id, movement_id, orchestra_type)` 回傳 `EditionPage`：那處（同 `read_place`）、登記了 Drive 檔案的聲部與登記的檔（`registration(voice)`）、總譜列登記的檔、沒登記的檔（`FolderPdf`，帶在版本資料夾裡的路徑），以及版本資料夾裡全部的 PDF（`pdfs`，一般下載從這裡挑）。試算表兩次請求，再每個資料夾列出一次
 - **狀態由登記推算**：分譜列登記了 Drive 檔案（`drive_file_id`）就是有，沒有就是缺；不讀也不寫舊的 `status` 欄
 - **沒登記的檔**：版本資料夾與它所有層的子資料夾裡、沒被任何分譜列（不分版本與樂章，含總譜列）登記的 PDF；垃圾桶裡的不算
 - **登記**：`CatalogService.register_files(PendingRegistration)` 寫入前一刻讀分譜工作表找列號，聲部與總譜列的登記（`drive_file_id`、`file_name`）以一個請求寫入；那處還沒有總譜列時新增一列（標記總譜欄，沒有人數）。要登記的聲部已不在譜庫時為已經不在譜庫
@@ -196,6 +196,14 @@
 - **重新命名**：跳過並在預覽另列一則說明（`RenameProblem.CATALOG_ONLY`，見 [move-history.md](move-history.md) 的問題的種類）
 - **存入譜庫**：跳過（見上方「存入譜庫」）
 - **清除本機檔案**：歸成只在譜庫；群組的檔都只在譜庫時，預覽寫成「已清除，只在譜庫」
+
+### 從譜庫下載
+
+只在譜庫的檔下載回原位，或把版本資料夾的檔下載到自選的資料夾。要下載哪些檔、放哪裡在 `core/catalog_download.py`（`restore_items`、`folder_items`），下載與核對在 `services/download_service.py` 的 `DownloadService`，碰譜庫經譜庫服務（`deposit_places` 讀那處的登記、`download_file` 下載內容）：
+
+- **同一套下載與核對**：每份先下載到暫存資料夾（使用者資料目錄的 `temp/`，見 [data-storage.md](data-storage.md)），以 Drive 的 `md5Checksum` 核對暫存檔，一致才搬到要放的位置（資料夾不在就建）；不一致（`mismatched`）、下載中斷或取消時暫存檔丟掉，要放的位置不留半份檔案。讀不到譜庫或下載失敗時停下，已下載的保留，錯誤記在 `error`；要求取消時做完目前這一份就停。再按一次就補齊。下載的每份檔寫一筆紀錄檔，不放上復原堆疊
+- **下載回原位**（`restore_sources` 在主執行緒找出群組裡只在譜庫的檔，`restore` 在背景下載）：下載的是群組連到的那處現在登記給這個聲部（總譜為總譜列）的 Drive 檔，放回清除前的路徑與檔名（`FileInfo.original_path`，清除沒有改它）。清除之後又重新存入過時下載的就是最新的，交回的指紋（`DownloadOutcome.fingerprints`）是那份的 MD5，經 `Project.record_fingerprints` 換掉記下的存入指紋。原位置已經有內容相同的檔算已經放回去；有別的檔時不覆蓋，列在 `occupied`。那處已經沒登記、或登記的檔已不在 Drive、在垃圾桶裡的列在 `unavailable`
+- **一般下載**（`download`）：整個版本保留版本資料夾底下的子資料夾，只勾幾份時都放在自選的資料夾裡。Drive 上的資料夾名稱與檔名照檔名清理的規則換掉非法字元，「.」「..」換成底線，放的位置不會跑出自選的資料夾。目的資料夾已有同名檔時，內容相同就略過，不同就照重新命名的規則加「 (1)」後綴（`core/filename.py` 的 `numbered`），加了後綴的那份已經有、內容也相同時一樣略過，所以再按一次不會多出一份；絕不覆蓋
 
 ### 對到 HuaXia 曲目
 

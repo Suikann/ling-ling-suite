@@ -9,7 +9,7 @@
 
 試算表照 Google 的行為：讀取時每列結尾的空格與結尾的空列不回傳；batchUpdate 全成或全不成；
 範圍的工作表不存在時整個請求失敗。Drive 解析查詢字串裡的字串值（反斜線跳脫），沒跳脫好的查詢會失敗；檔案的每次內容是一個版本，
-以預先要到的 ID 建檔重送時回 409（已經存在）。
+以預先要到的 ID 建檔重送時回 409（已經存在）；可以讓某個檔下載時內容壞掉（corrupt_downloads）。
 
 使用範例：
     from fake_google_catalog import FakeGoogle
@@ -341,6 +341,8 @@ class FakeDrive:
         # 第幾次上傳要丟出的錯誤（fail_upload）與已經上傳了幾次
         self._upload_failures: Dict[int, Tuple[CatalogErrorKind, bool]] = {}
         self._uploads = 0
+        # 下載時內容壞掉的檔（corrupt_downloads）
+        self._corrupt: set = set()
         self.page_size = 100
 
     # --- 測試直接操作（不算請求）---
@@ -384,6 +386,10 @@ class FakeDrive:
     def fail_upload(self, number: int, kind: CatalogErrorKind, applied: bool = False) -> None:
         """第 number 次上傳（upload，從 1 起算）丟出 kind 類的錯誤；applied 時照常上傳之後才丟出（回應沒收到）"""
         self._upload_failures[number] = (kind, applied)
+
+    def corrupt_downloads(self, file_id: str) -> None:
+        """之後下載這個檔收到的內容跟它的 md5Checksum 不符（扮演傳輸途中壞掉）"""
+        self._corrupt.add(file_id)
 
     def files_named(self, name: str) -> List[DriveFile]:
         """名稱是 name、不在垃圾桶的檔案（不分資料夾）"""
@@ -472,6 +478,14 @@ class FakeDrive:
             """標成在垃圾桶裡"""
             self._item(file_id).trashed = True
         self._google.request(handle)
+
+    def download(self, file_id: str) -> bytes:
+        """下載檔案目前的內容；沒有這個檔時找不到"""
+        def handle():
+            """取內容；排定壞掉的檔多接一段"""
+            content = self._item(file_id).content
+            return content + b" corrupted" if file_id in self._corrupt else content
+        return self._google.request(handle)
 
     @staticmethod
     def _relocate(item: _DriveItem, name: str, add_parent: str, remove_parents: Sequence[str]) -> None:

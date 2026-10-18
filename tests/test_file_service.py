@@ -124,6 +124,20 @@ class TestFileServiceRename(unittest.TestCase):
         self.assertEqual(self._read(src), "S")
 
 
+class TestFileServiceWriteBytes(unittest.TestCase):
+    """FileService.write_bytes：把位元組寫進新的檔案，父目錄不存在時先建立"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
+
+    def test_writes_the_bytes_and_creates_missing_folders(self):
+        path = os.path.join(self.temp_dir, "a", "b", "part.pdf")
+        FileService().write_bytes(path, b"%PDF \x00\xff")
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"%PDF \x00\xff")
+
+
 class TestFileServiceExists(unittest.TestCase):
     """FileService.file_exists_exact 測試"""
 

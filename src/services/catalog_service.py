@@ -24,6 +24,7 @@
     catalog.register_files(PendingRegistration(edition_id, movement_id, {"琵琶": pdf}))  # 失敗時以同一個物件重送
     places = catalog.deposit_places([("e1", "m1")])  # 存入前：那處的登記與版本資料夾裡的檔
     catalog.record_deposits(records, email)          # 存入後：登記分譜列並寫存入紀錄（一次寫入）
+    content = catalog.download_file(drive_file)      # 從譜庫下載：一個檔的內容，呼叫端拿 md5 核對
     rows = catalog.new_rows(SHEET_PIECES, [{"title": "春江花月夜"}])
     ids = catalog.add_rows(rows)                     # 失敗時以同一個 rows 重送，不會重複新增
 """
@@ -849,7 +850,7 @@ class CatalogService:
         return [self._place(catalog, edition_id, movement_id) for edition_id, movement_id in places]
 
     def edition_page(self, edition_id: str, movement_id: str, orchestra_type: OrchestraType) -> EditionPage:
-        """讀譜庫視窗的版本頁：一處的編制、各聲部與總譜列登記的檔，以及版本資料夾裡沒登記的檔
+        """讀譜庫視窗的版本頁：一處的編制、各聲部與總譜列登記的檔，以及版本資料夾裡全部與沒登記的檔
 
         試算表兩次請求（同 read_place），再逐層列出版本資料夾與它的子資料夾。沒登記的檔是沒被任何分譜列
         （不分版本與樂章）登記的 PDF；版本沒有 Drive 資料夾時沒有。
@@ -869,12 +870,13 @@ class CatalogService:
         place = self._place(catalog, edition_id, movement_id)
         registered = catalog.registered_file_ids()
         folder_id = catalog.editions[edition_id].drive_folder_id
+        pdfs = self._pdfs_under(folder_id) if folder_id else []
         return EditionPage(
             place=place,
             registrations=catalog.registrations(edition_id, movement_id),
             score=catalog.score(edition_id, movement_id),
-            unregistered=[pdf for pdf in self._pdfs_under(folder_id) if pdf.file.id not in registered]
-            if folder_id else [],
+            unregistered=[pdf for pdf in pdfs if pdf.file.id not in registered],
+            pdfs=pdfs,
         )
 
     def _place_tables(self, orchestra_type: OrchestraType) -> "_PlaceTables":
@@ -1250,6 +1252,20 @@ class CatalogService:
             return file
         self._call(lambda: self._drive.rename_or_move(file.id, name if name != file.name else "", add, remove))
         return replace(file, name=name, parents=(folder_id,))
+
+    def download_file(self, file: DriveFile) -> bytes:
+        """下載 Drive 上一個檔目前的內容（一次請求）；呼叫端拿 file.md5 核對
+
+        Args:
+            file: 列出或取得時拿到的檔案
+
+        Returns:
+            內容的原始位元組
+
+        Raises:
+            CatalogError: 下載失敗；檔案已不在 Drive 時為找不到
+        """
+        return self._call(lambda: self._drive.download(file.id))
 
     def subfolders(self, folder_id: str) -> List[DriveFile]:
         """列出 Drive 資料夾裡的子資料夾（依名稱排序，不含垃圾桶裡的）

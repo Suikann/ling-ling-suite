@@ -263,18 +263,20 @@ class FolderPdf:
 
 @dataclass(frozen=True)
 class EditionPage:
-    """譜庫視窗的版本頁要的全部：一處的編制、各聲部與總譜列登記的檔，以及版本資料夾裡沒登記的檔
+    """譜庫視窗的版本頁要的全部：一處的編制、各聲部與總譜列登記的檔，以及版本資料夾裡的檔（全部與沒登記的）
 
     Attributes:
         place: 這一處（版本的整首或一個樂章）的編制、時長與社團的聲部組對照
         registrations: 登記了 Drive 檔案的聲部（譜庫的寫法）與登記的檔；沒登記的聲部不在裡面
         score: 總譜列登記的檔；沒有總譜列或沒登記時為 None
         unregistered: 版本資料夾（含子資料夾）裡沒被任何分譜列登記的 PDF，依路徑排序
+        pdfs: 版本資料夾（含子資料夾）裡全部的 PDF，不分登記與否，依路徑排序（一般下載從這裡挑）
     """
     place: CatalogPlace
     registrations: Dict[str, Registration] = field(default_factory=dict)
     score: Optional[Registration] = None
     unregistered: List[FolderPdf] = field(default_factory=list)
+    pdfs: List[FolderPdf] = field(default_factory=list)
 
     def registration(self, voice: str) -> Optional[Registration]:
         """聲部登記的檔（同一聲部的規則比對寫法）；沒登記時為 None，狀態就是缺"""

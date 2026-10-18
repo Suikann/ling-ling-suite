@@ -202,3 +202,13 @@ class DrivePort(Protocol):
         Raises:
             CatalogError: 丟不進去，檔案還在原處
         """
+
+    def download(self, file_id: str) -> bytes:
+        """下載一個檔案目前的內容（files.get，alt=media）
+
+        Returns:
+            檔案內容的原始位元組
+
+        Raises:
+            CatalogError: 下載失敗；沒有這個檔時為找不到
+        """

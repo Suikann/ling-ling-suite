@@ -302,6 +302,27 @@ class TestDriveUploads(unittest.TestCase):
         self.assertEqual(sent_body(http, 0)["id"], "gen-3")
 
 
+class TestDriveDownloads(unittest.TestCase):
+    """下載一個檔的內容：一次 files.get（alt=media），回傳原始位元組；失敗時轉成錯誤類別"""
+
+    def test_downloads_the_content_in_one_request(self):
+        http = HttpMockSequence([({"status": "200"}, b"%PDF \x00\xff")])
+        self.assertEqual(GoogleDrive(http=http).download("f1"), b"%PDF \x00\xff")
+        self.assertIn("/files/f1", http.request_sequence[0][0])
+        self.assertEqual(sent_query(http, 0)["alt"], ["media"])
+        self.assertEqual(len(http.request_sequence), 1)
+
+    def test_an_empty_file_downloads_as_empty_bytes(self):
+        http = HttpMockSequence([({"status": "200"}, b"")])
+        self.assertEqual(GoogleDrive(http=http).download("f1"), b"")
+
+    def test_a_missing_file_is_not_found(self):
+        http = HttpMockSequence([({"status": "404"}, json.dumps({"error": {"message": "File not found"}}))])
+        with self.assertRaises(CatalogError) as raised:
+            GoogleDrive(http=http).download("f1")
+        self.assertIs(raised.exception.kind, CatalogErrorKind.NOT_FOUND)
+
+
 class TestOpenGoogleCatalog(unittest.TestCase):
     """拿不到憑證或沒設定試算表時，依原因分類"""
 

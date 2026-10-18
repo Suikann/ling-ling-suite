@@ -157,6 +157,24 @@ class FileService:
             self._remove_quietly(temp_path)
             raise
 
+    def write_bytes(self, path: str, content: bytes) -> None:
+        """把位元組寫進檔案並 fsync；父目錄不存在時先建立，已有檔案時覆蓋。只用於程式自己的暫存檔
+
+        Args:
+            path: 檔案路徑
+            content: 內容
+
+        Raises:
+            OSError: 寫不進去
+        """
+        parent = os.path.dirname(path)
+        if parent:
+            self.create_directory(parent)
+        with open(path, "wb") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+
     def append_text(self, path: str, text: str) -> None:
         """在文字檔結尾附加文字；檔案或父目錄不存在時先建立
 
