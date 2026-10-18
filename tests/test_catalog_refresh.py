@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.catalog_constants import SHEET_DURATIONS, SHEET_PARTS, SHEET_SECTIONS
-from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.catalog_sync import SyncField, Verdict, WriteSource, place_writes
 from core.constants import OrchestraType
 from core.models import CatalogChange, CatalogChangeKind, Headcount
