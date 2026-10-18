@@ -19,6 +19,7 @@
     platform = catalog.publishing_platform()         # 社團設定啟用的發譜平台，沒有時為 None
     place = catalog.read_place(edition_id, movement_id, OrchestraType.CHINESE)  # 群組要連的一處
     outcome = catalog.sync_instrumentation(place_writes(project), project.orchestra_type, email, WriteSource.SAVE, {})
+    rows = catalog.revert_rows(edition_id, movement_id, group.name, OrchestraType.CHINESE)  # 改連時撤得掉的編制
     page = catalog.edition_page(edition_id, movement_id, OrchestraType.CHINESE)  # 版本頁：登記與沒登記的檔
     catalog.register_files(PendingRegistration(edition_id, movement_id, {"琵琶": pdf}))  # 失敗時以同一個物件重送
     places = catalog.deposit_places([("e1", "m1")])  # 存入前：那處的登記與版本資料夾裡的檔
@@ -42,8 +43,10 @@ from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, OrchestraType
 from core.voice_suggestions import ranked_by_usage
 from core.catalog_models import (
     CatalogOverview, CatalogPlace, Composer, DriveFile, Edition, EditionFiles, EditionPage, FolderContents, FolderPdf,
-    LinkTargets, Movement, Part, Performance, Piece, PieceDetail, Registration, SectionMapEntry, sort_order_key,
+    InstrumentationLogEntry, LinkTargets, Movement, Part, Performance, Piece, PieceDetail, Registration,
+    SectionMapEntry, sort_order_key,
 )
+from core.catalog_revert import RevertRow, revert_rows
 from core.catalog_sync import (
     CurrentPlace, Decision, ItemReview, PlaceReview, PlaceWrite, SyncField, SyncItem, SyncOutcome, Verdict, WriteSource,
     final_voices, review_items, value_text,
@@ -905,6 +908,39 @@ class CatalogService:
             other_pieces=catalog.other_pieces(edition_id),
         )
 
+    def revert_rows(
+        self, edition_id: str, movement_id: str, group_name: str, orchestra_type: OrchestraType,
+    ) -> List[RevertRow]:
+        """讀出一個群組寫進一處的編制，分成撤掉後刪掉、改回原值與不動（改連時問要不要撤掉；兩次請求）
+
+        判斷見 core/catalog_revert.py 的 revert_rows：依編制寫入紀錄，之後沒人改過的才撤得掉。
+
+        Args:
+            edition_id: 那處的版本 ID
+            movement_id: 那處的樂章 ID；整首為空字串
+            group_name: 群組名稱（編制寫入紀錄的「群組」欄）
+            orchestra_type: 專案的樂團類型
+
+        Returns:
+            每個這個群組寫過的聲部一列；還沒有編制寫入紀錄、或那處已不在譜庫時為空清單
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        titles = self._call(self._sheets.sheet_titles)
+        if SHEET_INSTRUMENTATION_LOG not in titles:
+            return []
+        sheets = _place_sheets(titles) + [SHEET_INSTRUMENTATION_LOG]
+        tables = dict(zip(sheets, self._read_sheets(*sheets)))
+        try:
+            current = _PlaceTables(tables, orchestra_type).current(edition_id, movement_id)
+        except CatalogError as error:
+            if error.kind is CatalogErrorKind.GONE:
+                return []
+            raise
+        entries = _models(tables[SHEET_INSTRUMENTATION_LOG], SHEET_INSTRUMENTATION_LOG, InstrumentationLogEntry)
+        return revert_rows(entries, edition_id, movement_id, current.voices, current.filed, group_name)
+
     def section_map(self) -> Dict[OrchestraType, List[SectionMapEntry]]:
         """讀全社團的聲部組對照，每個樂團類型一套，連同譜庫裡用到、還沒歸類的樂器與各樂器用到幾首（兩次請求）
 
@@ -927,6 +963,8 @@ class CatalogService:
         每一格依譜庫現在的值處理（core/catalog_sync.py 的 review_items）：等於快照的原值就寫、等於要寫的新值就略過、
         兩者都不是就是衝突；有衝突（或選邊時看到的譜庫值之後又變了）時什麼都不寫，交回比對結果讓使用者選邊後再呼叫。
         要刪掉的聲部在譜庫已有 Drive 檔案時不寫（無法寫回），其餘照寫。
+        改連後的撤掉（PlaceWrite.revert）一起寫：譜庫已不是那次寫的值的格子不動、不算衝突，那處已不在譜庫時整處不動，
+        編制寫入紀錄的來源記撤銷。
 
         寫入的格子、新增的列、刪掉的聲部（清空那一列）、缺的標題與每一格一列的編制寫入紀錄，全部以同一個
         values.batchUpdate 送出（全成或全不成）。請求數固定：列出工作表名稱、讀取各一次，還沒建立的時長、
@@ -1004,7 +1042,14 @@ class CatalogService:
         places = []
         for write, orchestra in writes:
             catalog = catalogs[orchestra]
-            current = catalog.current(write.edition_id, write.movement_id) if write.edition_id else catalog.club()
+            try:
+                current = catalog.current(write.edition_id, write.movement_id) if write.edition_id else catalog.club()
+            except CatalogError as error:
+                if not (write.revert and error.kind is CatalogErrorKind.GONE):
+                    raise
+                # 要撤掉的那處已不在譜庫：沒有可撤的，整處不動
+                places.append(PlaceReview(write, [ItemReview(item, None, Verdict.KEPT) for item in write.items]))
+                continue
             reviews = review_items(write, current, dict(decisions.get(write.group_id, {})))
             places.append(PlaceReview(write, reviews, list(current.filed), catalog.other_pieces(write.edition_id)))
         outcome = SyncOutcome(places, written=False)
@@ -1014,8 +1059,9 @@ class CatalogService:
         stamp = now().strftime("%Y-%m-%d %H:%M:%S")
         written_sections: Dict[OrchestraType, Set[str]] = {orchestra: set() for orchestra in catalogs}
         for place, (_, orchestra) in zip(places, writes):
+            logged = WriteSource.UNDO if place.write.revert else source
             for review in catalogs[orchestra].write_place(batch, place, written_sections[orchestra]):
-                batch.add(SHEET_INSTRUMENTATION_LOG, _log_record(stamp, operator, source, place.write, review))
+                batch.add(SHEET_INSTRUMENTATION_LOG, _log_record(stamp, operator, logged, place.write, review))
         if batch.cells:
             for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
                 self._call(lambda: self._sheets.add_sheet(sheet))

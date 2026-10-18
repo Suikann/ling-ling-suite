@@ -52,6 +52,7 @@ class Verdict(Enum):
     CONFLICT = "conflict"  # 兩者都不是，還沒選邊：整次不寫
     CATALOG = "catalog"    # 使用者選「用譜庫的」：不寫，快照與群組跟著譜庫
     BLOCKED = "blocked"    # 要刪掉的聲部在譜庫已有 Drive 檔案：無法寫回，要到譜庫視窗處理
+    KEPT = "kept"          # 撤掉編制時譜庫已不是那次寫的值（之後又被改過）：不動，不算衝突
 
 
 class Choice(Enum):
@@ -113,9 +114,11 @@ class PlaceWrite:
         group_name: 群組名稱（寫進編制寫入紀錄）
         edition_id: 版本 ID
         movement_id: 樂章 ID；整首為空字串
-        voices: 群組目前的聲部清單（新增的聲部依它排序）
+        voices: 群組目前的聲部清單（新增的聲部依它排序）；撤掉時為空清單
         items: 一格一格的改動
         confirm: 寫入前先在衝突畫面確認（開啟專案時選了「用專案的（存檔時寫回）」，CatalogLink.confirm_voices）
+        revert: 改連後撤掉這個群組寫進原處的編制（CatalogRevert）：原值是那次寫的值、新值是撤掉後的值；
+            譜庫已不是那次寫的值時不動（Verdict.KEPT），編制寫入紀錄的來源記撤銷，不改群組與快照
     """
     group_id: str
     group_name: str
@@ -124,6 +127,7 @@ class PlaceWrite:
     voices: List[str]
     items: List[SyncItem]
     confirm: bool = False
+    revert: bool = False
 
 
 @dataclass
@@ -169,18 +173,29 @@ class SyncOutcome:
 
 
 def place_writes(project: Project) -> List[PlaceWrite]:
-    """專案裡連到譜庫、有待寫入改動的群組各自要寫回的改動（依群組順序）
+    """專案裡連到譜庫、有待寫入改動的群組各自要寫回的改動（依群組順序），每個群組之後接著它還沒寫的撤掉
 
     聲部清單的改動拆成每個新增或刪掉的聲部各一格，加上快照與群組都有的聲部順序變了時一格。
+    撤掉是要刪的聲部各一格（有→沒有）、要改回的人數各一格（那次寫的→原值）。
     """
     writes = []
     for group in project.groups:
         link = group.catalog_link
-        items = _split_changes(project.catalog_changes(group)) if link is not None else []
+        if link is None:
+            continue
+        items = _split_changes(project.catalog_changes(group))
         if items:
             writes.append(PlaceWrite(
                 group.id, group.name, link.edition_id, link.movement_id, list(group.instruments), items,
                 confirm=link.confirm_voices,
+            ))
+        for revert in link.reverts:
+            items = [SyncItem(SyncField.VOICE, voice, True, False) for voice in revert.remove]
+            items += [
+                SyncItem(SyncField.HEADCOUNT, voice, written, original) for voice, written, original in revert.restore
+            ]
+            writes.append(PlaceWrite(
+                group.id, group.name, revert.edition_id, revert.movement_id, [], items, revert=True,
             ))
     return writes
 
@@ -250,6 +265,8 @@ def review_items(
 ) -> List[ItemReview]:
     """比對一處的每一格：譜庫現在等於新值為已完成、等於原值為寫入、都不是為衝突（有選邊時照選的）
 
+    撤掉（PlaceWrite.revert）沒有衝突：都不是時不動（Verdict.KEPT），不看選邊。
+
     Args:
         write: 要寫的改動
         current: 寫入前重讀到的那處
@@ -259,6 +276,9 @@ def review_items(
         依 write.items 順序的比對結果
     """
     adding = {voice_key(i.voice) for i in write.items if i.field is SyncField.VOICE and i.new}
+    if write.revert:
+        reviews = [_review(item, current, adding, None) for item in write.items]
+        return [r._replace(verdict=Verdict.KEPT) if r.verdict is Verdict.CONFLICT else r for r in reviews]
     return [_review(item, current, adding, decisions.get(item.key)) for item in write.items]
 
 

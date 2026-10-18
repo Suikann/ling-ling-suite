@@ -158,6 +158,16 @@ class Headcount(NamedTuple):
             return f"{self.minimum}-{self.maximum}"
         return str(self.minimum)
 
+    @classmethod
+    def from_text(cls, text: str) -> "Headcount":
+        """由 HuaXia 的人數記法（text 的寫法，例如編制寫入紀錄裡的值）還原；空白或認不得的寫法為未填"""
+        text = text.strip()
+        open_ended = text.endswith("↑")
+        low, _, high = text.rstrip("↑").partition("-")
+        if not low.strip().isdigit() or (high and not high.strip().isdigit()):
+            return cls()
+        return cls(int(low), int(high) if high else None, open_ended).normalized()
+
     def to_data(self) -> Dict[str, Any]:
         """專案檔中存的內容"""
         return {"minimum": self.minimum, "maximum": self.maximum, "open_ended": self.open_ended}
@@ -254,6 +264,47 @@ class CatalogSnapshot:
 
 
 @dataclass
+class CatalogRevert:
+    """改連後選了「撤掉」：存檔時要寫進原本那處、把這個群組寫過的編制撤掉（core/catalog_revert.py）
+
+    Attributes:
+        edition_id: 那處的版本 ID
+        movement_id: 那處的樂章 ID；整首為空字串
+        remove: 要刪掉的聲部（這個群組新增的）
+        restore: 要改回原值的聲部：（聲部、這個群組寫的人數、改回的人數）
+    """
+    edition_id: str
+    movement_id: str = ""
+    remove: List[str] = field(default_factory=list)
+    restore: List[Tuple[str, Headcount, Headcount]] = field(default_factory=list)
+
+    def to_data(self) -> Dict[str, Any]:
+        """專案檔中存的內容"""
+        return {
+            "edition_id": self.edition_id,
+            "movement_id": self.movement_id,
+            "remove": list(self.remove),
+            "restore": [
+                {"voice": voice, "written": written.to_data(), "original": original.to_data()}
+                for voice, written, original in self.restore
+            ],
+        }
+
+    @classmethod
+    def from_data(cls, data: Dict[str, Any]) -> "CatalogRevert":
+        """由專案檔中的內容還原"""
+        return cls(
+            edition_id=data.get("edition_id", ""),
+            movement_id=data.get("movement_id", ""),
+            remove=list(data.get("remove") or []),
+            restore=[
+                (r["voice"], Headcount.from_data(r.get("written") or {}), Headcount.from_data(r.get("original") or {}))
+                for r in data.get("restore") or []
+            ],
+        )
+
+
+@dataclass
 class CatalogLink:
     """群組連到譜庫的哪一處（版本的整首或一個樂章），以及那處的快照
 
@@ -271,6 +322,7 @@ class CatalogLink:
         unsynced: 上次存檔時寫不進譜庫（未同步）；下次寫回成功時清掉
         confirm_voices: 開啟專案時譜庫的聲部清單變了，選了「用專案的（存檔時寫回）」：寫回前先在衝突畫面確認，
             群組的聲部清單要蓋掉譜庫的；寫回成功時清掉
+        reverts: 改連後選了「撤掉」、還沒寫進原處的撤掉；下次寫回時寫入
     """
     edition_id: str
     movement_id: str = ""
@@ -281,6 +333,7 @@ class CatalogLink:
     other_pieces: Dict[str, int] = field(default_factory=dict)
     unsynced: bool = False
     confirm_voices: bool = False
+    reverts: List[CatalogRevert] = field(default_factory=list)
 
     def other_pieces_using(self, voice: str) -> int:
         """聲部的樂器在譜庫裡被其他曲目用到幾首（同一樂器的規則）；不知道時為 0"""
@@ -299,6 +352,7 @@ class CatalogLink:
             "other_pieces": dict(self.other_pieces),
             "unsynced": self.unsynced,
             "confirm_voices": self.confirm_voices,
+            "reverts": [revert.to_data() for revert in self.reverts],
         }
 
     @classmethod
@@ -314,6 +368,7 @@ class CatalogLink:
             other_pieces={str(k): int(v) for k, v in (data.get("other_pieces") or {}).items()},
             unsynced=bool(data.get("unsynced")),
             confirm_voices=bool(data.get("confirm_voices")),
+            reverts=[CatalogRevert.from_data(revert) for revert in data.get("reverts") or []],
         )
 
 
@@ -1448,6 +1503,7 @@ class Project:
           對不到的分譜移到未分組；用群組的（LinkChoice.GROUP）編制與配對不變，與快照的差異成為改動
         - 時長：譜庫有就用譜庫的，沒有時群組的成為改動
         - 聲部組：社團對照有的樂器以社團的為準寫進專案的對照；沒有的樂器沿用專案的值，成為改動
+        - 改連：原本的連線換掉；還沒寫進去的撤掉（CatalogLink.reverts）留著，連回那處的撤掉丟掉
 
         Args:
             group: 要連線的群組
@@ -1479,6 +1535,7 @@ class Project:
             if club:
                 put_section(self.instrument_sections, voice, club)
                 club_sections[voice] = club
+        previous = group.catalog_link
         group.catalog_link = CatalogLink(
             edition_id=place.edition_id,
             movement_id=place.movement_id,
@@ -1487,6 +1544,10 @@ class Project:
             movement_name=place.movement_name,
             snapshot=CatalogSnapshot(list(place.voices), place.duration_seconds, club_sections, list(place.filed)),
             other_pieces=_other_pieces(group.instruments, place.other_pieces),
+            reverts=[
+                revert for revert in (previous.reverts if previous else [])
+                if (revert.edition_id, revert.movement_id) != (place.edition_id, place.movement_id)
+            ],
         )
         self._changed()
         return result
@@ -1592,8 +1653,23 @@ class Project:
         return self.catalog_changes(group) if link is not None and link.unsynced else []
 
     def unsynced_groups(self) -> List[Group]:
-        """有未同步的值的群組（依群組順序）"""
-        return [group for group in self.groups if self.unsynced_changes(group)]
+        """有未同步的值、或標了未同步而撤掉還沒寫進去的群組（依群組順序）"""
+        return [group for group in self.groups if self.unsynced_changes(group) or _unsynced_reverts(group)]
+
+    def queue_catalog_revert(self, group: Group, revert: CatalogRevert) -> None:
+        """改連後選了「撤掉」：記下要寫進原處的撤掉，下次寫回譜庫時寫入（同一處已有的換掉）
+
+        Args:
+            group: 已改連的群組
+            revert: 要寫的撤掉（core/catalog_revert.py 的 pending_revert）
+        """
+        link = group.catalog_link
+        if link is None:
+            return
+        place = (revert.edition_id, revert.movement_id)
+        reverts = [r for r in link.reverts if (r.edition_id, r.movement_id) != place] + [revert]
+        group.catalog_link = replace(link, reverts=reverts)
+        self._changed()
 
     def mark_catalog_unsynced(self, group_ids: Iterable[str]) -> None:
         """存檔時寫不進譜庫：這些群組標成未同步（記在專案檔），下次寫回成功時清掉
@@ -1612,7 +1688,7 @@ class Project:
 
         選「用譜庫的」的人數、時長、聲部組與順序照譜庫的值改群組（聲部組改的是專案的對照）；人數衝突而譜庫已刪掉那個聲部時，
         群組也拿掉它，分譜移到未分組。快照改成群組現在的編制、時長與聲部組，加上無法寫回、還留在譜庫的聲部，
-        之後 catalog_changes 只剩無法寫回的改動；未同步的標記清掉。
+        之後 catalog_changes 只剩無法寫回的改動；未同步的標記清掉。改連後的撤掉寫進去了就拿掉，不改群組與快照。
 
         Args:
             outcome: 已寫入的結果（CatalogService.sync_instrumentation）
@@ -1621,6 +1697,12 @@ class Project:
         for place in outcome.places:
             group = self._group_by_id(place.write.group_id)
             if group is None or group.catalog_link is None:
+                continue
+            if place.write.revert:
+                written = (place.write.edition_id, place.write.movement_id)
+                group.catalog_link = replace(group.catalog_link, unsynced=False, reverts=[
+                    r for r in group.catalog_link.reverts if (r.edition_id, r.movement_id) != written
+                ])
                 continue
             taken = [review for review in place.items if review.verdict is Verdict.CATALOG]
             for review in taken:
@@ -2098,6 +2180,12 @@ def _moved_voices(names: List[str], reference: List[str]) -> List[str]:
         longest.append(best + [i])
     kept = set(max(longest, key=len, default=[]))
     return [name for i, name in enumerate(shared) if i not in kept]
+
+
+def _unsynced_reverts(group: Group) -> bool:
+    """群組標了未同步，還有沒寫進原處的撤掉"""
+    link = group.catalog_link
+    return link is not None and link.unsynced and bool(link.reverts)
 
 
 def _other_pieces(voices: Iterable[str], counts: Dict[str, int]) -> Dict[str, int]:

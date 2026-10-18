@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from core.constants import PROJECT_FILE_VERSION, HuaXiaEnsemble, OrchestraType
 from core.models import (
-    CatalogLink, CatalogSnapshot, DuplicateVoiceError, FileInfo, Group, Headcount, HuaXiaLink, NewHuaXiaPiece, Project, SplitPlacement, SplitResult, UndoMapping,
+    CatalogLink, CatalogRevert, CatalogSnapshot, DuplicateVoiceError, FileInfo, Group, Headcount, HuaXiaLink, NewHuaXiaPiece, Project, SplitPlacement, SplitResult, UndoMapping,
     format_duration, sum_headcounts,
 )
 from services.project_service import ProjectService
@@ -113,6 +113,7 @@ def _rich_group(name: str, parts: list) -> Group:
             edition_id="e1", movement_id="m1", piece_title="命運", edition_label="Bärenreiter", movement_name="Allegro",
             snapshot=CatalogSnapshot([(p, Headcount(2)) for p in parts], 470, {parts[0]: "木管"}, [parts[0]]),
             other_pieces={parts[0]: 3},
+            reverts=[CatalogRevert("e0", "m0", [parts[0]], [(parts[0], Headcount(3), Headcount(2))])],
         ),
         huaxia_link=HuaXiaLink(
             piece_id="hx-1", piece_title="命運", new_piece=NewHuaXiaPiece("命運", "Beethoven", 7.5, HuaXiaEnsemble.SIZHU),

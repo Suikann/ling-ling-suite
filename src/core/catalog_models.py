@@ -90,6 +90,22 @@ class Part:
 
 
 @dataclass(frozen=True)
+class InstrumentationLogEntry:
+    """編制寫入紀錄的一列：一次寫回裡一格的改動（欄位的寫法見 core/catalog_sync.py 的 WriteSource、SyncField）"""
+    id: str = ""
+    time: str = ""
+    operator: str = ""
+    source: str = ""
+    edition_id: str = ""
+    movement_id: str = ""
+    voice: str = ""
+    field: str = ""
+    old_value: str = ""
+    new_value: str = ""
+    group: str = ""
+
+
+@dataclass(frozen=True)
 class Performance:
     """演出紀錄"""
     id: str = ""
