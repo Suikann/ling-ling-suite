@@ -13,31 +13,48 @@
   （名稱規則對到多個時只列那幾個），挑了就經 Project.choose_huaxia_part 記進專案；人數或聲部組不同時「覆寫」
   預設勾選；本專案沒有、HuaXia 也沒有的聲部預設不建，可以勾「在 HuaXia 建」。有衝突、還沒挑或要建的聲部
   沒填最少人數時寫出原因，「下一步」按不下去。覆寫與建立的勾選只在這次預覽，不記在專案。
+- 「檔案」：每個群組列出要發的分譜與總譜、會被取代的那份（同一個聲部底下、泠靈發的，publish_service.plan_files）
+  與同聲部別人放的檔（不動）。本機找不到的檔跳過並寫出來，只在譜庫的旁邊放「從譜庫下載回來」（關掉預覽，
+  交給主視窗下載回原位）。超過大小上限的檔第一次進這一步時在背景逐份壓縮（壓縮檔在壓縮服務的暫存資料夾，
+  原檔不動），底部顯示進度與「取消壓縮」；每份顯示壓縮狀態與「開啟」「比較」（共用的比較畫面）「不發這份」。
+- 「公演」：複選本學期、還沒結束的公演（PublishReadiness.concerts），逐場說明掛上後的影響；可以不掛。
+- 「確認」：每個群組列出曲目、要新建與覆寫的聲部、要傳的檔數與大小、要取代的份數與不發的檔，加上公演與合計。
+  每個群組要寫進 HuaXia 的全部內容由 publish_plan() 交出（publish_service.group_publish），確認步的文字也由它算。
+  超過上限的檔都壓縮好（或選了不發）、壓縮做完，「發譜」才按得下去。
 
-之後的步驟由後續工單以 add_step 接上；下一步還沒接上時「下一步」停用。
+關閉預覽時停下還在跑的壓縮並丟掉暫存的壓縮檔。
 
 使用範例：
-    dialog = PublishPreviewDialog(project, check_groups(project), readiness, parent)
+    dialog = PublishPreviewDialog(project, check_groups(project), readiness, parent, compressor=compressor,
+                                  opener=opener, download_back=download_back)
     dialog.exec()
 """
-from typing import Callable, Dict, List, Optional
+import os
+from typing import Callable, Dict, List, Optional, Sequence, Set
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QPushButton, QRadioButton, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
     QWidget,
 )
 
-from core.constants import HUAXIA_DURATION_STEP_MINUTES, HuaXiaEnsemble
+from core.constants import HUAXIA_DURATION_STEP_MINUTES, CompressionStatus, HuaXiaEnsemble
 from core.locale import t
 from core.models import Group, HuaXiaLink, NewHuaXiaPiece, Project
 from core.sections import section_label
-from services.huaxia_client import HuaXiaPart, HuaXiaPiece
+from services.compression_service import CompressionResult, CompressionService
+from services.external_opener import ExternalOpener
+from services.file_service import FileService
+from services.huaxia_client import HuaXiaEvent, HuaXiaPart, HuaXiaPiece, HuaXiaScore
 from services.publish_service import (
-    GroupCheck, PartMatch, PublishReadiness, VoiceDecisions, VoicePlan, VoiceRow, plan_voices,
+    FilePlan, GroupCheck, GroupPublish, PartMatch, PublishFile, PublishReadiness, VoiceDecisions, VoicePlan, VoiceRow,
+    group_publish, oversized, plan_files, plan_voices,
 )
+from ui.background_task import BackgroundTask
+from ui.compress_pdf import result_state, size_text
+from ui.compression_compare import CompressionCompareDialog
 from ui.instrumentation_table import catalog_change_text
 
 # 步驟的字串鍵，依順序
@@ -49,6 +66,10 @@ _MAX_DURATION_MINUTES = 999
 _BLOCKED_COLOR = "#e74c3c"
 _UNSYNCED_COLOR = "#e67e22"
 _NOTE_COLOR = "#888888"
+_REPLACE_COLOR = "#3498db"
+_NEW_COLOR = "#27ae60"
+# 「檔案」步表格的欄數（聲部、這次發的檔、大小、取代、其他人放的檔、壓縮）
+_FILE_COLUMNS = 6
 
 
 def blocked_text(check: GroupCheck) -> str:
@@ -127,6 +148,22 @@ def _voice_texts(row: VoiceRow) -> List[str]:
     else:
         after = t("publish.voices.unchanged")
     return [row.voice, now, change, after]
+
+
+def _score_titles(scores: List[HuaXiaScore]) -> str:
+    """樂譜的名稱，以頓號分隔；沒有名稱的用 Storage 裡的檔名"""
+    return "、".join(score.title or os.path.basename(score.file_path) for score in scores)
+
+
+def _file_voice(file: PublishFile) -> str:
+    """一份檔在表格裡的聲部欄：聲部名稱，總譜寫「總譜」"""
+    return t("publish.files.score") if file.score else file.voice
+
+
+def _event_text(event: HuaXiaEvent) -> str:
+    """一場公演：名稱、開始時間（這台電腦的時區）、地點（有時）"""
+    texts = [event.title, event.starts_at.astimezone().strftime("%Y-%m-%d %H:%M"), event.location]
+    return "　".join(text for text in texts if text)
 
 
 def _piece_text(piece: HuaXiaPiece) -> str:
@@ -235,22 +272,43 @@ class _PieceEditor(QWidget):
 
 
 class PublishPreviewDialog(QDialog):
-    """發譜預覽：分步驟列出全部群組，「曲目」步挑選或新建 HuaXia 曲目"""
+    """發譜預覽：分步驟列出全部群組，從挑選 HuaXia 曲目到確認所有會寫進 HuaXia 的變動"""
 
     def __init__(
         self, project: Project, checks: List[GroupCheck], readiness: PublishReadiness, parent=None,
+        compressor: Optional[CompressionService] = None, file_service: Optional[FileService] = None,
+        opener: Optional[ExternalOpener] = None, download_back: Optional[Callable[[Sequence[str]], None]] = None,
     ):
         """
         Args:
             project: 專案；「曲目」步的選擇經它的編輯操作寫入
             checks: 各群組發譜前的檢查結果（check_groups）
-            readiness: 按下發譜時 HuaXia 那一側的檢查結果（可以挑的曲目、登入的 Discord 帳號）
+            readiness: 按下發譜時 HuaXia 那一側的檢查結果（可以挑的曲目、它們的聲部與樂譜、可以掛的公演、
+                登入的 Discord 帳號）
             parent: 父元件
+            compressor: 壓縮超過大小上限的檔（它的大小上限就是發譜的單檔上限）；省略時以預設的暫存資料夾建立
+            file_service: 讀本機檔案大小；省略時建立一個
+            opener: 以預設的 PDF 閱讀器開啟壓縮檔；省略時依目前的平台建立
+            download_back: 「從譜庫下載回來」：關掉預覽後以群組 ID 呼叫；省略時不顯示這個按鈕
         """
         super().__init__(parent)
         self._project = project
         self._checks = checks
         self._readiness = readiness
+        self._file_service = file_service or FileService()
+        self._compressor = compressor or CompressionService(self._file_service)
+        self._opener = opener or ExternalOpener()
+        self._download_back = download_back
+        # 壓縮：結果以本機檔的路徑為鍵；正在壓的那份；背景工作（第一次進「檔案」步時開始，一次壓完全部）
+        self._compressed: Dict[str, CompressionResult] = {}
+        self._compressing: Optional[str] = None
+        self._compress_task: Optional[BackgroundTask] = None
+        self._compress_started = False
+        # 選了「不發這份」的本機檔路徑；勾選要掛的公演的編號
+        self._dropped: Set[str] = set()
+        self._chosen_events: Set[str] = set()
+        self._file_boxes: List[QWidget] = []
+        self._confirm_widgets: List[QWidget] = []
         self._pages: Dict[int, QWidget] = {}
         self._current = 0
         # 開啟預覽時各群組對到的曲目：改選別首再選回來時找回手動挑的聲部配對
@@ -263,6 +321,9 @@ class PublishPreviewDialog(QDialog):
         self._build_ui()
         self.add_step(0, self._build_piece_step())
         self.add_step(1, self._build_voices_step())
+        self.add_step(2, self._build_files_step())
+        self.add_step(3, self._build_events_step())
+        self.add_step(4, self._build_confirm_step())
         self._go(0)
 
     def _build_ui(self):
@@ -284,6 +345,14 @@ class PublishPreviewDialog(QDialog):
         self._stack = QStackedWidget()
         layout.addWidget(self._stack, stretch=1)
         buttons = QHBoxLayout()
+        self._compress_status = QLabel()
+        self._compress_status.setObjectName("compression_status")
+        self._compress_status.setVisible(False)
+        buttons.addWidget(self._compress_status)
+        self._compress_cancel = QPushButton(t("publish.files.cancel"))
+        self._compress_cancel.clicked.connect(self._cancel_compression)
+        self._compress_cancel.setVisible(False)
+        buttons.addWidget(self._compress_cancel)
         buttons.addStretch()
         self._back = QPushButton(t("publish.back"))
         self._back.clicked.connect(lambda: self._go(self._current - 1))
@@ -294,6 +363,10 @@ class PublishPreviewDialog(QDialog):
         cancel = QPushButton(t("dialog.cancel_btn"))
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)
+        self._publish = QPushButton(t("publish.publish"))
+        self._publish.setDefault(True)
+        self._publish.clicked.connect(self.accept)
+        buttons.addWidget(self._publish)
         layout.addLayout(buttons)
 
     def add_step(self, index: int, page: QWidget):
@@ -308,11 +381,44 @@ class PublishPreviewDialog(QDialog):
         parts = self._readiness.parts.get(link.piece_id, []) if link.new_piece is None else []
         return plan_voices(self._project, group, parts, self._decisions.setdefault(group.id, VoiceDecisions()))
 
+    def file_plan(self, group: Group) -> FilePlan:
+        """群組要發的檔與各自要取代的（依目前的聲部配對）；群組要已對到曲目"""
+        link = group.huaxia_link
+        scores = self._readiness.scores.get(link.piece_id, []) if link.new_piece is None else []
+        return plan_files(group, self.voice_plan(group), scores, self._file_service)
+
+    def publish_plan(self) -> List[GroupPublish]:
+        """每個沒擋下的群組這次發譜要寫進 HuaXia 的全部內容（依預覽目前的選擇），依專案中的順序"""
+        events = [event for event in self._readiness.concerts if event.id in self._chosen_events]
+        return [
+            group_publish(
+                check.group, self.voice_plan(check.group), self.file_plan(check.group), self._compressed,
+                self._dropped, events, self._compressor.size_limit,
+            )
+            for check in self._checks if not check.blocked
+        ]
+
+    def done(self, code: int):
+        """關閉預覽：停下還在跑的壓縮（之後它不再碰這個對話框），丟掉暫存的壓縮檔"""
+        if self._compress_task is not None:
+            self._compress_task.cancel()
+            self._compress_task.abandon()
+            self._compress_task = None
+        for result in self._compressed.values():
+            self._compressor.discard(result)
+        self._compressed = {}
+        super().done(code)
+
     def _go(self, index: int):
-        """切到第 index 步：步驟列標出目前這步，還沒接上頁面的步驟變灰；「聲部」步依目前對到的曲目重排"""
+        """切到第 index 步：步驟列標出目前這步，還沒接上頁面的步驟變灰；「聲部」「檔案」「確認」步依目前的選擇重排"""
         self._current = index
         if index == 1:
             self._show_voices()
+        elif index == 2:
+            self._start_compression()
+            self._show_files()
+        elif index == 4:
+            self._show_confirm()
         self._stack.setCurrentWidget(self._pages[index])
         for step, label in enumerate(self._step_labels):
             if step == index:
@@ -322,9 +428,20 @@ class PublishPreviewDialog(QDialog):
         self._refresh_buttons()
 
     def _refresh_buttons(self):
-        """「上一步」要有上一步的頁面；「下一步」還要這一步都決定好了"""
+        """「上一步」要有上一步的頁面；「下一步」還要這一步都決定好了；最後一步換成「發譜」"""
+        last = self._current == len(STEPS) - 1
         self._back.setEnabled(self._current - 1 in self._pages)
+        self._next.setVisible(not last)
         self._next.setEnabled(self._current + 1 in self._pages and self._step_ready(self._current))
+        self._publish.setVisible(last)
+        self._publish.setEnabled(last and self._can_publish())
+
+    def _can_publish(self) -> bool:
+        """前兩步都決定好、壓縮做完，有群組可以發，而且超過上限的檔都壓縮好或選了不發"""
+        if self._compress_task is not None or not self._step_ready(0) or not self._step_ready(1):
+            return False
+        plans = self.publish_plan()
+        return bool(plans) and not any(plan.too_large for plan in plans)
 
     def _step_ready(self, index: int) -> bool:
         """第 index 步是否都決定好了：「曲目」要每個沒擋下的群組都對到曲目，「聲部」要沒有群組還不能發"""
@@ -536,6 +653,349 @@ class PublishPreviewDialog(QDialog):
         else:
             rows.discard(index)
         self._refresh_voices(check)
+
+
+    # --- 「檔案」步 ---
+
+    def _build_files_step(self) -> QWidget:
+        """「檔案」步的頁面：每個群組一塊，切到這一步時才排（_show_files）"""
+        scroll = QScrollArea()
+        scroll.setObjectName("files_step")
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        self._files_layout = QVBoxLayout(content)
+        self._files_layout.addStretch()
+        scroll.setWidget(content)
+        return scroll
+
+    def _show_files(self):
+        """重排「檔案」步的每個群組"""
+        for box in self._file_boxes:
+            _discard(box)
+        self._file_boxes = [self._files_box(check) for check in self._checks]
+        for box in self._file_boxes:
+            self._files_layout.insertWidget(self._files_layout.count() - 1, box)
+
+    def _files_box(self, check: GroupCheck) -> QGroupBox:
+        """一個群組在「檔案」步的那一塊：擋下的寫原因，其餘是要發的檔與跳過的檔"""
+        box = QGroupBox(check.group.name)
+        box.setObjectName("files_group")
+        layout = QVBoxLayout(box)
+        if check.blocked:
+            reason = QLabel(blocked_text(check))
+            reason.setObjectName("blocked_reason")
+            reason.setStyleSheet(f"color: {_BLOCKED_COLOR};")
+            layout.addWidget(reason)
+            return box
+        plan = self.file_plan(check.group)
+        layout.addWidget(self._files_table(plan))
+        if plan.skipped:
+            layout.addLayout(self._skipped_row(check.group, plan))
+        return box
+
+    def _files_table(self, plan: FilePlan) -> QTableWidget:
+        """要發的檔：聲部、檔名、大小、要取代的、其他人放的（不動）與壓縮；表格高度剛好放下所有列"""
+        files = plan.publishing
+        table = QTableWidget(len(files), _FILE_COLUMNS)
+        table.setObjectName("files_table")
+        table.setHorizontalHeaderLabels([
+            t("publish.files.voice"), t("publish.files.file"), t("publish.files.size"), t("publish.files.replaces"),
+            t("publish.files.others"),
+            t("publish.files.compression", limit=size_text(self._compressor.size_limit)),
+        ])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.horizontalHeader().setStretchLastSection(True)
+        too_large = set(id(file) for file in oversized(plan, self._compressor.size_limit))
+        for row, file in enumerate(files):
+            replaced = _score_titles(file.replaces) if file.replaces else t("publish.files.new")
+            others = t("publish.files.untouched", titles=_score_titles(file.others)) if file.others else ""
+            texts = (_file_voice(file), os.path.basename(file.path), size_text(file.size), replaced, others)
+            for column, text in enumerate(texts):
+                table.setItem(row, column, QTableWidgetItem(text))
+            table.item(row, 3).setForeground(QColor(_REPLACE_COLOR if file.replaces else _NEW_COLOR))
+            table.item(row, 4).setForeground(QColor(_UNSYNCED_COLOR))
+            if id(file) in too_large:
+                table.item(row, 2).setForeground(QColor(_BLOCKED_COLOR))
+                table.setCellWidget(row, 5, self._compression_cell(file))
+        table.resizeRowsToContents()
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        height = table.horizontalHeader().sizeHint().height() + 2 * table.frameWidth()
+        table.setFixedHeight(height + sum(table.rowHeight(r) for r in range(table.rowCount())))
+        return table
+
+    def _compression_cell(self, file: PublishFile) -> QWidget:
+        """超過上限的一份檔的壓縮欄：狀態，壓縮好時加「開啟」「比較」，做完後都有「不發這份」"""
+        cell = QWidget()
+        cell.setObjectName("compression")
+        layout = QHBoxLayout(cell)
+        layout.setContentsMargins(2, 0, 2, 0)
+        result = self._compressed.get(file.path)
+        if result is not None:
+            text = result_state(result)
+        elif file.path == self._compressing:
+            text = t("publish.files.compressing")
+        elif self._compress_task is not None:
+            text = t("publish.files.waiting")
+        else:
+            text = t("publish.files.not_compressed")
+        state = QLabel(text)
+        state.setObjectName("compression_state")
+        compressed = result is not None and result.status is CompressionStatus.COMPRESSED
+        state.setStyleSheet(f"color: {_NEW_COLOR if compressed else _UNSYNCED_COLOR};")
+        layout.addWidget(state)
+        if compressed:
+            open_button = QPushButton(t("publish.files.open"))
+            open_button.clicked.connect(lambda: self._open_compressed(result))
+            layout.addWidget(open_button)
+            compare = QPushButton(t("publish.files.compare"))
+            compare.clicked.connect(lambda: self._compare(file, result))
+            layout.addWidget(compare)
+        if result is not None or self._compress_task is None:
+            drop = QPushButton(t("publish.files.drop"))
+            drop.setCheckable(True)
+            drop.setChecked(file.path in self._dropped)
+            drop.toggled.connect(lambda on: self._drop(file.path, on))
+            layout.addWidget(drop)
+        layout.addStretch()
+        return cell
+
+    def _skipped_row(self, group: Group, plan: FilePlan) -> QHBoxLayout:
+        """跳過的檔：只在譜庫的（旁邊放「從譜庫下載回來」）與本機找不到的"""
+        row = QHBoxLayout()
+        catalog_only = [os.path.basename(f.path) for f in plan.skipped if f.catalog_only]
+        missing = [os.path.basename(f.path) for f in plan.skipped if not f.catalog_only]
+        lines = []
+        if catalog_only:
+            lines.append(t("publish.files.catalog_only", files="、".join(catalog_only)))
+        if missing:
+            lines.append(t("publish.files.missing", files="、".join(missing)))
+        label = QLabel("\n".join(lines))
+        label.setObjectName("files_skipped")
+        label.setStyleSheet(f"color: {_UNSYNCED_COLOR};")
+        row.addWidget(label)
+        if catalog_only and self._download_back is not None:
+            download = QPushButton(t("download.back"))
+            download.clicked.connect(lambda: self._download(group))
+            row.addWidget(download)
+        row.addStretch()
+        return row
+
+    def _download(self, group: Group):
+        """「從譜庫下載回來」：關掉預覽，交給主視窗在背景下載回原位"""
+        self.reject()
+        self._download_back([group.id])
+
+    def _drop(self, path: str, on: bool):
+        """「不發這份」切換：on 為不發"""
+        if on:
+            self._dropped.add(path)
+        else:
+            self._dropped.discard(path)
+        self._refresh_buttons()
+
+    def _open_compressed(self, result: CompressionResult):
+        """以預設的 PDF 閱讀器開啟壓縮檔"""
+        if not self._opener.open(result.output_path):
+            QMessageBox.warning(self, t("dialog.warning"), t("compare.open_failed"))
+
+    def _compare(self, file: PublishFile, result: CompressionResult):
+        """開共用的比較畫面比較這一份：確定時留下就要發，不要就不發這份"""
+        dialog = CompressionCompareDialog(
+            [(os.path.basename(file.path), result)], self._opener, self, accept_text=t("publish.files.compare_done"),
+        )
+        if dialog.exec() == QDialog.Accepted:
+            self._drop(file.path, not dialog.kept())
+            self._show_files()
+        dialog.deleteLater()
+
+    def _start_compression(self):
+        """第一次進「檔案」步時，在背景逐份壓縮所有群組裡超過上限的檔"""
+        if self._compress_started:
+            return
+        self._compress_started = True
+        paths = [
+            file.path for check in self._checks if not check.blocked
+            for file in oversized(self.file_plan(check.group), self._compressor.size_limit)
+        ]
+        if not paths:
+            return
+        compressor = self._compressor
+
+        def work(should_cancel, report):
+            """一份一份壓；每份開始與壓好時回報，取消時丟掉剛壓好的那份"""
+            for index, path in enumerate(paths, start=1):
+                if should_cancel():
+                    return
+                report((path, index, None))
+                result = compressor.compress(path, should_cancel)
+                if should_cancel():
+                    compressor.discard(result)
+                    return
+                report((path, index, result))
+
+        task = BackgroundTask(work, self)
+        self._compress_task = task
+
+        def progressed(progress):
+            """一份開始或壓好了：更新狀態與「檔案」步"""
+            path, index, result = progress
+            if result is None:
+                self._compressing = path
+                self._compress_status.setText(t(
+                    "publish.files.status", name=os.path.basename(path), index=index, total=len(paths),
+                ))
+            else:
+                self._compressed[path] = result
+            self._compression_changed()
+
+        def finished(_result):
+            """壓完或取消了"""
+            self._compress_task = None
+            self._compressing = None
+            task.deleteLater()
+            self._compress_status.setVisible(False)
+            self._compress_cancel.setVisible(False)
+            self._compression_changed()
+
+        def failed(message: str):
+            """壓縮服務拋出例外：提示後當作做完"""
+            finished(None)
+            QMessageBox.warning(self, t("dialog.warning"), t("publish.files.compress_failed", error=message))
+
+        task.progressed.connect(progressed)
+        task.finished.connect(finished)
+        task.failed.connect(failed)
+        self._compress_status.setText(t("publish.files.waiting"))
+        self._compress_status.setVisible(True)
+        self._compress_cancel.setEnabled(True)
+        self._compress_cancel.setVisible(True)
+        task.start()
+
+    def _cancel_compression(self):
+        """「取消壓縮」：目前這份在頁與頁之間停下，之後的不壓"""
+        if self._compress_task is not None:
+            self._compress_task.cancel()
+            self._compress_cancel.setEnabled(False)
+
+    def _compression_changed(self):
+        """壓縮有進展：重排目前顯示的「檔案」或「確認」步，更新「發譜」"""
+        if self._current == 2:
+            self._show_files()
+        elif self._current == 4:
+            self._show_confirm()
+        self._refresh_buttons()
+
+    # --- 「公演」步 ---
+
+    def _build_events_step(self) -> QWidget:
+        """「公演」步：每場候選公演一個勾選框與說明；沒有候選時寫明"""
+        scroll = QScrollArea()
+        scroll.setObjectName("events_step")
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        heading = QLabel(t("publish.events.heading"))
+        heading.setStyleSheet("font-weight: bold;")
+        layout.addWidget(heading)
+        if not self._readiness.concerts:
+            layout.addWidget(QLabel(t("publish.events.none")))
+        for event in self._readiness.concerts:
+            check = QCheckBox(_event_text(event))
+            check.setObjectName("concert")
+            check.toggled.connect(lambda on, e=event.id: self._choose_event(e, on))
+            layout.addWidget(check)
+            note = QLabel(t("publish.events.note"))
+            note.setObjectName("concert_note")
+            note.setWordWrap(True)
+            note.setStyleSheet(f"color: {_NOTE_COLOR}; margin-left: 20px;")
+            layout.addWidget(note)
+        unattached = QLabel(t("publish.events.unattached"))
+        unattached.setWordWrap(True)
+        unattached.setStyleSheet(f"color: {_NOTE_COLOR};")
+        layout.addWidget(unattached)
+        layout.addStretch()
+        scroll.setWidget(content)
+        return scroll
+
+    def _choose_event(self, event_id: str, on: bool):
+        """勾選或取消一場公演"""
+        if on:
+            self._chosen_events.add(event_id)
+        else:
+            self._chosen_events.discard(event_id)
+
+    # --- 「確認」步 ---
+
+    def _build_confirm_step(self) -> QWidget:
+        """「確認」步的頁面：切到這一步時才排（_show_confirm）"""
+        scroll = QScrollArea()
+        scroll.setObjectName("confirm_step")
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        self._confirm_layout = QVBoxLayout(content)
+        self._confirm_layout.addStretch()
+        scroll.setWidget(content)
+        return scroll
+
+    def _show_confirm(self):
+        """重排「確認」步：每個要發的群組一塊，接著公演、合計與這次不發的群組"""
+        for widget in self._confirm_widgets:
+            _discard(widget)
+        plans = self.publish_plan()
+        widgets: List[QWidget] = [self._confirm_box(plan) for plan in plans]
+        events = [event.title for event in self._readiness.concerts if event.id in self._chosen_events]
+        widgets.append(_named_label(
+            "confirm_events",
+            t("publish.confirm.events", events="、".join(events)) if events else t("publish.confirm.no_events"),
+        ))
+        total = sum(len(plan.uploads) for plan in plans)
+        widgets.append(_named_label("confirm_total", t(
+            "publish.confirm.total", groups=len(plans), count=total, size=size_text(sum(p.size for p in plans)),
+        )))
+        blocked = [check.group.name for check in self._checks if check.blocked]
+        if blocked:
+            widgets.append(_named_label("confirm_blocked", t("publish.confirm.blocked", groups="、".join(blocked))))
+        for widget in widgets:
+            self._confirm_layout.insertWidget(self._confirm_layout.count() - 1, widget)
+        self._confirm_widgets = widgets
+
+    def _confirm_box(self, plan: GroupPublish) -> QGroupBox:
+        """一個群組會寫進 HuaXia 的變動：曲目、聲部、要傳的檔與不發的檔"""
+        box = QGroupBox(plan.group.name)
+        box.setObjectName("confirm_group")
+        layout = QVBoxLayout(box)
+        link = plan.link
+        piece = t("publish.confirm.new_piece", title=link.new_piece.title) if link.new_piece is not None \
+            else t("publish.confirm.piece", title=link.piece_title)
+        layout.addWidget(_named_label("confirm_piece", piece))
+        voices = []
+        if plan.voices.creates:
+            voices.append(t("publish.confirm.creates", voices="、".join(c.name for c in plan.voices.creates)))
+        if plan.voices.updates:
+            voices.append(t("publish.confirm.updates", voices="、".join(u.name for u in plan.voices.updates)))
+        layout.addWidget(_named_label("confirm_voices", "\n".join(voices) or t("publish.confirm.voices_unchanged")))
+        layout.addWidget(_named_label("confirm_files", t(
+            "publish.confirm.files", count=len(plan.uploads), size=size_text(plan.size), replaced=len(plan.replaces),
+        )))
+        not_sent = [os.path.basename(f.path) for f in plan.skipped + plan.dropped]
+        if not_sent:
+            layout.addWidget(_named_label("confirm_not_sent", t("publish.confirm.not_sent", files="、".join(not_sent))))
+        if plan.too_large:
+            waiting = "、".join(os.path.basename(f.path) for f in plan.too_large)
+            label = _named_label("confirm_too_large", t("publish.confirm.too_large", files=waiting))
+            label.setStyleSheet(f"color: {_BLOCKED_COLOR};")
+            layout.addWidget(label)
+        return box
+
+
+def _named_label(name: str, text: str) -> QLabel:
+    """有 objectName、可換行的標籤"""
+    label = QLabel(text)
+    label.setObjectName(name)
+    label.setWordWrap(True)
+    return label
 
 
 def _piece_identity(link: Optional[HuaXiaLink]):

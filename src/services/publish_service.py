@@ -13,7 +13,8 @@
   樂譜，以及可以掛的公演（本學期、還沒結束、類型含公演，upcoming_concerts）。
 
 發譜預覽各步的規則也在這裡：「聲部」步的配對與要寫的內容（plan_voices），「檔案」步每份檔要取代的
-與別人放的（plan_files）；「只在譜庫」與本機找不到的檔在 plan_files 跳過。
+與別人放的（plan_files）；「只在譜庫」與本機找不到的檔在 plan_files 跳過。各步的結果由 group_publish 合成
+一個群組這次發譜要寫進 HuaXia 的全部內容（GroupPublish）。
 
 使用範例：
     from services.publish_service import PublishService, check_groups, project_blocks
@@ -27,11 +28,12 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
-from core.constants import OTHER_SECTION, OrchestraType
-from core.models import CatalogChange, Group, Headcount, Project
+from core.constants import OTHER_SECTION, CompressionStatus, OrchestraType
+from core.models import CatalogChange, Group, Headcount, HuaXiaLink, Project
 from core.naming import is_renamed
 from core.voice_names import duplicate_rows, same_voice
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
+from services.compression_service import CompressionResult
 from services.file_service import FileService
 from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaEvent, HuaXiaPart, HuaXiaPiece, HuaXiaScore
 
@@ -429,6 +431,94 @@ def plan_files(group: Group, voices: VoicePlan, scores: List[HuaXiaScore], file_
             catalog_only=not found and group.has_catalog_copy(file),
         ))
     return FilePlan(files)
+
+
+class Upload(NamedTuple):
+    """一份要傳到 HuaXia 的檔
+
+    Attributes:
+        file: 群組裡的那份檔與它要取代的
+        path: 要傳的檔：壓縮過的是暫存資料夾裡的壓縮檔，否則是本機那份
+        size: 要傳的檔的大小（位元組）
+    """
+    file: PublishFile
+    path: str
+    size: int
+
+
+@dataclass(frozen=True)
+class GroupPublish:
+    """一個群組這次發譜會寫進 HuaXia 的全部內容（發譜預覽確認後交給發譜）
+
+    Attributes:
+        group: 群組
+        link: 對到的 HuaXia 曲目（現有的或新建的）
+        voices: 要新建與覆寫的聲部（plan_voices）
+        uploads: 要傳的檔，依檔案計畫的順序
+        too_large: 超過大小上限、還沒有壓縮好的檔（壓縮中、壓縮失敗或仍超過）；有的話還不能發
+        skipped: 本機找不到、這次跳過的檔（含只在譜庫的）
+        dropped: 譜務選了「不發這份」的檔
+        events: 要掛的公演
+    """
+
+    group: Group
+    link: HuaXiaLink
+    voices: VoicePlan
+    uploads: List[Upload]
+    too_large: List[PublishFile]
+    skipped: List[PublishFile]
+    dropped: List[PublishFile]
+    events: List[HuaXiaEvent]
+
+    @property
+    def replaces(self) -> List[HuaXiaScore]:
+        """要撤掉登記並刪掉檔案本體的樂譜（泠靈發的舊檔）"""
+        return [score for upload in self.uploads for score in upload.file.replaces]
+
+    @property
+    def size(self) -> int:
+        """要傳的檔的總大小（位元組）"""
+        return sum(upload.size for upload in self.uploads)
+
+
+def oversized(files: FilePlan, size_limit: int) -> List[PublishFile]:
+    """要發的檔裡超過大小上限、要先壓縮的"""
+    return [file for file in files.publishing if file.size > size_limit]
+
+
+def group_publish(
+    group: Group, voices: VoicePlan, files: FilePlan, compressed: Dict[str, CompressionResult], dropped: Set[str],
+    events: List[HuaXiaEvent], size_limit: int,
+) -> GroupPublish:
+    """把一個群組在預覽各步的結果合成這次發譜要寫進 HuaXia 的內容
+
+    超過大小上限的檔改傳壓縮好（CompressionStatus.COMPRESSED）的壓縮檔；還沒有壓縮好的列在 too_large。
+
+    Args:
+        group: 群組（已對到曲目）
+        voices: 聲部的配對與要寫的內容
+        files: 要發的檔
+        compressed: 壓縮結果，以本機檔的路徑為鍵
+        dropped: 選了「不發這份」的本機檔路徑
+        events: 要掛的公演
+        size_limit: 單檔大小上限（位元組）
+    """
+    uploads, too_large, skipped_by_choice = [], [], []
+    for file in files.publishing:
+        if file.path in dropped:
+            skipped_by_choice.append(file)
+            continue
+        if file.size > size_limit:
+            result = compressed.get(file.path)
+            if result is None or result.status is not CompressionStatus.COMPRESSED:
+                too_large.append(file)
+                continue
+            uploads.append(Upload(file, result.output_path, result.compressed_size))
+        else:
+            uploads.append(Upload(file, file.path, file.size))
+    return GroupPublish(
+        group, group.huaxia_link, voices, uploads, too_large, files.skipped, skipped_by_choice, list(events),
+    )
 
 
 def upcoming_concerts(events: List[HuaXiaEvent], now: datetime.datetime) -> List[HuaXiaEvent]:

@@ -1581,7 +1581,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, t("publish.title"), _not_ready_text(readiness))
             return
         from ui.publish_dialog import PublishPreviewDialog
-        PublishPreviewDialog(self.project, check_groups(self.project), readiness, self).exec()
+        dialog = PublishPreviewDialog(
+            self.project, check_groups(self.project), readiness, self, compressor=self._compressor,
+            file_service=self.file_service, opener=self._opener, download_back=self.download_back,
+        )
+        dialog.exec()
+        dialog.deleteLater()
         self._instrumentation_table.refresh()
 
     def _club_settings_enable_huaxia(self) -> bool:
