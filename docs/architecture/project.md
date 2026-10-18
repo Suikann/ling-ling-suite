@@ -204,6 +204,7 @@
 - 對應記在群組（`Group.huaxia_link`，`HuaXiaLink`），存進專案檔：曲目編號（`pieces.id`）、給群組面板顯示的曲名，新建時另記新建的欄位（`NewHuaXiaPiece`：曲名、作曲家、時長分鐘數、合奏或絲竹）。不記登入資訊；沒對到的群組存 `null`。新建曲目的編號在發譜一開始才產生並寫進專案，之前為空字串
 - 寫入經編輯操作 `Project.set_huaxia_link(group, link)`，由發譜預覽的「曲目」步呼叫：每個沒被擋下的群組選「挑選現有」（沒封存的曲目）或「新建」，選了就寫進專案（專案變成未存檔）；開啟預覽本身不改專案
 - 編制表上方在譜庫連線之下顯示對到的 HuaXia 曲目（新建的寫明發譜時新建）
+- 發譜預覽「聲部」步手動挑的配對也記在這裡（`HuaXiaLink.part_ids`：泠靈的聲部名稱對應 HuaXia 的聲部編號 `piece_parts.id`），經編輯操作 `Project.choose_huaxia_part(group, voice, part_id)` 寫入，`part_id` 為 None 是改回新建、忘掉記過的配對；名稱規則對上的不記。查詢經 `HuaXiaLink.part_for(voice)`，以同一聲部的規則比對名稱，所以泠靈改了寫法（「二胡 I」改成「二胡1」）照樣找得到；記的是編號，幹部在網頁上改了 HuaXia 那邊的聲部名稱也照樣對得到
 - 新建的預設值是 `NewHuaXiaPiece.for_group(group)`：曲名＋樂章名稱，沒有樂章名稱用樂章編號，整首（兩者都沒有）只用曲名，曲名沒填時用群組名稱；作曲家帶入；時長由秒換算成分鐘（`duration_minutes`），四捨五入到 0.5 分鐘（`HUAXIA_DURATION_STEP_MINUTES`：HuaXia 編輯曲目的表單以 0.5 為一格，別的值會讓網頁表單擋下）；合奏
 
 ### 未存檔狀態

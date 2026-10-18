@@ -117,6 +117,7 @@ def _rich_group(name: str, parts: list) -> Group:
         ),
         huaxia_link=HuaXiaLink(
             piece_id="hx-1", piece_title="命運", new_piece=NewHuaXiaPiece("命運", "Beethoven", 7.5, HuaXiaEnsemble.SIZHU),
+            part_ids={parts[0]: "part-1"},
         ),
     )
 

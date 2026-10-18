@@ -433,16 +433,23 @@ class NewHuaXiaPiece(NamedTuple):
 class HuaXiaLink:
     """群組對到的 HuaXia 曲目：挑選現有的，或發譜時新建的
 
-    只記曲目編號與新建的欄位，不記登入資訊。曲名記下來給群組面板顯示，不必連網。
+    只記曲目編號、新建的欄位與手動挑的聲部配對，不記登入資訊。曲名記下來給群組面板顯示，不必連網。
 
     Attributes:
         piece_id: HuaXia 的曲目編號（pieces.id）；新建的曲目在發譜一開始才產生，之前為空字串
         piece_title: 曲名
         new_piece: 新建時的欄位；挑選現有曲目時為 None
+        part_ids: 發譜預覽「聲部」步手動挑的配對：泠靈的聲部名稱對應 HuaXia 的聲部編號（piece_parts.id）；
+            名稱規則對上的不記。查詢經 part_for，以同一聲部的規則比對聲部名稱
     """
     piece_id: str = ""
     piece_title: str = ""
     new_piece: Optional[NewHuaXiaPiece] = None
+    part_ids: Dict[str, str] = field(default_factory=dict)
+
+    def part_for(self, voice: str) -> Optional[str]:
+        """這個聲部手動挑的 HuaXia 聲部編號；沒挑過時為 None"""
+        return next((part_id for name, part_id in self.part_ids.items() if same_voice(name, voice)), None)
 
     def to_data(self) -> Dict[str, Any]:
         """專案檔中存的內容"""
@@ -450,6 +457,7 @@ class HuaXiaLink:
             "piece_id": self.piece_id,
             "piece_title": self.piece_title,
             "new_piece": self.new_piece.to_data() if self.new_piece else None,
+            "part_ids": dict(self.part_ids),
         }
 
     @classmethod
@@ -460,6 +468,7 @@ class HuaXiaLink:
             piece_id=data.get("piece_id", ""),
             piece_title=data.get("piece_title", ""),
             new_piece=NewHuaXiaPiece.from_data(new_piece) if new_piece else None,
+            part_ids=dict(data.get("part_ids") or {}),
         )
 
 
@@ -1446,6 +1455,22 @@ class Project:
     def set_huaxia_link(self, group: Group, link: Optional[HuaXiaLink]) -> None:
         """設定群組對到的 HuaXia 曲目（發譜預覽的「曲目」步）；None 為還沒對到"""
         group.huaxia_link = link
+        self._changed()
+
+    def choose_huaxia_part(self, group: Group, voice: str, part_id: Optional[str]) -> None:
+        """記下發譜預覽「聲部」步手動挑的配對：這個聲部對到群組對到的曲目上的 HuaXia 聲部
+
+        同一聲部的其他寫法記過的配對一併換掉。群組要已對到 HuaXia 曲目。
+
+        Args:
+            group: 群組
+            voice: 泠靈的聲部名稱
+            part_id: HuaXia 的聲部編號（piece_parts.id）；None 為改回新建，忘掉記過的配對
+        """
+        link = group.huaxia_link
+        link.part_ids = {name: found for name, found in link.part_ids.items() if not same_voice(name, voice)}
+        if part_id is not None:
+            link.part_ids[voice] = part_id
         self._changed()
 
     def set_duration(self, group: Group, seconds: Optional[int]) -> None:

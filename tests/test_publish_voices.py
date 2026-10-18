@@ -16,7 +16,9 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from core.models import HuaXiaLink, Project
 from services.huaxia_client import HuaXiaPart
+from services.project_service import ProjectService
 from test_publish_preflight import PrepareTestCase
 
 
@@ -35,6 +37,43 @@ class TestPrepareReadsParts(PrepareTestCase):
                 HuaXiaPart(erhu, self.fenghuo, "二胡1", "6-8", 6, "拉弦", 2),
             ],
         })
+
+
+class TestChosenPartsAreSaved(unittest.TestCase):
+    """手動挑的配對以 HuaXia 的聲部編號記在群組對到的曲目，存進專案檔"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, True)
+        self.project = Project()
+        self.group = self.project.add_group("烽火操", "總譜")
+        self.project.set_instruments(self.group, ["二胡 I", "琵琶"])
+        self.project.set_huaxia_link(self.group, HuaXiaLink(piece_id="hx-1", piece_title="長城隨想－烽火操"))
+        self.project.mark_saved()
+
+    def reopened(self) -> Project:
+        """存成專案檔再開啟"""
+        path = os.path.join(self.temp_dir, "concert.llproj")
+        ProjectService().save_project(self.project, path)
+        return ProjectService().load_project(path)
+
+    def test_a_chosen_part_survives_reopening(self):
+        self.project.choose_huaxia_part(self.group, "二胡 I", "part-erhu")
+        self.assertTrue(self.project.is_modified())
+        link = self.reopened().groups[0].huaxia_link
+        self.assertEqual(link.part_ids, {"二胡 I": "part-erhu"})
+        self.assertEqual(link.piece_id, "hx-1")
+
+    def test_choosing_new_forgets_the_chosen_part(self):
+        self.project.choose_huaxia_part(self.group, "二胡 I", "part-erhu")
+        self.project.choose_huaxia_part(self.group, "二胡1", None)
+        self.assertEqual(self.reopened().groups[0].huaxia_link.part_ids, {})
+
+    def test_the_chosen_part_is_found_under_another_spelling_of_the_voice(self):
+        self.project.choose_huaxia_part(self.group, "二胡 I", "part-erhu")
+        self.project.choose_huaxia_part(self.group, "二胡1", "part-other")
+        self.assertEqual(self.group.huaxia_link.part_ids, {"二胡1": "part-other"})
+        self.assertEqual(self.group.huaxia_link.part_for("二胡一"), "part-other")
 
 
 if __name__ == "__main__":
