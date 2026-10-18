@@ -12,14 +12,15 @@
 元件不依賴主視窗：帶入專案後以 show_group 顯示任何一個群組；修改一律經專案的編輯操作立即寫入，
 只有改了聲部清單（增刪、改名、排序、本專案有）時再發出 instruments_changed。人數、時長、
 複製編制與聲部組不影響配對，不發出：人數與時長只寫入不重畫，複製編制與聲部組只重畫這張表。
-上方的 header 版面預留給連線。
+上方顯示群組連到譜庫的哪裡（曲目 › 版本 › 樂章）；沒連線時是「連到譜庫…」按鈕，按下發出 link_requested，
+由主視窗開啟連線對話框，連上後以 show_linked 標出依位置猜的聲部。
 
 使用範例：
     table = InstrumentationTable(project)
     table.instruments_changed.connect(refresh_parts)
     table.show_group(group)
 """
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional, Set, TYPE_CHECKING
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QComboBox, QLabel, QMessageBox,
     QAbstractItemView, QMenu, QTableWidget, QTableWidgetItem, QSpinBox, QHeaderView,
@@ -29,7 +30,7 @@ from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from core.constants import INSTRUMENT_PRESETS, TEXT_EXTENSION
 from core.instrument_list import instrument_list_text
 from core.locale import localized, t
-from core.models import DuplicateVoiceError, FileInfo, Headcount
+from core.models import CatalogLink, DuplicateVoiceError, FileInfo, Headcount, LinkResult
 from core.sections import section_label
 from core.voice_names import distinct_voices, duplicate_rows
 from core.voice_suggestions import VoiceCandidates
@@ -58,6 +59,8 @@ _MAX_DURATION_MINUTES = 999
 # 重名的列與本專案沒有的列的文字顏色
 _DUPLICATE_COLOR = QColor("#e74c3c")
 _ABSENT_COLOR = QColor("#888888")
+# 連線時依位置猜的聲部的底色
+_GUESSED_COLOR = QColor("#fff3b0")
 
 
 class VoiceRowsTable(QTableWidget):
@@ -113,6 +116,8 @@ class InstrumentationTable(QWidget):
     """編制表面板：顯示一個群組的編制，修改經專案的編輯操作寫入"""
 
     instruments_changed = Signal()
+    # 按了「連到譜庫…」（目前顯示的群組）
+    link_requested = Signal()
 
     def __init__(
         self, project: Optional["Project"] = None, parent=None, file_service: Optional[FileService] = None,
@@ -133,6 +138,8 @@ class InstrumentationTable(QWidget):
         self._editable = True
         self._filling = False
         self._copy_sources: List["Group"] = []
+        # 連線時依位置猜的聲部（標黃），換顯示別的群組時清掉
+        self._guessed: Set[str] = set()
         self._build_ui()
 
     @staticmethod
@@ -148,8 +155,8 @@ class InstrumentationTable(QWidget):
         title = QLabel(t("instrumentation.title"))
         title.setStyleSheet("font-size: 14px; font-weight: bold;")
         layout.addWidget(title)
-        # 預留給連線（曲目 › 版本 › 樂章）
         self.header = QVBoxLayout()
+        self.header.addLayout(self._build_link_row())
         layout.addLayout(self.header)
         layout.addLayout(self._build_duration_row())
         self._preset_combo = QComboBox()
@@ -206,6 +213,17 @@ class InstrumentationTable(QWidget):
         export_btn.clicked.connect(self._export_instruments)
         layout.addWidget(export_btn)
 
+    def _build_link_row(self) -> QHBoxLayout:
+        """連線一列：連到哪裡（曲目 › 版本 › 樂章），沒連線時是「連到譜庫…」按鈕"""
+        row = QHBoxLayout()
+        self._link_label = QLabel()
+        self._link_label.setWordWrap(True)
+        row.addWidget(self._link_label, stretch=1)
+        self._link_button = QPushButton(t("catalog.link.button"))
+        self._link_button.clicked.connect(self.link_requested.emit)
+        row.addWidget(self._link_button)
+        return row
+
     def _build_duration_row(self) -> QHBoxLayout:
         """時長一列：分、秒兩個欄位"""
         row = QHBoxLayout()
@@ -240,9 +258,15 @@ class InstrumentationTable(QWidget):
     def show_group(self, group: Optional["Group"]):
         """顯示群組的編制；不是群組時清空並停用，輸入的聲部才不會沒有地方寫入。只顯示，不寫入專案"""
         self._group = group
+        self._guessed = set()
         self.setEnabled(group is not None and self._editable)
         self._show_moved([])
         self._fill()
+
+    def show_linked(self, result: LinkResult):
+        """目前的群組剛連到譜庫：重畫、標黃依位置猜的聲部、寫出移到未分組的分譜，發出 instruments_changed"""
+        self._guessed = set(result.guessed)
+        self._changed(result.moved)
 
     def refresh(self):
         """依專案重畫目前群組的編制（在別處改了專案設定，例如樂團類型之後）"""
@@ -251,6 +275,7 @@ class InstrumentationTable(QWidget):
     def _fill(self):
         """依群組重畫整張表與時長（由程式填值，不觸發編輯操作）"""
         self._filling = True
+        self._show_link()
         self._table.clearContents()
         voices = list(self._group.instruments) if self._group else []
         self._table.setRowCount(len(voices))
@@ -263,8 +288,15 @@ class InstrumentationTable(QWidget):
         self._filling = False
         self._list_copy_sources()
 
+    def _show_link(self):
+        """顯示群組連到譜庫的哪裡；沒連線時顯示「連到譜庫…」按鈕，不是群組時兩者都收起"""
+        link = self._group.catalog_link if self._group else None
+        self._link_label.setText(_link_text(link) if link else "")
+        self._link_label.setVisible(link is not None)
+        self._link_button.setVisible(self._group is not None and link is None)
+
     def _fill_row(self, row: int, voice: str, duplicate: bool):
-        """填一列：本專案有的勾選框、聲部名稱（重名標紅、本專案沒有的變灰）、聲部組選單與影響範圍"""
+        """填一列：本專案有的勾選框、聲部名稱（重名標紅、本專案沒有的變灰、依位置猜的標黃）、聲部組選單與影響範圍"""
         present = self._group.present[row]
         check = QTableWidgetItem()
         check.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
@@ -278,6 +310,10 @@ class InstrumentationTable(QWidget):
             name.setToolTip(t("instrumentation.duplicate_row"))
         elif not present:
             name.setForeground(QBrush(_ABSENT_COLOR))
+        if voice in self._guessed:
+            name.setBackground(QBrush(_GUESSED_COLOR))
+            if not duplicate:
+                name.setToolTip(t("catalog.link.guessed"))
         self._table.setItem(row, self.column("voice"), name)
         for column, tip in (("minimum", "instrumentation.minimum_tip"), ("maximum", "instrumentation.maximum_tip")):
             spin = _count_spin(_MAX_HEADCOUNT)
@@ -503,6 +539,14 @@ class InstrumentationTable(QWidget):
             QMessageBox.critical(self, t("dialog.error"), str(e))
             return
         QMessageBox.information(self, t("dialog.info"), t("instrument.export_done", path=path))
+
+
+def _link_text(link: CatalogLink) -> str:
+    """連線的顯示：曲目 › 版本 › 樂章（整首時寫整首；版本沒有標示時寫未命名版本）"""
+    return t(
+        "catalog.link.path", piece=link.piece_title, edition=link.edition_label or t("catalog.link.unnamed_edition"),
+        movement=link.movement_name if link.movement_id else t("catalog.link.whole"),
+    )
 
 
 def _count_spin(maximum: int, blank_zero: bool = True) -> QSpinBox:

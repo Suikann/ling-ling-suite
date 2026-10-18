@@ -10,6 +10,12 @@ from typing import Dict, List, Optional, Tuple
 from core.models import Headcount
 
 
+def sort_order_key(value: str) -> Tuple[int, int]:
+    """排序欄（sort_order）的排序鍵：數字依大小排，空白或不是數字的排在最後（排序穩定，同值時保留工作表的順序）"""
+    value = value.strip()
+    return (0, int(value)) if value.isdigit() else (1, 0)
+
+
 @dataclass(frozen=True)
 class Composer:
     """作曲家"""
@@ -148,6 +154,24 @@ class CatalogOverview:
     folder_pieces: Dict[str, Piece] = field(default_factory=dict)
     root: FolderContents = field(default_factory=FolderContents)
     voice_names: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class LinkTargets:
+    """群組連線時可以挑的曲目、版本與樂章（連線對話框依序挑曲目 → 版本 → 樂章或整首）"""
+    pieces: List[Piece] = field(default_factory=list)
+    editions: List[Edition] = field(default_factory=list)
+    movements: List[Movement] = field(default_factory=list)
+
+    def editions_of(self, piece_id: str) -> List[Edition]:
+        """曲目的版本，依工作表的順序"""
+        return [e for e in self.editions if e.piece_id == piece_id]
+
+    def movements_of(self, piece_id: str) -> List[Movement]:
+        """曲目的樂章，依排序欄（不是數字的排在最後，同值時依工作表的順序）"""
+        return sorted(
+            (m for m in self.movements if m.piece_id == piece_id), key=lambda m: sort_order_key(m.sort_order),
+        )
 
 
 @dataclass(frozen=True)

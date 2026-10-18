@@ -34,8 +34,8 @@ from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, OrchestraType
 from core.voice_suggestions import ranked_by_usage
 from core.catalog_models import (
-    CatalogOverview, CatalogPlace, Composer, DriveFile, Edition, EditionFiles, FolderContents, Movement, Part,
-    Performance, Piece, PieceDetail,
+    CatalogOverview, CatalogPlace, Composer, DriveFile, Edition, EditionFiles, FolderContents, LinkTargets, Movement,
+    Part, Performance, Piece, PieceDetail, sort_order_key,
 )
 from core.models import Headcount
 from core.voice_names import instrument_key, voice_key
@@ -108,17 +108,11 @@ def _count(value: str) -> Optional[int]:
     return int(value) if value.isdigit() and int(value) > 0 else None
 
 
-def _sort_key(value: str) -> Tuple[int, int]:
-    """排序欄的值：數字依大小排，空白或不是數字的排在最後（同值時保留工作表的順序）"""
-    value = value.strip()
-    return (0, int(value)) if value.isdigit() else (1, 0)
-
-
 def _place_voices(parts: List[Part]) -> List[Tuple[str, Headcount]]:
     """一處的聲部與人數：依排序欄排，略過總譜列；同一聲部有兩列時只認排在前面那一列"""
     seen = set()
     voices = []
-    for part in sorted(parts, key=lambda p: _sort_key(p.sort_order)):
+    for part in sorted(parts, key=lambda p: sort_order_key(p.sort_order)):
         key = voice_key(part.instrument_name)
         if _is_true(part.is_score) or not part.instrument_name.strip() or key in seen:
             continue
@@ -421,6 +415,19 @@ class CatalogService:
                 return PUBLISHING_PLATFORM_NAMES.get(value)
         return None
 
+    def link_targets(self) -> LinkTargets:
+        """讀群組連線時可以挑的曲目、版本與樂章（一次請求）
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        piece_rows, edition_rows, movement_rows = self._read_sheets(SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS)
+        return LinkTargets(
+            pieces=_models(piece_rows, SHEET_PIECES, Piece),
+            editions=_models(edition_rows, SHEET_EDITIONS, Edition),
+            movements=_models(movement_rows, SHEET_MOVEMENTS, Movement),
+        )
+
     def read_place(self, edition_id: str, movement_id: str, orchestra_type: OrchestraType) -> CatalogPlace:
         """讀譜庫裡的一處（版本的整首或一個樂章）：編制、時長，連同社團的聲部組對照（兩次請求）
 
@@ -442,7 +449,8 @@ class CatalogService:
             sheet for sheet in (SHEET_DURATIONS, SHEET_SECTIONS) if sheet in titles
         ]
         tables = dict(zip(sheets, self._read_sheets(*sheets)))
-        edition = next((e for e in _models(tables[SHEET_EDITIONS], SHEET_EDITIONS, Edition) if e.id == edition_id), None)
+        editions = _models(tables[SHEET_EDITIONS], SHEET_EDITIONS, Edition)
+        edition = next((e for e in editions if e.id == edition_id), None)
         if edition is None:
             raise CatalogError(CatalogErrorKind.GONE, f"edition {edition_id} is no longer in the catalog")
         movement = None
@@ -452,7 +460,8 @@ class CatalogService:
             )
             if movement is None:
                 raise CatalogError(CatalogErrorKind.GONE, f"movement {movement_id} is no longer in the catalog")
-        piece = next((p for p in _models(tables[SHEET_PIECES], SHEET_PIECES, Piece) if p.id == edition.piece_id), Piece())
+        pieces = _models(tables[SHEET_PIECES], SHEET_PIECES, Piece)
+        piece = next((p for p in pieces if p.id == edition.piece_id), Piece())
         parts = [
             p for p in _models(tables[SHEET_PARTS], SHEET_PARTS, Part)
             if p.edition_id == edition_id and p.movement_id == movement_id

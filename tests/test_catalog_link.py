@@ -42,6 +42,18 @@ class LinkTestCase(unittest.TestCase):
         )
 
 
+class TestLinkTargets(LinkTestCase):
+    """連線對話框挑選的曲目、版本與樂章，一次請求讀出"""
+
+    def test_reads_pieces_editions_and_movements_in_one_request(self):
+        add_row(self.google, SHEET_MOVEMENTS, id="m0", piece_id="p1", movement_number="0", name="引子", sort_order="0")
+        targets = self.catalog.link_targets()
+        self.assertEqual([p.title for p in targets.pieces], ["春江花月夜"])
+        self.assertEqual([e.id for e in targets.editions_of("p1")], ["e1"])
+        self.assertEqual([m.id for m in targets.movements_of("p1")], ["m0", "m1"])
+        self.assertEqual(self.google.requests, 1)
+
+
 class TestReadPlace(LinkTestCase):
     """讀一處（版本的整首或一個樂章）的編制、時長與社團的聲部組對照"""
 
@@ -193,7 +205,10 @@ class ProjectLinkTestCase(LinkTestCase):
         self.part("揚琴", "4", headcount_min="1")
         add_row(self.google, SHEET_DURATIONS, id="d1", edition_id="e1", movement_id="m1", seconds="425")
         for n, (instrument, section) in enumerate((("二胡", "拉弦"), ("琵琶", "彈撥"), ("揚琴", "彈撥"))):
-            add_row(self.google, SHEET_SECTIONS, id=f"s{n}", orchestra_type="chinese", instrument=instrument, section=section)
+            add_row(
+                self.google, SHEET_SECTIONS, id=f"s{n}", orchestra_type="chinese", instrument=instrument,
+                section=section,
+            )
 
     def link(self):
         """讀第一樂章並把群組連過去"""

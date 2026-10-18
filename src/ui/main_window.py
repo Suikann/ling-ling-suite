@@ -5,7 +5,7 @@
 應用程式的主要視窗，整合所有 UI 面板。
 """
 import os
-from typing import Any, Callable, Iterable, List, NamedTuple, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QCheckBox, QComboBox, QPushButton, QFileDialog,
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
-    CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
+    CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
@@ -22,6 +22,7 @@ from core.launch_env import app_version, current_build
 from core.locale import t, get_locale, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
+from core.voice_names import duplicate_rows
 from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
 from services.compression_output_service import CompressionBatch, CompressionOutputService
@@ -40,6 +41,9 @@ from services.split_service import SplitService
 from ui.background_task import BackgroundTask, Work
 from ui.instrumentation_table import InstrumentationTable
 from ui.widgets import ask_save_path
+
+if TYPE_CHECKING:
+    from services.catalog_service import CatalogService
 
 
 # 關閉程式時選了取消背景工作，最多等它停下幾秒（停在頁與頁之間，通常不到一秒）；
@@ -95,6 +99,7 @@ class MainWindow(QMainWindow):
         compressor: Optional[CompressionService] = None,
         log: Optional[ActivityLog] = None,
         huaxia_auth: Optional[HuaXiaAuthService] = None,
+        catalog_factory: Optional[Callable[[], "CatalogService"]] = None,
     ):
         """建立主視窗；刪掉舊版的明文權杖檔，不碰安全儲存
 
@@ -107,6 +112,7 @@ class MainWindow(QMainWindow):
             compressor: PDF 壓縮服務；省略時以使用者資料目錄下的暫存資料夾建立
             log: 紀錄檔；省略時以使用者資料目錄下的紀錄檔資料夾建立
             huaxia_auth: HuaXia 登入服務；省略時以系統的安全儲存接真的 HuaXia
+            catalog_factory: 在背景執行緒取得譜庫服務的函式（群組連到譜庫用）；省略時以登入服務接 Google
         """
         super().__init__(parent)
         self.project = self._blank_project()
@@ -129,6 +135,7 @@ class MainWindow(QMainWindow):
         self._huaxia_auth = huaxia_auth or HuaXiaAuthService(opener=self._opener)
         self._huaxia_login_not_saved.connect(self._warn_huaxia_login_not_saved)
         self._huaxia_auth.subscribe_not_saved(self._huaxia_login_not_saved.emit)
+        self._catalog_factory = catalog_factory or self._open_google_catalog
         self._compressor = compressor or CompressionService(self.file_service)
         self._compression_output = CompressionOutputService(self.file_service, self._compressor)
         self._log = log or ActivityLog(self.file_service)
@@ -227,6 +234,7 @@ class MainWindow(QMainWindow):
         )
         self._instrumentation_table.setMinimumWidth(300)
         self._instrumentation_table.instruments_changed.connect(self._on_instruments_changed)
+        self._instrumentation_table.link_requested.connect(self._link_group_to_catalog)
         splitter.addWidget(self._instrumentation_table)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
@@ -1006,19 +1014,48 @@ class MainWindow(QMainWindow):
         """HuaXia 登入或續期換到的續期權杖沒寫進安全儲存：提示下次啟動需要重新登入"""
         QMessageBox.warning(self, t("huaxia.auth.title"), t("catalog.auth.reason.not_saved"))
 
+    def _catalog_ready(self) -> bool:
+        """譜庫已設定（登入 Google、有譜庫試算表）；還沒有時先引導設定，回傳設定完成與否"""
+        spreadsheet_id = self._preferences.get(CATALOG_SPREADSHEET_ID_KEY)
+        if self._auth_service.get_credentials() is None or not spreadsheet_id:
+            return self._open_catalog_settings()
+        return True
+
     def _open_catalog(self):
         """開啟譜庫瀏覽器，尚未設定時先引導設定"""
-        auth = self._auth_service
-        spreadsheet_id = self._preferences.get(CATALOG_SPREADSHEET_ID_KEY)
-        if auth.get_credentials() is None or not spreadsheet_id:
-            if not self._open_catalog_settings():
-                return
+        if not self._catalog_ready():
+            return
         from ui.catalog_window import CatalogWindow
         self._catalog_window = CatalogWindow(
-            auth, self._preferences, log=self._log, huaxia_auth=self._huaxia_auth,
+            self._auth_service, self._preferences, log=self._log, huaxia_auth=self._huaxia_auth,
             voice_candidates=self._voice_candidates,
         )
         self._catalog_window.show()
+
+    def _open_google_catalog(self) -> "CatalogService":
+        """以登入服務的憑證接 Google 的譜庫服務（背景執行緒呼叫，拿不到時丟出 CatalogError）"""
+        from services.google_catalog import open_google_catalog
+        return open_google_catalog(self._auth_service, self._preferences.get(CATALOG_SPREADSHEET_ID_KEY) or "")
+
+    def _link_group_to_catalog(self):
+        """編制表按了「連到譜庫…」：樂器表有重名的列時寫出是哪幾列；譜庫還沒設定時先引導設定，再開連線對話框"""
+        group = self._current_group()
+        if group is None:
+            return
+        from ui.catalog_link_dialog import CatalogLinkDialog, duplicate_rows_text
+        rows = duplicate_rows(group.instruments)
+        if rows:
+            QMessageBox.warning(self, t("catalog.link.title"), duplicate_rows_text(group, rows))
+            return
+        if not self._catalog_ready():
+            return
+        dialog = CatalogLinkDialog(
+            self._catalog_factory, self.project, group, self._preferences.get(CATALOG_ROOT_FOLDER_ID_KEY) or "",
+            self, log=self._log, open_settings=self._open_catalog_settings,
+        )
+        dialog.linked.connect(self._instrumentation_table.show_linked)
+        dialog.finished.connect(dialog.deleteLater)
+        dialog.open()
 
     def _open_catalog_settings(self) -> bool:
         """開啟譜庫設定，回傳是否設定完成"""

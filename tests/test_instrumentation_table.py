@@ -19,13 +19,16 @@ from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QLabel, QMessageBox, QPushButton, QSpinBox, QTableWidget,
 )
 
+from core.catalog_models import CatalogPlace
 from core.locale import get_keys, t
-from core.models import FileInfo, Group, Headcount, Project
+from core.models import FileInfo, Group, Headcount, LinkResult, Project
 from ui.instrumentation_table import InstrumentationTable
 from tests.test_main_window import button_in
 
 # 重名的列的文字顏色
 DUPLICATE_RED = "#e74c3c"
+# 連線時依位置猜的聲部的底色
+GUESSED_YELLOW = "#fff3b0"
 
 
 def _files(*names: str) -> List[FileInfo]:
@@ -256,3 +259,44 @@ class TestOldHeadcountDialogIsGone(InstrumentationTableTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCatalogLinkAboveTheTable(InstrumentationTableTestCase):
+    """編制表上方顯示群組連到譜庫的哪裡；沒連線時是「連到譜庫…」按鈕"""
+
+    def link(self, movement_name: str = "江樓鐘鼓"):
+        place = CatalogPlace(
+            edition_id="e1", movement_id="m1" if movement_name else "", piece_title="春江花月夜",
+            edition_label="彭修文編", movement_name=movement_name,
+        )
+        group = Group(name="h")
+        self.project.groups.append(group)
+        result = self.project.link_group(group, place)
+        self.editor.show_group(group)
+        return result
+
+    def test_unlinked_group_offers_linking(self):
+        requested = []
+        self.editor.link_requested.connect(lambda: requested.append(True))
+        button = button_in(self.editor, QPushButton, t("catalog.link.button"))
+        self.assertTrue(button.isVisibleTo(self.editor))
+        button.click()
+        self.assertEqual(requested, [True])
+
+    def test_linked_group_shows_piece_edition_and_movement(self):
+        self.link()
+        self.assertIn("春江花月夜 › 彭修文編 › 江樓鐘鼓", self.shown_texts())
+        self.assertFalse(button_in(self.editor, QPushButton, t("catalog.link.button")).isVisibleTo(self.editor))
+
+    def test_whole_piece_link_says_whole(self):
+        self.link(movement_name="")
+        self.assertIn(f"春江花月夜 › 彭修文編 › {t('catalog.link.whole')}", self.shown_texts())
+
+    def test_guessed_voices_are_marked_until_another_group_is_shown(self):
+        self.editor.show_linked(LinkResult(guessed=["Oboe"]))
+        column = self.editor.column("voice")
+        self.assertEqual(self.table.item(1, column).background().color().name(), GUESSED_YELLOW)
+        self.assertEqual(self.table.item(1, column).toolTip(), t("catalog.link.guessed"))
+        self.assertNotEqual(self.table.item(0, column).background().color().name(), GUESSED_YELLOW)
+        self.editor.show_group(self.group)
+        self.assertNotEqual(self.table.item(1, column).background().color().name(), GUESSED_YELLOW)
