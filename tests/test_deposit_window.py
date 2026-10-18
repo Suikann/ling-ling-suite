@@ -18,6 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from PySide6.QtCore import QEvent
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton
 
@@ -208,6 +209,15 @@ class TestUndeposited(DepositWindowTestCase):
         bar = self.undeposited_bar()
         self.assertFalse(bar.isHidden())
         self.assertEqual(bar.text(), t("deposit.undeposited.bar", files="琵琶.pdf"))
+
+    def test_coming_back_to_the_window_checks_the_files_again(self):
+        self.assertTrue(self.undeposited_bar().isHidden())
+        self.change_pipa()
+        bar = self.window._tab_widget.widget(1).findChild(QLabel, "undeposited_bar")
+        self.assertTrue(bar.isHidden())
+        with mock.patch.object(self.window, "isActiveWindow", return_value=True):
+            self.window.changeEvent(QEvent(QEvent.ActivationChange))
+        self.assertFalse(bar.isHidden())
 
     def test_closing_reminds_once_and_can_be_cancelled(self):
         self.change_pipa()

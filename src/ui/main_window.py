@@ -481,10 +481,12 @@ class MainWindow(QMainWindow):
             tab.show_undeposited()
 
     def changeEvent(self, event):
-        """切回這個視窗時，目前的群組分頁重新比對未存入的檔"""
+        """切回這個視窗時：目前的群組分頁重新比對未存入的檔（本機的檔可能在別的程式裡改過），
+        「發譜」依記住的社團設定顯示或隱藏（例如關掉讀過社團設定的譜庫視窗）"""
         super().changeEvent(event)
         if event.type() == QEvent.ActivationChange and self.isActiveWindow():
             self._show_undeposited()
+            self._show_publish_button()
 
     # --- 編制表回呼 ---
 
@@ -1648,12 +1650,6 @@ class MainWindow(QMainWindow):
     def _show_publish_button(self):
         """依這台電腦記住的社團設定顯示或隱藏「發譜」"""
         self._publish_btn.setVisible(self._club_settings.remembered() is PublishingPlatform.HUAXIA)
-
-    def changeEvent(self, event):
-        """回到主視窗時（例如關掉讀過社團設定的譜庫視窗）依記住的社團設定更新「發譜」"""
-        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
-            self._show_publish_button()
-        super().changeEvent(event)
 
     def _publish(self):
         """按了「發譜」：檢查能不能發，不能就寫出原因；能就開啟發譜預覽
