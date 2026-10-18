@@ -47,6 +47,10 @@ LINGLING_STORAGE_PREFIX = "lingling/"
 _LINGLING_PATH = re.compile(re.escape(LINGLING_STORAGE_PREFIX) + r"[^/]+/[0-9a-f]{64}\.pdf")
 # Storage 列出檔案時一次要幾筆（Supabase 的預設）
 _STORAGE_PAGE_SIZE = 100
+# 讀資料表時一次要幾列（Supabase 的 max_rows 預設 1000；HuaXia 設得更小時回得較少，照樣讀到回空為止）
+_TABLE_PAGE_SIZE = 1000
+# 以 in.(…) 篩選時一個請求帶幾個編號（避免網址過長），多的分成幾個請求
+_IN_FILTER_CHUNK = 50
 # 一個請求最多等這麼久（秒）
 _REQUEST_TIMEOUT = 30
 # PostgREST 回報找不到資料庫函式的錯誤代碼
@@ -282,6 +286,49 @@ class HuaXiaClient:
         params = {"select": columns, **{column: f"eq.{value}" for column, value in equals.items()}}
         return self._call("GET", f"/rest/v1/{table}", access_token, params=params)
 
+    def select_all(
+        self, table: str, access_token: str, columns: str, filters: Optional[Dict[str, str]] = None,
+        within: Optional[Tuple[str, List[str]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """以使用者身分讀資料表裡符合篩選的所有列：依 id 分頁讀到回空為止，不受 HuaXia 一次最多回傳幾列限制
+
+        Args:
+            table: 資料表名稱
+            access_token: 使用者的 access token
+            columns: 要讀的欄位，以逗號分隔（要含 id）
+            filters: 欄位名稱對應 PostgREST 的篩選（例如 "eq.false"）
+            within: （欄位名稱，值）：只讀這個欄位是其中一個值的列；值是空的時不送請求、回傳空的
+
+        Returns:
+            讀到的列（照 HuaXia 的 RLS，只有看得到的）
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        if within is None:
+            batches = [dict(filters or {})]
+        else:
+            column, values = within
+            batches = [
+                {**(filters or {}), column: f"in.({','.join(values[i:i + _IN_FILTER_CHUNK])})"}
+                for i in range(0, len(values), _IN_FILTER_CHUNK)
+            ]
+        rows: List[Dict[str, Any]] = []
+        for batch in batches:
+            offset = 0
+            while True:
+                page = self._call("GET", f"/rest/v1/{table}", access_token, params={
+                    "select": columns, "order": "id.asc", "offset": str(offset), "limit": str(_TABLE_PAGE_SIZE),
+                    **batch,
+                })
+                if not isinstance(page, list):
+                    raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected {table}: {page!r}")
+                if not page:
+                    break
+                rows.extend(page)
+                offset += len(page)
+        return rows
+
     def publish_interface_version(self, access_token: str) -> Optional[int]:
         """HuaXia 發譜函式的介面版本；HuaXia 沒有發譜函式時為 None
 
@@ -304,7 +351,9 @@ class HuaXiaClient:
         Raises:
             HuaXiaError: 連不上或讀取失敗
         """
-        rows = self.select("pieces", access_token, "id,title,composer,duration_min,ensemble", archived="false")
+        rows = self.select_all(
+            "pieces", access_token, "id,title,composer,duration_min,ensemble", filters={"archived": "eq.false"},
+        )
         try:
             pieces = [
                 HuaXiaPiece(
@@ -318,13 +367,16 @@ class HuaXiaClient:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected pieces: {e}") from e
         return sorted(pieces, key=lambda piece: piece.title)
 
-    def piece_parts(self, access_token: str) -> List[HuaXiaPart]:
-        """看得到的所有曲目的聲部，依曲目、排序與名稱（同 HuaXia 網頁的 order(sort)）
+    def piece_parts(self, access_token: str, piece_ids: List[str]) -> List[HuaXiaPart]:
+        """這幾首曲目的聲部（全部讀完），依曲目、排序與名稱（同 HuaXia 網頁的 order(sort)）
 
         Raises:
             HuaXiaError: 連不上或讀取失敗
         """
-        rows = self.select("piece_parts", access_token, "id,piece_id,name,needed,needed_min,section,sort")
+        rows = self.select_all(
+            "piece_parts", access_token, "id,piece_id,name,needed,needed_min,section,sort",
+            within=("piece_id", list(piece_ids)),
+        )
         try:
             parts = [
                 HuaXiaPart(
@@ -337,13 +389,16 @@ class HuaXiaClient:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected piece parts: {e}") from e
         return sorted(parts, key=lambda part: (part.piece_id, part.sort, part.name))
 
-    def scores(self, access_token: str) -> List[HuaXiaScore]:
-        """看得到的所有曲目上登記的樂譜，依曲目與登記的先後
+    def scores(self, access_token: str, piece_ids: List[str]) -> List[HuaXiaScore]:
+        """這幾首曲目上登記的樂譜（全部讀完），依曲目與登記的先後
 
         Raises:
             HuaXiaError: 連不上或讀取失敗
         """
-        rows = self.select("scores", access_token, "id,piece_id,part_id,title,file_path,section,created_at")
+        rows = self.select_all(
+            "scores", access_token, "id,piece_id,part_id,title,file_path,section,created_at",
+            within=("piece_id", list(piece_ids)),
+        )
         try:
             ordered = sorted(rows, key=lambda row: (row["piece_id"], row.get("created_at") or ""))
             return [

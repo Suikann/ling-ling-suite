@@ -561,14 +561,13 @@ class PublishService:
         if version != PUBLISH_INTERFACE_VERSION:
             return PublishReadiness(function_problem=FunctionProblem.VERSION_MISMATCH, function_version=version)
         pieces = self._client.pieces(token)
-        parts: Dict[str, List[HuaXiaPart]] = {piece.id: [] for piece in pieces}
-        for part in self._client.piece_parts(token):
-            if part.piece_id in parts:
-                parts[part.piece_id].append(part)
-        scores: Dict[str, List[HuaXiaScore]] = {piece.id: [] for piece in pieces}
-        for score in self._client.scores(token):
-            if score.piece_id in scores:
-                scores[score.piece_id].append(score)
+        piece_ids = [piece.id for piece in pieces]
+        parts: Dict[str, List[HuaXiaPart]] = {piece_id: [] for piece_id in piece_ids}
+        for part in self._client.piece_parts(token, piece_ids):
+            parts[part.piece_id].append(part)
+        scores: Dict[str, List[HuaXiaScore]] = {piece_id: [] for piece_id in piece_ids}
+        for score in self._client.scores(token, piece_ids):
+            scores[score.piece_id].append(score)
         semester = self._client.current_semester(token)
         events = self._client.events(token, semester) if semester else []
         return PublishReadiness(

@@ -277,5 +277,33 @@ class TestPrepare(PrepareTestCase):
         self.assertIs(raised.exception.kind, HuaXiaErrorKind.SIGNED_OUT)
 
 
+class TestPrepareReadsEveryRow(PrepareTestCase):
+    """HuaXia 一次最多回傳 max_rows 列（Supabase 預設 1000）：曲目、聲部與樂譜都分頁讀完，只讀可以挑的曲目的"""
+
+    def setUp(self):
+        super().setUp()
+        self.huaxia.max_rows = 3
+        self.archived = next(row["id"] for row in self.huaxia.tables["pieces"] if row["archived"])
+        for n in range(4):
+            self.huaxia.add_piece(f"小品 {n}")
+            part = self.huaxia.add_part(self.fenghuo, f"二胡 {n + 1}", sort=n)
+            self.huaxia.add_score(self.fenghuo, part, f"{self.fenghuo}/{part}/{n}.pdf")
+            self.huaxia.add_part(self.archived, f"琵琶 {n + 1}", sort=n)
+            self.huaxia.add_score(self.archived, None, f"{self.archived}/full/{n}.pdf")
+
+    def test_more_rows_than_one_response_holds_are_all_read(self):
+        readiness = self.service.prepare()
+        self.assertEqual(len(readiness.pieces), 6)
+        self.assertEqual([part.name for part in readiness.parts[self.fenghuo]], [f"二胡 {n}" for n in range(1, 5)])
+        self.assertEqual(len(readiness.scores[self.fenghuo]), 4)
+
+    def test_parts_and_scores_of_archived_pieces_are_not_requested(self):
+        self.service.prepare()
+        for request in self.huaxia.requests:
+            if request["path"] in ("/rest/v1/piece_parts", "/rest/v1/scores"):
+                self.assertTrue(request["params"].get("piece_id", "").startswith("in."), request)
+                self.assertNotIn(self.archived, request["params"]["piece_id"])
+
+
 if __name__ == "__main__":
     unittest.main()

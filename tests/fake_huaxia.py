@@ -8,7 +8,8 @@
 - Auth：authorize（由開瀏覽器的替身呼叫 authorize 取得授權碼）、PKCE 兌換、續期與輪替
   （續期權杖只能用一次，重用用過的會撤銷整個 session）、logout 的 scope=local 與 global
   （sign_out_everywhere 扮演在 HuaXia 網頁按了登出全部）。
-- PostgREST：資料表的讀取（select 欄位與 eq 篩選），各表的讀取權限照 HuaXia 的 RLS 寫在 _READ_POLICIES。
+- PostgREST：資料表的讀取（select 欄位、eq 與 in 篩選、order、limit 與 offset），各表的讀取權限照 HuaXia 的 RLS
+  寫在 _READ_POLICIES。一次最多回傳 max_rows 列（同 Supabase 的 max_rows，預設 1000），多的要分頁讀。
 - rpc：is_officer（帳號啟用且有 admin 或 officer）；發譜函式的版本查詢預設不存在（同 HuaXia 合併 #117 之前），
   以 install_publish_function 裝上指定的版本。
 - 曲目（pieces）與聲部（piece_parts）：以 add_piece、add_part 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider
@@ -102,6 +103,7 @@ class FakeHuaXia:
         self._counter = itertools.count(1)
         self.expires_in = TOKEN_LIFETIME
         self.offline = False
+        self.max_rows = 1000
         self.requests: List[Dict[str, Any]] = []
         self.tables: Dict[str, List[Dict[str, Any]]] = {
             "profiles": [], "user_roles": [], "pieces": [], "piece_parts": [], "scores": [], "semesters": [],
@@ -467,7 +469,8 @@ class FakeHuaXia:
         )
 
     def _rest(self, table: str, record: Dict[str, Any]) -> _Response:
-        """/rest/v1/<table>：目前只有讀取（GET），照 RLS 只回呼叫者看得到的列"""
+        """/rest/v1/<table>：目前只有讀取（GET），照 RLS 只回呼叫者看得到的列，依 order 排序、照 offset 與 limit
+        取一段，一次最多 max_rows 列"""
         if table not in self.tables:
             return _Response(404, {"code": "PGRST205", "message": f"Could not find the table public.{table}"})
         if record["method"] != "GET":
@@ -475,10 +478,17 @@ class FakeHuaXia:
         caller = self._caller(record)
         params = dict(record["params"])
         columns = [c.strip() for c in params.pop("select", "*").split(",")]
+        order = params.pop("order", "")
+        offset = int(params.pop("offset", 0))
+        limit = min(int(params.pop("limit", self.max_rows)), self.max_rows)
         rows = [
             row for row in self.tables[table]
             if _READ_POLICIES[table](self, caller, row) and all(_matches(row, k, v) for k, v in params.items())
         ]
+        for column in reversed([c for c in order.split(",") if c]):
+            name, _, direction = column.partition(".")
+            rows.sort(key=lambda row: str(row.get(name)), reverse=direction == "desc")
+        rows = rows[offset:offset + limit]
         if columns != ["*"]:
             rows = [{c: row.get(c) for c in columns} for row in rows]
         return _Response(200, rows)
@@ -534,11 +544,15 @@ class FakeHuaXia:
 
 
 def _matches(row: Dict[str, Any], column: str, condition: str) -> bool:
-    """PostgREST 的篩選（目前只支援 eq.）；是非值照 PostgREST 寫成 true、false"""
+    """PostgREST 的篩選（目前只支援 eq. 與 in.(…)）；是非值照 PostgREST 寫成 true、false"""
     operator, _, value = condition.partition(".")
-    assert operator == "eq", f"fake supports eq only: {column}={condition}"
+    assert operator in ("eq", "in"), f"fake supports eq and in only: {column}={condition}"
     actual = row.get(column)
-    return (str(actual).lower() if isinstance(actual, bool) else str(actual)) == value
+    text = str(actual).lower() if isinstance(actual, bool) else str(actual)
+    if operator == "in":
+        assert value.startswith("(") and value.endswith(")"), condition
+        return text in value[1:-1].split(",")
+    return text == value
 
 
 # HuaXia 的 guess_section(n)：依名稱猜聲部組，依序比對，都不符時為 None（省略其中的簡體寫法）
