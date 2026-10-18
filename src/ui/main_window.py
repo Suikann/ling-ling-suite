@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QCheckBox, QComboBox, QPushButton, QFileDialog,
     QMessageBox, QTabWidget, QMenu, QProgressBar,
 )
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QStandardPaths, Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
@@ -22,6 +22,7 @@ from core.constants import (
 from core.catalog_constants import PublishingPlatform
 from core.catalog_errors import CatalogFailure, as_catalog_error
 from core.catalog_sync import PlaceWrite, SyncOutcome, WriteSource, place_writes
+from core.clear_local import ClearPlan
 from core.launch_env import app_version, current_build
 from core.locale import t, get_locale, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
@@ -29,6 +30,7 @@ from core.paths import same_path
 from core.voice_names import duplicate_rows
 from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
+from services.clear_local_service import ClearLocalService, ClearOutcome, ClearProgress
 from services.club_settings_service import ClubSettingsService
 from services.compression_output_service import CompressionBatch, CompressionOutputService
 from services.compression_service import CompressionResult, CompressionService
@@ -50,6 +52,7 @@ from services.rename_service import assign_default_sections
 from services.split_service import SplitService
 from ui.background_task import BackgroundTask, Work
 from ui.catalog_error_bar import CatalogErrorBar
+from ui.compress_pdf import size_text
 from ui.instrumentation_table import InstrumentationTable
 from ui.waiting_dialog import run_while_waiting
 from ui.widgets import ask_save_path
@@ -80,12 +83,30 @@ class _BackgroundTexts(NamedTuple):
 
 _COMPRESS_TEXTS = _BackgroundTexts("compress.cancel", "compress.cancelling", "compress.error", "compress.close.message")
 _DEPOSIT_TEXTS = _BackgroundTexts("deposit.cancel", "deposit.cancelling", "deposit.error", "deposit.close.message")
+_CLEAR_TEXTS = _BackgroundTexts("clear.cancel", "clear.cancelling", "clear.error", "clear.close.message")
+# 清除本機檔案不刪的系統標準使用者資料夾（含在地化的名稱，例如 Linux 的「桌面」）
+_STANDARD_LOCATIONS = (
+    QStandardPaths.HomeLocation, QStandardPaths.DesktopLocation, QStandardPaths.DocumentsLocation,
+    QStandardPaths.DownloadLocation, QStandardPaths.MusicLocation, QStandardPaths.PicturesLocation,
+    QStandardPaths.MoviesLocation, QStandardPaths.PublicShareLocation, QStandardPaths.TemplatesLocation,
+)
 
 
 def _describe_deposit(progress: DepositProgress) -> tuple:
     """存入的進度轉成（狀態列文字，已完成數，總數）"""
     text = t("deposit.progress", done=progress.done, total=progress.total, name=progress.file_name)
     return text, progress.done, progress.total
+
+
+def _describe_clear(progress: ClearProgress) -> tuple:
+    """清除的進度轉成（狀態列文字，已完成數，總數）"""
+    text = t("clear.progress", done=progress.done, total=progress.total, name=progress.file_name)
+    return text, progress.done, progress.total
+
+
+def _standard_folders() -> List[str]:
+    """系統的標準使用者資料夾（家目錄、桌面、文件、下載、音樂等），清除本機檔案時就算空了也不刪"""
+    return [folder for location in _STANDARD_LOCATIONS for folder in QStandardPaths.standardLocations(location)]
 
 
 class _PendingMoveTexts(NamedTuple):
@@ -194,6 +215,7 @@ class MainWindow(QMainWindow):
         self._compression_output = CompressionOutputService(self.file_service, self._compressor)
         self._log = log or ActivityLog(self.file_service)
         self._deposit_service = DepositService(self.file_service, self._log)
+        self._clear_service = ClearLocalService(self.file_service, self._log, standard_folders=_standard_folders())
         # 上次存入中斷（取消或中途失敗）前完成了幾份；0 表示上次沒有中斷，存入預覽據此提示
         self._deposit_interrupted = 0
         # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀
@@ -208,7 +230,7 @@ class MainWindow(QMainWindow):
         self._task: Optional[BackgroundTask] = None
         self._task_texts = _COMPRESS_TEXTS
         self._task_status = ""
-        # 進行中的背景工作是否連專案編輯也鎖住（存入譜庫：結束時要把指紋寫回專案並存檔）
+        # 進行中的背景工作是否連專案編輯也鎖住（存入譜庫、清除本機檔案：結束時要把指紋寫回專案並存檔）
         self._task_locks_project = False
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
@@ -249,11 +271,12 @@ class MainWindow(QMainWindow):
         self._add_action(catalog_menu, t("menu.catalog.open"), self._open_catalog)
         self._add_action(catalog_menu, t("menu.catalog.settings"), self._open_catalog_settings)
         deposit = self._add_action(catalog_menu, t("menu.catalog.deposit"), self._deposit_to_catalog)
+        clear = self._add_action(catalog_menu, t("menu.catalog.clear"), self._clear_local_copies)
         tools_menu = mb.addMenu(t("menu.tools"))
         split = self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf)
         # 唯讀的專案停用的動作：會改專案，或搬動、產生專案引用的檔案（之後存不了檔，專案檔就對不上）
-        self._edit_actions = [undo, redo, import_files, import_folder, split, deposit]
-        self._file_actions.extend([undo, redo, split, deposit])
+        self._edit_actions = [undo, redo, import_files, import_folder, split, deposit, clear]
+        self._file_actions.extend([undo, redo, split, deposit, clear])
         tools_menu.addSeparator()
         self._file_actions.append(self._add_action(tools_menu, t("menu.tools.rotate_pdf"), self._open_rotate_pdf))
         self._file_actions.append(self._add_action(tools_menu, t("menu.tools.compress_pdf"), self._compress_files))
@@ -1180,7 +1203,7 @@ class MainWindow(QMainWindow):
 
         唯讀的專案（較新版本建立的專案檔）存不了檔，所以停用存檔、另存，以及所有會改專案或搬動、
         產生它引用的檔案的操作：關閉時才不會有存不了的修改。分頁仍可切換，只停用內容。
-        背景工作進行中停用會動到檔案的操作；鎖住專案的背景工作（存入譜庫）進行中，比照唯讀停用專案編輯與存檔。
+        背景工作進行中停用會動到檔案的操作；鎖住專案的背景工作（存入譜庫、清除本機檔案）進行中，比照唯讀停用專案編輯與存檔。
         """
         busy = self._task is not None
         editable = not self.project.read_only and not (busy and self._task_locks_project)
@@ -1362,6 +1385,70 @@ class MainWindow(QMainWindow):
             self._set_status(t("deposit.cancelled", count=outcome.completed))
         else:
             self._set_status(t("deposit.done", count=outcome.completed))
+
+    def _clear_local_copies(self):
+        """「清除本機檔案…」：在等待視窗裡核對出計畫，開預覽，確認框按「永久刪除」後在背景清除
+
+        讀不到譜庫（例如斷網）時頂端顯示提示列、不開預覽，按「重試」再開一次。
+        專案沒存過檔或有未存檔的改動時，預覽寫明原因、不能清除（清除後要把指紋存進專案檔）。
+        """
+        if self._task is not None or not self._catalog_ready():
+            return
+        project = self.project
+        service = self._clear_service
+        stopped = []
+
+        def read():
+            """在背景接譜庫並核對出計畫"""
+            return service.preview(project, self._catalog_factory())
+        try:
+            plan = run_while_waiting(self, t("clear.title"), t("clear.reading"), read, lambda: stopped.append(True))
+        except Exception as e:
+            failure = CatalogFailure.from_error(as_catalog_error(e), t("clear.title"))
+            self._catalog_error_bar.show_failure(t("catalog.error.cannot_read"), failure, self._clear_local_copies)
+            return
+        if stopped:
+            return
+        self._catalog_error_bar.clear()
+        from ui.clear_dialog import ClearDialog
+        dialog = ClearDialog(plan, project.is_modified() or not self._project_path, self)
+        accepted = dialog.exec() == ClearDialog.Accepted
+        group_ids = dialog.chosen_ids()
+        dialog.deleteLater()
+        if not accepted or not self._confirm_clear(plan, group_ids):
+            return
+
+        def work(should_cancel, report) -> ClearOutcome:
+            """在背景永久刪除"""
+            return service.clear(plan, group_ids, should_cancel, report)
+
+        self._run_in_background(work, _describe_clear, self._clear_finished, _CLEAR_TEXTS, locks_project=True)
+
+    def _confirm_clear(self, plan: ClearPlan, group_ids: List[str]) -> bool:
+        """清除前的確認框：寫出哪些群組、幾份、多大、不進回收處、清空的資料夾一併刪除與怎麼找回"""
+        items = plan.chosen(group_ids)
+        names = [group.sources.group_name for group in plan.groups if group.group_id in group_ids and group.clearable]
+        box = QMessageBox(QMessageBox.Warning, t("clear.confirm.title", count=len(items)), t(
+            "clear.confirm.message", groups="、".join(names), count=len(items),
+            size=size_text(sum(item.size for item in items)),
+        ), parent=self)
+        box.addButton(t("dialog.cancel_btn"), QMessageBox.RejectRole)
+        delete = box.addButton(t("clear.confirm.delete"), QMessageBox.DestructiveRole)
+        box.exec()
+        return box.clickedButton() is delete
+
+    def _clear_finished(self, outcome: ClearOutcome, _cancelled: bool):
+        """清除結束（做完或取消）：清除了的指紋交回專案並只存專案檔，重畫分頁標出只在譜庫的檔；沒刪的列出來"""
+        if outcome.cleared:
+            self.project.record_fingerprints(outcome.fingerprints)
+            if self._project_path and not self.project.read_only and self.project.is_modified():
+                self._write_project_file(self._project_path)
+            self._rebuild_tabs()
+        key = "clear.cancelled" if outcome.cancelled else "clear.done"
+        self._set_status(t(key, count=len(outcome.cleared), size=size_text(outcome.freed)))
+        kept = [item.path for item in outcome.changed] + [item.path for item, _ in outcome.failed]
+        if kept:
+            QMessageBox.warning(self, t("clear.title"), t("clear.kept", count=len(kept), files="\n".join(kept)))
 
     def _link_group_by_id(self, group_id: str):
         """存入預覽的「連到譜庫…」：切到那個群組，開連線對話框"""

@@ -4,9 +4,10 @@
 
 提供群組標籤管理與檔案清單。分頁只表達使用者的意圖，修改一律透過專案的編輯操作立即寫入；
 影響其他分頁的修改（群組新增或刪除、檔案在群組與未分組之間搬動）以 groups_changed 通知主視窗重建分頁。
-群組分頁標出未存入的檔（存入譜庫後本機又改過，推算在存入服務），主視窗切回分頁或視窗時以 show_undeposited 重新比對。
+群組分頁標出未存入的檔（存入譜庫後本機又改過，推算在存入服務）與只在譜庫的檔（本機沒有、譜庫裡有一份，見
+Project.catalog_only_paths），主視窗切回分頁或視窗時以 show_undeposited 照磁碟現況重新比對。
 """
-from typing import List, Optional
+from typing import List, Optional, Set
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QCheckBox, QListWidget, QListWidgetItem,
@@ -17,6 +18,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from core.locale import t
 from core.models import FileInfo, Group, Project
+from core.paths import path_key
 from services.deposit_service import DepositService
 from services.file_service import FileService
 from services.import_service import ImportService
@@ -204,6 +206,11 @@ class GroupTab(QWidget):
         self._undeposited_bar.setStyleSheet(f"color: {_UNDEPOSITED_COLOR.name()};")
         self._undeposited_bar.hide()
         layout.addWidget(self._undeposited_bar)
+        self._catalog_only_label = QLabel("")
+        self._catalog_only_label.setWordWrap(True)
+        self._catalog_only_label.setStyleSheet("color: #7a7f93; font-size: 12px;")
+        self._catalog_only_label.setVisible(False)
+        layout.addWidget(self._catalog_only_label)
         layout.addWidget(QLabel(t("group.file_list")))
         self._file_list = DragListWidget()
         self._file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -269,27 +276,47 @@ class GroupTab(QWidget):
         )
 
     def refresh(self):
-        """依群組重新顯示分譜清單、總譜、檔案數是否符合樂器表與未存入的檔"""
+        """依群組重新顯示分譜清單、總譜、檔案數是否符合樂器表，以及未存入與只在譜庫的檔"""
         self._refresh_file_list()
         self._check_mismatch()
         self.show_undeposited()
 
     def show_undeposited(self):
-        """重新比對群組的檔與存入指紋：未存入的分譜與總譜改用橘字，清單上方寫出是哪幾份"""
+        """照磁碟現況重新比對群組的檔：未存入的分譜與總譜改用橘字、只在譜庫的加上標示，清單上方寫出是哪幾份"""
         stale = [ref.file for ref in self._deposit_service.undeposited(self.project) if ref.group is self.group]
         ids = {id(file) for file in stale}
+        catalog_only = self._catalog_only()
+        voices = [pair.voice for pair in self.group.pairing()]
         for row in range(self._file_list.count()):
             item = self._file_list.item(row)
             index = item.data(Qt.UserRole)
-            undeposited = index is not None and index < len(self.group.files) and id(self.group.files[index]) in ids
-            item.setForeground(_UNDEPOSITED_COLOR if undeposited else self._file_list.palette().text())
-        self._update_score_display()
+            if index is None or index >= len(self.group.files):
+                continue
+            file = self.group.files[index]
+            inst = f"{voices[index]}  |  " if index < len(voices) else ""
+            item.setText(f"{inst}{self._file_text(file, catalog_only)}")
+            item.setForeground(_UNDEPOSITED_COLOR if id(file) in ids else self._file_list.palette().text())
+        self._update_score_display(catalog_only)
         if self.group.score_file is not None and id(self.group.score_file) in ids:
             self._score_label.setStyleSheet(f"color: {_UNDEPOSITED_COLOR.name()};")
         self._undeposited_bar.setText(
             t("deposit.undeposited.bar", files="、".join(file.display_name for file in stale)) if stale else "",
         )
         self._undeposited_bar.setVisible(bool(stale))
+        self._catalog_only_label.setText(t("catalog_only.group", count=len(catalog_only)))
+        self._catalog_only_label.setVisible(bool(catalog_only))
+
+    def _catalog_only(self) -> Set[str]:
+        """群組裡只在譜庫的檔（本機找不到、譜庫裡有一份）的路徑比對鍵"""
+        files = ([self.group.score_file] if self.group.score_file else []) + self.group.files
+        missing = [f.original_path for f in files if not self._file_service.file_exists(f.original_path)]
+        return {path_key(path) for path in self.project.catalog_only_paths(missing)}
+
+    def _file_text(self, file: FileInfo, catalog_only: Set[str]) -> str:
+        """檔案的顯示名稱；只在譜庫的加上標示"""
+        if path_key(file.original_path) in catalog_only:
+            return t("catalog_only.file", name=file.display_name)
+        return file.display_name
 
     def _check_mismatch(self):
         """本專案有的聲部數與分譜數是否相同"""
@@ -364,9 +391,10 @@ class GroupTab(QWidget):
         self.project.remove_paths([f.original_path for f in files])
         self.refresh()
 
-    def _update_score_display(self):
+    def _update_score_display(self, catalog_only: Set[str]):
+        """顯示總譜的名稱；只在譜庫的加上標示"""
         if self.group.score_file:
-            self._score_label.setText(self.group.score_file.display_name)
+            self._score_label.setText(self._file_text(self.group.score_file, catalog_only))
             self._score_label.setStyleSheet("")
         else:
             self._score_label.setText(t("group.score_file.none"))
