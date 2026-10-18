@@ -569,13 +569,16 @@ class PublishPreviewDialog(QDialog):
         if row.present:
             combo = QComboBox()
             combo.setObjectName("part_choice")
-            combo.setPlaceholderText(t("publish.voices.pick"))
             combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            if row.part is None and not row.can_create:
+                # 名稱規則對到多個、還沒挑：第一項是挑不到的「請挑選」（setPlaceholderText 在不可編輯的選單上不一定畫得出來）
+                combo.addItem(t("publish.voices.pick"), None)
+                combo.model().item(0).setEnabled(False)
             if row.can_create:
                 combo.addItem(t("publish.voices.new", voice=row.voice), None)
             for part in row.options:
                 combo.addItem(part.name, part.id)
-            combo.setCurrentIndex(combo.findData(row.part.id) if row.part else (0 if row.can_create else -1))
+            combo.setCurrentIndex(combo.findData(row.part.id) if row.part else 0)
             combo.currentIndexChanged.connect(
                 lambda i, c=combo: self._choose_part(check, row, c.itemData(i)),
             )

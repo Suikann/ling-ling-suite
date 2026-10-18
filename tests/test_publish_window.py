@@ -113,9 +113,9 @@ def voice_cell(dialog: PublishPreviewDialog, group: str, voice: str) -> QWidget:
 
 
 def part_choices(dialog: PublishPreviewDialog, group: str, voice: str) -> list:
-    """這個聲部可以挑的 HuaXia 聲部（選單的各項）"""
+    """這個聲部可以挑的 HuaXia 聲部（選單裡挑得到的各項，不含「請挑選」）"""
     combo = voice_cell(dialog, group, voice).findChild(QComboBox, "part_choice")
-    return [combo.itemText(i) for i in range(combo.count())]
+    return [combo.itemText(i) for i in range(combo.count()) if combo.model().item(i).isEnabled()]
 
 
 def choose_part(dialog: PublishPreviewDialog, group: str, voice: str, text: str):
@@ -368,7 +368,7 @@ class TestVoicesStep(PublishWindowTestCase):
             self.to_voices(dialog)
             self.assertEqual(part_choices(dialog, "烽火操", "二胡 I"), ["二胡I", "二胡 1"])
             combo = voice_cell(dialog, "烽火操", "二胡 I").findChild(QComboBox, "part_choice")
-            self.assertEqual(combo.currentIndex(), -1)
+            self.assertEqual(combo.currentText(), t("publish.voices.pick"))
             self.assertIn(t("publish.voices.undecided", voices="二胡 I"), voices_problem(dialog, "烽火操"))
         self.publish(operate=operate)
 
