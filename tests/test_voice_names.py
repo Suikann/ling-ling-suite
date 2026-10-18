@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from core.voice_names import distinct_voices, duplicate_rows, same_instrument, same_voice
+from core.voice_names import distinct_voices, duplicate_rows, match_by_voice, same_instrument, same_voice, voice_index
 
 SAME_VOICE = [
     # 結尾編號的各種寫法互通
@@ -126,6 +126,22 @@ class TestDistinctVoices(unittest.TestCase):
             distinct_voices(["二胡1", "Cello", "二胡 I", "二胡 II", "cello", "二胡"]),
             ["二胡1", "Cello", "二胡 II", "二胡"],
         )
+
+
+class TestVoiceIndex(unittest.TestCase):
+    """第一個同一聲部的列：另一種寫法也算，沒有時為 None"""
+
+    def test_finds_the_first_row_of_the_same_voice(self):
+        self.assertEqual(voice_index(["二胡 I", "二胡 II", "二胡2"], "二胡二"), 1)
+        self.assertIsNone(voice_index(["二胡 I"], "二胡"))
+
+
+class TestMatchByVoice(unittest.TestCase):
+    """依同一聲部配值：來源重名時取第一個，對不到為 None"""
+
+    def test_each_name_gets_the_first_value_of_its_voice(self):
+        pairs = [("二胡1", 6), ("二胡 I", 8), ("中胡", 4)]
+        self.assertEqual(match_by_voice(pairs, ["二胡一", "高胡", "中胡"]), [6, None, 4])
 
 
 class TestDuplicateRows(unittest.TestCase):

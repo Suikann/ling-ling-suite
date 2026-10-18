@@ -9,7 +9,7 @@
 | 職責 | 入口 |
 |------|------|
 | 判斷兩條路徑是否同一個檔（絕對路徑、不分大小寫） | `core/paths.py` 的 `path_key`、`same_path`、`is_inside`；沒有本機路徑的名稱（Drive 檔名）用同一規則的 `name_key` |
-| 判斷兩個聲部名稱是否同一聲部（結尾編號互通）或同一樂器（去掉結尾編號） | `core/voice_names.py` 的 `same_voice`、`voice_key`、`same_instrument`、`instrument_key`；規則寫死在模組 docstring。依名稱配對分譜、同一份樂器表不重名（`duplicate_rows` 列出重名的列）、發譜對到 HuaXia 聲部、舊專案人數展開、複製編制、自動完成的同名標記都經它，同一樂器只用在聲部組對照的鍵。只用於比對，各處保留自己的寫法；檔名與路徑用上一列的 `name_key`、`path_key` |
+| 判斷兩個聲部名稱是否同一聲部（結尾編號互通）或同一樂器（去掉結尾編號） | `core/voice_names.py` 的 `same_voice`、`voice_key`、`same_instrument`、`instrument_key`；規則寫死在模組 docstring。依名稱配對分譜、同一份樂器表不重名（`duplicate_rows` 列出重名的列，`voice_index` 找同一聲部的第一列）、發譜對到 HuaXia 聲部、依聲部配值（`match_by_voice`：舊專案人數展開、換樂器表時沿用人數、複製編制）、自動完成的同名標記都經它，同一樂器只用在聲部組對照的鍵。只用於比對，各處保留自己的寫法；檔名與路徑用上一列的 `name_key`、`path_key` |
 | 聲部的聲部組（以樂器為鍵的對照，沒存的依樂團類型偵測） | `core/sections.py` 的 `section_for`（專案裡經 `Project.section_of`）；寫入經 `Project.set_section`、`update_sections`（見 [project.md](project.md)） |
 | 編輯一個群組的編制（聲部、本專案有、人數、聲部組、時長；拖動時分譜跟著走） | `ui/instrumentation_table.py` 的 `InstrumentationTable`：主視窗左欄用它，其他視窗要顯示編制（例如譜庫視窗的版本頁）時沿用、不另做一份；帶入專案後以 `show_group` 顯示群組，修改經 `Project` 的編輯操作（見 [project.md](project.md) 的編制表） |
 | 人數範圍的整理與 HuaXia 記法（`6`、`6-8`、`2↑`） | `core/models.py` 的 `Headcount`（`normalized`、`text`、`filled`）；合計用 `sum_headcounts`，時長的「分:秒」用 `format_duration` |

@@ -16,7 +16,7 @@ from core.constants import (
 from core.paths import path_key
 from core.sections import guess_orchestra_type, migrate_sections, put_section, section_for, section_options
 from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
-from core.voice_names import VoiceKey, distinct_voices, same_instrument, same_voice, voice_key
+from core.voice_names import distinct_voices, match_by_voice, same_instrument, same_voice, voice_index
 
 
 class DuplicateVoiceError(ValueError):
@@ -239,10 +239,7 @@ class Group:
         """
         instruments = list(instruments)
         if headcounts is None:
-            kept = {}
-            for voice, headcount in zip(self.instruments, self.headcounts):
-                kept.setdefault(voice_key(voice), headcount)
-            headcounts = [kept.get(voice_key(voice), Headcount()) for voice in instruments]
+            headcounts = _or_unfilled(match_by_voice(zip(self.instruments, self.headcounts), instruments))
         self.instruments = instruments
         self.present = _present_flags(list(present) if present is not None else [], len(self.instruments))
         self.headcounts = _headcount_rows(list(headcounts), len(self.instruments))
@@ -676,12 +673,12 @@ class Project:
         同一聲部在所有群組套用同一個值（舊對照裡有幾種寫法時取第一個有值的）；0 與沒有值為未填，
         樂器表裡已沒有的殘留鍵丟掉。
         """
-        counts: Dict[VoiceKey, Headcount] = {}
-        for voice, count in headcounts.items():
-            if isinstance(count, int) and not isinstance(count, bool) and count > 0:
-                counts.setdefault(voice_key(voice), Headcount(count))
+        counts = [
+            (voice, Headcount(count)) for voice, count in headcounts.items()
+            if isinstance(count, int) and not isinstance(count, bool) and count > 0
+        ]
         for group in self.groups:
-            group.headcounts = [counts.get(voice_key(voice), Headcount()) for voice in group.instruments]
+            group.headcounts = _or_unfilled(match_by_voice(counts, group.instruments))
 
     def _migrate_group(self, group: Group, score_label: str) -> None:
         """舊格式群組的遷移：補上總譜標籤、承接專案層級的樂器表、把勾選的子集收成群組自己的樂器表"""
@@ -1024,12 +1021,10 @@ class Project:
         Returns:
             對應不到、人數已留空的聲部，依樂器表順序
         """
-        counts: Dict[VoiceKey, Headcount] = {}
-        for voice, headcount in zip(source.instruments, source.headcounts):
-            counts.setdefault(voice_key(voice), headcount)
-        group.headcounts = [counts.get(voice_key(voice), Headcount()) for voice in group.instruments]
+        matched = match_by_voice(zip(source.instruments, source.headcounts), group.instruments)
+        group.headcounts = _or_unfilled(matched)
         self._changed()
-        return [voice for voice in group.instruments if voice_key(voice) not in counts]
+        return [voice for voice, headcount in zip(group.instruments, matched) if headcount is None]
 
     def set_duration(self, group: Group, seconds: Optional[int]) -> None:
         """設定群組的時長（秒）；0 與 None 為未填"""
@@ -1277,10 +1272,15 @@ def _place_rows(group: Group, rows: List[_VoiceRow]) -> None:
 
 def _refuse_duplicate_voice(instruments: Iterable[str], name: str) -> None:
     """name 與 instruments 裡任一列是同一聲部時丟出 DuplicateVoiceError"""
-    key = voice_key(name)
-    existing = next((other for other in instruments if voice_key(other) == key), None)
-    if existing is not None:
-        raise DuplicateVoiceError(existing)
+    instruments = list(instruments)
+    index = voice_index(instruments, name)
+    if index is not None:
+        raise DuplicateVoiceError(instruments[index])
+
+
+def _or_unfilled(headcounts: Iterable[Optional[Headcount]]) -> List[Headcount]:
+    """對不到的人數（None）換成未填"""
+    return [Headcount() if headcount is None else headcount for headcount in headcounts]
 
 
 def _index_of(files: List[FileInfo], file: FileInfo) -> int:

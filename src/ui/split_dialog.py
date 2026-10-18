@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt
 from core.constants import SECTION_COLORS
 from core.locale import t
 from core.models import WorkspaceOwner
-from core.voice_names import voice_key
+from core.voice_names import voice_index, voice_key
 from services.pdf_service import get_page_count, render_page_thumbnails
 from services.split_service import SplitCheck, SplitRequest, SplitSegment, SplitService
 from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
@@ -356,8 +356,7 @@ class SplitPdfDialog(QDialog):
 
     def _voice_index(self, name: str) -> Optional[int]:
         """名稱在樂器表裡是第幾個聲部（同一聲部的另一種寫法也算）；不在樂器表時為 None"""
-        key = voice_key(name)
-        return next((i for i, voice in enumerate(self._voices()) if voice_key(voice) == key), None)
+        return voice_index(self._voices(), name)
 
     def _next_unused(self, used, start_after=-1):
         """樂器表裡 start_after 之後第一個還沒用過的聲部（used 為已用的名稱，同一聲部的另一種寫法也算用過）"""

@@ -12,17 +12,20 @@
 只用於比對，各處保留自己的寫法。檔名與路徑的比對用 `core/paths.py`。
 
 使用範例：
-    from core.voice_names import same_instrument, same_voice, voice_key
+    from core.voice_names import match_by_voice, same_instrument, same_voice, voice_index, voice_key
     same_voice("二胡 I", "二胡1")  # True
     same_instrument("二胡 I", "二胡 II")  # True
     seen = {voice_key(name) for name in instruments}
+    voice_index(["二胡 I", "二胡 II"], "二胡2")  # 1
+    match_by_voice([("二胡1", 6)], ["二胡 I", "中胡"])  # [6, None]
 """
 import re
 import unicodedata
 from collections import Counter
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple, TypeVar
 
 VoiceKey = Tuple[str, Optional[int]]
+T = TypeVar("T")
 
 _SEPARATORS = "-_.、()[]{}【】〔〕「」『』《》〈〉"
 _SEPARATOR_RUN = re.compile(f"[\\s{re.escape(_SEPARATORS)}]+")
@@ -80,6 +83,28 @@ def duplicate_rows(names: Iterable[str]) -> List[int]:
     keys = [voice_key(name) for name in names]
     counts = Counter(keys)
     return [i for i, key in enumerate(keys) if counts[key] > 1]
+
+
+def voice_index(names: Iterable[str], name: str) -> Optional[int]:
+    """name 在 names 裡第一個同一聲部的位置（從 0 起算，另一種寫法也算）；沒有時為 None"""
+    key = voice_key(name)
+    return next((i for i, other in enumerate(names) if voice_key(other) == key), None)
+
+
+def match_by_voice(pairs: Iterable[Tuple[str, T]], names: Iterable[str]) -> List[Optional[T]]:
+    """依同一聲部的規則，把 pairs（聲部名稱與值）的值配給 names 的每個名稱
+
+    Args:
+        pairs: 來源的聲部名稱與值；同一聲部出現幾次時取第一個
+        names: 要配值的聲部名稱
+
+    Returns:
+        依 names 的順序，各自配到的值；對不到同一聲部的為 None
+    """
+    values = {}
+    for name, value in pairs:
+        values.setdefault(voice_key(name), value)
+    return [values.get(voice_key(name)) for name in names]
 
 
 def _split_number(text: str) -> Tuple[str, Optional[int]]:
