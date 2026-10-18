@@ -21,7 +21,9 @@ from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from core.constants import DEFAULT_HEADCOUNT, INSTRUMENT_PRESETS, SECTION_NAMES_EN, TEXT_EXTENSION
 from core.locale import is_english, localized, t
+from core.models import DuplicateVoiceError
 from core.naming import section_for
+from core.voice_names import distinct_voices
 
 if TYPE_CHECKING:
     from core.models import Group, Project
@@ -112,14 +114,26 @@ class InstrumentListEditor(QWidget):
         self._preset_combo.blockSignals(False)
 
     def _add_instrument(self):
+        """把輸入欄的名稱加到樂器表最後；與其他列同一聲部時說明原因，樂器表與輸入欄不變"""
         name = self._entry.text().strip()
-        if not name:
+        if not name or self._project is None or self._group is None:
+            return
+        try:
+            self._project.add_instrument(self._group, name)
+        except DuplicateVoiceError as e:
+            self._explain_duplicate(name, e)
             return
         item = QListWidgetItem(name)
         item.setFlags(item.flags() | Qt.ItemIsEditable)
         self._list.addItem(item)
         self._entry.clear()
-        self._commit()
+        self.instruments_changed.emit(self.get_instruments())
+
+    def _explain_duplicate(self, name: str, error: DuplicateVoiceError):
+        """說明新名稱與樂器表的哪一列是同一聲部"""
+        QMessageBox.warning(
+            self, t("dialog.warning"), t("instrument.duplicate", name=name, existing=error.existing),
+        )
 
     def _remove_selected(self):
         items = self._list.selectedItems()
@@ -144,7 +158,7 @@ class InstrumentListEditor(QWidget):
             self._commit()
 
     def _on_item_edited(self, item):
-        """雙擊編輯樂器名稱後觸發"""
+        """雙擊編輯樂器名稱後觸發：清空即移除；與其他列同一聲部時說明原因並還原名稱"""
         if self._editing:
             return
         new_text = item.text().strip()
@@ -152,7 +166,25 @@ class InstrumentListEditor(QWidget):
             self._editing = True
             self._list.takeItem(self._list.row(item))
             self._editing = False
-        self._commit()
+            self._commit()
+            return
+        if self._project is None or self._group is None:
+            return
+        row = self._list.row(item)
+        try:
+            self._project.rename_instrument(self._group, row, new_text)
+        except DuplicateVoiceError as e:
+            self._set_item_text(item, self._group.instruments[row])
+            self._explain_duplicate(new_text, e)
+            return
+        self._set_item_text(item, new_text)
+        self.instruments_changed.emit(self.get_instruments())
+
+    def _set_item_text(self, item: QListWidgetItem, text: str):
+        """由程式改寫一列的名稱，不再觸發改名"""
+        self._editing = True
+        item.setText(text)
+        self._editing = False
 
     def _on_rows_moved(self):
         self._commit()
@@ -166,13 +198,7 @@ class InstrumentListEditor(QWidget):
             QMessageBox.information(self, t("dialog.info"), t("instrument.auto_extract.empty"))
             return
         from core.template_engine import extract_instruments_from_filenames
-        extracted = extract_instruments_from_filenames(all_filenames)
-        seen = set()
-        unique = []
-        for inst in extracted:
-            if inst not in seen:
-                seen.add(inst)
-                unique.append(inst)
+        unique = distinct_voices(extract_instruments_from_filenames(all_filenames))
         if not unique:
             QMessageBox.information(self, t("dialog.info"), t("instrument.auto_extract.empty"))
             return

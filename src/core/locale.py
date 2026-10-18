@@ -220,6 +220,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "instrument.headcount_section": "聲部組",
         "instrument.export_done": "已匯出至 {path}",
         "instrument.section_other": "其他",
+        "instrument.duplicate": "樂器表已有「{existing}」，和「{name}」是同一個聲部。",
         # 連結樂章
         "group.link_movements": "連結為樂章...",
         "group.link_movements.title": "連結群組為同一曲目的樂章",
@@ -826,6 +827,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "instrument.headcount_section": "Section",
         "instrument.export_done": "Exported to {path}",
         "instrument.section_other": "Other",
+        "instrument.duplicate": "\"{existing}\" is already in the list and is the same voice as \"{name}\".",
         # 連結樂章
         "group.link_movements": "Link as Movements...",
         "group.link_movements.title": "Link Groups as Movements of One Piece",

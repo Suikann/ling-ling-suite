@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from core.voice_names import same_instrument, same_voice
+from core.voice_names import distinct_voices, same_instrument, same_voice
 
 SAME_VOICE = [
     # 結尾編號的各種寫法互通
@@ -116,6 +116,16 @@ class TestSameInstrument(unittest.TestCase):
             with self.subTest(a=a, b=b):
                 self.assertEqual(same_instrument(a, b), expected)
                 self.assertEqual(same_instrument(b, a), expected)
+
+
+class TestDistinctVoices(unittest.TestCase):
+    """去掉同一聲部的其他寫法，保留第一次出現的寫法與順序"""
+
+    def test_keeps_the_first_spelling_of_each_voice(self):
+        self.assertEqual(
+            distinct_voices(["二胡1", "Cello", "二胡 I", "二胡 II", "cello", "二胡"]),
+            ["二胡1", "Cello", "二胡 II", "二胡"],
+        )
 
 
 if __name__ == "__main__":

@@ -720,8 +720,8 @@ class TestMainWindowKeepsTypedInput(MainWindowTestCase):
         self.assertEqual(self._saved_group(path).piece_name, "Brahms Symphony")
 
 
-class TestMainWindowInstrumentListFollowsGroup(MainWindowTestCase):
-    """樂器表跟著目前的群組分頁；目前分頁不是群組時清空並停用，輸入的樂器才不會沒有地方寫入"""
+class InstrumentListTestCase(MainWindowTestCase):
+    """操作主視窗樂器表的測試共用的輔助"""
 
     def _instrument_entry(self) -> QLineEdit:
         """樂器表的輸入欄"""
@@ -734,6 +734,10 @@ class TestMainWindowInstrumentListFollowsGroup(MainWindowTestCase):
         """樂器表目前列出的樂器"""
         listing = self._instrument_entry().parentWidget().findChild(QListWidget)
         return [listing.item(i).text() for i in range(listing.count())]
+
+
+class TestMainWindowInstrumentListFollowsGroup(InstrumentListTestCase):
+    """樂器表跟著目前的群組分頁；目前分頁不是群組時清空並停用，輸入的樂器才不會沒有地方寫入"""
 
     def test_instrument_list_is_disabled_before_any_group_exists(self):
         self.assertFalse(self._instrument_entry().isEnabled())
@@ -767,6 +771,41 @@ class TestMainWindowInstrumentListFollowsGroup(MainWindowTestCase):
         with answering_prompts(), saving_as(path):
             self.trigger_menu(t("menu.file.save"))
         self.assertEqual(ProjectService().load_project(path).groups[0].instruments, ["Flute"])
+
+
+class TestMainWindowInstrumentListRefusesDuplicateVoices(InstrumentListTestCase):
+    """在樂器表輸入與其他列同一聲部的名稱時顯示說明，名稱不變"""
+
+    def setUp(self):
+        super().setUp()
+        self.path = self.open_from_menu(Project(groups=[Group(name="g", instruments=["Violin I", "Violin II"])]))
+
+    def test_adding_another_spelling_of_an_existing_voice_shows_why_and_keeps_the_list(self):
+        with answering_prompts() as shown:
+            QTest.keyClicks(self._instrument_entry(), "violin 1")
+            QTest.keyClick(self._instrument_entry(), Qt.Key_Return)
+        self.assertEqual(shown, [(t("dialog.warning"), t("instrument.duplicate", name="violin 1", existing="Violin I"))])
+        self.assertEqual(self._shown_instruments(), ["Violin I", "Violin II"])
+        self.assertEqual(self._saved_instruments(), ["Violin I", "Violin II"])
+
+    def test_renaming_to_another_row_s_voice_shows_why_and_restores_the_name(self):
+        listing = self._instrument_entry().parentWidget().findChild(QListWidget)
+        with answering_prompts() as shown:
+            listing.item(0).setText("Violin 2")
+        self.assertEqual(shown, [(t("dialog.warning"), t("instrument.duplicate", name="Violin 2", existing="Violin II"))])
+        self.assertEqual(self._shown_instruments(), ["Violin I", "Violin II"])
+        self.assertEqual(self._saved_instruments(), ["Violin I", "Violin II"])
+
+    def test_renaming_to_another_spelling_of_itself_is_kept(self):
+        listing = self._instrument_entry().parentWidget().findChild(QListWidget)
+        with answering_prompts() as shown:
+            listing.item(0).setText("Violin 1")
+        self.assertEqual(shown, [])
+        self.assertEqual(self._saved_instruments(), ["Violin 1", "Violin II"])
+
+    def _saved_instruments(self) -> List[str]:
+        """存檔後讀回的群組樂器表"""
+        return self.save_from_menu(self.path).groups[0].instruments
 
 
 class TestMainWindowPreviewNaming(MainWindowTestCase):

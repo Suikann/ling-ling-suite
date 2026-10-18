@@ -19,7 +19,7 @@
 """
 import re
 import unicodedata
-from typing import Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 VoiceKey = Tuple[str, Optional[int]]
 
@@ -60,6 +60,18 @@ def instrument_key(name: str) -> str:
 def same_instrument(a: str, b: str) -> bool:
     """兩個聲部名稱是否為同一樂器（只用在聲部組對照的鍵）"""
     return instrument_key(a) == instrument_key(b)
+
+
+def distinct_voices(names: Iterable[str]) -> List[str]:
+    """去掉同一聲部的其他寫法，每個聲部保留第一次出現的寫法，順序不變"""
+    seen = set()
+    distinct = []
+    for name in names:
+        key = voice_key(name)
+        if key not in seen:
+            seen.add(key)
+            distinct.append(name)
+    return distinct
 
 
 def _split_number(text: str) -> Tuple[str, Optional[int]]:
