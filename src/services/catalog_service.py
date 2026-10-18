@@ -38,7 +38,7 @@ from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, OrchestraType
 from core.voice_suggestions import ranked_by_usage
 from core.catalog_models import (
     CatalogOverview, CatalogPlace, Composer, DriveFile, Edition, EditionFiles, FolderContents, LinkTargets, Movement,
-    Part, Performance, Piece, PieceDetail, sort_order_key,
+    Part, Performance, Piece, PieceDetail, SectionMapEntry, sort_order_key,
 )
 from core.catalog_sync import (
     CurrentPlace, Decision, ItemReview, PlaceReview, PlaceWrite, SyncField, SyncOutcome, Verdict, WriteSource,
@@ -46,6 +46,7 @@ from core.catalog_sync import (
 )
 from core.log_entry import now
 from core.models import Headcount
+from core.sections import stored_section
 from core.voice_names import instrument_key, instrument_name, voice_key
 from services.catalog_ports import CellWrite, DrivePort, SheetsPort, sheet_range
 
@@ -185,6 +186,13 @@ def _records(rows: List[List[str]], sheet: str) -> List[Dict[str, str]]:
     ]
 
 
+def _place_sheets(titles: Sequence[str]) -> List[str]:
+    """讀一處或聲部組對照要讀的工作表：曲目、版本、樂章、分譜，以及已經建立的時長與聲部組對照"""
+    return [SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS] + [
+        sheet for sheet in (SHEET_DURATIONS, SHEET_SECTIONS) if sheet in titles
+    ]
+
+
 class _Batch:
     """一次寫回要送出的全部格子：改既有列的格子、接在各工作表最後的新列與缺的標題，最後以一個請求送出"""
 
@@ -280,6 +288,30 @@ class _PlaceTables:
     def other_pieces(self, edition_id: str) -> Dict[str, int]:
         """譜庫裡每種樂器（第一次出現的寫法）被這個版本的曲目以外的幾首曲目用到（總譜列不算）"""
         piece_id = self.editions[edition_id].piece_id if edition_id in self.editions else ""
+        names, pieces = self._instrument_pieces()
+        return {names[key]: len(used - {piece_id}) for key, used in pieces.items()}
+
+    def section_entries(self) -> List[SectionMapEntry]:
+        """社團對照裡這個樂團類型的每種樂器，再接上分譜工作表用到、對照裡還沒有的樂器，各連同用到幾首
+
+        對照裡的樂器依工作表的順序、寫法是第一次寫入的（同一樂器有幾列時認排在前面那一列），聲部組照讀取的規則
+        （_club_sections：空白的不算）；還沒有的依分譜工作表第一次出現的順序，寫法去掉結尾編號，聲部組空白。
+        """
+        names, pieces = self._instrument_pieces()
+        club = _club_sections([record for _, record in self._sections], self._orchestra_type)
+        entries = []
+        seen: Set[str] = set()
+        for _, record in self._sections:
+            instrument = record["instrument"].strip()
+            key = instrument_key(instrument)
+            if key not in seen:
+                seen.add(key)
+                entries.append(SectionMapEntry(instrument, stored_section(instrument, club), len(pieces.get(key, ()))))
+        entries += [SectionMapEntry(names[key], "", len(used)) for key, used in pieces.items() if key not in seen]
+        return entries
+
+    def _instrument_pieces(self) -> Tuple[Dict[str, str], Dict[str, Set[str]]]:
+        """分譜工作表用到的每種樂器（instrument_key）：第一次出現時去掉編號的寫法，與用到它的曲目 ID（總譜列不算）"""
         pieces: Dict[str, Set[str]] = {}
         names: Dict[str, str] = {}
         for _, part in self._parts:
@@ -289,7 +321,7 @@ class _PlaceTables:
             key = instrument_key(part.instrument_name)
             names.setdefault(key, instrument_name(part.instrument_name))
             pieces.setdefault(key, set()).add(edition.piece_id)
-        return {names[key]: len(used - {piece_id}) for key, used in pieces.items()}
+        return names, pieces
 
     def write_place(self, batch: "_Batch", place: PlaceReview, written_sections: Set[str]) -> List[ItemReview]:
         """把一處要寫的格子放進 batch，回傳真的寫了的格子（每格一列編制寫入紀錄）
@@ -703,10 +735,7 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到；版本或樂章已不在譜庫時為已經不在譜庫
         """
-        titles = set(self._call(self._sheets.sheet_titles))
-        sheets = [SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS] + [
-            sheet for sheet in (SHEET_DURATIONS, SHEET_SECTIONS) if sheet in titles
-        ]
+        sheets = _place_sheets(self._call(self._sheets.sheet_titles))
         catalog = _PlaceTables(dict(zip(sheets, self._read_sheets(*sheets))), orchestra_type)
         current = catalog.current(edition_id, movement_id)
         edition = catalog.editions[edition_id]
@@ -724,6 +753,19 @@ class CatalogService:
             filed=current.filed,
             other_pieces=catalog.other_pieces(edition_id),
         )
+
+    def section_map(self) -> Dict[OrchestraType, List[SectionMapEntry]]:
+        """讀全社團的聲部組對照，每個樂團類型一套，連同譜庫裡用到、還沒歸類的樂器與各樂器用到幾首（兩次請求）
+
+        Returns:
+            樂團類型 → 這一套的樂器（見 _PlaceTables.section_entries）
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        sheets = _place_sheets(self._call(self._sheets.sheet_titles))
+        tables = dict(zip(sheets, self._read_sheets(*sheets)))
+        return {orchestra: _PlaceTables(tables, orchestra).section_entries() for orchestra in OrchestraType}
 
     def sync_instrumentation(
         self, writes: Sequence[PlaceWrite], orchestra_type: OrchestraType, operator: str, source: WriteSource,
@@ -754,9 +796,7 @@ class CatalogService:
                 連到的版本或樂章已不在譜庫時為已經不在譜庫
         """
         titles = set(self._call(self._sheets.sheet_titles))
-        sheets = [SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS] + [
-            sheet for sheet in (SHEET_DURATIONS, SHEET_SECTIONS) if sheet in titles
-        ]
+        sheets = _place_sheets(titles)
         ranges = [_whole_sheet(sheet) for sheet in sheets]
         has_log = SHEET_INSTRUMENTATION_LOG in titles
         if has_log:

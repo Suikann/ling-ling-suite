@@ -202,3 +202,17 @@ class CatalogPlace:
     sections: Dict[str, str] = field(default_factory=dict)
     filed: List[str] = field(default_factory=list)
     other_pieces: Dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SectionMapEntry:
+    """聲部組對照裡的一種樂器（譜庫視窗編輯全社團的對照時的一項）
+
+    Attributes:
+        instrument: 樂器：社團對照裡的寫法（第一次寫入的），還沒歸類的是分譜工作表第一次出現時去掉編號的名稱
+        section: 聲部組；還沒歸類為空字串
+        pieces: 譜庫裡用到這種樂器的曲目數（總譜列不算）
+    """
+    instrument: str
+    section: str = ""
+    pieces: int = 0
