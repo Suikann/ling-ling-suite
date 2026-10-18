@@ -795,6 +795,24 @@ class CatalogService:
         """
         return self._place(self._place_tables(orchestra_type), edition_id, movement_id)
 
+    def read_places(
+        self, places: Sequence[Tuple[str, str]], orchestra_type: OrchestraType,
+    ) -> List[CatalogPlace]:
+        """讀譜庫裡的幾處（開啟專案時各群組連到的那處），內容同 read_place；請求數同樣是兩次，不隨處數增加
+
+        Args:
+            places: 每一處的（版本 ID、樂章 ID；整首為空字串）
+            orchestra_type: 專案的樂團類型（聲部組對照只取這一套）
+
+        Returns:
+            依 places 順序的各處
+
+        Raises:
+            CatalogError: 讀不到；任一處的版本或樂章已不在譜庫時為已經不在譜庫
+        """
+        catalog = self._place_tables(orchestra_type)
+        return [self._place(catalog, edition_id, movement_id) for edition_id, movement_id in places]
+
     def edition_page(self, edition_id: str, movement_id: str, orchestra_type: OrchestraType) -> EditionPage:
         """讀譜庫視窗的版本頁：一處的編制、各聲部與總譜列登記的檔，以及版本資料夾裡沒登記的檔
 
@@ -872,7 +890,7 @@ class CatalogService:
 
     def sync_instrumentation(
         self, writes: Sequence[PlaceWrite], orchestra_type: OrchestraType, operator: str, source: WriteSource,
-        decisions: Mapping[str, Mapping[Tuple[SyncField, object], Decision]],
+        decisions: Mapping[str, Mapping[Tuple[SyncField, object], Decision]], review_only: bool = False,
     ) -> SyncOutcome:
         """把群組的編制改動寫回譜庫：寫入前一刻重讀、逐格比對，沒有待選邊的衝突才以一個請求寫入
 
@@ -890,6 +908,7 @@ class CatalogService:
             operator: 操作者（登入的 email），寫進編制寫入紀錄
             source: 來源，寫進編制寫入紀錄
             decisions: 衝突的選擇：群組 ID → （SyncItem.key → Decision）
+            review_only: 只比對、不寫（寫入前先讓使用者在衝突畫面確認全部改動時）
 
         Returns:
             比對結果，與是否已寫入
@@ -898,7 +917,7 @@ class CatalogService:
             CatalogError: 讀不到或寫不進去（沒有任何一格被寫入，以同樣的參數再呼叫一次即可）；
                 連到的版本或樂章已不在譜庫時為已經不在譜庫
         """
-        return self._sync([(write, orchestra_type) for write in writes], operator, source, decisions)
+        return self._sync([(write, orchestra_type) for write in writes], operator, source, decisions, review_only)
 
     def sync_section_map(
         self, items: Mapping[OrchestraType, Sequence[SyncItem]], operator: str,
@@ -928,7 +947,7 @@ class CatalogService:
 
     def _sync(
         self, writes: Sequence[Tuple[PlaceWrite, OrchestraType]], operator: str, source: WriteSource,
-        decisions: Mapping[str, Mapping[Tuple[SyncField, object], Decision]],
+        decisions: Mapping[str, Mapping[Tuple[SyncField, object], Decision]], review_only: bool = False,
     ) -> SyncOutcome:
         """寫入前一刻重讀、逐格比對，沒有待選邊的衝突才以一個請求寫入（sync_instrumentation、sync_section_map 共用）
 
@@ -937,6 +956,7 @@ class CatalogService:
             operator: 操作者，寫進編制寫入紀錄
             source: 來源，寫進編制寫入紀錄
             decisions: 衝突的選擇：PlaceWrite.group_id → （SyncItem.key → Decision）
+            review_only: 只比對、不寫
         """
         titles = set(self._call(self._sheets.sheet_titles))
         sheets = _place_sheets(titles)
@@ -958,7 +978,7 @@ class CatalogService:
             reviews = review_items(write, current, dict(decisions.get(write.group_id, {})))
             places.append(PlaceReview(write, reviews, list(current.filed), catalog.other_pieces(write.edition_id)))
         outcome = SyncOutcome(places, written=False)
-        if outcome.conflicts:
+        if outcome.conflicts or review_only:
             return outcome
         batch = _Batch({sheet: rows for sheet, rows in tables.items()}, self._draw_ids)
         stamp = now().strftime("%Y-%m-%d %H:%M:%S")

@@ -115,6 +115,7 @@ class PlaceWrite:
         movement_id: 樂章 ID；整首為空字串
         voices: 群組目前的聲部清單（新增的聲部依它排序）
         items: 一格一格的改動
+        confirm: 寫入前先在衝突畫面確認（開啟專案時選了「用專案的（存檔時寫回）」，CatalogLink.confirm_voices）
     """
     group_id: str
     group_name: str
@@ -122,6 +123,7 @@ class PlaceWrite:
     movement_id: str
     voices: List[str]
     items: List[SyncItem]
+    confirm: bool = False
 
 
 @dataclass
@@ -178,6 +180,7 @@ def place_writes(project: Project) -> List[PlaceWrite]:
         if items:
             writes.append(PlaceWrite(
                 group.id, group.name, link.edition_id, link.movement_id, list(group.instruments), items,
+                confirm=link.confirm_voices,
             ))
     return writes
 

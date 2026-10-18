@@ -246,6 +246,8 @@ class CatalogLink:
         other_pieces: 群組各樂器在譜庫裡被其他曲目用到幾首（樂器的一個聲部寫法 → 曲目數），聲部組旁寫影響範圍用；
             讀到那處時更新
         unsynced: 上次存檔時寫不進譜庫（未同步）；下次寫回成功時清掉
+        confirm_voices: 開啟專案時譜庫的聲部清單變了，選了「用專案的（存檔時寫回）」：寫回前先在衝突畫面確認，
+            群組的聲部清單要蓋掉譜庫的；寫回成功時清掉
     """
     edition_id: str
     movement_id: str = ""
@@ -255,6 +257,7 @@ class CatalogLink:
     snapshot: CatalogSnapshot = field(default_factory=CatalogSnapshot)
     other_pieces: Dict[str, int] = field(default_factory=dict)
     unsynced: bool = False
+    confirm_voices: bool = False
 
     def other_pieces_using(self, voice: str) -> int:
         """聲部的樂器在譜庫裡被其他曲目用到幾首（同一樂器的規則）；不知道時為 0"""
@@ -272,6 +275,7 @@ class CatalogLink:
             "snapshot": self.snapshot.to_data(),
             "other_pieces": dict(self.other_pieces),
             "unsynced": self.unsynced,
+            "confirm_voices": self.confirm_voices,
         }
 
     @classmethod
@@ -286,7 +290,23 @@ class CatalogLink:
             snapshot=CatalogSnapshot.from_data(data.get("snapshot") or {}),
             other_pieces={str(k): int(v) for k, v in (data.get("other_pieces") or {}).items()},
             unsynced=bool(data.get("unsynced")),
+            confirm_voices=bool(data.get("confirm_voices")),
         )
+
+
+class CatalogListChange(NamedTuple):
+    """開啟專案時讀到的譜庫那處，聲部清單與群組的不同（Project.catalog_list_change）
+
+    Attributes:
+        voices: 譜庫現在的聲部名稱與人數，依譜庫的順序
+        added: 只在譜庫的聲部（譜庫的寫法，依譜庫的順序）
+        removed: 只在群組的聲部（依樂器表順序）
+        moved: 兩邊都有、在譜庫裡換了相對順序的聲部（群組的寫法，依樂器表順序）
+    """
+    voices: List[Tuple[str, "Headcount"]]
+    added: List[str]
+    removed: List[str]
+    moved: List[str]
 
 
 class LinkChoice(Enum):
@@ -797,6 +817,8 @@ class Project:
     read_only: bool = field(default=False, init=False, repr=False, compare=False)
     _saved: Optional[Dict[str, Any]] = field(default=None, init=False, repr=False, compare=False)
     _listeners: List[Callable[[], None]] = field(default_factory=list, init=False, repr=False, compare=False)
+    # 開啟專案時讀到、聲部清單與群組不同而還沒決定的譜庫那處（群組 ID → 那處；不在專案檔內容裡）
+    _catalog_lists: Dict[str, "CatalogPlace"] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         self._saved = self.to_data()
@@ -1518,7 +1540,7 @@ class Project:
             }
             blocked = {voice_key(r.item.voice) for r in place.items if r.verdict is Verdict.BLOCKED}
             other_pieces = _other_pieces(group.instruments, place.other_pieces)
-            link = replace(group.catalog_link, other_pieces=other_pieces, unsynced=False)
+            link = replace(group.catalog_link, other_pieces=other_pieces, unsynced=False, confirm_voices=False)
             group.catalog_link = replace(link, snapshot=CatalogSnapshot(
                 voices=_with_blocked(
                     list(zip(group.instruments, group.headcounts)), group.catalog_link.snapshot.voices, blocked,
@@ -1531,6 +1553,131 @@ class Project:
                 filed=list(place.filed),
             ))
         self._changed()
+
+    def refresh_catalog(self, group: Group, place: "CatalogPlace") -> None:
+        """開啟專案時從譜庫更新快照：人數與時長的變動直接套用，聲部清單變了時記下、等譜務決定
+
+        - 人數與時長：譜庫的值跟快照不同時，群組還是快照的值就改成譜庫的，快照跟著改；群組另有還沒寫回的值時
+          兩邊都不動，存檔時照衝突處理
+        - 聲部清單（名稱、增刪、順序）：譜庫的跟群組的一樣時快照換成譜庫的；譜庫的變了、跟群組不同時不套用，
+          記下讀到的清單（catalog_list_change），由 take_catalog_list 或 keep_project_list 決定，
+          還沒決定時配對與命名照專案的清單
+        - 曲名、版本與樂章的名稱、已有 Drive 檔案的聲部、各樂器被其他曲目用到幾首換成讀到的
+
+        Args:
+            group: 連到譜庫的群組；沒連線時不動
+            place: 譜庫服務讀到的那一處（CatalogService.read_places）
+        """
+        link = group.catalog_link
+        if link is None:
+            return
+        snapshot = link.snapshot
+        catalog_keys = [voice_key(name) for name, _ in place.voices]
+        if catalog_keys == [voice_key(name) for name in group.instruments]:
+            olds = match_by_voice(snapshot.voices, [name for name, _ in place.voices])
+            voices = [
+                (name, self._refreshed_headcount(group, name, old or Headcount(), headcount))
+                for (name, headcount), old in zip(place.voices, olds)
+            ]
+        else:
+            theirs = match_by_voice(place.voices, [name for name, _ in snapshot.voices])
+            voices = [
+                (name, self._refreshed_headcount(group, name, old, new or old))
+                for (name, old), new in zip(snapshot.voices, theirs)
+            ]
+        listed = catalog_keys in ([voice_key(name) for name, _ in voices], [voice_key(n) for n in group.instruments])
+        if listed:
+            self._catalog_lists.pop(group.id, None)
+        else:
+            self._catalog_lists[group.id] = place
+        duration = snapshot.duration_seconds
+        if place.duration_seconds != duration:
+            if group.duration_seconds == duration:
+                group.duration_seconds = place.duration_seconds
+            if group.duration_seconds == place.duration_seconds:
+                duration = place.duration_seconds
+        group.catalog_link = replace(
+            link, piece_title=place.piece_title, edition_label=place.edition_label,
+            movement_name=place.movement_name, other_pieces=_other_pieces(group.instruments, place.other_pieces),
+            snapshot=replace(snapshot, voices=voices, duration_seconds=duration, filed=list(place.filed)),
+        )
+        self._changed()
+
+    @staticmethod
+    def _refreshed_headcount(group: Group, voice: str, old: Headcount, new: Headcount) -> Headcount:
+        """更新快照時一個聲部的人數：群組是快照的原值就改成譜庫的；回傳快照的新值（群組另有改動時留著原值）"""
+        index = voice_index(group.instruments, voice)
+        if index is None or new == old:
+            return new
+        if group.headcounts[index] == old:
+            group.headcounts[index] = new
+        return new if group.headcounts[index] == new else old
+
+    def catalog_list_change(self, group: Group) -> Optional[CatalogListChange]:
+        """開啟專案時讀到的譜庫聲部清單與群組的不同；沒有不同或已決定時為 None"""
+        place = self._catalog_lists.get(group.id)
+        if place is None or group.catalog_link is None:
+            return None
+        voices = place.voices
+        names = [name for name, _ in voices]
+        if [voice_key(name) for name in names] == [voice_key(name) for name in group.instruments]:
+            return None
+        return CatalogListChange(
+            voices=list(voices),
+            added=[name for name in names if voice_index(group.instruments, name) is None],
+            removed=[name for name in group.instruments if voice_index(names, name) is None],
+            moved=_moved_voices(group.instruments, names),
+        )
+
+    def take_catalog_list(self, group: Group) -> List[FileInfo]:
+        """「套用譜庫的」：群組的聲部清單換成開啟時讀到的譜庫清單，分譜依名稱配對（apply_catalog_voices 的規則）
+
+        群組原有的聲部保留群組的人數（還沒寫回的人數存檔時照衝突處理），譜庫新增的聲部用譜庫的人數；
+        快照的聲部清單換成譜庫的。新增的樂器在社團對照有聲部組時照連線的規則以社團的為準。
+
+        Returns:
+            對不到聲部、移到未分組的分譜（依原樂器表的順序）；沒有待決定的清單時為空清單
+        """
+        place = self._catalog_lists.pop(group.id, None)
+        if place is None:
+            return []
+        known = {instrument_key(voice) for voice in group.instruments}
+        own = match_by_voice(zip(group.instruments, group.headcounts), [name for name, _ in place.voices])
+        moved = _follow_voices_by_name(
+            group, [(name, mine or headcount) for (name, headcount), mine in zip(place.voices, own)],
+        )
+        self.ungrouped_files.extend(moved)
+        self._adopt_catalog_list(group, place.voices, confirm=False)
+        sections = dict(group.catalog_link.snapshot.sections)
+        for voice in _distinct_instruments(group.instruments):
+            club = stored_section(voice, place.sections)
+            if club and instrument_key(voice) not in known:
+                put_section(self.instrument_sections, voice, club)
+                sections[voice] = club
+        group.catalog_link = replace(group.catalog_link, snapshot=replace(group.catalog_link.snapshot, sections=sections))
+        self._changed()
+        return moved
+
+    def keep_project_list(self, group: Group) -> None:
+        """「用專案的（存檔時寫回）」：快照的聲部清單換成開啟時讀到的譜庫清單，群組的清單因此成為待寫入的改動
+
+        群組與配對不變；下次存檔先在衝突畫面確認再寫回（CatalogLink.confirm_voices），
+        要刪掉的聲部在譜庫已有 Drive 檔案時無法寫回。沒有待決定的清單時不動。
+        """
+        place = self._catalog_lists.pop(group.id, None)
+        if place is None:
+            return
+        self._adopt_catalog_list(group, place.voices, confirm=True)
+        self._changed()
+
+    @staticmethod
+    def _adopt_catalog_list(group: Group, voices: List[Tuple[str, Headcount]], confirm: bool) -> None:
+        """快照的聲部清單換成譜庫的；快照已有的聲部留著快照的人數（還沒寫回的人數存檔時才比對得出衝突）"""
+        link = group.catalog_link
+        olds = match_by_voice(link.snapshot.voices, [name for name, _ in voices])
+        group.catalog_link = replace(link, confirm_voices=confirm, snapshot=replace(
+            link.snapshot, voices=[(name, old or headcount) for (name, headcount), old in zip(voices, olds)],
+        ))
 
     def link_movements(self, groups: Iterable[Group], piece_name: str) -> None:
         """把群組連成同一首曲目的各樂章：曲名一致、樂章編號依序，沒有樂章名稱的以群組名稱補上"""
@@ -1804,6 +1951,21 @@ def _with_blocked(
         if voice_key(name) in blocked:
             result.insert(min(index, len(result)), (name, headcount))
     return result
+
+
+def _moved_voices(names: List[str], reference: List[str]) -> List[str]:
+    """names 裡在 reference 換了相對順序的聲部（依 names 的順序）：兩邊都有的聲部中，
+    不在最長的共同順序裡的那些"""
+    ref_keys = [voice_key(name) for name in reference]
+    shared = [name for name in names if voice_key(name) in ref_keys]
+    order = [ref_keys.index(voice_key(name)) for name in shared]
+    # 最長遞增子序列（聲部數不多，用平方的做法）：留在原相對順序的聲部
+    longest: List[List[int]] = []
+    for i, position in enumerate(order):
+        best = max((longest[j] for j in range(i) if order[j] < position), key=len, default=[])
+        longest.append(best + [i])
+    kept = set(max(longest, key=len, default=[]))
+    return [name for i, name in enumerate(shared) if i not in kept]
 
 
 def _other_pieces(voices: Iterable[str], counts: Dict[str, int]) -> Dict[str, int]:
