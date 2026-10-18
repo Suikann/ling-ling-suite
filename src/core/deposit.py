@@ -209,8 +209,14 @@ class GroupDeposit:
 
 @dataclass(frozen=True)
 class DepositPlan:
-    """一次存入的計畫：專案裡每個群組各一個（依專案的順序）"""
+    """一次存入的計畫
+
+    Attributes:
+        groups: 專案裡每個群組各一個（依專案的順序）
+        interrupted: 這個專案上次存入中斷（中途停下或登記寫不進去）時做了幾份；沒有中斷時為 None
+    """
     groups: List[GroupDeposit] = field(default_factory=list)
+    interrupted: Optional[int] = None
 
     def work(self) -> List[Tuple[GroupDeposit, DepositItem]]:
         """要做的每一份（不存入的群組與聲部不算），依群組與檔案的順序"""

@@ -237,8 +237,6 @@ class MainWindow(QMainWindow):
         self._clear_service = ClearLocalService(self.file_service, self._log, standard_folders=_standard_folders())
         self._download_service = DownloadService(self.file_service, self._log)
         self._revert_service = DepositRevertService(self.file_service, self._download_service, self._log)
-        # 上次存入中斷（取消或中途失敗）前完成了幾份；0 表示上次沒有中斷，存入預覽據此提示
-        self._deposit_interrupted = 0
         # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀
         self._club_settings = ClubSettingsService(preferences, self._log)
         self._publisher = PublishService(self._huaxia_auth)
@@ -1377,7 +1375,7 @@ class MainWindow(QMainWindow):
         self._catalog_error_bar.clear()
         from ui.deposit_dialog import DepositDialog
         unsaved = project.is_modified() or not self._project_path
-        dialog = DepositDialog(plan, unsaved, self._deposit_interrupted, self)
+        dialog = DepositDialog(plan, unsaved, self)
         dialog.link_requested.connect(self._link_group_by_id)
         accepted = dialog.exec() == DepositDialog.Accepted
         dialog.deleteLater()
@@ -1398,8 +1396,6 @@ class MainWindow(QMainWindow):
             self._instrumentation_table.refresh()
             if self._project_path and not self.project.read_only:
                 self._write_project_file(self._project_path)
-        interrupted = outcome.error is not None or outcome.cancelled
-        self._deposit_interrupted = outcome.completed if interrupted else 0
         if outcome.error is not None:
             failure = CatalogFailure.from_error(outcome.error, t("deposit.title"))
             self._catalog_error_bar.show_failure(

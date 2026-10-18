@@ -30,7 +30,7 @@ from services.file_service import FileService
 from services.move_history import RenameVerdict
 from services.project_service import ProjectService
 from test_deposit import DepositFixture, md5
-from tests.test_main_window import MainWindowTestCase, answering_prompts, wait_until
+from tests.test_main_window import MainWindowTestCase, answering_prompts, opening, wait_until
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.deposit_dialog import DepositDialog
 from ui.instrumentation_table import InstrumentationTable
@@ -147,6 +147,29 @@ class TestArchiving(DepositWindowTestCase):
         self.finish()
         self.assertTrue(bar.isHidden())
         self.assertEqual(set(self.registered()), {"總譜", "二胡 I", "琵琶"})
+
+    def test_a_restarted_program_still_shows_that_the_last_deposit_stopped(self):
+        self.google.drive.fail_upload(2, CatalogErrorKind.OFFLINE)
+        self.archive()
+        self.finish()
+        with answering_prompts(t("dialog.discard_btn")):
+            self.window.close()
+        self.window = MainWindow(
+            self.preferences, history=self.history, opener=self.opener, auth_service=self.auth,
+            compressor=self.compressor(), log=ActivityLog(FileService(), self.log_dir),
+            catalog_factory=lambda: self.catalog,
+        )
+        with answering_prompts(), opening(self.path):
+            self.trigger_menu(t("menu.file.open"))
+        notices = []
+
+        def look(dialog):
+            notices.append(dialog.interrupted_notice.text() if dialog.interrupted_notice else "")
+            dialog.reject()
+            return dialog.result()
+        with mock.patch.object(DepositDialog, "exec", look), answering_prompts():
+            self.trigger_menu(t("menu.catalog.deposit"))
+        self.assertEqual(notices, [t("deposit.interrupted", count=1)])
 
     def action(self, text: str):
         """主視窗選單裡文字相符的動作"""

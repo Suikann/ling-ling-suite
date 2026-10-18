@@ -7,6 +7,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from core.catalog_constants import DEPOSIT_PENDING
 from core.models import Headcount
 from core.voice_names import voice_key
 
@@ -120,7 +121,8 @@ class DepositLogEntry:
     """存入紀錄的一列：一次存入（或撤銷存入）裡的一份檔（欄位見 core/catalog_constants.py 的 SHEET_DEPOSIT_LOG）
 
     存入時 action 是 core/deposit.py 的 DepositAction 的值、reverts 空白；撤銷存入時 action 是
-    core/deposit_revert.py 的 RevertAction 的值、reverts 是被撤銷的那次存入編號。
+    core/deposit_revert.py 的 RevertAction 的值、reverts 是被撤銷的那次存入編號。存入前先寫的「要做」列
+    state 是 DEPOSIT_PENDING、revision_after 空白（新上傳的 drive_file_id 是預先要到的 ID）。
     """
     id: str = ""
     deposit_id: str = ""
@@ -137,6 +139,12 @@ class DepositLogEntry:
     revision_before: str = ""
     reverts: str = ""
     group_id: str = ""
+    state: str = ""
+
+    @property
+    def pending(self) -> bool:
+        """是不是存入前先寫的「要做」列（DEPOSIT_PENDING）"""
+        return self.state == DEPOSIT_PENDING
 
     @property
     def group_key(self) -> str:

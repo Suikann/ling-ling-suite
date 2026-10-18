@@ -5,6 +5,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -182,6 +183,26 @@ class TestCreatePlace(LinkTestCase):
         self.assertEqual(len(records(self.google, SHEET_EDITIONS)), 2)
         self.assertEqual(len(records(self.google, SHEET_MOVEMENTS)), 2)
         self.assertEqual(len(self.google.drive.children(self.root)), 1)
+
+    def test_a_lost_response_when_creating_the_folder_does_not_create_a_second_one(self):
+        create = self.google.drive.create_folder
+        lost = []
+
+        def create_but_lose_the_response(name, parent, file_id=""):
+            """建好資料夾，第一次卻扮演回應沒收到"""
+            folder = create(name, parent, file_id)
+            if not lost:
+                lost.append(folder.id)
+                raise CatalogError(CatalogErrorKind.OFFLINE, "response lost")
+            return folder
+        pending = PendingPlace(title="將軍令", root_folder_id=self.root)
+        with mock.patch.object(self.google.drive, "create_folder", create_but_lose_the_response):
+            with self.assertRaises(CatalogError):
+                self.catalog.create_place(pending, OrchestraType.CHINESE)
+            place = self.catalog.create_place(pending, OrchestraType.CHINESE)
+        self.assertEqual([f.name for f in self.google.drive.children(self.root)], ["將軍令"])
+        edition = next(r for r in records(self.google, SHEET_EDITIONS) if r["id"] == place.edition_id)
+        self.assertEqual(edition["drive_folder_id"], lost[0])
 
     def test_without_a_root_folder_nothing_is_created(self):
         with self.assertRaises(CatalogError) as caught:

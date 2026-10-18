@@ -4,11 +4,11 @@
 
 左邊是群組清單，每個群組寫出各動作的份數，不存入的群組寫原因，沒連到譜庫的附「連到譜庫…」；
 右邊是所選群組的「聲部／本機 → 譜庫（Drive）／動作」對照表，預設只看要上傳或搬移的。
-上方是未存檔時的紅色提示（「存入譜庫」按不下去）與上次中斷的提示，底部是合計（上傳幾份、多大、搬移幾份）。
+上方是未存檔時的紅色提示（「存入譜庫」按不下去）與上次中斷的提示（DepositPlan.interrupted，從存入紀錄推算），底部是合計（上傳幾份、多大、搬移幾份）。
 只顯示計畫（core/deposit.py 的 DepositPlan），按「存入譜庫」關閉對話框，存入由主視窗在背景執行。
 
 使用範例：
-    dialog = DepositDialog(plan, unsaved=project.is_modified(), interrupted=0, parent=window)
+    dialog = DepositDialog(plan, unsaved=project.is_modified(), parent=window)
     dialog.link_requested.connect(link_group)
     if dialog.exec() == DepositDialog.Accepted:
         ...
@@ -62,12 +62,11 @@ class DepositDialog(QDialog):
 
     link_requested = Signal(str)
 
-    def __init__(self, plan: DepositPlan, unsaved: bool, interrupted: int = 0, parent: Optional[QWidget] = None):
+    def __init__(self, plan: DepositPlan, unsaved: bool, parent: Optional[QWidget] = None):
         """
         Args:
-            plan: 存入計畫
+            plan: 存入計畫（上次中斷時 interrupted 是那次做了幾份）
             unsaved: 專案有沒有未存檔的改動（有時不能存入）
-            interrupted: 上次存入中斷前完成了幾份；0 表示沒有中斷
             parent: 父元件
         """
         super().__init__(parent)
@@ -79,8 +78,9 @@ class DepositDialog(QDialog):
         self._unsaved.setStyleSheet(_UNSAVED_STYLE)
         self._unsaved.setVisible(unsaved)
         layout.addWidget(self._unsaved)
-        if interrupted:
-            notice = QLabel(t("deposit.interrupted", count=interrupted))
+        self.interrupted_notice: Optional[QLabel] = None
+        if plan.interrupted is not None:
+            notice = self.interrupted_notice = QLabel(t("deposit.interrupted", count=plan.interrupted))
             notice.setStyleSheet(_INTERRUPTED_STYLE)
             layout.addWidget(notice)
         splitter = QSplitter(Qt.Horizontal)

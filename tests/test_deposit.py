@@ -9,14 +9,15 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.catalog_constants import (
-    SHEET_DEPOSIT_LOG, SHEET_EDITIONS, SHEET_HEADERS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PIECES,
+    DEPOSIT_PENDING, SHEET_DEPOSIT_LOG, SHEET_EDITIONS, SHEET_HEADERS, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PIECES,
 )
-from core.catalog_errors import CatalogErrorKind
+from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.constants import PROJECT_FILE_VERSION, PartsOutputMode
 from core.deposit import DepositAction, DepositBlock
 from core.models import FileInfo, Project, UndoMapping
@@ -267,7 +268,7 @@ class TestInterrupted(DepositTestCase):
         )
         self.assertIsNone(second.error)
         self.assert_complete_once()
-        self.assertEqual(len(records(self.google, SHEET_DEPOSIT_LOG)), 1 + 3)
+        self.assertEqual(len(done_rows(self.google)), 1 + 3)
 
     def test_an_upload_whose_response_was_lost_is_registered_on_the_next_press(self):
         self.google.drive.fail_upload(2, CatalogErrorKind.OFFLINE, applied=True)
@@ -297,8 +298,42 @@ class TestInterrupted(DepositTestCase):
         self.assertEqual(set(self.registered()), {"總譜"})
 
 
+class TestInterruptedNotice(DepositTestCase):
+    """上次存入中斷時，下次預覽記得（從存入紀錄推算，重開程式也在）；補齊之後就沒有"""
+
+    def test_the_next_preview_knows_the_last_deposit_stopped_and_how_far_it_got(self):
+        self.google.drive.fail_upload(2, CatalogErrorKind.OFFLINE)
+        self.deposit()
+        plan = DepositService(FileService()).preview(self.project, self.catalog)
+        self.assertEqual(plan.interrupted, 1)
+
+    def test_a_deposit_whose_registration_failed_counts_as_interrupted(self):
+        plan = self.service.preview(self.project, self.catalog)
+        with mock.patch.object(self.catalog, "record_deposits", side_effect=CatalogError(CatalogErrorKind.OFFLINE, "")):
+            self.service.deposit(plan, self.catalog, "office@example.com", lambda: False, lambda progress: None)
+        self.assertEqual(self.service.preview(self.project, self.catalog).interrupted, 0)
+
+    def test_pressing_again_to_completion_clears_the_notice(self):
+        self.google.drive.fail_upload(2, CatalogErrorKind.OFFLINE)
+        self.deposit()
+        self.deposit()
+        self.assertIsNone(self.service.preview(self.project, self.catalog).interrupted)
+
+    def test_another_projects_interrupted_deposit_is_not_this_projects_notice(self):
+        self.google.drive.fail_upload(2, CatalogErrorKind.OFFLINE)
+        self.deposit()
+        other = Project(master_template="{樂器}")
+        self.assertIsNone(self.service.preview(other, self.catalog).interrupted)
+
+
 class TestRequests(DepositTestCase):
     """試算表的請求數不隨聲部數增加；遇到用量上限自動等一下再試"""
+
+    def test_more_than_a_thousand_drive_ids_are_asked_for_in_batches(self):
+        before = self.google.drive_requests
+        ids = self.catalog.drive_ids(2500)
+        self.assertEqual((len(ids), len(set(ids))), (2500, 2500))
+        self.assertEqual(self.google.drive_requests - before, 3)
 
     def test_sheets_requests_are_the_same_for_3_and_30_voices(self):
         counts = []
@@ -327,7 +362,7 @@ class TestDepositLog(DepositTestCase):
         with open(self.parts[1].original_path, "wb") as f:
             f.write(b"new pipa")
         self.deposit(operator="b@example.com")
-        log = records(self.google, SHEET_DEPOSIT_LOG)
+        log = done_rows(self.google)
         self.assertEqual((log[0]["id"], log[0]["deposit_id"], log[0]["voice"]), ("old", "d0", "笛"))
         first, second = log[1:4], log[4:]
         self.assertEqual([r["action"] for r in first], ["new", "new", "new"])
@@ -335,7 +370,7 @@ class TestDepositLog(DepositTestCase):
         self.assertEqual(len({r["deposit_id"] for r in first}), 1)
         self.assertEqual(len({r["deposit_id"] for r in second}), 1)
         self.assertEqual(len({first[0]["deposit_id"], second[0]["deposit_id"], "d0"}), 3)
-        self.assertEqual(len({r["id"] for r in log}), 7)
+        self.assertEqual(len({r["id"] for r in records(self.google, SHEET_DEPOSIT_LOG)}), 13)
         self.assertEqual(
             [(r["operator"], r["edition_id"], r["movement_id"], r["group"], r["voice"]) for r in first],
             [("a@example.com", "e1", "m1", "江樓鐘鼓", voice) for voice in ("總譜", "二胡 I", "琵琶")],
@@ -354,7 +389,30 @@ class TestDepositLog(DepositTestCase):
         _, outcome = self.deposit()
         self.assertIsNone(outcome.error)
         self.assertEqual(self.google.sheets.rows(SHEET_DEPOSIT_LOG)[0], SHEET_HEADERS[SHEET_DEPOSIT_LOG])
-        self.assertEqual(len(records(self.google, SHEET_DEPOSIT_LOG)), 3)
+        self.assertEqual(len(done_rows(self.google)), 3)
+
+    def test_every_file_to_do_is_logged_as_pending_before_drive_is_touched(self):
+        self.google.drive.fail_upload(1, CatalogErrorKind.OFFLINE)
+        _, outcome = self.deposit()
+        self.assertEqual(outcome.completed, 0)
+        pending = [r for r in records(self.google, SHEET_DEPOSIT_LOG) if r["state"] == DEPOSIT_PENDING]
+        self.assertEqual([r["voice"] for r in pending], ["總譜", "二胡 I", "琵琶"])
+        self.assertEqual({r["action"] for r in pending}, {"new"})
+        self.assertEqual(len({r["drive_file_id"] for r in pending}), 3)
+        self.assertEqual({r["revision_after"] for r in pending}, {""})
+        self.assertEqual(done_rows(self.google), [])
+
+    def test_done_rows_share_the_deposit_id_of_their_pending_rows(self):
+        self.deposit()
+        log = records(self.google, SHEET_DEPOSIT_LOG)
+        self.assertEqual(len({r["deposit_id"] for r in log}), 1)
+        pending = [(r["voice"], r["drive_file_id"]) for r in log if r["state"] == DEPOSIT_PENDING]
+        self.assertEqual(pending, [(r["voice"], r["drive_file_id"]) for r in done_rows(self.google)])
+
+
+def done_rows(google) -> list:
+    """存入紀錄裡做了的列（不含存入前先寫的「要做」列）"""
+    return [r for r in records(google, SHEET_DEPOSIT_LOG) if r["state"] != DEPOSIT_PENDING]
 
 
 class TestNotDeposited(DepositTestCase):

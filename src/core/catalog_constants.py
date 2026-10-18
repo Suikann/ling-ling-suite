@@ -38,7 +38,8 @@ SHEET_SECTIONS = "聲部組對照"
 SHEET_INSTRUMENTATION_LOG = "編制寫入紀錄"
 # 存入紀錄：一次存入一個存入編號、每份檔一列，只新增、不修改；動作寫 DepositAction 的值，
 # 版本 ID 是 Drive 檔案寫入後與被蓋掉的版本（headRevisionId；沒寫內容時兩者相同）。
-# 撤銷存入也是一個新的存入編號、每份撤掉的檔一列：動作寫 RevertAction 的值，reverts 是被撤銷的那次存入編號
+# 撤銷存入也是一個新的存入編號、每份撤掉的檔一列：動作寫 RevertAction 的值，reverts 是被撤銷的那次存入編號。
+# 存入時先寫「要做」的列（狀態欄見 DEPOSIT_PENDING），做完再寫做了的列
 SHEET_DEPOSIT_LOG = "存入紀錄"
 
 SHEET_HEADERS = {
@@ -86,8 +87,14 @@ SHEET_HEADERS = {
         "reverts",
         # 群組 ID（同名的群組分得開，群組改名後也認得出；舊的列空白，以群組名稱認）
         "group_id",
+        # 存入前先寫的「要做」列是 DEPOSIT_PENDING；做完寫的列（與舊的列）空白
+        "state",
     ],
 }
+
+# 存入紀錄的狀態欄：動 Drive 之前先寫一列「要做」，做完再另寫一列（只新增、不修改）。
+# 只有「要做」、沒有做完那列的檔，是中途停下或登記寫不進去的：撤銷時照 Drive 現況判斷那次做到了沒有
+DEPOSIT_PENDING = "pending"
 
 # 是非欄（是否「以上」、是否為總譜列）寫入時的「是」；讀取時這些寫法都算是，其餘（含空白）算否
 CATALOG_TRUE = "TRUE"

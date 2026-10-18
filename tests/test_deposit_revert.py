@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.catalog_constants import (
     SHEET_DEPOSIT_LOG, SHEET_EDITIONS, SHEET_HEADERS, SHEET_INSTRUMENTATION_LOG, SHEET_PARTS, SHEET_PIECES,
 )
+from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.catalog_revert import RevertOutcome
 from core.catalog_sync import WriteSource, place_writes
 from core.locale import t
@@ -222,7 +224,8 @@ class TestChangedAfterwards(RevertTestCase):
         preview, outcome = self.revert(first)
         pipa = next(f for f in preview.groups[0].files if f.entry.voice == "琵琶")
         self.assertEqual((pipa.action, pipa.kept, pipa.later.deposit_id), (RevertAction.KEEP, KeptBecause.REDEPOSITED, second))
-        self.assertEqual(outcome.completed, 0)
+        # 第二次存入只是跳過的檔（內容沒變）不算又存入過
+        self.assertEqual(outcome.completed, 2)
         self.assertEqual(self.google.drive.content(self.registered_ids()["琵琶"]), b"new pipa")
 
 
@@ -291,6 +294,68 @@ class TestOnlyCopy(RevertTestCase):
         preview, outcome = self.revert(deposit_id, local=LocalProject.of(Project(), ()))
         self.assertIsNone(preview.groups[0].block)
         self.assertEqual(outcome.completed, 3)
+
+
+class TestUnfinishedDeposit(RevertTestCase):
+    """中斷或登記寫不進去的存入：只有「要做」列的檔照 Drive 現況判斷，蓋掉的內容照樣撤得掉"""
+
+    def deposit(self, should_cancel=lambda: False, record_fails: bool = False) -> str:
+        """存入（可以中途取消，或讓最後的登記寫不進去），回傳這次的存入編號"""
+        service = DepositService(FileService())
+        plan = service.preview(self.project, self.catalog)
+        failure = CatalogError(CatalogErrorKind.OFFLINE, "registration lost")
+        with mock.patch.object(self.catalog, "record_deposits", side_effect=failure if record_fails else None,
+                               wraps=None if record_fails else self.catalog.record_deposits):
+            outcome = service.deposit(plan, self.catalog, OPERATOR, should_cancel, lambda progress: None)
+        self.project.record_deposit(outcome.records)
+        self.project.mark_saved()
+        return deposits(self.catalog.deposit_log())[0].deposit_id
+
+    def test_an_overwrite_whose_registration_failed_is_still_reverted(self):
+        self.archive()
+        pipa = self.registered_ids()["琵琶"]
+        self.write_local(self.parts[1], b"wrong pipa")
+        deposit_id = self.deposit(record_fails=True)
+        self.assertEqual(self.google.drive.content(pipa), b"wrong pipa")
+        preview, outcome = self.revert(deposit_id)
+        self.assertEqual(self.outcomes(preview.groups[0])["琵琶.pdf"], (RevertAction.RESTORE, None))
+        self.assertIsNone(outcome.error)
+        self.assertEqual(self.google.drive.content(pipa), "琵琶".encode())
+
+    def test_pressing_again_after_the_failure_still_lets_the_overwrite_be_reverted(self):
+        self.archive()
+        pipa = self.registered_ids()["琵琶"]
+        self.write_local(self.parts[1], b"wrong pipa")
+        deposit_id = self.deposit(record_fails=True)
+        self.archive()
+        preview, _ = self.revert(deposit_id)
+        self.assertEqual(self.outcomes(preview.groups[0])["琵琶.pdf"], (RevertAction.RESTORE, None))
+        self.assertEqual(self.google.drive.content(pipa), "琵琶".encode())
+
+    def test_new_uploads_whose_registration_failed_go_to_the_trash(self):
+        deposit_id = self.deposit(record_fails=True)
+        preview, outcome = self.revert(deposit_id)
+        self.assertEqual(
+            {action for action, _ in self.outcomes(preview.groups[0]).values()}, {RevertAction.TRASH},
+        )
+        self.assertEqual(outcome.completed, 3)
+        self.assertEqual(sum(1 for name in ("總譜.pdf", "二胡 I.pdf", "琵琶.pdf")
+                             for f in self.google.drive.files_named(name) if not f.trashed), 0)
+
+    def test_files_a_cancelled_deposit_never_reached_are_listed_as_unfinished(self):
+        asked = []
+
+        def cancel_after_first():
+            asked.append(True)
+            return len(asked) > 1
+        deposit_id = self.deposit(should_cancel=cancel_after_first)
+        preview, outcome = self.revert(deposit_id)
+        self.assertEqual(self.outcomes(preview.groups[0]), {
+            "總譜.pdf": (RevertAction.TRASH, None),
+            "二胡 I.pdf": (RevertAction.KEEP, KeptBecause.UNFINISHED),
+            "琵琶.pdf": (RevertAction.KEEP, KeptBecause.UNFINISHED),
+        })
+        self.assertEqual(outcome.completed, 1)
 
 
 class TestRecheckedBeforeActing(RevertTestCase):

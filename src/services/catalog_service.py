@@ -23,7 +23,8 @@
     page = catalog.edition_page(edition_id, movement_id, OrchestraType.CHINESE)  # 版本頁：登記與沒登記的檔
     catalog.register_files(PendingRegistration(edition_id, movement_id, {"琵琶": pdf}))  # 失敗時以同一個物件重送
     places = catalog.deposit_places([("e1", "m1")])  # 存入前：那處的登記與版本資料夾裡的檔
-    catalog.record_deposits(records, email)          # 存入後：登記分譜列並寫存入紀錄（一次寫入）
+    deposit_id = catalog.begin_deposit(planned, email)  # 存入前：每份要做的檔寫一列「要做」
+    catalog.record_deposits(deposit_id, records, email)  # 存入後：登記分譜列並寫存入紀錄（一次寫入）
     content = catalog.download_file(drive_file)      # 從譜庫下載：一個檔的內容，呼叫端拿 md5 核對
     history = catalog.deposit_log()                  # 存入紀錄的全部列（撤銷存入挑一次存入）
     reading = catalog.revert_reading(deposit_id, OrchestraType.CHINESE)  # 撤銷存入前：那次每份檔與各處的現況
@@ -38,7 +39,7 @@ from dataclasses import fields, replace
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Type, TypeVar
 
 from core.catalog_constants import (
-    CATALOG_TRUE, CATALOG_TRUE_VALUES, CLUB_SETTING_PUBLISHING_PLATFORM, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME,
+    CATALOG_TRUE, CATALOG_TRUE_VALUES, CLUB_SETTING_PUBLISHING_PLATFORM, DEPOSIT_PENDING, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME,
     DRIVE_SPREADSHEET_MIME, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, SHEET_COMPOSERS, SHEET_DURATIONS,
     SHEET_DEPOSIT_LOG, SHEET_EDITIONS, SHEET_HEADERS, SHEET_INSTRUMENTATION_LOG, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES,
     SHEET_PIECES, SHEET_SECTIONS, PublishingPlatform,
@@ -58,7 +59,7 @@ from core.catalog_sync import (
 )
 from core.deposit import SCORE_VOICE, DepositRecord, PlaceFiles, folder_key
 from core.deposit_revert import UNREGISTERING, RevertFile, RevertPlace, RevertReading, needs_revisions
-from core.log_entry import now
+from core.log_entry import now_text
 from core.models import Headcount
 from core.sections import stored_section
 from core.voice_names import instrument_key, instrument_name, voice_key
@@ -66,6 +67,8 @@ from services.catalog_ports import CellWrite, DrivePort, SheetsPort, sheet_range
 
 T = TypeVar("T")
 
+# Drive 的 files.generateIds 一次最多給幾個 ID
+DRIVE_IDS_PER_REQUEST = 1000
 # 遇到 429 時最多自動重試幾次，以及第一次等幾秒（之後每次加倍）
 DEFAULT_RATE_LIMIT_RETRIES = 5
 DEFAULT_FIRST_WAIT_SECONDS = 1.0
@@ -167,6 +170,24 @@ def _registered_by(part: Part, entry: DepositLogEntry) -> bool:
         and part.drive_file_id.strip() == entry.drive_file_id
         and (_is_true(part.is_score) or voice_key(part.instrument_name) == voice_key(entry.voice))
     )
+
+
+def _deposit_row(
+    deposit_id: str, stamp: str, operator: str, record: DepositRecord, revision_after: str, state: str,
+) -> Dict[str, str]:
+    """存入紀錄的一列：一份檔的「要做」列（state 為 DEPOSIT_PENDING、沒有寫入後的版本）或做了的列"""
+    return {
+        "deposit_id": deposit_id, "time": stamp, "operator": operator, "edition_id": record.edition_id,
+        "movement_id": record.movement_id, "group": record.group_name, "voice": record.voice or record.score_label,
+        "local_path": record.local_path, "drive_file_id": record.drive_file.id, "action": record.action.value,
+        "revision_after": revision_after, "revision_before": record.revision_before, "group_id": record.group_id,
+        "state": state,
+    }
+
+
+def _at(parts: List[Tuple[int, Part]], edition_id: str, movement_id: str) -> List[Tuple[int, Part]]:
+    """一處（版本、樂章）的分譜列連同列號"""
+    return [(row, part) for row, part in parts if (part.edition_id, part.movement_id) == (edition_id, movement_id)]
 
 
 def _add_score_row(batch: "_Batch", edition_id: str, movement_id: str, file: DriveFile) -> None:
@@ -585,7 +606,8 @@ class PendingPlace:
     """要在譜庫新建的一處：還沒有的曲目（連同作曲家）、版本（連同 Drive 資料夾）與樂章
 
     已有的部分給 ID，其餘依曲名、作曲家、樂章編號與名稱新建。CatalogService.create_place 建好一部分就記下來：
-    之後中途失敗時以同一個物件重送，只補上缺的，不產生重複的列與資料夾。
+    之後中途失敗時以同一個物件重送，只補上缺的，不產生重複的列與資料夾（版本資料夾以預先要到的 ID 建立，
+    回應沒收到而其實已建好時重送取那一個）。
     """
 
     def __init__(
@@ -614,6 +636,8 @@ class PendingPlace:
         self.movement_number = movement_number
         self.movement_name = movement_name
         self.folder_id = ""
+        # 新版本資料夾預先要到的 ID：回應沒收到而重送時 Drive 回已經存在，取那一個，不建第二個
+        self._folder_file_id = ""
         self.composer_id = ""
         self._composer_rows: Optional[PendingRows] = None
         self._piece_rows: Optional[PendingRows] = None
@@ -1043,18 +1067,7 @@ class CatalogService:
             decisions: 衝突的選擇：PlaceWrite.group_id → （SyncItem.key → Decision）
             review_only: 只比對、不寫
         """
-        titles = set(self._call(self._sheets.sheet_titles))
-        sheets = _place_sheets(titles)
-        ranges = [_whole_sheet(sheet) for sheet in sheets]
-        has_log = SHEET_INSTRUMENTATION_LOG in titles
-        if has_log:
-            # 紀錄只會越來越長：只讀標題列與 ID 欄（找下一列、抽不撞號的 ID）
-            ranges += [sheet_range(SHEET_INSTRUMENTATION_LOG, "1:1"), sheet_range(SHEET_INSTRUMENTATION_LOG, "A:A")]
-        values = self._call(lambda: self._sheets.read_ranges(ranges))
-        tables = dict(zip(sheets, values))
-        if has_log:
-            header, ids = values[-2:]
-            tables[SHEET_INSTRUMENTATION_LOG] = header[:1] + ids[1:]
+        titles, tables, _ = self._read_with_log(_place_sheets, SHEET_INSTRUMENTATION_LOG, "A:A")
         catalogs = {orchestra: _PlaceTables(tables, orchestra) for orchestra in {o for _, o in writes}}
         places = []
         for write, orchestra in writes:
@@ -1072,17 +1085,14 @@ class CatalogService:
         outcome = SyncOutcome(places, written=False)
         if outcome.conflicts or review_only:
             return outcome
-        batch = _Batch({sheet: rows for sheet, rows in tables.items()}, self._draw_ids)
-        stamp = now().strftime("%Y-%m-%d %H:%M:%S")
+        batch = _Batch(tables, self._draw_ids)
+        stamp = now_text()
         written_sections: Dict[OrchestraType, Set[str]] = {orchestra: set() for orchestra in catalogs}
         for place, (_, orchestra) in zip(places, writes):
             logged = WriteSource.UNDO if place.write.revert else source
             for review in catalogs[orchestra].write_place(batch, place, written_sections[orchestra]):
                 batch.add(SHEET_INSTRUMENTATION_LOG, _log_record(stamp, operator, logged, place.write, review))
-        if batch.cells:
-            for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
-                self._call(lambda: self._sheets.add_sheet(sheet))
-            self._call(lambda: self._sheets.write_cells(batch.cells))
+        self._send(batch, titles)
         outcome.written = True
         return outcome
 
@@ -1138,45 +1148,56 @@ class CatalogService:
             )
         return result
 
-    def record_deposits(self, records: Sequence[DepositRecord], operator: str) -> None:
+    def begin_deposit(self, planned: Sequence[DepositRecord], operator: str) -> str:
+        """存入動 Drive 之前先寫存入紀錄：每份要做的檔一列「要做」（DEPOSIT_PENDING），一個請求寫入，回傳這次的存入編號
+
+        之後登記寫不進去（例如斷網）時，蓋掉的內容照樣有紀錄可撤銷：撤銷時只有「要做」列的檔照 Drive 現況判斷
+        那次做到了沒有（core/deposit_revert.py）。請求數固定：列出工作表名稱、讀取、寫入各一次，
+        存入紀錄還沒建立時另建一次。
+
+        Args:
+            planned: 要做的每份檔（drive_file 是要動的那份；新上傳是預先要到的 ID，revision_before 是被蓋掉的版本）
+            operator: 操作者（登入的 email），寫進存入紀錄
+
+        Returns:
+            新抽的存入編號；做完以它呼叫 record_deposits
+
+        Raises:
+            CatalogError: 讀不到或寫不進去（沒有任何一列被寫入）；這時還沒動 Drive
+        """
+        titles, tables, log = self._read_with_log(lambda _: [], SHEET_DEPOSIT_LOG, "A:B")
+        batch = _Batch(tables, self._draw_ids)
+        deposit_id = self._draw_ids({row[1] for row in log if len(row) > 1}, 1)[0]
+        stamp = now_text()
+        for record in planned:
+            batch.add(SHEET_DEPOSIT_LOG, _deposit_row(deposit_id, stamp, operator, record, "", DEPOSIT_PENDING))
+        self._send(batch, titles)
+        return deposit_id
+
+    def record_deposits(self, deposit_id: str, records: Sequence[DepositRecord], operator: str) -> None:
         """存入後登記分譜列並寫存入紀錄：寫入前一刻才讀分譜工作表找列號，全部以一個請求寫入
 
         每份檔的分譜列（總譜為那處的總譜列，還沒有就新增一列，與 register_files 相同）改登記成存入後的 Drive 檔案與檔名，
         只送值變了的格子，被換掉的舊檔不動（新上傳只在原本登記的檔已不在 Drive 或在垃圾桶裡時發生）；
-        聲部的列已被刪掉時不登記。每份檔一列存入紀錄，這一批共用一個新抽的存入編號。請求數固定：
-        列出工作表名稱、讀取、寫入各一次，存入紀錄還沒建立時另建一次。
+        聲部的列已被刪掉時不登記。每份檔一列做了的存入紀錄，存入編號是 begin_deposit 抽的。請求數固定：
+        列出工作表名稱、讀取、寫入各一次。
 
         Args:
+            deposit_id: begin_deposit 交回的存入編號
             records: 存入了的每份檔
             operator: 操作者（登入的 email），寫進存入紀錄
 
         Raises:
             CatalogError: 讀不到或寫不進去（沒有任何一格被寫入）
         """
-        titles = set(self._call(self._sheets.sheet_titles))
-        has_log = SHEET_DEPOSIT_LOG in titles
-        ranges = [_whole_sheet(SHEET_PARTS)]
-        if has_log:
-            # 紀錄只會越來越長：只讀標題列與 ID、存入編號兩欄
-            ranges += [sheet_range(SHEET_DEPOSIT_LOG, "1:1"), sheet_range(SHEET_DEPOSIT_LOG, "A:B")]
-        values = self._call(lambda: self._sheets.read_ranges(ranges))
-        tables = {SHEET_PARTS: values[0]}
-        deposit_ids: Set[str] = set()
-        if has_log:
-            header, ids = values[1:]
-            tables[SHEET_DEPOSIT_LOG] = header[:1] + ids[1:]
-            deposit_ids = {row[1] for row in ids[1:] if len(row) > 1}
+        titles, tables, _ = self._read_with_log(lambda _: [SHEET_PARTS], SHEET_DEPOSIT_LOG, "A:A")
         batch = _Batch(tables, self._draw_ids)
-        parts = _numbered(values[0], SHEET_PARTS, Part)
-        deposit_id = self._draw_ids(deposit_ids, 1)[0]
-        stamp = now().strftime("%Y-%m-%d %H:%M:%S")
+        parts = _numbered(tables[SHEET_PARTS], SHEET_PARTS, Part)
+        stamp = now_text()
         added_scores: Set[Tuple[str, str]] = set()
         for record in records:
             file = record.drive_file
-            here = [
-                (row, part) for row, part in parts
-                if part.edition_id == record.edition_id and part.movement_id == record.movement_id
-            ]
+            here = _at(parts, record.edition_id, record.movement_id)
             if record.voice == SCORE_VOICE:
                 target = _score_part(here)
             else:
@@ -1187,25 +1208,22 @@ class CatalogService:
             elif record.voice == SCORE_VOICE and (record.edition_id, record.movement_id) not in added_scores:
                 added_scores.add((record.edition_id, record.movement_id))
                 _add_score_row(batch, record.edition_id, record.movement_id, file)
-            batch.add(SHEET_DEPOSIT_LOG, {
-                "deposit_id": deposit_id, "time": stamp, "operator": operator, "edition_id": record.edition_id,
-                "movement_id": record.movement_id, "group": record.group_name, "voice": record.voice or record.score_label,
-                "local_path": record.local_path, "drive_file_id": file.id, "action": record.action.value,
-                "revision_after": file.head_revision, "revision_before": record.revision_before,
-                "group_id": record.group_id,
-            })
-        if batch.cells:
-            for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
-                self._call(lambda: self._sheets.add_sheet(sheet))
-            self._call(lambda: self._sheets.write_cells(batch.cells))
+            batch.add(SHEET_DEPOSIT_LOG, _deposit_row(deposit_id, stamp, operator, record, file.head_revision, ""))
+        self._send(batch, titles)
 
     def drive_ids(self, count: int) -> List[str]:
-        """預先向 Drive 要 count 個檔案 ID（一次請求）；以它們建檔，重送時不會建出第二份
+        """預先向 Drive 要 count 個檔案 ID；以它們建檔，重送時不會建出第二份
+
+        Drive 一次最多給 DRIVE_IDS_PER_REQUEST 個，多的分幾次要（每次一個請求）。
 
         Raises:
             CatalogError: 要不到
         """
-        return self._call(lambda: self._drive.generate_ids(count))
+        ids: List[str] = []
+        while len(ids) < count:
+            wanted = min(DRIVE_IDS_PER_REQUEST, count - len(ids))
+            ids += self._call(lambda: self._drive.generate_ids(wanted))
+        return ids
 
     def upload_file(self, file_id: str, name: str, folder_id: str, content: bytes) -> DriveFile:
         """以預先要到的 ID 把 PDF 上傳到 Drive 資料夾；上一次其實已經上傳了（Drive 回已經存在）時取那一份
@@ -1397,22 +1415,11 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到或寫不進去（沒有任何一格被寫入）
         """
-        titles = set(self._call(self._sheets.sheet_titles))
-        has_log = SHEET_DEPOSIT_LOG in titles
-        ranges = [_whole_sheet(SHEET_PARTS)]
-        if has_log:
-            ranges += [sheet_range(SHEET_DEPOSIT_LOG, "1:1"), sheet_range(SHEET_DEPOSIT_LOG, "A:B")]
-        values = self._call(lambda: self._sheets.read_ranges(ranges))
-        tables = {SHEET_PARTS: values[0]}
-        deposit_ids: Set[str] = set()
-        if has_log:
-            header, ids = values[1:]
-            tables[SHEET_DEPOSIT_LOG] = header[:1] + ids[1:]
-            deposit_ids = {row[1] for row in ids[1:] if len(row) > 1}
+        titles, tables, log = self._read_with_log(lambda _: [SHEET_PARTS], SHEET_DEPOSIT_LOG, "A:B")
         batch = _Batch(tables, self._draw_ids)
-        parts = _numbered(values[0], SHEET_PARTS, Part)
-        revert_id = self._draw_ids(deposit_ids, 1)[0]
-        stamp = now().strftime("%Y-%m-%d %H:%M:%S")
+        parts = _numbered(tables[SHEET_PARTS], SHEET_PARTS, Part)
+        revert_id = self._draw_ids({row[1] for row in log if len(row) > 1}, 1)[0]
+        stamp = now_text()
         for reverted, head in done:
             entry = reverted.entry
             if reverted.action in UNREGISTERING:
@@ -1427,10 +1434,7 @@ class CatalogService:
                 "revision_after": head, "revision_before": reverted.file.head_revision if reverted.file else "",
                 "reverts": deposit_id, "group_id": entry.group_id,
             })
-        if batch.cells:
-            for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
-                self._call(lambda: self._sheets.add_sheet(sheet))
-            self._call(lambda: self._sheets.write_cells(batch.cells))
+        self._send(batch, titles)
 
     def subfolders(self, folder_id: str) -> List[DriveFile]:
         """列出 Drive 資料夾裡的子資料夾（依名稱排序，不含垃圾桶裡的）
@@ -1629,7 +1633,9 @@ class CatalogService:
             pending.piece_id = self._create_piece(pending)
         if not pending.edition_id:
             if not pending.folder_id:
-                pending.folder_id = self.create_folder(pending.title, pending.root_folder_id).id
+                if not pending._folder_file_id:
+                    pending._folder_file_id = self.drive_ids(1)[0]
+                pending.folder_id = self.create_folder(pending.title, pending.root_folder_id, pending._folder_file_id).id
             if pending._edition_rows is None:
                 pending._edition_rows = self.new_rows(
                     SHEET_EDITIONS, [{"piece_id": pending.piece_id, "drive_folder_id": pending.folder_id}],
@@ -1833,6 +1839,44 @@ class CatalogService:
         return drawn
 
     # --- 關口的呼叫 ---
+
+    def _read_with_log(
+        self, sheets_for: Callable[[Set[str]], List[str]], log_sheet: str, log_columns: str,
+    ) -> Tuple[Set[str], Dict[str, List[List[str]]], List[List[str]]]:
+        """寫紀錄前一刻讀：列出工作表名稱一次，再以一次請求讀要的工作表與紀錄表
+
+        紀錄只會越來越長：紀錄表只讀標題列與 log_columns 那幾欄（從 A 欄起；A 欄是 ID，找下一列、抽不撞號的 ID）。
+
+        Args:
+            sheets_for: 依已有的工作表名稱決定要整張讀的工作表
+            log_sheet: 紀錄表（編制寫入紀錄或存入紀錄）
+            log_columns: 紀錄表要讀的欄（例如 "A:B"）
+
+        Returns:
+            （已有的工作表名稱，各工作表的列（紀錄表是標題列接上讀到的那幾欄；還沒建立時不在裡面），
+            紀錄表讀到那幾欄的資料列（不含標題；還沒建立時為空））
+        """
+        titles = set(self._call(self._sheets.sheet_titles))
+        sheets = sheets_for(titles)
+        ranges = [_whole_sheet(sheet) for sheet in sheets]
+        has_log = log_sheet in titles
+        if has_log:
+            ranges += [sheet_range(log_sheet, "1:1"), sheet_range(log_sheet, log_columns)]
+        values = self._call(lambda: self._sheets.read_ranges(ranges))
+        tables = dict(zip(sheets, values))
+        if not has_log:
+            return titles, tables, []
+        header, columns = values[-2:]
+        tables[log_sheet] = header[:1] + columns[1:]
+        return titles, tables, columns[1:]
+
+    def _send(self, batch: "_Batch", titles: Set[str]) -> None:
+        """送出一次寫入的全部格子（一個請求）；寫到還沒建立的工作表時先各建一次。沒有格子時不送"""
+        if not batch.cells:
+            return
+        for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
+            self._call(lambda: self._sheets.add_sheet(sheet))
+        self._call(lambda: self._sheets.write_cells(batch.cells))
 
     def _read_sheets(self, *sheets: str) -> List[List[List[str]]]:
         """以一次請求讀多張工作表的全部列（含標題列）"""

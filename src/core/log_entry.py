@@ -31,9 +31,18 @@ _SECRET_PATTERNS = (
 )
 
 
+# 紀錄的時間寫法：紀錄檔的一筆，以及譜庫的編制寫入紀錄、存入紀錄的時間欄（字串比較即先後）
+TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
 def now() -> datetime.datetime:
     """現在的本機時間，精確到秒（紀錄檔一筆的時間）"""
     return datetime.datetime.now().replace(microsecond=0)
+
+
+def now_text() -> str:
+    """現在的本機時間，照紀錄的寫法（TIME_FORMAT）"""
+    return now().strftime(TIME_FORMAT)
 
 
 def redact(message: str) -> str:
@@ -69,7 +78,7 @@ class LogEntry:
         失敗時最後是「錯誤類別：原始訊息」，原始訊息遮掉權杖與密碼。
         """
         heading = "　".join(
-            part for part in (self.time.strftime("%Y-%m-%d %H:%M:%S"), self.action, self.piece_title, self.file_name)
+            part for part in (self.time.strftime(TIME_FORMAT), self.action, self.piece_title, self.file_name)
             if part
         )
         lines = [heading]

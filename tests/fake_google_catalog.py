@@ -438,9 +438,11 @@ class FakeDrive:
         return self._google.request(handle)
 
     def generate_ids(self, count: int) -> List[str]:
-        """發出 count 個之後可以拿來建檔的 ID"""
+        """發出 count 個之後可以拿來建檔的 ID；同 Drive，一次最多 1000 個"""
         def handle():
             """發 ID 並記下"""
+            if not 1 <= count <= 1000:
+                raise CatalogError(CatalogErrorKind.OTHER, f"generateIds count {count} is out of range")
             ids = [next(self._generated) for _ in range(count)]
             self._issued.update(ids)
             return ids

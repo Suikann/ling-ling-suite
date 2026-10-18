@@ -10,8 +10,13 @@
 - 那次新上傳的：移除分譜列的登記，檔丟進 Drive 垃圾桶（不永久刪除）；已經在垃圾桶裡的只移除登記
 - 那次更新內容的：被蓋掉的舊版本 Drive 還留著就還原存入前的內容，已經被 Drive 清掉的無法還原
 - 那次登記的是 Drive 上原有、內容相同的同名檔：只移除登記，檔不動
-- 其餘不動（KeptBecause）：已經撤銷過、之後又存入過（存入紀錄裡之後還有這個檔）、之後 Drive 上的內容改過、
-  Drive 上已沒有這個檔或在垃圾桶裡、那次只改了檔名或位置、那次沒有改動
+- 其餘不動（KeptBecause）：已經撤銷過、之後又存入過（存入紀錄裡之後還有動到這個檔的存入，跳過的不算）、
+  之後 Drive 上的內容改過、Drive 上已沒有這個檔或在垃圾桶裡、那次只改了檔名或位置、那次沒有改動、那次中斷沒做到
+
+存入前先寫的「要做」列（DEPOSIT_PENDING）有同一次存入做了的列時以做了的為準；只有「要做」列的檔（中途停下，
+或登記寫不進去）照 Drive 現況判斷那次做到了沒有（_settled）：新上傳的以預先要到的 ID 找得到檔就是做到了，
+寫入後的版本是那個檔的第一個版本；更新內容的，目前版本不是被蓋掉的版本、而 Drive 的版本裡緊接在被蓋掉的版本之後的
+就是寫入後的版本。所以登記寫不進去時，蓋掉的內容照樣撤得掉。
 本機已清除（只在譜庫）的檔要撤銷時，先下載回原位並核對，才動 Drive 上的那份。
 
 撤銷不毀掉唯一的一份（RevertBlock）：要丟進垃圾桶或還原的檔，Drive 上那份可能是那次存入內容唯一的一份，所以
@@ -29,7 +34,7 @@
 """
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Collection, Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from core.catalog_models import CatalogPlace, DepositLogEntry, DriveFile, DriveRevision, InstrumentationLogEntry
 from core.catalog_revert import RevertRow, revert_rows
@@ -67,6 +72,7 @@ class KeptBecause(Enum):
     GONE = "gone"                # Drive 上已沒有這個檔，或在垃圾桶裡
     MOVED = "moved"              # 那次只改了檔名或位置
     SKIPPED = "skipped"          # 那次沒有改動
+    UNFINISHED = "unfinished"    # 那次中斷，沒做到這一份
 
 
 @dataclass(frozen=True)
@@ -77,7 +83,7 @@ class Deposit:
         deposit_id: 存入編號
         time: 時間（紀錄的寫法）
         operator: 操作者
-        entries: 這次的每份檔，依紀錄的順序
+        entries: 這次的每份檔，依紀錄的順序（有做了的列時是做了的那列，不然是「要做」列）
         reverts: 撤銷存入時被撤銷的存入編號；存入為空字串
     """
     deposit_id: str
@@ -85,6 +91,16 @@ class Deposit:
     operator: str
     entries: List[DepositLogEntry] = field(default_factory=list)
     reverts: str = ""
+
+    @property
+    def unfinished(self) -> List[DepositLogEntry]:
+        """只有「要做」列、沒有做了的列的檔（那次中途停下，或登記寫不進去）"""
+        return [entry for entry in self.entries if entry.pending]
+
+    @property
+    def completed(self) -> int:
+        """這次做了（寫進存入紀錄）的份數"""
+        return sum(1 for entry in self.entries if not entry.pending)
 
     @property
     def groups(self) -> List[str]:
@@ -256,20 +272,48 @@ def deposits(entries: Sequence[DepositLogEntry], edition_id: str = "") -> List[D
     for entry in entries:
         if entry.deposit_id:
             grouped.setdefault(entry.deposit_id, []).append(entry)
-    result = [
-        Deposit(deposit_id, rows[0].time, rows[0].operator, rows, rows[0].reverts)
-        for deposit_id, rows in grouped.items()
-        if not edition_id or any(row.edition_id == edition_id for row in rows)
-    ]
+    result = []
+    for deposit_id, rows in grouped.items():
+        done = {_file_key(row) for row in rows if not row.pending}
+        kept = [row for row in rows if not row.pending or _file_key(row) not in done]
+        if not edition_id or any(row.edition_id == edition_id for row in kept):
+            result.append(Deposit(deposit_id, kept[0].time, kept[0].operator, kept, kept[0].reverts))
     return list(reversed(result))
 
 
+def _file_key(entry: DepositLogEntry) -> Tuple[str, str, str, str]:
+    """同一次存入裡認出同一份檔：處、聲部與 Drive 檔案（「要做」列與做了的列相同）"""
+    return entry.edition_id, entry.movement_id, entry.voice, entry.drive_file_id
+
+
+def interrupted(entries: Sequence[DepositLogEntry], group_ids: Collection[str], group_names: Collection[str]) -> Optional[int]:
+    """這些群組最近一次存入有沒有中斷（中途停下，或登記寫不進去）：存入預覽的「上次中斷」提示
+
+    Args:
+        entries: 存入紀錄的全部列，依紀錄的順序
+        group_ids: 專案的群組 ID
+        group_names: 專案的群組名稱（舊的列沒有群組 ID 時以名稱認）
+
+    Returns:
+        中斷時是那次做了幾份；最近一次沒有中斷、或還沒存入過時為 None
+    """
+    def ours(entry: DepositLogEntry) -> bool:
+        """這一列是不是這個專案的群組存入的"""
+        return entry.group_id in group_ids if entry.group_id else entry.group in group_names
+    last = next((d for d in deposits(entries) if not d.reverts and any(ours(e) for e in d.entries)), None)
+    return last.completed if last is not None and last.unfinished else None
+
+
 def needs_revisions(entry: DepositLogEntry, file: Optional[DriveFile]) -> bool:
-    """這份檔要不要讀 Drive 留著的版本：那次更新了內容，而 Drive 上那份還在、內容沒再變過"""
-    return (
-        entry.action == DepositAction.UPDATE.value and file is not None and not file.trashed
-        and file.head_revision == entry.revision_after
-    )
+    """這份檔要不要讀 Drive 留著的版本：那次更新了內容，而 Drive 上那份還在、內容沒再變過；
+    只有「要做」列的新上傳與更新內容，Drive 上那份還在時也要（判斷那次做到了沒有）"""
+    if file is None or file.trashed:
+        return False
+    if entry.pending:
+        return entry.action == DepositAction.NEW.value or (
+            entry.action == DepositAction.UPDATE.value and file.head_revision != entry.revision_before
+        )
+    return entry.action == DepositAction.UPDATE.value and file.head_revision == entry.revision_after
 
 
 def revert_preview(
@@ -291,11 +335,21 @@ def revert_preview(
     if deposit is None:
         return RevertPreview(Deposit(deposit_id, "", ""))
     start = reading.entries.index(deposit.entries[0])
-    afterwards = [entry for entry in reading.entries[start:] if entry.deposit_id != deposit_id]
+    # 之後動到同一個檔的存入與撤銷：跳過的與只有「要做」列的不算（之後的內容變動另以版本 ID 判斷）
+    afterwards = [
+        entry for entry in reading.entries[start:]
+        if entry.deposit_id != deposit_id and not entry.pending and entry.action != DepositAction.SKIP.value
+    ]
     files: Dict[Tuple[str, str, str], List[RevertFile]] = {}
     for entry in deposit.entries:
         later = [other for other in afterwards if other.drive_file_id == entry.drive_file_id]
-        outcome = _classify(entry, reading.files.get(entry.drive_file_id), reading.revisions.get(entry.drive_file_id), later)
+        file = reading.files.get(entry.drive_file_id)
+        revisions = reading.revisions.get(entry.drive_file_id)
+        settled = _settled(entry, file, revisions)
+        if settled is None:
+            outcome = RevertFile(entry, RevertAction.KEEP, file, kept=KeptBecause.UNFINISHED)
+        else:
+            outcome = replace(_classify(settled, file, revisions, later), entry=entry)
         if outcome.action in REVERTING and path_key(entry.local_path) in cleared:
             outcome = replace(outcome, download=True)
         files.setdefault((entry.group_key, entry.edition_id, entry.movement_id), []).append(outcome)
@@ -318,6 +372,31 @@ def _guard(group: RevertGroup, local: LocalProject, local_md5s: Mapping[str, str
         if not file.download and local_md5s.get(path_key(file.entry.local_path)) != file.file.md5
     ]
     return replace(group, block=RevertBlock.NO_LOCAL_COPY, uncovered=uncovered) if uncovered else group
+
+
+def _settled(
+    entry: DepositLogEntry, file: Optional[DriveFile], revisions: Optional[List[DriveRevision]],
+) -> Optional[DepositLogEntry]:
+    """這一列當成做了的列來判斷：做了的列原樣；只有「要做」列時照 Drive 現況補上寫入後的版本，那次沒做到時為 None"""
+    if not entry.pending:
+        return entry
+    if entry.action == DepositAction.NEW.value:
+        if file is None:
+            return None
+        return replace(entry, revision_after=revisions[0].id if revisions else file.head_revision)
+    if entry.action == DepositAction.UPDATE.value:
+        if file is None or file.trashed:
+            return entry
+        if file.head_revision == entry.revision_before:
+            return None
+        ids = [revision.id for revision in revisions or []]
+        position = ids.index(entry.revision_before) if entry.revision_before in ids else -1
+        after = ids[position + 1] if 0 <= position < len(ids) - 1 else file.head_revision
+        return replace(entry, revision_after=after)
+    if entry.action == DepositAction.REGISTER.value:
+        # 只登記的檔，登記沒寫進去就是沒做到
+        return None
+    return entry
 
 
 def _classify(
