@@ -4,7 +4,8 @@
 
 依序挑曲目 → 版本 → 樂章或整首；各層找不到時可選「新建」，以群組的曲名、作曲家、樂章編號與名稱建立。
 開啟時依群組的曲名與樂章編號預選。按「連線」後在背景讀那一處（或新建後再讀），回到主執行緒交給專案的
-連線操作（Project.link_group），連上就發出 linked 並關閉。讀寫譜庫都經譜庫服務在背景執行，失敗時頂端顯示
+連線操作（Project.link_group），連上就發出 linked 並關閉；兩邊都有編制時先開合併差異表（CatalogMergeDialog），
+照選的那一邊連線，取消就留在這裡重新挑。讀寫譜庫都經譜庫服務在背景執行，失敗時頂端顯示
 提示列並寫進紀錄檔，按處理按鈕重做（新建時以同一個 PendingPlace 重送，不重複建立）。
 
 使用範例：
@@ -22,12 +23,13 @@ from PySide6.QtWidgets import (
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import CatalogPlace, Edition, LinkTargets, Movement, Piece
 from core.locale import t
-from core.models import DuplicateVoicesError, Group, Project
+from core.models import DuplicateVoicesError, Group, LinkChoice, Project
 from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingPlace
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.catalog_tasks import CatalogTasks
+from ui.catalog_merge_dialog import CatalogMergeDialog
 
 
 class CatalogLinkDialog(QDialog):
@@ -219,21 +221,27 @@ class CatalogLinkDialog(QDialog):
         self._confirm_button.setEnabled(False)
         self._tasks.run(work, self._link, failed)
 
-    def _link(self, place: CatalogPlace):
-        """讀到那處：交給專案連線；兩邊都有編制或樂器表重名時說明原因並關閉，群組不變"""
+    def _link(self, place: CatalogPlace, choice: Optional[LinkChoice] = None):
+        """讀到那處：交給專案連線；兩邊都有編制時先開合併差異表，樂器表重名時說明原因並關閉，群組不變"""
         self._confirm_button.setEnabled(True)
         try:
-            result = self._project.link_group(self._group, place)
+            result = self._project.link_group(self._group, place, choice)
         except DuplicateVoicesError as e:
             QMessageBox.warning(self, t("catalog.link.title"), duplicate_rows_text(self._group, e.rows))
             self.reject()
             return
         if result.needs_merge:
-            QMessageBox.information(self, t("catalog.link.title"), t("catalog.link.needs_merge"))
-            self.reject()
+            self._ask_merge(place)
             return
         self.linked.emit(result)
         self.accept()
+
+    def _ask_merge(self, place: CatalogPlace):
+        """兩邊都有編制：開合併差異表，選了哪一邊就照它連線；取消時留在這裡重新挑"""
+        table = CatalogMergeDialog(self._project.merge_rows(self._group, place), self._group.name, self)
+        table.chosen.connect(lambda choice: self._link(place, choice))
+        table.finished.connect(table.deleteLater)
+        table.open()
 
 
 def duplicate_rows_text(group: Group, rows: List[int]) -> str:
