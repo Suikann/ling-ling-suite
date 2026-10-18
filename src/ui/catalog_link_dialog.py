@@ -8,12 +8,16 @@
 照選的那一邊連線，取消就留在這裡重新挑。讀寫譜庫都經譜庫服務在背景執行，失敗時頂端顯示
 提示列並寫進紀錄檔，按處理按鈕重做（新建時以同一個 PendingPlace 重送，不重複建立）。
 
+群組已連線時就是改連：讀那處時一併讀這個群組在原處寫過的編制（CatalogService.revert_rows），連上後有撤得掉的
+就開確認框（CatalogRevertDialog），選「撤掉」記下（Project.queue_catalog_revert），存檔時寫進原處；
+在合併差異表取消時不問、連線不變。
+
 使用範例：
     dialog = CatalogLinkDialog(connect, project, group, root_folder_id, parent=window)
     dialog.linked.connect(table.show_linked)
     dialog.open()
 """
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -22,14 +26,17 @@ from PySide6.QtWidgets import (
 
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import CatalogPlace, Edition, LinkTargets, Movement, Piece
+from core.catalog_revert import RevertRow, pending_revert, revert_count
 from core.locale import t
-from core.models import DuplicateVoicesError, Group, LinkChoice, Project
+from core.models import DuplicateVoicesError, Group, LinkChoice, LinkResult, Project
 from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingPlace
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.catalog_tasks import CatalogTasks
 from ui.catalog_merge_dialog import CatalogMergeDialog
+from ui.catalog_revert_dialog import CatalogRevertDialog
+from ui.instrumentation_table import link_text
 
 
 class CatalogLinkDialog(QDialog):
@@ -60,11 +67,13 @@ class CatalogLinkDialog(QDialog):
         self._group = group
         self._root_folder_id = root_folder_id
         self._voice_candidates = voice_candidates
+        # 改連時原本的連線；第一次連線時為 None
+        self._previous = group.catalog_link
         self._tasks = CatalogTasks(self)
         self._targets = LinkTargets()
         # 新建時要送的一處；選擇改了就換一個，失敗後重送沿用同一個
         self._pending: Optional[PendingPlace] = None
-        self.setWindowTitle(t("catalog.link.title"))
+        self.setWindowTitle(t("catalog.relink.title") if self._previous else t("catalog.link.title"))
         self.setMinimumWidth(420)
         self._build_ui(log, sign_in, open_settings)
         self._load()
@@ -202,12 +211,20 @@ class CatalogLinkDialog(QDialog):
                 movement_name=self._group.movement_name.strip(),
             )
         pending = self._pending
+        previous = self._previous
+        group_name = self._group.name
 
-        def work() -> CatalogPlace:
-            """新建還沒有的部分再讀那處，或直接讀那處（背景執行緒）"""
+        def work() -> Tuple[CatalogPlace, List[RevertRow]]:
+            """新建還沒有的部分再讀那處，或直接讀那處；改連到別處時一併讀群組在原處寫過的編制（背景執行緒）"""
+            catalog = self._connect()
             if pending is not None:
-                return self._connect().create_place(pending, orchestra_type)
-            return self._connect().read_place(edition.id, movement_id, orchestra_type)
+                place = catalog.create_place(pending, orchestra_type)
+            else:
+                place = catalog.read_place(edition.id, movement_id, orchestra_type)
+            here = (place.edition_id, place.movement_id)
+            if previous is None or here == (previous.edition_id, previous.movement_id):
+                return place, []
+            return place, catalog.revert_rows(previous.edition_id, previous.movement_id, group_name, orchestra_type)
 
         def failed(error: CatalogError):
             """讀寫失敗：顯示提示列，重試時以同樣的選擇再送一次"""
@@ -219,10 +236,16 @@ class CatalogLinkDialog(QDialog):
             self._error_bar.show_failure(heading, failure, self._confirm)
         self._error_bar.clear()
         self._confirm_button.setEnabled(False)
-        self._tasks.run(work, self._link, failed)
+        self._tasks.run(work, lambda found: self._link(*found), failed)
 
-    def _link(self, place: CatalogPlace, choice: Optional[LinkChoice] = None):
-        """讀到那處：交給專案連線；兩邊都有編制時先開合併差異表，樂器表重名時說明原因並關閉，群組不變"""
+    def _link(self, place: CatalogPlace, reverts: List[RevertRow], choice: Optional[LinkChoice] = None):
+        """讀到那處：交給專案連線；兩邊都有編制時先開合併差異表，樂器表重名時說明原因並關閉，群組不變
+
+        Args:
+            place: 讀到的那處
+            reverts: 改連時群組在原處寫過的編制；第一次連線或連回原處時為空清單
+            choice: 合併差異表選的那一邊；還沒選時為 None
+        """
         self._confirm_button.setEnabled(True)
         try:
             result = self._project.link_group(self._group, place, choice)
@@ -231,17 +254,40 @@ class CatalogLinkDialog(QDialog):
             self.reject()
             return
         if result.needs_merge:
-            self._ask_merge(place)
+            self._ask_merge(place, reverts)
             return
+        if revert_count(reverts):
+            self._ask_revert(reverts, result)
+            return
+        self._finish(result)
+
+    def _finish(self, result: LinkResult):
+        """連好了：發出 linked 並關閉"""
         self.linked.emit(result)
         self.accept()
 
-    def _ask_merge(self, place: CatalogPlace):
+    def _ask_merge(self, place: CatalogPlace, reverts: List[RevertRow]):
         """兩邊都有編制：開合併差異表，選了哪一邊就照它連線；取消時留在這裡重新挑"""
         table = CatalogMergeDialog(self._project.merge_rows(self._group, place), self._group.name, self)
-        table.chosen.connect(lambda choice: self._link(place, choice))
+        table.chosen.connect(lambda choice: self._link(place, reverts, choice))
         table.finished.connect(table.deleteLater)
         table.open()
+
+    def _ask_revert(self, reverts: List[RevertRow], result: LinkResult):
+        """改連好了、原處有撤得掉的編制：問要不要撤掉，選「撤掉」就記下（存檔時寫入），選哪個都連好了"""
+        previous = self._previous
+        question = CatalogRevertDialog(reverts, link_text(previous), self)
+
+        def answered(code: int):
+            """按了「撤掉」就記下要寫進原處的撤掉，再發出 linked"""
+            if code == QDialog.Accepted:
+                self._project.queue_catalog_revert(
+                    self._group, pending_revert(previous.edition_id, previous.movement_id, reverts),
+                )
+            question.deleteLater()
+            self._finish(result)
+        question.finished.connect(answered)
+        question.open()
 
 
 def duplicate_rows_text(group: Group, rows: List[int]) -> str:
