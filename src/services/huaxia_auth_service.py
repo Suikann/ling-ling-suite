@@ -79,7 +79,7 @@ class AccountStanding(Enum):
 
 @dataclass(frozen=True)
 class NotOfficer:
-    """不是幹部：帳號的狀況與目前登入的 Discord 帳號名稱"""
+    """不是幹部：帳號的狀況與目前登入的 Discord 帳號名稱（查不到時為空字串）"""
 
     standing: AccountStanding
     discord_name: str

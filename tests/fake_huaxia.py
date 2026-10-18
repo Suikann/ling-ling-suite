@@ -110,7 +110,7 @@ class FakeHuaXia:
 
     def add_account(
         self, discord_name: str, status: str = "active", roles: Iterable[str] = ("officer",),
-        created_at: Optional[datetime.datetime] = None,
+        created_at: Optional[datetime.datetime] = None, metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """加入一個以 Discord 登入的帳號，回傳使用者 ID
 
@@ -119,12 +119,13 @@ class FakeHuaXia:
             status: profiles.status（pending、active、inactive）
             roles: user_roles 裡的身分組
             created_at: 帳號建立時間；省略時為一年前
+            metadata: Auth 回應裡 user 的 user_metadata；省略時照 Discord 的欄位以 discord_name 填
         """
         with self._lock:
             user_id = str(uuid.uuid4())
             created = created_at or _now() - datetime.timedelta(days=365)
             self._identities[discord_name] = user_id
-            self._users[user_id] = {"discord_name": discord_name, "created_at": created}
+            self._users[user_id] = {"discord_name": discord_name, "created_at": created, "metadata": metadata}
             self.tables["profiles"].append({
                 "id": user_id, "display_name": discord_name, "status": status, "created_at": created.isoformat(),
             })
@@ -291,7 +292,7 @@ class FakeHuaXia:
                 "id": user_id, "aud": "authenticated", "role": "authenticated",
                 "created_at": user["created_at"].isoformat(),
                 "app_metadata": {"provider": "discord", "providers": ["discord"]},
-                "user_metadata": {
+                "user_metadata": user.get("metadata") if user.get("metadata") is not None else {
                     "full_name": name, "name": f"{name}#0", "custom_claims": {"global_name": name.title()},
                 },
             },

@@ -112,8 +112,11 @@ def sign_in_google(parent: QWidget, auth: GoogleAuthService) -> bool:
 
 
 def not_officer_text(not_officer: NotOfficer) -> str:
-    """不是幹部時的說明：帳號的狀況與目前登入的 Discord 帳號名稱（登入與發譜前重查共用）"""
-    return t(_NOT_OFFICER_KEYS[not_officer.standing], name=not_officer.discord_name)
+    """不是幹部時的說明：帳號的狀況，查得到時前面寫出目前登入的 Discord 帳號名稱（登入與發譜前重查共用）"""
+    reason = t(_NOT_OFFICER_KEYS[not_officer.standing])
+    if not not_officer.discord_name:
+        return reason
+    return t("huaxia.not_officer.with_account", name=not_officer.discord_name, reason=reason)
 
 
 def sign_in_huaxia(parent: QWidget, auth: HuaXiaAuthService) -> bool:

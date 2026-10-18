@@ -70,10 +70,13 @@ class AuthTokens:
 
 
 def _discord_name(user: Dict[str, Any]) -> str:
-    """Auth 回應裡 user 的 Discord 帳號名稱：使用者名稱，沒有時依序退回 name、顯示名稱"""
+    """Auth 回應裡 user 的 Discord 帳號名稱：使用者名稱，沒有時依序退回 name、user_name、preferred_username、顯示名稱"""
     metadata = user.get("user_metadata") or {}
     claims = metadata.get("custom_claims") or {}
-    return metadata.get("full_name") or metadata.get("name") or claims.get("global_name") or ""
+    for name in (metadata.get(field) for field in ("full_name", "name", "user_name", "preferred_username")):
+        if name:
+            return name
+    return claims.get("global_name") or ""
 
 
 class HuaXiaClient:

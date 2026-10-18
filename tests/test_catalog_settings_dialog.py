@@ -222,9 +222,18 @@ class TestHuaXiaLoginArea(LoginAreaTestCase):
         self.huaxia.sign_in_as("member_mei")
         dialog = self.open_dialog()
         shown = self.click(dialog, t("huaxia.auth.connect"))
-        self.assertEqual(shown, [(t("huaxia.auth.title"), t("huaxia.not_officer.not_officer", name="member_mei"))])
+        reason = t("huaxia.not_officer.not_officer")
+        self.assertEqual(shown, [(t("huaxia.auth.title"), t("huaxia.not_officer.with_account", name="member_mei", reason=reason))])
         self.assertTrue(self.shows(dialog, t("huaxia.auth.not_connected")))
         self.assertEqual(self.huaxia_keyring.stored(), [])
+
+    def test_without_a_discord_name_the_account_sentence_is_left_out(self):
+        self.enable_huaxia()
+        self.huaxia.add_account("nameless", roles=("member",), metadata={})
+        self.huaxia.sign_in_as("nameless")
+        shown = self.click(self.open_dialog(), t("huaxia.auth.connect"))
+        self.assertEqual(shown, [(t("huaxia.auth.title"), t("huaxia.not_officer.not_officer"))])
+        self.assertNotIn("『』", shown[0][1])
 
     def test_denied_in_discord_says_so(self):
         self.enable_huaxia()

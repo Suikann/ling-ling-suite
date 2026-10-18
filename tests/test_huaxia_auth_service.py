@@ -64,6 +64,13 @@ class TestOfficerSignsIn(HuaXiaAuthTestCase):
         self.browser.finish()
         self.assertIn("登入完成，可以關閉這個分頁", self.browser.pages[0])
 
+    def test_name_falls_back_to_the_user_name_fields(self):
+        for metadata, expected in (({"user_name": "lin_u"}, "lin_u"), ({"preferred_username": "pref_p"}, "pref_p")):
+            with self.subTest(metadata):
+                self.huaxia.add_account(expected, metadata=metadata)
+                self.huaxia.sign_in_as(expected)
+                self.assertEqual(self.service().authenticate(), expected)
+
 
 class TestNotAnOfficer(HuaXiaAuthTestCase):
     """不是幹部：依帳號狀態分成四種、寫出 Discord 帳號名稱，以 scope=local 登出、不存續期權杖"""
