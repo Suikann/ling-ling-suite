@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from core.constants import PartsOutputMode
+from core.constants import OrchestraType, PartsOutputMode
 from core.models import FileInfo, Group, Project
 from core.naming import UnsafeFolderNameError
 from services.rename_service import assign_default_sections, generate_rename_plan
@@ -106,7 +106,7 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
     def _project(self, **fields):
         project = Project(
             master_template="{樂器}.pdf", output_directory=OUT_DIR, parts_output_mode=PartsOutputMode.SECTION,
-            groups=[_group()], orchestra_type="western", **fields,
+            groups=[_group()], orchestra_type=OrchestraType.WESTERN, **fields,
         )
         project.mark_saved()
         return project
@@ -124,7 +124,7 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
     def test_written_sections_stay_after_changing_the_orchestra_type(self):
         project = self._project()
         assign_default_sections(project)
-        project.set_orchestra_type("chinese")
+        project.set_orchestra_type(OrchestraType.CHINESE)
         assign_default_sections(project)
         new_paths = [e.new_path for e in generate_rename_plan(project).entries]
         self.assertEqual(new_paths[1], os.path.join(OUT_DIR, "木管", "Flute.pdf"))

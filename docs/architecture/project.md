@@ -47,7 +47,7 @@
 
 ### 樂團類型與聲部組
 
-- 樂團類型（`Project.orchestra_type`，`OrchestraType`）是專案層級：國樂團（吹管、拉弦、彈撥、打擊、低音）或管弦樂團（木管、銅管、打擊、鍵盤、弦樂），兩套都另有「其他」（`ORCHESTRA_SECTIONS`）。新專案是國樂團；主視窗底部的「樂團類型」選單以 `set_orchestra_type` 改它
+- 樂團類型（`Project.orchestra_type`，`OrchestraType`）是專案層級：國樂團（吹管、拉弦、彈撥、打擊、低音）或管弦樂團（木管、銅管、打擊、鍵盤、弦樂），兩套都另有「其他」（`ORCHESTRA_SECTIONS`）。新專案是國樂團；主視窗底部的「樂團類型」選單以 `set_orchestra_type` 改它。專案裡存的是 `OrchestraType`，只在 `to_data`、`from_data` 與值互轉；專案檔的值不認得（較新版本才有的類型）時開成國樂團
 - 聲部組對照（`instrument_sections`）以樂器為鍵：同一樂器（`core/voice_names.py` 的 `instrument_key`，去掉結尾編號）的各個聲部共用一個值，鍵保留第一次寫入的寫法。改聲部組一律經 `set_section(voice, section)` 或 `update_sections(sections)`，同一樂器已有鍵就改它的值；`set_section` 回傳專案裡跟著改的其他編號，`same_instrument_voices` 在改之前列出它們（各群組的樂器表都算，例如其他樂章；同一聲部只列一次，不列聲部本身），編制表寫在選單旁（例如「二胡 II 也會跟著改」）
 - 值一律是中文的聲部組名稱，介面為英文時只在顯示時換成英文（`SECTION_NAMES_EN`）
 - 沒有存值的樂器依樂團類型以關鍵字偵測（`core/sections.py` 的 `detect_section`、`SECTION_KEYWORDS`）：國樂團的胡類歸拉弦，大提琴、低音提琴、革胡歸低音，偵測不到的歸「其他」。`section_of` 取存值或偵測值；改樂團類型時已存的值不變，只有沒存的改依新的那套偵測

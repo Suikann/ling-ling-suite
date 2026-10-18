@@ -354,7 +354,7 @@ class MainWindow(QMainWindow):
 
     def _on_orchestra_type_chosen(self, _index: int):
         """改樂團類型：寫入專案，編制表的聲部組改列新的那一套"""
-        self.project.set_orchestra_type(self._orchestra_combo.currentData())
+        self.project.set_orchestra_type(OrchestraType(self._orchestra_combo.currentData()))
         self._instrumentation_table.refresh()
 
     def _on_instruments_changed(self):
@@ -506,7 +506,7 @@ class MainWindow(QMainWindow):
     def _show_orchestra_type(self):
         """樂團類型選單改為顯示目前專案的值，不寫回專案"""
         self._orchestra_combo.blockSignals(True)
-        self._orchestra_combo.setCurrentIndex(self._orchestra_combo.findData(self.project.orchestra_type))
+        self._orchestra_combo.setCurrentIndex(self._orchestra_combo.findData(self.project.orchestra_type.value))
         self._orchestra_combo.blockSignals(False)
 
     def _sync_ui_from_project(self):

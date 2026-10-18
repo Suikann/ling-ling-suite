@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QPushButton, QRadioButton, QSpinBox, QSplitter, QTabWidget, QTableWidget, QWidget,
 )
 
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CompressionStatus, PartsOutputMode
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CompressionStatus, OrchestraType, PartsOutputMode
 from core.locale import get_locale, set_locale, t
 from core.models import FileInfo, Group, Project, RenameEntry
 from services.activity_log import ActivityLog
@@ -999,7 +999,7 @@ class TestMainWindowPreviewNaming(MainWindowTestCase):
 
     def test_section_folders_use_chinese_section_names_in_either_language(self):
         self.addCleanup(set_locale, get_locale())
-        self._open_group(orchestra_type="western")
+        self._open_group(orchestra_type=OrchestraType.WESTERN)
         self._switch_language("en")
         in_english = self._preview(
             lambda dialog: button_in(dialog, QRadioButton, t("panel.parts_mode_section")).click(),

@@ -26,7 +26,7 @@ _CHINESE_ORCHESTRA_MARKS = ("吹管", "彈撥")
 
 def section_options(orchestra_type: OrchestraType) -> Tuple[str, ...]:
     """樂團類型的聲部組選項，依選單順序，「其他」在最後"""
-    return ORCHESTRA_SECTIONS[OrchestraType(orchestra_type)] + (OTHER_SECTION,)
+    return ORCHESTRA_SECTIONS[orchestra_type] + (OTHER_SECTION,)
 
 
 def detect_section(voice: str, orchestra_type: OrchestraType) -> str:
@@ -40,7 +40,7 @@ def detect_section(voice: str, orchestra_type: OrchestraType) -> str:
         聲部組名稱（中文）；偵測不到時為「其他」
     """
     name = voice.lower()
-    for section, keywords in SECTION_KEYWORDS[OrchestraType(orchestra_type)]:
+    for section, keywords in SECTION_KEYWORDS[orchestra_type]:
         if any(keyword in name for keyword in keywords):
             return section
     return OTHER_SECTION

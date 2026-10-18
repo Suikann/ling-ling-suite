@@ -571,7 +571,7 @@ class Project:
     parts_output_mode: str = PartsOutputMode.ROOT
     output_directory: str = ""
     instrument_sections: Dict[str, str] = field(default_factory=dict)
-    orchestra_type: str = DEFAULT_ORCHESTRA_TYPE
+    orchestra_type: OrchestraType = DEFAULT_ORCHESTRA_TYPE
     OUTPUT_SETTINGS: ClassVar[FrozenSet[str]] = frozenset({
         "output_directory", "use_subfolders", "subfolder_template", "parts_output_mode", "parts_subfolder_name",
     })
@@ -611,7 +611,7 @@ class Project:
             "parts_output_mode": self.parts_output_mode,
             "output_directory": self.output_directory,
             "instrument_sections": dict(self.instrument_sections),
-            "orchestra_type": self.orchestra_type,
+            "orchestra_type": self.orchestra_type.value,
             "ungrouped_files": [f.to_data() for f in self.ungrouped_files],
             "groups": [g.to_data() for g in self.groups],
         }
@@ -642,7 +642,7 @@ class Project:
             parts_output_mode=data.get("parts_output_mode", PartsOutputMode.ROOT),
             output_directory=data.get("output_directory", ""),
             instrument_sections=data.get("instrument_sections", {}),
-            orchestra_type=data.get("orchestra_type", DEFAULT_ORCHESTRA_TYPE),
+            orchestra_type=_orchestra_type(data.get("orchestra_type")),
             ungrouped_files=[FileInfo.from_data(f) for f in data.get("ungrouped_files", [])],
             groups=[Group.from_data(g) for g in data.get("groups", [])],
         )
@@ -664,7 +664,7 @@ class Project:
         """格式 3 以前的聲部組遷移：判定樂團類型（guess_type 時），聲部組轉成以樂器為鍵的對照"""
         voices = [voice for group in self.groups for voice in group.instruments]
         if guess_type:
-            self.orchestra_type = guess_orchestra_type(voices, self.instrument_sections).value
+            self.orchestra_type = guess_orchestra_type(voices, self.instrument_sections)
         self.instrument_sections = migrate_sections(voices, self.instrument_sections, self.orchestra_type)
 
     def _migrate_headcounts(self, headcounts: Dict[str, Any]) -> None:
@@ -732,9 +732,9 @@ class Project:
 
     # --- 樂團類型與聲部組 ---
 
-    def set_orchestra_type(self, orchestra_type: str) -> None:
-        """設定樂團類型（OrchestraType 的值）；已存的聲部組不變，沒存的聲部改依新的樂團類型偵測"""
-        self.orchestra_type = OrchestraType(orchestra_type).value
+    def set_orchestra_type(self, orchestra_type: OrchestraType) -> None:
+        """設定樂團類型；已存的聲部組不變，沒存的聲部改依新的樂團類型偵測"""
+        self.orchestra_type = orchestra_type
         self._changed()
 
     def section_options(self) -> Tuple[str, ...]:
@@ -1234,6 +1234,14 @@ class _VoiceRow(NamedTuple):
     present: bool
     headcount: Headcount
     part: Optional[FileInfo]
+
+
+def _orchestra_type(value: Any) -> OrchestraType:
+    """專案檔存的樂團類型；沒有這一欄或不認得（較新版本的值）時為預設的樂團類型"""
+    try:
+        return OrchestraType(value)
+    except ValueError:
+        return DEFAULT_ORCHESTRA_TYPE
 
 
 def _present_flags(present: List[bool], count: int) -> List[bool]:

@@ -14,11 +14,12 @@ import sys
 import tempfile
 import time
 import unittest
+from enum import Enum
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from core.constants import PROJECT_FILE_VERSION
+from core.constants import PROJECT_FILE_VERSION, OrchestraType
 from core.models import (
     DuplicateVoiceError, FileInfo, Group, Headcount, Project, SplitPlacement, SplitResult, UndoMapping,
     format_duration, sum_headcounts,
@@ -145,6 +146,8 @@ def _changed(value):
     """與原值不同的新值（不改動原值本身）"""
     if isinstance(value, bool):
         return not value
+    if isinstance(value, Enum):
+        return next(member for member in type(value) if member is not value)
     if isinstance(value, int):
         return value + 1
     if isinstance(value, str):
@@ -1004,10 +1007,15 @@ class TestSectionsByInstrument(unittest.TestCase):
         self.project.update_sections({"二胡1": "彈撥"})
         self.assertEqual(self.project.instrument_sections, {"二胡 II": "彈撥"})
 
+    def test_an_unknown_orchestra_type_from_a_newer_file_opens_as_the_default(self):
+        data = {"version": PROJECT_FILE_VERSION + 1, "orchestra_type": "big_band"}
+        self.assertIs(Project.from_data(data, "總譜").orchestra_type, OrchestraType.CHINESE)
+        self.assertIs(Project.from_data({"orchestra_type": "western"}, "總譜").orchestra_type, OrchestraType.WESTERN)
+
     def test_voices_without_a_stored_section_are_detected_for_the_orchestra_type(self):
         self.assertEqual(Project().orchestra_type, "chinese")
         self.assertEqual(self.project.section_of("Cello"), "低音")
-        self.project.set_orchestra_type("western")
+        self.project.set_orchestra_type(OrchestraType.WESTERN)
         self.assertEqual(self.project.section_of("Cello"), "弦樂")
         self.assertEqual(self.project.section_options(), ("木管", "銅管", "打擊", "鍵盤", "弦樂", "其他"))
         self.assertEqual(self.heard, [True])
