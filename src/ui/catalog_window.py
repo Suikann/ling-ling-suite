@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCursor
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_ORCHESTRA_TYPE, OrchestraType
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLOSE_WAIT_SECONDS, DEFAULT_ORCHESTRA_TYPE, OrchestraType
 from core.locale import t
 from core.catalog_constants import (
     PerformanceStatus, SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PERFORMANCES, SHEET_PIECES,
@@ -56,9 +56,6 @@ from ui.catalog_tasks import CatalogTasks
 from ui.section_map_editor import SectionMapEditor
 from ui.widgets import not_downloaded_text
 
-
-# 關閉視窗時選了取消下載，最多等它停下幾秒（停在檔與檔之間）；逾時就放棄它，暫存檔留待下次啟動清掉
-_CLOSE_WAIT_SECONDS = 10
 
 _FOLDER_ICON = "\U0001f4c1 "
 _PDF_ICON = "\U0001f4c4 "
@@ -1263,7 +1260,7 @@ class CatalogWindow(QMainWindow):
         task.finished.disconnect()
         task.failed.disconnect()
         task.cancel()
-        task.wait(_CLOSE_WAIT_SECONDS)
+        task.wait(CLOSE_WAIT_SECONDS)
         task.abandon()
         self._download_task = None
         return True

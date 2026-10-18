@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.clear_local import ClearItem, ClearPlan, ClearStatus, GroupClear
+from core.constants import ALERT_BANNER_STYLE
 from core.locale import t
 from ui.compress_pdf import size_text
 
@@ -37,7 +38,6 @@ _STATUS_COLORS = {
     ClearStatus.MISSING: "#ff8a8a",
 }
 _CLEARED_COLOR = "#7a7f93"
-_UNSAVED_STYLE = "background-color: #5a2129; color: #ff8a8a; border-radius: 5px; padding: 6px 10px;"
 
 
 class ClearDialog(QDialog):
@@ -57,7 +57,7 @@ class ClearDialog(QDialog):
         self.resize(1000, 680)
         layout = QVBoxLayout(self)
         banner = QLabel(t("clear.unsaved"))
-        banner.setStyleSheet(_UNSAVED_STYLE)
+        banner.setStyleSheet(ALERT_BANNER_STYLE)
         banner.setVisible(unsaved)
         layout.addWidget(banner)
         self._groups = self._group_table()

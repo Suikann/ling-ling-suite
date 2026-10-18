@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
-from core.constants import INSTRUMENT_PRESETS, TEXT_EXTENSION
+from core.constants import INSTRUMENT_PRESETS, MAX_DURATION_MINUTES, TEXT_EXTENSION, UNSYNCED_COLOR
 from core.instrument_list import instrument_list_text
 from core.locale import localized, t
 from core.models import (
@@ -70,15 +70,11 @@ _HEADERS = {
 }
 # 人數欄的上限（超過的樂譜要求不實際）
 _MAX_HEADCOUNT = 999
-# 時長的分鐘欄上限
-_MAX_DURATION_MINUTES = 999
 # 重名的列與本專案沒有的列的文字顏色
 _DUPLICATE_COLOR = QColor("#e74c3c")
 _ABSENT_COLOR = QColor("#888888")
 # 連線時依位置猜的聲部的底色
 _GUESSED_COLOR = QColor("#fff3b0")
-# 未同步的提示與值的文字顏色
-_UNSYNCED_COLOR = QColor("#e67e22")
 # 版本頁的狀態：有、缺、指定了檔還沒儲存
 _PRESENT_COLOR = QColor("#27ae60")
 _MISSING_COLOR = QColor("#e74c3c")
@@ -203,7 +199,7 @@ class InstrumentationTable(QWidget):
         self._unsynced_bar = QLabel()
         self._unsynced_bar.setObjectName("unsynced_bar")
         self._unsynced_bar.setWordWrap(True)
-        self._unsynced_bar.setStyleSheet(f"color: {_UNSYNCED_COLOR.name()};")
+        self._unsynced_bar.setStyleSheet(f"color: {UNSYNCED_COLOR};")
         self._unsynced_bar.hide()
         self.header.addWidget(self._unsynced_bar)
         self.header.addWidget(self._build_list_bar())
@@ -249,7 +245,7 @@ class InstrumentationTable(QWidget):
         QShortcut(QKeySequence("Delete"), self._table, self._remove_selected)
         self._notice = QLabel()
         self._notice.setWordWrap(True)
-        self._notice.setStyleSheet("color: #e67e22;")
+        self._notice.setStyleSheet(f"color: {UNSYNCED_COLOR};")
         self._notice.hide()
         layout.addWidget(self._notice)
         input_row = QHBoxLayout()
@@ -346,7 +342,7 @@ class InstrumentationTable(QWidget):
         """時長一列：分、秒兩個欄位"""
         row = QHBoxLayout()
         row.addWidget(QLabel(t("instrumentation.duration")))
-        self._duration_minutes = _count_spin(_MAX_DURATION_MINUTES, blank_zero=False)
+        self._duration_minutes = _count_spin(MAX_DURATION_MINUTES, blank_zero=False)
         self._duration_minutes.setObjectName("duration_minutes")
         self._duration_seconds = _count_spin(59, blank_zero=False)
         self._duration_seconds.setObjectName("duration_seconds")
@@ -357,7 +353,7 @@ class InstrumentationTable(QWidget):
             row.addWidget(QLabel(t(unit)))
         self._duration_catalog_now = QLabel()
         self._duration_catalog_now.setObjectName("duration_catalog_now")
-        self._duration_catalog_now.setStyleSheet(f"color: {_UNSYNCED_COLOR.name()};")
+        self._duration_catalog_now.setStyleSheet(f"color: {UNSYNCED_COLOR};")
         self._duration_catalog_now.hide()
         row.addWidget(self._duration_catalog_now)
         row.addStretch()
@@ -499,7 +495,7 @@ class InstrumentationTable(QWidget):
             old = self._unsynced_headcounts[voice_key(voice)]
             catalog_now = t("catalog.unsynced.catalog_now", value=_catalog_value(old.text() if old else ""))
             if not duplicate:
-                name.setForeground(QBrush(_UNSYNCED_COLOR))
+                name.setForeground(QBrush(QColor(UNSYNCED_COLOR)))
                 name.setToolTip(catalog_now)
         self._table.setItem(row, self.column("voice"), name)
         for column, tip in (("minimum", "instrumentation.minimum_tip"), ("maximum", "instrumentation.maximum_tip")):

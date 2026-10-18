@@ -17,15 +17,13 @@ from PySide6.QtWidgets import (
 from ui.widgets import DragListWidget
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
+from core.constants import UNSYNCED_COLOR
 from core.locale import t
 from core.models import FileInfo, Group, Project
 from core.paths import path_key
 from services.deposit_service import DepositService
 from services.file_service import FileService
 from services.import_service import ImportService
-
-# 未存入的檔（存入後本機又改過）的字色
-_UNDEPOSITED_COLOR = QColor("#e67e22")
 
 
 class UngroupedTab(QWidget):
@@ -206,7 +204,7 @@ class GroupTab(QWidget):
         self._undeposited_bar = QLabel()
         self._undeposited_bar.setObjectName("undeposited_bar")
         self._undeposited_bar.setWordWrap(True)
-        self._undeposited_bar.setStyleSheet(f"color: {_UNDEPOSITED_COLOR.name()};")
+        self._undeposited_bar.setStyleSheet(f"color: {UNSYNCED_COLOR};")
         self._undeposited_bar.hide()
         layout.addWidget(self._undeposited_bar)
         catalog_only_row = QHBoxLayout()
@@ -307,10 +305,10 @@ class GroupTab(QWidget):
             file = self.group.files[index]
             inst = f"{voices[index]}  |  " if index < len(voices) else ""
             item.setText(f"{inst}{self._file_text(file, catalog_only)}")
-            item.setForeground(_UNDEPOSITED_COLOR if id(file) in ids else self._file_list.palette().text())
+            item.setForeground(QColor(UNSYNCED_COLOR) if id(file) in ids else self._file_list.palette().text())
         self._update_score_display(catalog_only)
         if self.group.score_file is not None and id(self.group.score_file) in ids:
-            self._score_label.setStyleSheet(f"color: {_UNDEPOSITED_COLOR.name()};")
+            self._score_label.setStyleSheet(f"color: {UNSYNCED_COLOR};")
         self._undeposited_bar.setText(
             t("deposit.undeposited.bar", files="、".join(file.display_name for file in stale)) if stale else "",
         )

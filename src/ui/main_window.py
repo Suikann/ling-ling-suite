@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QEvent, QStandardPaths, Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
-    CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
+    CATALOG_ROOT_FOLDER_ID_KEY, CLOSE_WAIT_SECONDS, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
@@ -62,11 +62,6 @@ from ui.widgets import ask_save_path, not_downloaded_text
 
 if TYPE_CHECKING:
     from services.catalog_service import CatalogService
-
-
-# 關閉程式時選了取消背景工作，最多等它停下幾秒（停在頁與頁之間，通常不到一秒）；
-# 逾時就放棄它（之後不再送回任何結果）再關閉，暫存檔留待下次啟動清掉
-_CLOSE_WAIT_SECONDS = 10
 
 
 class _WriteBack(Enum):
@@ -1258,7 +1253,7 @@ class MainWindow(QMainWindow):
         task.finished.disconnect()
         task.failed.disconnect()
         task.cancel()
-        task.wait(_CLOSE_WAIT_SECONDS)
+        task.wait(CLOSE_WAIT_SECONDS)
         task.abandon()
         self._task = None
         return True

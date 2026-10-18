@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from core.catalog_errors import CATALOG_ERROR_RULES
 from core.catalog_revert import revert_count
+from core.constants import ALERT_BANNER_STYLE
 from core.deposit_revert import (
     Deposit, RevertAction, RevertBlock, RevertChoice, RevertFile, RevertGroup, RevertPreview,
 )
@@ -50,7 +51,6 @@ _ACTION_COLORS = {
 }
 _GRAY = "#7a7f93"
 _DOWNLOAD_STYLE = "background-color: #253c63; color: #8fb8ff; border-radius: 5px; padding: 6px 10px;"
-_BLOCK_STYLE = "background-color: #5a2129; color: #ff8a8a; border-radius: 5px; padding: 6px 10px;"
 # 存入紀錄表的欄位（介面字串鍵的結尾）
 _LOG_COLUMNS = ("time", "operator", "kind", "groups", "count")
 # 撤銷預覽對照表的欄位（介面字串鍵的結尾）
@@ -188,7 +188,7 @@ class RevertGroupPage(QWidget):
         if group.block is not None:
             self.block_notice = QLabel(block_text(group))
             self.block_notice.setWordWrap(True)
-            self.block_notice.setStyleSheet(_BLOCK_STYLE)
+            self.block_notice.setStyleSheet(ALERT_BANNER_STYLE)
             layout.addWidget(self.block_notice)
         strip = QHBoxLayout()
         self.counts: List[QLabel] = []

@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from core.constants import ALERT_BANNER_STYLE
 from core.deposit import DepositAction, DepositItem, DepositPlan, GroupDeposit, PlaceFiles, folder_key
 from core.locale import t
 from ui.compress_pdf import size_text
@@ -43,7 +44,6 @@ _SUMMARY_ORDER = (
     DepositAction.NEW, DepositAction.UPDATE, DepositAction.MOVE, DepositAction.REGISTER, DepositAction.SKIP,
     DepositAction.UNLISTED,
 )
-_UNSAVED_STYLE = "background-color: #5a2129; color: #ff8a8a; border-radius: 5px; padding: 6px 10px;"
 _INTERRUPTED_STYLE = "background-color: #5b4613; color: #f2c14e; border-radius: 5px; padding: 6px 10px;"
 
 
@@ -75,7 +75,7 @@ class DepositDialog(QDialog):
         self.resize(1100, 700)
         layout = QVBoxLayout(self)
         self._unsaved = QLabel(t("deposit.unsaved"))
-        self._unsaved.setStyleSheet(_UNSAVED_STYLE)
+        self._unsaved.setStyleSheet(ALERT_BANNER_STYLE)
         self._unsaved.setVisible(unsaved)
         layout.addWidget(self._unsaved)
         self.interrupted_notice: Optional[QLabel] = None
