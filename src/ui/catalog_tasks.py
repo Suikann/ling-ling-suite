@@ -28,7 +28,8 @@ T = TypeVar("T")
 
 
 def catalog_work(
-    connect: Callable[[], CatalogService], run: Callable[[CatalogService, Callable[[], bool], Callable[[Any], None]], T],
+    connect: Callable[[], CatalogService],
+    run: Callable[[CatalogService, Callable[[], bool], Callable[[Any], None]], T],
     unreachable: Callable[[CatalogError], T],
 ) -> Work:
     """要接譜庫的背景長工作：先接譜庫，接上了才 run；接不上時以 unreachable(錯誤) 的結果交回，不拋出

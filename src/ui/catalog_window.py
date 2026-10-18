@@ -1139,7 +1139,9 @@ class CatalogWindow(QMainWindow):
             if not self._reverter.revert_deposit(preview, choices, finished):
                 QMessageBox.information(self, t("revert.confirm"), t("revert.busy"))
 
-        self._read(read, done, lambda: None, lambda: self._revert_deposit(deposit, page, piece_title, version), piece_title)
+        self._read(
+            read, done, lambda: None, lambda: self._revert_deposit(deposit, page, piece_title, version), piece_title,
+        )
 
     def _revert_finished(self, outcome: RevertOutcome, retry: Callable[[], None]):
         """撤銷存入結束（進度與完成幾份在主視窗的狀態列）：中途失敗時頂端提示列寫出已撤掉幾份、按「重試」再開一次預覽；

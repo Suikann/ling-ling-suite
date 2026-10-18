@@ -286,7 +286,9 @@ def _file_key(entry: DepositLogEntry) -> Tuple[str, str, str, str]:
     return entry.edition_id, entry.movement_id, entry.voice, entry.drive_file_id
 
 
-def interrupted(entries: Sequence[DepositLogEntry], group_ids: Collection[str], group_names: Collection[str]) -> Optional[int]:
+def interrupted(
+    entries: Sequence[DepositLogEntry], group_ids: Collection[str], group_names: Collection[str],
+) -> Optional[int]:
     """這些群組最近一次存入有沒有中斷（中途停下，或登記寫不進去）：存入預覽的「上次中斷」提示
 
     Args:

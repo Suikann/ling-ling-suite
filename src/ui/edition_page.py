@@ -16,7 +16,7 @@
 讀寫都經譜庫視窗在背景執行（讀不到、寫不進去時視窗頂端顯示提示列）。
 
 使用範例：
-    page = EditionPagePanel(detail, window._read, window._write, lambda: email, showing, voice_candidates, orchestra_type)
+    page = EditionPagePanel(detail, window._read, window._write, lambda: email, showing, candidates, orchestra_type)
     page.actions.addWidget(rename_button)   # 版本頁的其他入口（套用命名格式、下載、存入紀錄）
     pdfs = page.folder_pdfs()               # 版本資料夾裡全部的 PDF（一般下載）
 """
@@ -201,8 +201,8 @@ class EditionPagePanel(QWidget):
         """經譜庫服務在背景讀這一處的版本頁；沒儲存的改動丟掉"""
         edition_id, movement_id = self._place_ids()
         orchestra_type = self._orchestra_type()
-        self._shown = (
-            self._edition_combo.currentIndex(), self._movement_combo.currentIndex(), self._orchestra_combo.currentIndex(),
+        self._shown = tuple(
+            combo.currentIndex() for combo in (self._edition_combo, self._movement_combo, self._orchestra_combo)
         )
         self._page = None
         self._assigned = {}
@@ -214,7 +214,8 @@ class EditionPagePanel(QWidget):
 
         def done(page: EditionPage):
             """讀到了：換成這一處"""
-            if self._showing() and (self._place_ids(), self._orchestra_type()) == ((edition_id, movement_id), orchestra_type):
+            showing = (self._place_ids(), self._orchestra_type())
+            if self._showing() and showing == ((edition_id, movement_id), orchestra_type):
                 self._show_page(page, orchestra_type)
 
         def unreadable():

@@ -39,7 +39,8 @@ from dataclasses import fields, replace
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Type, TypeVar
 
 from core.catalog_constants import (
-    CATALOG_TRUE, CATALOG_TRUE_VALUES, CLUB_SETTING_PUBLISHING_PLATFORM, DEPOSIT_PENDING, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME,
+    CATALOG_TRUE, CATALOG_TRUE_VALUES, CLUB_SETTING_PUBLISHING_PLATFORM, DEPOSIT_PENDING, DRIVE_FOLDER_MIME,
+    DRIVE_PDF_MIME,
     DRIVE_SPREADSHEET_MIME, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, SHEET_COMPOSERS, SHEET_DURATIONS,
     SHEET_DEPOSIT_LOG, SHEET_EDITIONS, SHEET_HEADERS, SHEET_INSTRUMENTATION_LOG, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES,
     SHEET_PIECES, SHEET_SECTIONS, PublishingPlatform,
@@ -1333,7 +1334,8 @@ class CatalogService:
         places = {}
         for key in dict.fromkeys((entry.edition_id, entry.movement_id) for entry in ours):
             places[key] = self._revert_place(catalog, *key)
-        files = {file_id: self.drive_file(file_id) for file_id in dict.fromkeys(e.drive_file_id for e in ours) if file_id}
+        file_ids = dict.fromkeys(entry.drive_file_id for entry in ours if entry.drive_file_id)
+        files = {file_id: self.drive_file(file_id) for file_id in file_ids}
         revisions: Dict[str, List[DriveRevision]] = {}
         for entry in ours:
             if entry.drive_file_id not in revisions and needs_revisions(entry, files.get(entry.drive_file_id)):
@@ -1621,7 +1623,8 @@ class CatalogService:
             if not pending.folder_id:
                 if not pending._folder_file_id:
                     pending._folder_file_id = self.drive_ids(1)[0]
-                pending.folder_id = self.create_folder(pending.title, pending.root_folder_id, pending._folder_file_id).id
+                folder = self.create_folder(pending.title, pending.root_folder_id, pending._folder_file_id)
+                pending.folder_id = folder.id
             if pending._edition_rows is None:
                 pending._edition_rows = self.new_rows(
                     SHEET_EDITIONS, [{"piece_id": pending.piece_id, "drive_folder_id": pending.folder_id}],
