@@ -1218,6 +1218,11 @@ class Project:
         self._changed()
         return moved
 
+    @staticmethod
+    def filed_voices(group: Group, rows: Iterable[int]) -> List[str]:
+        """要移除的列裡，連到譜庫而已有 Drive 檔案、不能移除的聲部（移除前先查，remove_instruments 會擋下它們）"""
+        return _filed_voices(group, rows)
+
     def set_headcount(self, group: Group, index: int, headcount: Headcount) -> None:
         """設定群組樂器表第 index 列的人數範圍（整理規則見 Headcount.normalized）
 
@@ -1776,16 +1781,22 @@ def _other_pieces(voices: Iterable[str], counts: Dict[str, int]) -> Dict[str, in
     """群組各樂器（第一次出現的寫法）被譜庫其他曲目用到幾首：從譜庫讀到的全部樂器裡挑出群組有的"""
     by_key = {instrument_key(name): count for name, count in counts.items()}
     return {
-        voice: by_key[instrument_key(voice)] for voice in _distinct_instruments(voices) if instrument_key(voice) in by_key
+        voice: by_key[instrument_key(voice)]
+        for voice in _distinct_instruments(voices) if instrument_key(voice) in by_key
     }
+
+
+def _filed_voices(group: Group, rows: Iterable[int]) -> List[str]:
+    """群組連到譜庫時，rows 裡已有 Drive 檔案的聲部（依樂器表順序）；沒連到譜庫時為空清單"""
+    if group.catalog_link is None:
+        return []
+    filed = {voice_key(name) for name in group.catalog_link.snapshot.filed}
+    return [group.instruments[i] for i in sorted(set(rows)) if voice_key(group.instruments[i]) in filed]
 
 
 def _refuse_filed_voices(group: Group, rows: Iterable[int]) -> None:
     """群組連到譜庫、rows 裡有已有 Drive 檔案的聲部時丟出 FiledVoicesError"""
-    if group.catalog_link is None:
-        return
-    filed = {voice_key(name) for name in group.catalog_link.snapshot.filed}
-    voices = [group.instruments[i] for i in sorted(set(rows)) if voice_key(group.instruments[i]) in filed]
+    voices = _filed_voices(group, rows)
     if voices:
         raise FiledVoicesError(voices)
 

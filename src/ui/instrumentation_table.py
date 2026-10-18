@@ -13,7 +13,8 @@
 只有改了聲部清單（增刪、改名、排序、本專案有）時再發出 instruments_changed。人數、時長、
 複製編制與聲部組不影響配對，不發出：人數與時長只寫入不重畫，複製編制與聲部組只重畫這張表。
 上方顯示群組連到譜庫的哪裡（曲目 › 版本 › 樂章）；沒連線時是「連到譜庫…」按鈕，按下發出 link_requested，
-由主視窗開啟連線對話框，連上後以 show_linked 標出依位置猜的聲部。
+由主視窗開啟連線對話框，連上後以 show_linked 標出依位置猜的聲部。連到譜庫的群組刪除聲部前先確認（等於從樂譜刪除），
+已有 Drive 檔案的聲部不刪；聲部組旁另寫出譜庫裡用到這種樂器的其他曲目數。
 
 使用範例：
     table = InstrumentationTable(project)
@@ -30,9 +31,9 @@ from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from core.constants import INSTRUMENT_PRESETS, TEXT_EXTENSION
 from core.instrument_list import instrument_list_text
 from core.locale import localized, t
-from core.models import CatalogLink, DuplicateVoiceError, FileInfo, Headcount, LinkResult
+from core.models import CatalogLink, DuplicateVoiceError, FiledVoicesError, FileInfo, Headcount, LinkResult
 from core.sections import section_label
-from core.voice_names import distinct_voices, duplicate_rows
+from core.voice_names import distinct_voices, duplicate_rows, instrument_name
 from core.voice_suggestions import VoiceCandidates
 from services.file_service import FileService
 from ui.voice_completer import VoiceNameDelegate, attach_voice_completer
@@ -326,11 +327,22 @@ class InstrumentationTable(QWidget):
         self._table.setItem(row, self.column("open_ended"), open_ended)
         self._show_headcount(row)
         self._table.setCellWidget(row, self.column("section"), self._section_combo(voice))
-        follows = self._project.same_instrument_voices(voice)
-        note = QTableWidgetItem(t("instrument.section_follows", voices="、".join(follows)) if follows else "")
+        note = QTableWidgetItem(self._section_impact(voice))
         note.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled)
         note.setForeground(QBrush(_ABSENT_COLOR))
         self._table.setItem(row, self.column("follows"), note)
+
+    def _section_impact(self, voice: str) -> str:
+        """聲部組旁的影響範圍：連到譜庫時譜庫裡用到這種樂器的其他曲目，以及專案裡同一樂器的其他編號"""
+        notes = []
+        link = self._group.catalog_link
+        count = link.other_pieces_using(voice) if link is not None else 0
+        if count:
+            notes.append(t("catalog.sync.other_pieces", count=count, instrument=instrument_name(voice)))
+        follows = self._project.same_instrument_voices(voice)
+        if follows:
+            notes.append(t("instrument.section_follows", voices="、".join(follows)))
+        return "；".join(notes)
 
     def _section_combo(self, voice: str) -> QComboBox:
         """一列的聲部組選單：選項是專案樂團類型的那一套（已存的值不在其中時另外列出），資料是中文名稱"""
@@ -409,15 +421,20 @@ class InstrumentationTable(QWidget):
             self._rename(item.row(), item.text().strip())
 
     def _rename(self, row: int, name: str):
-        """改聲部名稱：清空即移除；與其他列同一聲部時說明原因並還原名稱"""
+        """改聲部名稱：清空即移除；與其他列同一聲部、或連到譜庫而已有 Drive 檔案時說明原因並還原名稱"""
         if not name:
-            self._changed(self._project.remove_instruments(self._group, [row]))
+            if not self._remove_rows([row]):
+                self._fill()
             return
         try:
             self._project.rename_instrument(self._group, row, name)
         except DuplicateVoiceError as e:
             self._fill()
             self._explain_duplicate(name, e)
+            return
+        except FiledVoicesError as e:
+            self._fill()
+            self._explain_filed(e.voices)
             return
         self._changed()
 
@@ -493,7 +510,28 @@ class InstrumentationTable(QWidget):
         rows = self._selected_rows()
         if not rows or self._group is None:
             return
+        self._remove_rows(rows)
+
+    def _remove_rows(self, rows: List[int]) -> bool:
+        """移除幾列，回傳是否移除了
+
+        連到譜庫的群組：已有 Drive 檔案的聲部說明要到譜庫視窗處理、不移除；其餘先確認，因為這等於從樂譜刪除。
+        """
+        filed = self._project.filed_voices(self._group, rows)
+        if filed:
+            self._explain_filed(filed)
+            return False
+        if self._group.catalog_link is not None:
+            voices = "、".join(self._group.instruments[i] for i in rows)
+            answer = QMessageBox.question(self, t("dialog.warning"), t("catalog.sync.delete_voices", voices=voices))
+            if answer != QMessageBox.Yes:
+                return False
         self._changed(self._project.remove_instruments(self._group, rows))
+        return True
+
+    def _explain_filed(self, voices: List[str]):
+        """說明這些聲部在譜庫已有 Drive 檔案，不能從群組刪除"""
+        QMessageBox.warning(self, t("dialog.warning"), t("catalog.sync.filed_voices", voices="、".join(voices)))
 
     def _show_context_menu(self, pos):
         """在列上按右鍵：選單提供移除選取的列"""

@@ -18,6 +18,8 @@ from core.constants import (
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
+from core.catalog_errors import CatalogFailure, as_catalog_error
+from core.catalog_sync import SyncOutcome, WriteSource, place_writes
 from core.launch_env import app_version, current_build
 from core.locale import t, get_locale, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
@@ -39,7 +41,9 @@ from services.project_access import AccessResult, ProjectAccess
 from services.rename_service import assign_default_sections
 from services.split_service import SplitService
 from ui.background_task import BackgroundTask, Work
+from ui.catalog_error_bar import CatalogErrorBar
 from ui.instrumentation_table import InstrumentationTable
+from ui.waiting_dialog import run_while_waiting
 from ui.widgets import ask_save_path
 
 if TYPE_CHECKING:
@@ -226,6 +230,10 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(4, 4, 4, 4)
         main_layout.setSpacing(4)
+        # 存檔時寫不進譜庫的提示列；按「重試」等處理按鈕時再存一次
+        self._catalog_error_bar = CatalogErrorBar(log=self._log)
+        self._catalog_error_bar.connect_remedies(self._sign_in_google, self._open_catalog_settings)
+        main_layout.addWidget(self._catalog_error_bar)
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
         main_layout.addWidget(splitter, stretch=1)
@@ -498,7 +506,10 @@ class MainWindow(QMainWindow):
         return self._do_save(path)
 
     def _do_save(self, path: str) -> bool:
-        """存檔；專案檔寫不成才顯示「儲存失敗」，最近清單或 meta 寫不進去只在狀態列提示
+        """存檔：連到譜庫的群組有改動時先寫回譜庫，再寫專案檔
+
+        寫不進譜庫、或在衝突畫面取消時不存專案檔。專案檔寫不成才顯示「儲存失敗」，
+        最近清單或 meta 寫不進去只在狀態列提示。
 
         Args:
             path: 專案檔路徑
@@ -506,6 +517,8 @@ class MainWindow(QMainWindow):
         Returns:
             專案檔是否寫成
         """
+        if not self._write_back_to_catalog():
+            return False
         result = self._project_access.save(self.project, path)
         if result.error is not None:
             QMessageBox.critical(self, t("dialog.error"), t("dialog.error.save_failed", error=result.error))
@@ -514,6 +527,51 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._refresh_recent_menu()
         self._show_access_status(t("status.saved", path=path), result)
+        return True
+
+    def _write_back_to_catalog(self) -> bool:
+        """把連到譜庫的群組的改動寫回譜庫（ADR 0002），回傳可不可以接著存專案檔
+
+        在背景寫入，期間顯示等待視窗。有衝突時開衝突畫面選邊後再寫一次（寫入前又重讀，選邊之後又被改的格子再問）；
+        寫完把結果交回專案（選「用譜庫的」的值與新的快照），有無法寫回的聲部時說明。
+        寫不進去時在頂端顯示提示列，按「重試」再存一次。
+
+        Returns:
+            沒有要寫的、或已寫入時為 True；寫不進去或在衝突畫面取消時為 False
+        """
+        writes = place_writes(self.project)
+        if not writes:
+            return True
+        operator = self._auth_service.account_email or ""
+        orchestra_type = self.project.orchestra_type
+        decisions: dict = {}
+        while True:
+            def work(chosen=dict(decisions)) -> SyncOutcome:
+                """在背景接譜庫並寫回"""
+                return self._catalog_factory().sync_instrumentation(
+                    writes, orchestra_type, operator, WriteSource.SAVE, chosen,
+                )
+            try:
+                outcome = run_while_waiting(
+                    self, t("catalog.sync.title"), t("catalog.sync.waiting"), work, lambda: None,
+                )
+            except Exception as e:
+                failure = CatalogFailure.from_error(as_catalog_error(e), t("catalog.sync.title"))
+                self._catalog_error_bar.show_failure(t("catalog.error.cannot_write"), failure, self._save_project)
+                return False
+            if outcome.written:
+                break
+            from ui.catalog_conflict_dialog import CatalogConflictDialog
+            dialog = CatalogConflictDialog(outcome, self)
+            if dialog.exec() != CatalogConflictDialog.Accepted:
+                return False
+            for group_id, chosen in dialog.decisions().items():
+                decisions[group_id] = {**decisions.get(group_id, {}), **chosen}
+        self._catalog_error_bar.clear()
+        self.project.mark_catalog_synced(outcome)
+        if outcome.blocked:
+            voices = "、".join(review.item.voice for _, review in outcome.blocked)
+            QMessageBox.warning(self, t("catalog.sync.title"), t("catalog.sync.blocked_saved", voices=voices))
         return True
 
     def _show_orchestra_type(self):
@@ -1056,6 +1114,11 @@ class MainWindow(QMainWindow):
         dialog.linked.connect(self._instrumentation_table.show_linked)
         dialog.finished.connect(dialog.deleteLater)
         dialog.open()
+
+    def _sign_in_google(self) -> bool:
+        """提示列的「重新登入 Google」：開瀏覽器登入，回傳是否登入成功"""
+        from ui.catalog_settings_dialog import sign_in_google
+        return sign_in_google(self, self._auth_service)
 
     def _open_catalog_settings(self) -> bool:
         """開啟譜庫設定，回傳是否設定完成"""
