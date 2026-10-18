@@ -1,16 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-檔名清理
+檔名清理與同名後綴
 
-把使用者輸入或模板產生的字串整理成可安全寫入檔案系統的檔名。
+把使用者輸入或模板產生的字串整理成可安全寫入檔案系統的檔名；同名時加上「 (1)」「 (2)」…後綴。
 
 使用範例：
-    from core.filename import ensure_extension, ensure_pdf_extension, sanitize_filename
+    from core.filename import ensure_extension, ensure_pdf_extension, numbered, sanitize_filename
     sanitize_filename('Flute: 1')            # 'Flute_ 1'
     sanitize_filename('   ', fallback='Part')  # 'Part'
     ensure_pdf_extension('Flute')            # 'Flute.pdf'
     ensure_extension('winter', '.llproj')    # 'winter.llproj'
+    numbered('/out/Flute.pdf', 1)            # '/out/Flute (1).pdf'
 """
+import os
+
 from core.constants import FILENAME_ILLEGAL_CHARS, PDF_EXTENSION
 
 
@@ -47,3 +50,17 @@ def ensure_extension(name: str, extension: str) -> str:
     if name.lower().endswith(extension.lower()):
         return name
     return name + extension
+
+
+def numbered(path: str, count: int) -> str:
+    """同名時的後綴：在副檔名前加上「 (count)」；重新命名的重複目標與從譜庫下載的同名檔共用
+
+    Args:
+        path: 檔名或路徑
+        count: 第幾個同名的（從 1 起算）
+
+    Returns:
+        加了後綴的檔名或路徑
+    """
+    base, ext = os.path.splitext(path)
+    return f"{base} ({count}){ext}"

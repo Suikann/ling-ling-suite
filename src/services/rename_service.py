@@ -18,6 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from typing import Collection, Iterable, List, Optional
 from core.constants import PartsOutputMode, VariableLevel
+from core.filename import numbered
 from core.models import Group, Project, RenameEntry
 from core.naming import default_sections, name_group, settings_for, unknown_variables, variable_level, variables_in
 from core.paths import path_key
@@ -112,8 +113,7 @@ def apply_auto_suffix(entries: List[RenameEntry]) -> List[RenameEntry]:
         count = seen[key]
         seen[key] += 1
         if count > 0:
-            base, ext = os.path.splitext(entry.new_path)
-            entry = replace(entry, new_path=f"{base} ({count}){ext}")
+            entry = replace(entry, new_path=numbered(entry.new_path, count))
         result.append(entry)
     return result
 

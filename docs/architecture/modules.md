@@ -16,7 +16,7 @@
 | 編輯一個群組的編制（聲部、本專案有、人數、聲部組、時長；拖動時分譜跟著走） | `ui/instrumentation_table.py` 的 `InstrumentationTable`：主視窗左欄用它，其他視窗要顯示編制（例如譜庫視窗的版本頁）時沿用、不另做一份；帶入專案後以 `show_group` 顯示群組，修改經 `Project` 的編輯操作（見 [project.md](project.md) 的編制表） |
 | 人數範圍的整理與 HuaXia 記法（`6`、`6-8`、`2↑`） | `core/models.py` 的 `Headcount`（`normalized`、`text`、`filled`）；合計用 `sum_headcounts`，時長的「分:秒」用 `format_duration` |
 | 依介面語言挑選中英文版本 | `core/locale.py` 的 `is_english`、`localized` |
-| 檔名清理（非法字元換底線、空名回退） | `core/filename.py`，重新命名與分割共用 |
+| 檔名清理（非法字元換底線、空名回退）與同名後綴（「 (1)」） | `core/filename.py`：清理由重新命名與分割共用，同名後綴 `numbered` 由重新命名的重複目標與從譜庫下載的同名檔共用 |
 | 一格（總譜或第 N 份分譜）的檔名與資料夾；群組是否已重新命名（檔都在命名結果的位置，存入譜庫與發譜共用） | `core/naming.py`（見 [naming.md](naming.md)）；已重新命名是 `is_renamed`，單一份檔是 `is_named_at` |
 | 走訪專案引用的檔案（總譜＋分譜＋未分組）；依路徑取代、移除引用 | `Project.file_refs()`、`Project.replace_paths`、`Project.remove_paths` |
 | 群組欄位的編輯規則 | `Group.update`；不屬於專案的 Drive 群組也用它 |
