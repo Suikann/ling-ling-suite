@@ -168,16 +168,19 @@ class MainWindow(QMainWindow):
         # 背景工作進行中停用的動作：會動到檔案的操作，以及另開一件背景工作
         self._file_actions: List[QAction] = []
         edit_menu = mb.addMenu(t("menu.edit"))
-        self._file_actions.append(self._add_action(edit_menu, t("menu.edit.undo"), self._undo_last, "Ctrl+Z"))
-        self._file_actions.append(self._add_action(edit_menu, t("menu.edit.redo"), self._redo_last, "Ctrl+Y"))
+        undo = self._add_action(edit_menu, t("menu.edit.undo"), self._undo_last, "Ctrl+Z")
+        redo = self._add_action(edit_menu, t("menu.edit.redo"), self._redo_last, "Ctrl+Y")
         import_menu = mb.addMenu(t("menu.import"))
-        self._add_action(import_menu, t("menu.import.files"), self._import_files)
-        self._add_action(import_menu, t("menu.import.folder"), self._import_folder)
+        import_files = self._add_action(import_menu, t("menu.import.files"), self._import_files)
+        import_folder = self._add_action(import_menu, t("menu.import.folder"), self._import_folder)
         catalog_menu = mb.addMenu(t("menu.catalog"))
         self._add_action(catalog_menu, t("menu.catalog.open"), self._open_catalog)
         self._add_action(catalog_menu, t("menu.catalog.settings"), self._open_catalog_settings)
         tools_menu = mb.addMenu(t("menu.tools"))
-        self._file_actions.append(self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf))
+        split = self._add_action(tools_menu, t("menu.tools.split_pdf"), self._open_split_pdf)
+        # 唯讀的專案停用的動作：會改專案，或搬動、產生專案引用的檔案（之後存不了檔，專案檔就對不上）
+        self._edit_actions = [undo, redo, import_files, import_folder, split]
+        self._file_actions.extend([undo, redo, split])
         tools_menu.addSeparator()
         self._file_actions.append(self._add_action(tools_menu, t("menu.tools.rotate_pdf"), self._open_rotate_pdf))
         self._file_actions.append(self._add_action(tools_menu, t("menu.tools.compress_pdf"), self._compress_files))
@@ -232,6 +235,8 @@ class MainWindow(QMainWindow):
         link_btn = QPushButton(t("group.link_movements"))
         link_btn.clicked.connect(self._link_as_movements)
         btn_bar.addWidget(link_btn)
+        # 唯讀的專案停用的元件（另有分頁內容、編制表與預覽並重新命名，見 _show_enabled_state）
+        self._edit_widgets: List[QWidget] = [add_group_btn, link_btn]
         btn_bar.addStretch()
         right_layout.addLayout(btn_bar)
         self._tab_widget = QTabWidget()
@@ -241,6 +246,7 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([560, 720])
         self._build_bottom_panel(main_layout)
+        self._edit_widgets += [self._orchestra_combo, self._master_template_entry, self._vars_btn]
         self._rebuild_tabs()
 
     def _build_bottom_panel(self, parent_layout):
@@ -261,9 +267,9 @@ class MainWindow(QMainWindow):
         self._master_template_entry = QLineEdit(self.project.master_template)
         self._master_template_entry.textEdited.connect(lambda text: self.project.set_master_template(text))
         template_row.addWidget(self._master_template_entry, stretch=1)
-        vars_btn = QPushButton(t("panel.insert_variable"))
-        vars_btn.clicked.connect(self._show_variable_menu)
-        template_row.addWidget(vars_btn)
+        self._vars_btn = QPushButton(t("panel.insert_variable"))
+        self._vars_btn.clicked.connect(self._show_variable_menu)
+        template_row.addWidget(self._vars_btn)
         bl.addLayout(template_row)
         action_row = QHBoxLayout()
         self._status_label = QLabel(t("status.ready"))
@@ -295,6 +301,7 @@ class MainWindow(QMainWindow):
         )
         for group in self.project.groups:
             self._add_group_tab(group)
+        self._show_enabled_state()
 
     def _create_ungrouped_tab(self):
         from ui.group_panel import UngroupedTab
@@ -505,8 +512,6 @@ class MainWindow(QMainWindow):
     def _sync_ui_from_project(self):
         """畫面改為顯示目前的專案"""
         self._instrumentation_table.set_project(self.project)
-        for action in self._save_actions:
-            action.setEnabled(not self.project.read_only)
         self._show_orchestra_type()
         self._master_template_entry.setText(self.project.master_template)
         self._rebuild_tabs()
@@ -904,15 +909,33 @@ class MainWindow(QMainWindow):
     def _show_background_state(self):
         """依有沒有背景工作，停用或恢復會動到檔案的操作，顯示或隱藏進度與取消鈕"""
         busy = self._task is not None
-        for action in self._file_actions:
-            action.setEnabled(not busy)
-        self._rename_btn.setEnabled(not busy)
+        self._show_enabled_state()
         self._task_progress.setVisible(busy)
         self._task_cancel_btn.setText(t(self._task_texts.cancel))
         self._task_cancel_btn.setVisible(busy)
         self._task_cancel_btn.setEnabled(busy and not self._task.cancel_requested)
         if busy and self._task_status and not self._task.cancel_requested:
             self._set_status(self._task_status)
+
+    def _show_enabled_state(self):
+        """依專案唯不唯讀與有沒有背景工作，停用或恢復各個操作（唯讀與背景工作的判斷都只在這裡）
+
+        唯讀的專案（較新版本建立的專案檔）存不了檔，所以停用存檔、另存，以及所有會改專案或搬動、
+        產生它引用的檔案的操作：關閉時才不會有存不了的修改。分頁仍可切換，只停用內容。
+        背景工作進行中停用會動到檔案的操作。
+        """
+        editable = not self.project.read_only
+        busy = self._task is not None
+        for action in self._save_actions:
+            action.setEnabled(editable)
+        for action in set(self._file_actions + self._edit_actions):
+            blocked = (busy and action in self._file_actions) or (not editable and action in self._edit_actions)
+            action.setEnabled(not blocked)
+        pages = [self._tab_widget.widget(i) for i in range(self._tab_widget.count())]
+        for widget in self._edit_widgets + pages:
+            widget.setEnabled(editable)
+        self._rename_btn.setEnabled(editable and not busy)
+        self._instrumentation_table.set_editable(editable)
 
     def _confirm_cancel_background(self) -> bool:
         """關閉程式時有背景工作就詢問要不要取消；選取消就要求取消、等它停下，再放棄它

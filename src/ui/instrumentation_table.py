@@ -123,6 +123,7 @@ class InstrumentationTable(QWidget):
         self._project = project
         self._file_service = file_service or FileService()
         self._group: Optional["Group"] = None
+        self._editable = True
         self._filling = False
         self._copy_sources: List["Group"] = []
         self._build_ui()
@@ -218,10 +219,15 @@ class InstrumentationTable(QWidget):
         """切換到另一個專案（開啟或新增專案時）"""
         self._project = project
 
+    def set_editable(self, editable: bool):
+        """能不能修改（專案唯讀時停用）；不能修改時整張表停用，切換群組也不恢復"""
+        self._editable = editable
+        self.setEnabled(self._group is not None and editable)
+
     def show_group(self, group: Optional["Group"]):
         """顯示群組的編制；不是群組時清空並停用，輸入的聲部才不會沒有地方寫入。只顯示，不寫入專案"""
         self._group = group
-        self.setEnabled(group is not None)
+        self.setEnabled(group is not None and self._editable)
         self._show_moved([])
         self._fill()
 

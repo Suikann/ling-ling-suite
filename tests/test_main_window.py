@@ -859,7 +859,7 @@ class TestMainWindowInstrumentListRefusesDuplicateVoices(InstrumentListTestCase)
 
 
 class TestMainWindowNewerProjectFile(MainWindowTestCase):
-    """較新版本的泠靈建立的專案檔唯讀開啟：寫明原因，存檔與另存都不能用"""
+    """較新版本的泠靈建立的專案檔唯讀開啟：寫明原因，存檔、另存與所有會改專案或磁碟上檔案的操作都不能用"""
 
     def setUp(self):
         super().setUp()
@@ -885,9 +885,45 @@ class TestMainWindowNewerProjectFile(MainWindowTestCase):
         self.open_from_menu(Project())
         self.assertEqual([a.isEnabled() for a in self._save_actions()], [True, True])
 
-    def test_closing_after_edits_does_not_offer_to_save(self):
+    def _edit_controls(self) -> List[QWidget]:
+        """會改專案或它引用的檔案的選單動作、按鈕、欄位與編制表，以及目前群組分頁的內容"""
+        action_texts = (
+            t("menu.import.files"), t("menu.import.folder"), t("menu.edit.undo"), t("menu.edit.redo"),
+            t("menu.tools.split_pdf"),
+        )
+        actions = [a for a in self.window.findChildren(QAction) if a.text() in action_texts]
+        self.assertEqual(len(actions), len(action_texts))
+        buttons = [
+            button_in(self.window, QPushButton, text)
+            for text in (t("panel.preview_rename"), t("group.add"), t("group.link_movements"), t("panel.insert_variable"))
+        ]
+        orchestra = next(c for c in self.window.findChildren(QComboBox) if c.findText(t("orchestra.western")) >= 0)
+        tabs = self.window.findChild(QTabWidget)
+        return actions + buttons + [
+            field_in(self.window, "{樂器}.pdf"), orchestra, self.window.findChild(InstrumentationTable),
+            tabs.widget(0), tabs.widget(1),
+        ]
+
+    def test_everything_that_changes_the_project_or_its_files_is_disabled(self):
         self._open_newer()
-        QTest.keyClicks(field_in(self.window, "{樂器}.pdf"), "x")
+        self.assertEqual(self.window.findChild(QTabWidget).currentIndex(), 1)
+        self.assertEqual([c.isEnabled() for c in self._edit_controls()], [False] * len(self._edit_controls()))
+
+    def test_tabs_can_still_be_switched_and_stay_disabled(self):
+        self._open_newer()
+        tabs = self.window.findChild(QTabWidget)
+        tabs.setCurrentIndex(0)
+        tabs.setCurrentIndex(1)
+        self.assertEqual(tabs.currentIndex(), 1)
+        self.assertFalse(self.window.findChild(InstrumentationTable).isEnabled())
+
+    def test_opening_another_project_enables_editing_again(self):
+        self._open_newer()
+        self.open_from_menu(Project(master_template="{樂器}.pdf", groups=[Group(name="g")]))
+        self.assertEqual([c.isEnabled() for c in self._edit_controls()], [True] * len(self._edit_controls()))
+
+    def test_closing_does_not_offer_to_save(self):
+        self._open_newer()
         with answering_prompts() as shown:
             closed = self.window.close()
         self.assertTrue(closed)
