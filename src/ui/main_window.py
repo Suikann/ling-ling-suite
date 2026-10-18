@@ -479,7 +479,7 @@ class MainWindow(QMainWindow):
                 self, t("dialog.warning"),
                 t("missing.on_load", count=len(result.missing_files), files="\n".join(result.missing_files)),
             )
-        self._retry_unsynced()
+        self._sync_catalog_on_open()
 
     def _show_access_status(self, done: str, result: AccessResult):
         """開啟或存檔成功後的狀態列：附帶動作有失敗時改顯示失敗的提示
@@ -549,23 +549,65 @@ class MainWindow(QMainWindow):
         self._show_access_status(t("status.saved", path=path), result)
         return True
 
-    def _retry_unsynced(self):
+    def _sync_catalog_on_open(self):
+        """開啟專案後與譜庫同步：先重試未同步的群組，沒有寫不進去才從譜庫更新快照
+
+        先重試再更新，未同步的改動才會以原本的快照比對，不會被當成譜庫的新值蓋掉。唯讀的專案兩者都不做。
+        """
+        if self._retry_unsynced() is not _WriteBack.FAILED:
+            self._refresh_from_catalog()
+
+    def _retry_unsynced(self) -> Optional[_WriteBack]:
         """開啟專案後重試未同步的群組：寫回成功時再存一次專案檔，清掉檔裡的未同步標記
 
         開啟時就有未存檔的改動（例如套用了中斷還原的路徑）時不自動存，交給使用者存檔。唯讀的專案不重試。
         寫不進去時頂端顯示提示列，按「重試」再試一次。
+
+        Returns:
+            寫回的結果；唯讀、沒有路徑或沒有未同步的群組時為 None
         """
         if self.project.read_only or not self._project_path:
-            return
+            return None
         unsynced = {group.id for group in self.project.unsynced_groups()}
         writes = [write for write in place_writes(self.project) if write.group_id in unsynced]
         if not writes:
-            return
+            return None
         modified = self.project.is_modified()
-        if self._write_back_to_catalog(writes, self._retry_unsynced) is not _WriteBack.WRITTEN:
-            return
+        written = self._write_back_to_catalog(writes, self._retry_unsynced)
+        if written is not _WriteBack.WRITTEN:
+            return written
         self._sync_ui_from_project()
         if not modified:
+            self._write_project_file(self._project_path)
+        return written
+
+    def _refresh_from_catalog(self):
+        """開啟專案時從譜庫更新連到譜庫的群組的快照：人數與時長直接套用，聲部清單變了時由編制表頂端的提示列決定
+
+        各處一起讀（背景執行、期間顯示等待視窗）。開啟時沒有未存檔的改動、更新後有改動時再存一次專案檔。
+        讀不到時照快照開啟，頂端顯示提示列，按處理按鈕再讀一次；唯讀的專案不更新。
+        """
+        groups = [group for group in self.project.groups if group.catalog_link is not None]
+        if self.project.read_only or not self._project_path or not groups:
+            return
+        orchestra_type = self.project.orchestra_type
+        targets = [(group.catalog_link.edition_id, group.catalog_link.movement_id) for group in groups]
+
+        def work() -> list:
+            """在背景接譜庫並讀出各處"""
+            return self._catalog_factory().read_places(targets, orchestra_type)
+        try:
+            places = run_while_waiting(self, t("catalog.refresh.title"), t("catalog.refresh.waiting"), work, lambda: None)
+        except Exception as e:
+            failure = CatalogFailure.from_error(as_catalog_error(e), t("catalog.refresh.title"))
+            self._catalog_error_bar.show_failure(t("catalog.refresh.heading"), failure, self._refresh_from_catalog)
+            return
+        self._catalog_error_bar.clear()
+        modified = self.project.is_modified()
+        for group, place in zip(groups, places):
+            self.project.refresh_catalog(group, place)
+        self._instrumentation_table.refresh()
+        if not modified and self.project.is_modified():
             self._write_project_file(self._project_path)
 
     def _confirm_unsynced(self) -> bool:
@@ -583,6 +625,7 @@ class MainWindow(QMainWindow):
         """把連到譜庫的群組的改動寫回譜庫（ADR 0002）
 
         在背景寫入，期間顯示等待視窗。有衝突時開衝突畫面選邊後再寫一次（寫入前又重讀，選邊之後又被改的格子再問）；
+        有群組要先確認（PlaceWrite.confirm）時，第一次只比對、開衝突畫面確認後才寫；
         寫完把結果交回專案（選「用譜庫的」的值與新的快照，清掉未同步），有無法寫回的聲部時說明。
         寫不進去時在頂端顯示提示列，按「重試」呼叫 retry。
 
@@ -596,11 +639,13 @@ class MainWindow(QMainWindow):
         operator = self._auth_service.account_email or ""
         orchestra_type = self.project.orchestra_type
         decisions: dict = {}
+        # 選了「用專案的（存檔時寫回）」的群組：第一次只比對，在衝突畫面確認全部改動後才寫
+        review_only = any(write.confirm for write in writes)
         while True:
-            def work(chosen=dict(decisions)) -> SyncOutcome:
-                """在背景接譜庫並寫回"""
+            def work(chosen=dict(decisions), review=review_only) -> SyncOutcome:
+                """在背景接譜庫並寫回（review 時只比對）"""
                 return self._catalog_factory().sync_instrumentation(
-                    writes, orchestra_type, operator, WriteSource.SAVE, chosen,
+                    writes, orchestra_type, operator, WriteSource.SAVE, chosen, review_only=review,
                 )
             try:
                 outcome = run_while_waiting(
@@ -616,6 +661,7 @@ class MainWindow(QMainWindow):
             dialog = CatalogConflictDialog(outcome, self)
             if dialog.exec() != CatalogConflictDialog.Accepted:
                 return _WriteBack.CANCELLED
+            review_only = False
             for group_id, chosen in dialog.decisions().items():
                 decisions[group_id] = {**decisions.get(group_id, {}), **chosen}
         self._catalog_error_bar.clear()

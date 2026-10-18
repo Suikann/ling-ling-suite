@@ -18,6 +18,8 @@
 群組有未同步的值（存檔時寫不進譜庫）時，頂端的提示列寫出是哪些，人數與時長旁寫出譜庫現在的值。
 譜庫視窗的版本頁（ui/edition_page.py）以 edition_page=True 沿用同一個元件：每列多了推算的狀態與登記的檔（show_files），
 最上面固定一列總譜，選取的列以 selected_target 取得；沒有本專案有、從其他群組複製與從檔名擷取。
+開啟專案時譜庫的聲部清單變了，頂端另有提示列與「套用譜庫的」「用專案的（存檔時寫回）」兩顆按鈕，
+表格標出譜庫移除與換了順序的列，譜庫新增的聲部以不能編輯的列接在最後。
 
 使用範例：
     table = InstrumentationTable(project)
@@ -35,8 +37,8 @@ from core.constants import INSTRUMENT_PRESETS, TEXT_EXTENSION
 from core.instrument_list import instrument_list_text
 from core.locale import localized, t
 from core.models import (
-    CatalogChange, CatalogChangeKind, CatalogLink, DuplicateVoiceError, FiledVoicesError, FileInfo, Headcount,
-    LinkResult, format_duration,
+    CatalogChange, CatalogChangeKind, CatalogLink, CatalogListChange, DuplicateVoiceError, FiledVoicesError,
+    FileInfo, Headcount, LinkResult, format_duration,
 )
 from core.sections import section_label
 from core.voice_names import VoiceKey, distinct_voices, duplicate_rows, instrument_name, voice_key
@@ -81,6 +83,11 @@ _UNSYNCED_COLOR = QColor("#e67e22")
 _PRESENT_COLOR = QColor("#27ae60")
 _MISSING_COLOR = QColor("#e74c3c")
 _PENDING_COLOR = QColor("#2980b9")
+# 開啟專案時譜庫的聲部清單變了：譜庫新增、移除、換了順序的列的底色與提示列的文字顏色
+_ADDED_COLOR = QColor("#d5f5e3")
+_REMOVED_COLOR = QColor("#fadbd8")
+_MOVED_COLOR = QColor("#d6eaf8")
+_LIST_CHANGE_COLOR = QColor("#2471a3")
 
 
 class VoiceRowsTable(QTableWidget):
@@ -169,6 +176,8 @@ class InstrumentationTable(QWidget):
         self._guessed: Set[str] = set()
         # 人數未同步的聲部（同一聲部的鍵 → 譜庫現在的人數），重畫時更新
         self._unsynced_headcounts: Dict[VoiceKey, Optional[Headcount]] = {}
+        # 開啟專案時讀到、跟群組不同的譜庫聲部清單（沒有時為 None），重畫時更新
+        self._list_change: Optional[CatalogListChange] = None
         self._build_ui()
 
     @staticmethod
@@ -192,6 +201,13 @@ class InstrumentationTable(QWidget):
         self._unsynced_bar.setStyleSheet(f"color: {_UNSYNCED_COLOR.name()};")
         self._unsynced_bar.hide()
         self.header.addWidget(self._unsynced_bar)
+        self.header.addWidget(self._build_list_bar())
+        self._keep_note = QLabel(t("catalog.refresh.keep_note"))
+        self._keep_note.setObjectName("catalog_keep_note")
+        self._keep_note.setWordWrap(True)
+        self._keep_note.setStyleSheet(f"color: {_LIST_CHANGE_COLOR.name()};")
+        self._keep_note.hide()
+        self.header.addWidget(self._keep_note)
         layout.addLayout(self.header)
         layout.addLayout(self._build_duration_row())
         self._preset_combo = QComboBox()
@@ -297,6 +313,28 @@ class InstrumentationTable(QWidget):
         row.addWidget(self._link_button)
         return row
 
+    def _build_list_bar(self) -> QWidget:
+        """「譜庫的聲部清單變了」的提示列：說明與「套用譜庫的」「用專案的（存檔時寫回）」兩顆按鈕；先收起"""
+        self._list_bar = QWidget()
+        self._list_bar.setObjectName("catalog_list_bar")
+        bar = QVBoxLayout(self._list_bar)
+        bar.setContentsMargins(0, 0, 0, 0)
+        text = QLabel(t("catalog.refresh.bar"))
+        text.setWordWrap(True)
+        text.setStyleSheet(f"color: {_LIST_CHANGE_COLOR.name()};")
+        bar.addWidget(text)
+        buttons = QHBoxLayout()
+        take = QPushButton(t("catalog.refresh.take"))
+        take.clicked.connect(self._take_catalog_list)
+        buttons.addWidget(take)
+        keep = QPushButton(t("catalog.refresh.keep"))
+        keep.clicked.connect(self._keep_project_list)
+        buttons.addWidget(keep)
+        buttons.addStretch()
+        bar.addLayout(buttons)
+        self._list_bar.hide()
+        return self._list_bar
+
     def _build_duration_row(self) -> QHBoxLayout:
         """時長一列：分、秒兩個欄位"""
         row = QHBoxLayout()
@@ -385,12 +423,20 @@ class InstrumentationTable(QWidget):
         self._unsynced_headcounts = {
             voice_key(change.voice): change.old for change in unsynced if change.kind is CatalogChangeKind.HEADCOUNT
         }
+        self._list_change = self._project.catalog_list_change(self._group) if self._group else None
+        self._list_bar.setVisible(self._list_change is not None)
+        link = self._group.catalog_link if self._group else None
+        self._keep_note.setVisible(link is not None and link.confirm_voices)
         self._table.clearContents()
         voices = list(self._group.instruments) if self._group else []
-        self._table.setRowCount(len(voices))
+        added = self._list_change.added if self._list_change else []
+        self._table.setRowCount(len(voices) + len(added))
         duplicates = set(duplicate_rows(voices))
         for row, voice in enumerate(voices):
             self._fill_row(row, voice, row in duplicates)
+            self._mark_list_change(row, voice)
+        for row, voice in enumerate(added, start=len(voices)):
+            self._fill_added_row(row, voice)
         if self._edition_page:
             self._fill_files(self._score_table, 0, *self._score_files)
         minutes, seconds = divmod(self._group.duration_seconds or 0, 60) if self._group else (0, 0)
@@ -481,6 +527,28 @@ class InstrumentationTable(QWidget):
             file_item.setForeground(QBrush(_ABSENT_COLOR))
         table.setItem(row, self.column("file"), file_item)
 
+    def _mark_list_change(self, row: int, voice: str):
+        """譜庫的聲部清單變了時，標出這一列：譜庫已移除的標紅底、換了順序的標藍底，提示寫出原因"""
+        change = self._list_change
+        if change is None:
+            return
+        name = self._table.item(row, self.column("voice"))
+        if voice in change.removed:
+            name.setBackground(QBrush(_REMOVED_COLOR))
+            name.setToolTip(t("catalog.refresh.removed"))
+        elif voice in change.moved:
+            position = 1 + [voice_key(n) for n, _ in change.voices].index(voice_key(voice))
+            name.setBackground(QBrush(_MOVED_COLOR))
+            name.setToolTip(t("catalog.refresh.moved", position=position))
+
+    def _fill_added_row(self, row: int, voice: str):
+        """接在最後、譜庫新增的聲部：標綠底，不能勾選、編輯、選取或拖動（選了「套用譜庫的」才加進群組）"""
+        for column in range(len(COLUMNS)):
+            cell = QTableWidgetItem(t("catalog.refresh.added", voice=voice) if column == self.column("voice") else "")
+            cell.setFlags(Qt.ItemIsEnabled)
+            cell.setBackground(QBrush(_ADDED_COLOR))
+            self._table.setItem(row, column, cell)
+
     def _section_impact(self, voice: str) -> str:
         """聲部組旁的影響範圍：連到譜庫時譜庫裡用到這種樂器的其他曲目，以及專案裡同一樂器的其他編號"""
         notes = []
@@ -551,11 +619,28 @@ class InstrumentationTable(QWidget):
     # --- 使用者的修改 ---
 
     def _on_rows_dropped(self, rows: List[int], target: int):
-        """拖動列：聲部連同分譜一起移動"""
+        """拖動列：聲部連同分譜一起移動；放在譜庫新增的列（接在最後）上時算放到最後"""
         if self._group is None:
             return
-        self._project.move_instruments(self._group, rows, target)
+        count = len(self._group.instruments)
+        rows = [row for row in rows if row < count]
+        if not rows:
+            return
+        self._project.move_instruments(self._group, rows, min(target, count))
         self._changed()
+
+    def _take_catalog_list(self):
+        """按了「套用譜庫的」：換成譜庫的聲部清單，分譜依名稱配對，寫出移到未分組的分譜"""
+        if self._group is None:
+            return
+        self._changed(self._project.take_catalog_list(self._group))
+
+    def _keep_project_list(self):
+        """按了「用專案的（存檔時寫回）」：群組的清單不變，存檔時確認後寫回譜庫"""
+        if self._group is None:
+            return
+        self._project.keep_project_list(self._group)
+        self._fill()
 
     def _on_item_changed(self, item: QTableWidgetItem):
         """勾選「本專案有」或改完聲部名稱"""

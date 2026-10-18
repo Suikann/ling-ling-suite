@@ -6,6 +6,7 @@
 以及要怎麼做。衝突的列標紅，要逐項選「用我的」或「用譜庫的」，全部選完才能按「寫入並存檔」
 （譜庫視窗寫聲部組對照時按鈕是「寫入」）；
 其餘的列寫出照寫、譜庫已採用或無法寫回（已有 Drive 檔案的聲部，要到譜庫視窗處理）。
+開啟專案時選了「用專案的（存檔時寫回）」的群組，存檔時沒有衝突也先開這個畫面確認再寫。
 比對與選擇的意義見 core/catalog_sync.py；這裡只顯示比對結果、收集選擇。
 
 使用範例：
@@ -48,7 +49,7 @@ class CatalogConflictDialog(QDialog):
     def __init__(self, outcome: SyncOutcome, parent: Optional[QWidget] = None, confirm_text: str = ""):
         """
         Args:
-            outcome: 有衝突、還沒寫入的比對結果（CatalogService.sync_instrumentation、sync_section_map）
+            outcome: 還沒寫入的比對結果（CatalogService.sync_instrumentation、sync_section_map）：有衝突，或只比對、等確認
             parent: 父元件
             confirm_text: 確定按鈕的文字；省略時為「寫入並存檔」（存檔時寫回）
         """
@@ -58,7 +59,8 @@ class CatalogConflictDialog(QDialog):
         # 衝突的列：所在的那處、比對結果與選擇的選單
         self._choices: List[Tuple[PlaceReview, ItemReview, QComboBox]] = []
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(t("catalog.sync.intro")))
+        # 沒有衝突時是寫入前的確認（開啟專案時選了「用專案的（存檔時寫回）」）
+        layout.addWidget(QLabel(t("catalog.sync.intro" if outcome.conflicts else "catalog.sync.confirm_intro")))
         self._table = QTableWidget(0, len(_HEADERS))
         self._table.setHorizontalHeaderLabels([t(key) for key in _HEADERS])
         self._table.verticalHeader().setVisible(False)
