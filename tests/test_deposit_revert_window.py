@@ -20,7 +20,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QPushButton, QTabWidget, QTreeWidget
 
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY
-from core.deposit_revert import LocalProject, RevertAction, RevertBlock, RevertChoice, deposits
+from core.deposit_revert import KeptBecause, LocalProject, RevertAction, RevertBlock, RevertChoice, deposits
 from core.models import Project
 from core.locale import t
 from fake_google_catalog import ROOT
@@ -82,6 +82,16 @@ class TestRevertDialog(ClearedTestCase):
         self.assertTrue(self.dialog.confirm.isEnabled())
         self.assertEqual(self.dialog.choices(), [RevertChoice(self.revert_preview.groups[1], False)])
         self.assertFalse(self.dialog.pages[1].instrumentation.isEnabled())
+
+
+class TestReasonTexts(unittest.TestCase):
+    """每種不動的原因都有中英文的說明（鍵以原因的值組出，tests/test_locale.py 掃不到）"""
+
+    def test_every_kept_reason_has_a_text_in_both_languages(self):
+        from core.locale import get_available_locales, get_keys
+        for kept in KeptBecause:
+            for language in get_available_locales():
+                self.assertTrue(f"revert.reason.{kept.value}" in get_keys(language), (language, kept))
 
 
 class TestRefusedGroupInDialog(ClearedTestCase):
