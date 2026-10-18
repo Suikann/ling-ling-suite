@@ -7,7 +7,7 @@
 from typing import Optional
 from core.constants import PROJECT_FILE_VERSION
 from core.locale import t
-from core.models import Project
+from core.models import Project, ReadOnlyProjectError
 from services.file_service import FileService
 
 
@@ -23,7 +23,12 @@ class ProjectService:
         Args:
             project: 專案資料
             file_path: 儲存路徑
+
+        Raises:
+            ReadOnlyProjectError: 專案唯讀（由較新版本的程式建立），什麼都不寫
         """
+        if project.read_only:
+            raise ReadOnlyProjectError()
         data = {"version": PROJECT_FILE_VERSION, **project.to_data()}
         self.file_service.write_json_atomic(file_path, data)
         project.mark_saved()

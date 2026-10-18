@@ -10,10 +10,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional, Tuple
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_ORCHESTRA_TYPE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE,
-    LEGACY_PROJECT_FILE_VERSIONS, OperationKind, OrchestraType, PartsOutputMode, WorkspaceStatus,
+    LEGACY_PROJECT_FILE_VERSIONS, PROJECT_FILE_VERSION, SECTIONS_BY_INSTRUMENT_FILE_VERSION, OperationKind,
+    OrchestraType, PartsOutputMode, WorkspaceStatus,
 )
 from core.paths import path_key
-from core.sections import put_section, section_for, section_options
+from core.sections import guess_orchestra_type, migrate_sections, put_section, section_for, section_options
 from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
 from core.voice_names import same_instrument, same_voice, voice_key
 
@@ -28,6 +29,13 @@ class DuplicateVoiceError(ValueError):
     def __init__(self, existing: str):
         super().__init__(f"樂器表已有同一聲部：{existing}")
         self.existing = existing
+
+
+class ReadOnlyProjectError(Exception):
+    """存檔唯讀的專案（由較新版本的程式建立的專案檔）時丟出"""
+
+    def __init__(self):
+        super().__init__("這個專案檔由較新版本的泠靈建立，不能存檔")
 
 
 @dataclass
@@ -440,6 +448,8 @@ class Project:
     OUTPUT_SETTINGS: ClassVar[FrozenSet[str]] = frozenset({
         "output_directory", "use_subfolders", "subfolder_template", "parts_output_mode", "parts_subfolder_name",
     })
+    # 由較新版本的程式建立的專案檔：唯讀開啟，不能存檔（不在專案檔內容裡）
+    read_only: bool = field(default=False, init=False, repr=False, compare=False)
     _saved: Optional[Dict[str, Any]] = field(default=None, init=False, repr=False, compare=False)
     _listeners: List[Callable[[], None]] = field(default_factory=list, init=False, repr=False, compare=False)
 
@@ -485,7 +495,8 @@ class Project:
         """由專案檔中的內容還原，完成舊格式遷移後以還原結果作為已存檔的快照
 
         群組的遷移只在舊版程式寫的專案檔（version 在 LEGACY_PROJECT_FILE_VERSIONS）做，
-        新版存的檔裡留空的總譜標籤與樂器表是使用者清掉的，不補回。
+        新版存的檔裡留空的總譜標籤與樂器表是使用者清掉的，不補回。格式 3 以前的檔（含上述舊版）
+        另把聲部組轉成以樂器為鍵的對照，沒存樂團類型時依聲部組判定。version 比 PROJECT_FILE_VERSION 新時唯讀。
 
         Args:
             data: 專案檔中的內容（含 version）
@@ -511,11 +522,23 @@ class Project:
         )
         if "parts_output_mode" not in data and project.use_parts_subfolder:
             project.parts_output_mode = PartsOutputMode.PARTS
-        if data.get("version") in LEGACY_PROJECT_FILE_VERSIONS:
+        version = data.get("version")
+        legacy = version in LEGACY_PROJECT_FILE_VERSIONS
+        if legacy:
             for group in project.groups:
                 project._migrate_group(group, score_label)
+        if legacy or (isinstance(version, int) and version < SECTIONS_BY_INSTRUMENT_FILE_VERSION):
+            project._migrate_sections(guess_type="orchestra_type" not in data)
+        project.read_only = isinstance(version, int) and version > PROJECT_FILE_VERSION
         project.mark_saved()
         return project
+
+    def _migrate_sections(self, guess_type: bool) -> None:
+        """格式 3 以前的聲部組遷移：判定樂團類型（guess_type 時），聲部組轉成以樂器為鍵的對照"""
+        voices = [voice for group in self.groups for voice in group.instruments]
+        if guess_type:
+            self.orchestra_type = guess_orchestra_type(voices, self.instrument_sections).value
+        self.instrument_sections = migrate_sections(voices, self.instrument_sections, self.orchestra_type)
 
     def _migrate_group(self, group: Group, score_label: str) -> None:
         """舊格式群組的遷移：補上總譜標籤、承接專案層級的樂器表、把勾選的子集收成群組自己的樂器表"""

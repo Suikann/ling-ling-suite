@@ -160,8 +160,11 @@ class MainWindow(QMainWindow):
         self._recent_menu.setToolTipsVisible(True)
         self._refresh_recent_menu()
         file_menu.addSeparator()
-        self._add_action(file_menu, t("menu.file.save"), self._save_project, "Ctrl+S")
-        self._add_action(file_menu, t("menu.file.save_as"), self._save_project_as)
+        # 唯讀的專案（較新版本建立的專案檔）停用的動作
+        self._save_actions = [
+            self._add_action(file_menu, t("menu.file.save"), self._save_project, "Ctrl+S"),
+            self._add_action(file_menu, t("menu.file.save_as"), self._save_project_as),
+        ]
         # 背景工作進行中停用的動作：會動到檔案的操作，以及另開一件背景工作
         self._file_actions: List[QAction] = []
         edit_menu = mb.addMenu(t("menu.edit"))
@@ -415,6 +418,8 @@ class MainWindow(QMainWindow):
     def _do_open_project(self, path: str, moved: Iterable[UndoMapping] = ()):
         """開啟專案檔；讀不到才顯示「無法開啟專案」，最近清單或 meta 寫不進去只在狀態列提示
 
+        較新版本建立的專案檔唯讀開啟，並寫明原因。
+
         Args:
             path: 專案檔路徑
             moved: 開啟後先套用的路徑變動（見 ProjectAccess.open）
@@ -426,6 +431,8 @@ class MainWindow(QMainWindow):
             return
         self._set_project(result.project, path)
         self._show_access_status(t("status.opened", path=path), result)
+        if result.project.read_only:
+            QMessageBox.information(self, t("dialog.info"), t("project.newer_format"))
         if result.missing_files:
             QMessageBox.warning(
                 self, t("dialog.warning"),
@@ -447,13 +454,17 @@ class MainWindow(QMainWindow):
         self._set_status(" ".join(notices) or done)
 
     def _save_project(self) -> bool:
-        """存到目前的專案檔，尚未存過時改走另存新檔；回傳是否存成"""
+        """存到目前的專案檔，尚未存過時改走另存新檔；回傳是否存成（唯讀的專案不存）"""
+        if self.project.read_only:
+            return False
         if not self._project_path:
             return self._save_project_as()
         return self._do_save(self._project_path)
 
     def _save_project_as(self) -> bool:
-        """詢問位置後存檔；在對話框按取消也算沒存成，回傳是否存成"""
+        """詢問位置後存檔；在對話框按取消也算沒存成，回傳是否存成（唯讀的專案不存）"""
+        if self.project.read_only:
+            return False
         path = ask_save_path(
             self, t("filedialog.save_project"), "", t("filedialog.project_files"), PROJECT_EXTENSION,
             self.file_service,
@@ -490,6 +501,8 @@ class MainWindow(QMainWindow):
     def _sync_ui_from_project(self):
         """畫面改為顯示目前的專案"""
         self._instrument_editor.set_project(self.project)
+        for action in self._save_actions:
+            action.setEnabled(not self.project.read_only)
         self._show_orchestra_type()
         self._master_template_entry.setText(self.project.master_template)
         self._rebuild_tabs()
@@ -1045,6 +1058,8 @@ class MainWindow(QMainWindow):
             title += f" - {self._suggested_name}"
         else:
             title += f" - {t('app.unsaved_project')}"
+        if self.project.read_only:
+            title += f" [{t('app.read_only')}]"
         if self.project.is_modified():
             title += " *"
         self.setWindowTitle(title)
@@ -1053,12 +1068,12 @@ class MainWindow(QMainWindow):
         self._status_label.setText(text)
 
     def _confirm_unsaved(self) -> bool:
-        """有未存檔的修改時詢問是否儲存（開新專案、開啟專案、開啟最近專案）
+        """有未存檔的修改時詢問是否儲存（開新專案、開啟專案、開啟最近專案）；唯讀的專案存不了，不問
 
         Returns:
             可以繼續原本的操作時為 True；選「取消」或選「儲存」但沒存成時為 False
         """
-        return not self.project.is_modified() or self._ask_to_save()
+        return self.project.read_only or not self.project.is_modified() or self._ask_to_save()
 
     def _differs_from_project_file(self) -> bool:
         """目前內容是否與磁碟上的專案檔不同；還沒存過檔時沒有可比對的檔案，交給未存檔判定"""
@@ -1115,8 +1130,11 @@ class MainWindow(QMainWindow):
         self._do_open_project(path)
 
     def closeEvent(self, event):
-        """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次，任一不同就詢問是否儲存；有背景工作時再問要不要取消"""
-        unsaved = self.project.is_modified() or self._differs_from_project_file()
+        """關閉前除了未存檔判定，再和磁碟上的專案檔比對一次，任一不同就詢問是否儲存；有背景工作時再問要不要取消
+
+        唯讀的專案存不了，不詢問是否儲存。
+        """
+        unsaved = not self.project.read_only and (self.project.is_modified() or self._differs_from_project_file())
         if unsaved and not self._ask_to_save(t("dialog.close"), t("dialog.close.message")):
             event.ignore()
             return

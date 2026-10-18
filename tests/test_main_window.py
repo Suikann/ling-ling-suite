@@ -810,6 +810,45 @@ class TestMainWindowInstrumentListRefusesDuplicateVoices(InstrumentListTestCase)
 
 
 
+
+class TestMainWindowNewerProjectFile(MainWindowTestCase):
+    """較新版本的泠靈建立的專案檔唯讀開啟：寫明原因，存檔與另存都不能用"""
+
+    def setUp(self):
+        super().setUp()
+        self.path = os.path.join(self.temp_dir, "newer.llproj")
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump({"version": 99, "master_template": "{樂器}.pdf", "groups": [{"name": "g"}]}, f)
+
+    def _save_actions(self) -> List[QAction]:
+        texts = (t("menu.file.save"), t("menu.file.save_as"))
+        return [a for a in self.window.findChildren(QAction) if a.text() in texts]
+
+    def _open_newer(self) -> list:
+        with answering_prompts() as shown, opening(self.path):
+            self.trigger_menu(t("menu.file.open"))
+        return shown
+
+    def test_opening_says_why_and_disables_save_and_save_as(self):
+        self.assertEqual(self._open_newer(), [(t("dialog.info"), t("project.newer_format"))])
+        self.assertEqual([a.isEnabled() for a in self._save_actions()], [False, False])
+
+    def test_opening_another_project_enables_saving_again(self):
+        self._open_newer()
+        self.open_from_menu(Project())
+        self.assertEqual([a.isEnabled() for a in self._save_actions()], [True, True])
+
+    def test_closing_after_edits_does_not_offer_to_save(self):
+        self._open_newer()
+        QTest.keyClicks(field_in(self.window, "{樂器}.pdf"), "x")
+        with answering_prompts() as shown:
+            closed = self.window.close()
+        self.assertTrue(closed)
+        self.assertEqual(shown, [])
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["version"], 99)
+
+
 @contextmanager
 def editing_ensemble(operate: Callable[[EnsembleDialog], None]):
     """模擬使用者在「編輯人數」對話框操作後按下儲存

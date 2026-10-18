@@ -60,6 +60,8 @@ Built-in instrument lists for common ensembles:
 
 Download the latest portable EXE from the **[Releases](../../releases)** page. No installation required --- extract and run.
 
+After upgrading, do not open project files saved by the new version with an older version: the older version does not understand the new fields and drops them when it saves. A newer version opens project files saved by an even newer one read-only, and cannot save them.
+
 ## Quick Start
 
 1. Launch `LingLingSuite.exe`

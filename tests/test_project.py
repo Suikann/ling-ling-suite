@@ -18,6 +18,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
+from core.constants import PROJECT_FILE_VERSION
 from core.models import DuplicateVoiceError, FileInfo, Group, Project, SplitResult, UndoMapping
 from services.project_service import ProjectService
 from path_spellings import spellings
@@ -211,7 +212,8 @@ class TestOpenedProjectIsSaved(unittest.TestCase):
 
     def test_round_trip_keeps_every_saved_field(self):
         project = _rich_project()
-        self.assertEqual(Project.from_data(project.to_data(), score_label="").to_data(), project.to_data())
+        data = {"version": PROJECT_FILE_VERSION, **project.to_data()}
+        self.assertEqual(Project.from_data(data, score_label="").to_data(), project.to_data())
 
 
 class TestMigrationOnlyForOldProjectFiles(unittest.TestCase):

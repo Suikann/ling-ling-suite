@@ -5,6 +5,7 @@
 開啟與存檔：專案檔本身讀寫成功就算成功，最近清單與工作區 meta 所屬專案的寫入失敗只帶在結果裡回報。
 全部在暫存目錄進行，偏好設定與工作區的位置由建構時注入；寫入失敗以注入的檔案服務模擬。
 """
+import json
 import os
 import shutil
 import sys
@@ -259,6 +260,100 @@ class TestWorkspaceCleanupScan(ProjectAccessTestCase):
         os.remove(gone)
         self.access.scan_workspace(None)
         self.assertEqual(self._access().recent_projects(), [kept])
+
+
+
+class TestOpenOldFormat(ProjectAccessTestCase):
+    """開啟格式 3 以前的專案檔：判定樂團類型，聲部組轉成以樂器為鍵的對照；遷移不算未存檔"""
+
+    def _open_old(self, groups, sections, version=2) -> Project:
+        """以舊格式（version 為 version）寫一份專案檔再開啟；groups 為各群組的樂器表"""
+        path = os.path.join(self.temp_dir, "old.llproj")
+        data = {
+            "version": version, "master_template": "{樂器}.pdf", "instrument_sections": sections,
+            "groups": [{"name": f"g{i}", "score_label": "總譜", "instruments": voices} for i, voices in enumerate(groups)],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        result = self.access.open(path)
+        self.assertIsNone(result.error)
+        self.assertFalse(result.project.is_modified())
+        self.assertTrue(self.access.matches_file(result.project, path))
+        return result.project
+
+    def test_winds_or_plucked_strings_make_a_chinese_orchestra(self):
+        self.assertEqual(self._open_old([["高胡", "琵琶"]], {}).orchestra_type, "chinese")
+        self.assertEqual(self._open_old([["Solo"]], {"Solo": "Winds"}).orchestra_type, "chinese")
+
+    def test_stored_sections_come_before_detection(self):
+        project = self._open_old([["笛", "Violin"]], {"笛": "木管"})
+        self.assertEqual(project.orchestra_type, "western")
+        self.assertEqual(project.instrument_sections, {"笛": "木管"})
+
+    def test_english_sections_are_mapped_back_to_chinese(self):
+        project = self._open_old([["Flute", "Horn", "Violin I"]], {"Flute": "Woodwinds", "Horn": "Brass"})
+        self.assertEqual(project.orchestra_type, "western")
+        self.assertEqual(project.instrument_sections, {"Flute": "木管", "Horn": "銅管"})
+
+    def test_huqin_move_from_strings_to_bowed_strings_in_a_chinese_orchestra(self):
+        project = self._open_old(
+            [["二胡 I", "大提琴", "琵琶"]], {"二胡 I": "弦樂", "大提琴": "Strings", "琵琶": "Plucked Strings"},
+        )
+        self.assertEqual(project.instrument_sections, {"二胡 I": "拉弦", "大提琴": "低音", "琵琶": "彈撥"})
+
+    def test_custom_sections_are_detected_again_in_a_chinese_orchestra(self):
+        project = self._open_old([["梆笛", "高胡", "Theremin"]], {"高胡": "胡琴組", "Theremin": "電子"})
+        self.assertEqual(project.instrument_sections, {"高胡": "拉弦", "Theremin": "其他"})
+
+    def test_western_orchestra_values_stay(self):
+        project = self._open_old([["Flute", "Horn"]], {"Flute": "長笛組", "Horn": "Brass"})
+        self.assertEqual(project.instrument_sections, {"Flute": "長笛組", "Horn": "銅管"})
+
+    def test_first_value_of_an_instrument_in_list_order_wins(self):
+        project = self._open_old(
+            [["琵琶", "二胡 II"], ["二胡 I", "二胡 III"]], {"二胡 I": "拉弦", "二胡 II": "低音", "二胡 III": "打擊"},
+        )
+        self.assertEqual(project.instrument_sections, {"二胡 II": "低音"})
+        self.assertEqual(project.section_of("二胡 I"), "低音")
+
+    def test_file_written_by_the_oldest_version_migrates_too(self):
+        project = self._open_old([["高胡", "琵琶"]], {"高胡": "Strings"}, version="1.1.0-alpha")
+        self.assertEqual((project.orchestra_type, project.instrument_sections), ("chinese", {"高胡": "拉弦"}))
+
+    def test_current_format_is_not_migrated(self):
+        path = os.path.join(self.temp_dir, "current.llproj")
+        project = Project(groups=[Group(name="g", instruments=["高胡"])], instrument_sections={"高胡": "胡琴組"})
+        ProjectService().save_project(project, path)
+        self.assertEqual(self.access.open(path).project.instrument_sections, {"高胡": "胡琴組"})
+
+
+class TestOpenNewerFormat(ProjectAccessTestCase):
+    """比自己新的格式唯讀開啟：存檔與另存都不寫，看不懂的欄位不會被丟掉"""
+
+    def setUp(self):
+        super().setUp()
+        self.path = os.path.join(self.temp_dir, "newer.llproj")
+        self.data = {"version": 99, "master_template": "{樂器}.pdf", "groups": [], "from_the_future": [1]}
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(self.data, f)
+
+    def test_opens_read_only(self):
+        result = self.access.open(self.path)
+        self.assertIsNone(result.error)
+        self.assertTrue(result.project.read_only)
+        self.assertFalse(Project().read_only)
+
+    def test_save_and_save_as_write_nothing(self):
+        project = self.access.open(self.path).project
+        project.set_master_template("{序號}.pdf")
+        other = os.path.join(self.temp_dir, "other.llproj")
+        for path in (self.path, other):
+            with self.subTest(path=path):
+                self.assertIsNotNone(self.access.save(project, path).error)
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f), self.data)
+        self.assertFalse(os.path.exists(other))
+        self.assertTrue(project.is_modified())
 
 
 if __name__ == '__main__':

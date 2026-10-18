@@ -33,6 +33,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # 應用程式
         "app.title": "泠靈小工具",
         "app.unsaved_project": "未命名",
+        "app.read_only": "唯讀",
+        "project.newer_format": "這個專案檔由較新版本的泠靈建立，只能檢視，不能存檔。",
         "app.already_running": "程式已在執行中。",
         "app.lock_failed": "無法開啟鎖檔，程式未啟動：\n{error}",
         # 選單 - 檔案
@@ -661,6 +663,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         # 應用程式
         "app.title": "Ling Ling Suite",
         "app.unsaved_project": "Untitled",
+        "app.read_only": "Read-only",
+        "project.newer_format": "This project file was created by a newer version of Ling Ling. It is read-only and cannot be saved.",
         "app.already_running": "The application is already running.",
         "app.lock_failed": "Could not open the lock file; the application did not start:\n{error}",
         # 選單 - 檔案
