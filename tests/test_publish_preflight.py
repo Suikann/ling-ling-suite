@@ -17,8 +17,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.constants import HuaXiaEnsemble, OrchestraType
 from core.models import CatalogChangeKind, CatalogLink, CatalogSnapshot, FileInfo, Headcount, HuaXiaLink, NewHuaXiaPiece, Project
+from services.huaxia_auth_service import AccountStanding, HuaXiaAuthService, NotOfficer
+from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaClient, HuaXiaError, HuaXiaErrorKind, HuaXiaPiece
 from services.project_service import ProjectService
-from services.publish_service import ProjectBlock, check_groups, project_blocks
+from services.publish_service import FunctionProblem, ProjectBlock, PublishService, check_groups, project_blocks
+from services.secure_storage import SecureStorage
+from tests.fake_browser import CallbackBrowser
+from tests.fake_huaxia import FakeHuaXia
+from tests.memory_keyring import MemoryKeyring
 
 OUT_DIR = os.path.abspath("out")
 IN_DIR = os.path.abspath("in")
@@ -194,6 +200,69 @@ class TestGroupChecks(unittest.TestCase):
         check = self.check()
         self.assertEqual([(c.kind, c.voice) for c in check.unsynced], [(CatalogChangeKind.HEADCOUNT, "琵琶")])
         self.assertFalse(check.blocked)
+
+
+class PrepareTestCase(unittest.TestCase):
+    """假 HuaXia 上有一位已登入的幹部 officer_amy、相符版本的發譜函式與三首曲目（其中一首已封存）"""
+
+    def setUp(self):
+        self.huaxia = FakeHuaXia()
+        self.huaxia.add_account("officer_amy", roles=("member", "officer"))
+        self.huaxia.sign_in_as("officer_amy")
+        self.huaxia.install_publish_function(PUBLISH_INTERFACE_VERSION)
+        self.moli = self.huaxia.add_piece("茉莉花", composer="江蘇民歌", duration_min=4.5)
+        self.fenghuo = self.huaxia.add_piece("長城隨想－烽火操", composer="劉文金", ensemble="tutti")
+        self.huaxia.add_piece("春節序曲", archived=True)
+        browser = CallbackBrowser(provider=self.huaxia.authorize)
+        self.addCleanup(browser.finish)
+        self.auth = HuaXiaAuthService(
+            HuaXiaClient(session=self.huaxia), storage=SecureStorage("test-huaxia", backend=MemoryKeyring()),
+            opener=browser,
+        )
+        self.auth.authenticate()
+        self.service = PublishService(self.auth)
+
+
+class TestPrepare(PrepareTestCase):
+    """按下發譜時：重查幹部身分、查發譜函式的版本，都過了才讀可以挑的曲目"""
+
+    def test_an_officer_gets_the_unarchived_pieces_ordered_by_title_like_huaxia(self):
+        readiness = self.service.prepare()
+        self.assertTrue(readiness.ready)
+        self.assertEqual(readiness.pieces, [
+            HuaXiaPiece(self.moli, "茉莉花", "江蘇民歌", 4.5, HuaXiaEnsemble.TUTTI),
+            HuaXiaPiece(self.fenghuo, "長城隨想－烽火操", "劉文金", None, HuaXiaEnsemble.TUTTI),
+        ])
+        self.assertEqual(readiness.discord_name, "officer_amy")
+
+    def test_someone_no_longer_an_officer_is_signed_out_and_told_why(self):
+        self.huaxia.remove_roles("officer_amy")
+        readiness = self.service.prepare()
+        self.assertFalse(readiness.ready)
+        self.assertEqual(readiness.not_officer, NotOfficer(AccountStanding.NOT_OFFICER, "officer_amy"))
+        self.assertFalse(self.auth.status().signed_in)
+        self.assertEqual(readiness.pieces, [])
+
+    def test_without_the_publish_function_publishing_is_unavailable(self):
+        self.huaxia.install_publish_function(None)
+        readiness = self.service.prepare()
+        self.assertFalse(readiness.ready)
+        self.assertIs(readiness.function_problem, FunctionProblem.MISSING)
+        self.assertEqual(readiness.pieces, [])
+        self.assertFalse(any(r["path"] == "/rest/v1/pieces" for r in self.huaxia.requests))
+
+    def test_a_different_version_is_unavailable(self):
+        self.huaxia.install_publish_function(PUBLISH_INTERFACE_VERSION + 1)
+        readiness = self.service.prepare()
+        self.assertIs(readiness.function_problem, FunctionProblem.VERSION_MISMATCH)
+        self.assertEqual(readiness.function_version, PUBLISH_INTERFACE_VERSION + 1)
+        self.assertFalse(readiness.ready)
+
+    def test_not_signed_in_raises(self):
+        self.auth.logout()
+        with self.assertRaises(HuaXiaError) as raised:
+            self.service.prepare()
+        self.assertIs(raised.exception.kind, HuaXiaErrorKind.SIGNED_OUT)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,11 @@ HuaXia 用戶端
 每個請求都帶 apikey；以使用者身分的請求另帶 Authorization: Bearer <access token>。
 
 用戶端不記任何登入狀態：access token 由呼叫端傳入，續期與輪替、安全儲存由 services/huaxia_auth_service.py 管。
-失敗一律丟出帶類別的 HuaXiaError（連不上、續期權杖已失效、其他回應錯誤）。
+失敗一律丟出帶類別的 HuaXiaError（連不上、續期權杖已失效、資料庫函式不存在、其他回應錯誤）。
+
+發譜函式的版本查詢（publish_interface_version）：HuaXia 的發譜函式與它的介面由對 HuaXia 的合併請求（#117）定案，
+定案前泠靈這一側只假設「有一個不帶參數、回傳整數介面版本的資料庫函式」，名稱與泠靈要的版本是
+PUBLISH_VERSION_FUNCTION、PUBLISH_INTERFACE_VERSION；介面定案時改這兩個常數，必要時改這一個方法。
 請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
 使用範例：
@@ -19,16 +23,23 @@ HuaXia 用戶端
 """
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 from urllib.parse import urlencode
 
 import requests
 
+from core.constants import HuaXiaEnsemble
+
 # HuaXia 的 Supabase 專案（HuaXia 的 config.js，main 5cf811d）
 HUAXIA_URL = "https://cluuvrdreqpchfoscowc.supabase.co"
 HUAXIA_PUBLISHABLE_KEY = "sb_publishable_CK-Xpp2OOiaUVh3b1dmgGg_ktahQV_8"
+# HuaXia 回報發譜函式介面版本的資料庫函式（#117 定案前的假設），以及這版泠靈要的介面版本
+PUBLISH_VERSION_FUNCTION = "lingling_publish_version"
+PUBLISH_INTERFACE_VERSION = 1
 # 一個請求最多等這麼久（秒）
 _REQUEST_TIMEOUT = 30
+# PostgREST 回報找不到資料庫函式的錯誤代碼
+_MISSING_FUNCTION_CODE = "PGRST202"
 # Supabase Auth 回報續期權杖或 session 已不存在（在別處登出、被撤銷、重用了舊的）的錯誤代碼
 _SESSION_GONE_CODES = frozenset({
     "refresh_token_not_found", "refresh_token_already_used", "session_not_found", "session_expired",
@@ -41,6 +52,7 @@ class HuaXiaErrorKind(Enum):
     UNREACHABLE = "unreachable"    # 連不上 HuaXia
     SIGNED_OUT = "signed_out"      # 這台電腦沒有登入 HuaXia
     SESSION_GONE = "session_gone"  # 續期權杖已失效（可能在別處登出了）
+    MISSING_FUNCTION = "missing_function"  # HuaXia 沒有這個資料庫函式
     REJECTED = "rejected"          # HuaXia 回了其他錯誤
 
 
@@ -67,6 +79,23 @@ class AuthTokens:
     expires_in: int     # access token 的有效秒數
     user_id: str
     discord_name: str   # 登入的 Discord 帳號名稱；查不到時為空字串
+
+
+class HuaXiaPiece(NamedTuple):
+    """HuaXia 的一首曲目（pieces 的一列）
+
+    Attributes:
+        id: 曲目編號
+        title: 曲名
+        composer: 作曲家
+        duration_min: 時長（分鐘）；沒填為 None
+        ensemble: 合奏或絲竹
+    """
+    id: str
+    title: str
+    composer: str
+    duration_min: Optional[float]
+    ensemble: HuaXiaEnsemble
 
 
 def _discord_name(user: Dict[str, Any]) -> str:
@@ -168,6 +197,42 @@ class HuaXiaClient:
         params = {"select": columns, **{column: f"eq.{value}" for column, value in equals.items()}}
         return self._call("GET", f"/rest/v1/{table}", access_token, params=params)
 
+    def publish_interface_version(self, access_token: str) -> Optional[int]:
+        """HuaXia 發譜函式的介面版本；HuaXia 沒有發譜函式時為 None
+
+        Raises:
+            HuaXiaError: 連不上、呼叫失敗或回傳的不是整數
+        """
+        try:
+            version = self.rpc(PUBLISH_VERSION_FUNCTION, access_token)
+        except HuaXiaError as e:
+            if e.kind is HuaXiaErrorKind.MISSING_FUNCTION:
+                return None
+            raise
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected publish version: {version!r}")
+        return version
+
+    def pieces(self, access_token: str) -> List[HuaXiaPiece]:
+        """沒封存的曲目，依曲名排序（同 HuaXia 網頁的 order(title)；照 HuaXia 的 RLS，只回看得到的）
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        rows = self.select("pieces", access_token, "id,title,composer,duration_min,ensemble", archived="false")
+        try:
+            pieces = [
+                HuaXiaPiece(
+                    row["id"], row["title"], row.get("composer") or "",
+                    float(row["duration_min"]) if row.get("duration_min") is not None else None,
+                    HuaXiaEnsemble(row.get("ensemble") or HuaXiaEnsemble.TUTTI.value),
+                )
+                for row in rows
+            ]
+        except (KeyError, TypeError, ValueError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected pieces: {e}") from e
+        return sorted(pieces, key=lambda piece: piece.title)
+
     # --- 共用 ---
 
     def _call(
@@ -206,11 +271,17 @@ class HuaXiaClient:
 
 
 def _error_from(status: int, payload: Any) -> HuaXiaError:
-    """以錯誤回應建立 HuaXiaError：Auth 回報續期權杖或 session 已不存在時類別為 SESSION_GONE"""
+    """以錯誤回應建立 HuaXiaError：Auth 回報續期權杖或 session 已不存在時類別為 SESSION_GONE，
+    PostgREST 找不到資料庫函式時為 MISSING_FUNCTION"""
     body = payload if isinstance(payload, dict) else {}
     code = body.get("error_code") or body.get("code") or body.get("error") or ""
     message = body.get("msg") or body.get("message") or body.get("error_description") or ""
     # 舊版 Auth 以 OAuth 的 invalid_grant 回報續期權杖不存在
     gone = code in _SESSION_GONE_CODES or (code == "invalid_grant" and "Refresh Token" in message)
-    kind = HuaXiaErrorKind.SESSION_GONE if gone else HuaXiaErrorKind.REJECTED
+    if gone:
+        kind = HuaXiaErrorKind.SESSION_GONE
+    elif code == _MISSING_FUNCTION_CODE:
+        kind = HuaXiaErrorKind.MISSING_FUNCTION
+    else:
+        kind = HuaXiaErrorKind.REJECTED
     return HuaXiaError(kind, f"HTTP {status} {code}: {message}".strip())

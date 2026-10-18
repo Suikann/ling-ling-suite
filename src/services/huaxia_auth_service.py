@@ -171,6 +171,11 @@ class HuaXiaAuthService:
         # 登出後到下次登入前不再讀安全儲存：那份刪不掉時，這次執行也不會又被當成已登入
         self._signed_out = False
 
+    @property
+    def client(self) -> HuaXiaClient:
+        """這個登入服務送請求用的 HuaXia 用戶端；以使用者身分的其他請求（例如發譜）共用它"""
+        return self._client
+
     def subscribe_not_saved(self, listener: Callable[[], None]) -> None:
         """登入成功或續期換了新的續期權杖，但有安全儲存卻沒寫進去時呼叫 listener（在背景執行緒呼叫）"""
         self._not_saved_listeners.append(listener)

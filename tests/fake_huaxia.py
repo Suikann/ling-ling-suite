@@ -9,7 +9,9 @@
   （續期權杖只能用一次，重用用過的會撤銷整個 session）、logout 的 scope=local 與 global
   （sign_out_everywhere 扮演在 HuaXia 網頁按了登出全部）。
 - PostgREST：資料表的讀取（select 欄位與 eq 篩選），各表的讀取權限照 HuaXia 的 RLS 寫在 _READ_POLICIES。
-- rpc：is_officer（帳號啟用且有 admin 或 officer）。
+- rpc：is_officer（帳號啟用且有 admin 或 officer）；發譜函式的版本查詢預設不存在（同 HuaXia 合併 #117 之前），
+  以 install_publish_function 裝上指定的版本。
+- 曲目（pieces）：以 add_piece 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider（不實作 in_piece 的排人判斷）。
 
 擴充（之後的工單）：新資料表加進 tables 與 _READ_POLICIES；寫入在 _rest 裡依方法分派（POST、PATCH、DELETE）；
 新的 rpc 函式加進 functions（名稱對應以（使用者 ID，參數）求值的函式）；Storage 在 _route 加 /storage/v1/ 的分支。
@@ -33,6 +35,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlsplit
 
 import requests
+
+from services.huaxia_client import PUBLISH_VERSION_FUNCTION
 
 # 假 HuaXia 發的 access token 有效秒數（Supabase 預設 3600）
 TOKEN_LIFETIME = 3600
@@ -92,7 +96,7 @@ class FakeHuaXia:
         self.expires_in = TOKEN_LIFETIME
         self.offline = False
         self.requests: List[Dict[str, Any]] = []
-        self.tables: Dict[str, List[Dict[str, Any]]] = {"profiles": [], "user_roles": []}
+        self.tables: Dict[str, List[Dict[str, Any]]] = {"profiles": [], "user_roles": [], "pieces": []}
         self.functions: Dict[str, Callable[[Optional[str], dict], Any]] = {"is_officer": self._is_officer}
         # Discord 帳號名稱對應 HuaXia 的使用者 ID；使用者 ID 對應 auth.users 的那筆
         self._identities: Dict[str, str] = {}
@@ -132,6 +136,27 @@ class FakeHuaXia:
             for role in roles:
                 self.tables["user_roles"].append({"user_id": user_id, "role": role})
             return user_id
+
+    def add_piece(
+        self, title: str, composer: str = "", duration_min: Optional[float] = None, ensemble: str = "tutti",
+        archived: bool = False,
+    ) -> str:
+        """加入一首曲目（pieces 的一列，欄位照 HuaXia 的 schema），回傳曲目編號"""
+        with self._lock:
+            piece_id = str(uuid.uuid4())
+            self.tables["pieces"].append({
+                "id": piece_id, "title": title, "composer": composer, "duration_min": duration_min, "notes": "",
+                "archived": archived, "ensemble": ensemble, "created_at": _now().isoformat(),
+            })
+            return piece_id
+
+    def install_publish_function(self, version: Optional[int]) -> None:
+        """HuaXia 的發譜函式：回報這個介面版本；None 為沒有發譜函式（呼叫時回 PGRST202）"""
+        with self._lock:
+            if version is None:
+                self.functions.pop(PUBLISH_VERSION_FUNCTION, None)
+            else:
+                self.functions[PUBLISH_VERSION_FUNCTION] = lambda _user_id, _args: version
 
     def sign_in_as(self, discord_name: str) -> None:
         """之後在瀏覽器登入的是這個 Discord 帳號"""
@@ -369,16 +394,28 @@ class FakeHuaXia:
         """HuaXia 的 is_active()"""
         return any(p["id"] == user_id and p["status"] == "active" for p in self.tables["profiles"])
 
+    def _is_insider(self, user_id: Optional[str]) -> bool:
+        """HuaXia 的 is_insider()：帳號啟用，且身分組是社內的（admin、officer、leader、member、newbie、teacher、alumni）"""
+        return self._is_active(user_id) and any(
+            r["user_id"] == user_id and r["role"] in _INSIDER_ROLES for r in self.tables["user_roles"]
+        )
+
 
 def _matches(row: Dict[str, Any], column: str, condition: str) -> bool:
-    """PostgREST 的篩選（目前只支援 eq.）"""
+    """PostgREST 的篩選（目前只支援 eq.）；是非值照 PostgREST 寫成 true、false"""
     operator, _, value = condition.partition(".")
     assert operator == "eq", f"fake supports eq only: {column}={condition}"
-    return str(row.get(column)) == value
+    actual = row.get(column)
+    return (str(actual).lower() if isinstance(actual, bool) else str(actual)) == value
+
+
+# HuaXia 的 is_insider() 認的身分組
+_INSIDER_ROLES = frozenset({"admin", "officer", "leader", "member", "newbie", "teacher", "alumni"})
 
 
 # 各資料表的讀取權限，照 HuaXia schema.sql 的 RLS：（假 HuaXia，呼叫者的使用者 ID，列）→ 看不看得到
 _READ_POLICIES: Dict[str, Callable[[FakeHuaXia, Optional[str], Dict[str, Any]], bool]] = {
     "profiles": lambda fake, caller, row: row["id"] == caller or fake._is_active(caller),
     "user_roles": lambda fake, caller, row: row["user_id"] == caller or fake._is_active(caller),
+    "pieces": lambda fake, caller, row: fake._is_insider(caller),
 }

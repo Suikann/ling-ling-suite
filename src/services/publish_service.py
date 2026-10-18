@@ -8,23 +8,29 @@
   （HuaXia 的聲部組只接受國樂團那五組）。
 - 群組層級（check_groups，擋下那個群組，預覽裡寫出原因）：還沒重新命名（總譜與分譜不全在命名格式算出的位置，
   發譜從輸出位置讀檔）、本專案有的聲部沒填最少人數、樂器表有重名的列。未同步的值（還沒進譜庫）不擋，只標出。
+- HuaXia 那一側（PublishService.prepare，連網，要在背景執行緒呼叫）：重查幹部身分（不是幹部就登出）、
+  HuaXia 發譜函式的介面版本（沒有或不符時整個發譜不能用），兩者都過了才讀可以挑的曲目（未封存的）。
 
 「只在譜庫」的檔（清除本機檔案後只剩譜庫那份，#107）還沒有對應的狀態，之後在 check_groups 的群組結果加上跳過的檔。
 
 使用範例：
-    from services.publish_service import check_groups, project_blocks
+    from services.publish_service import PublishService, check_groups, project_blocks
     if not project_blocks(project):
-        checks = check_groups(project)
+        readiness = PublishService(huaxia_auth).prepare()   # 背景執行緒
+        if readiness.ready:
+            checks = check_groups(project)
 """
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
 from core.constants import OrchestraType
 from core.models import CatalogChange, Group, Project
 from core.naming import UnsafeFolderNameError
 from core.paths import same_path
 from core.voice_names import duplicate_rows
+from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
+from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaPiece
 from services.rename_service import generate_rename_plan
 
 
@@ -33,6 +39,37 @@ class ProjectBlock(Enum):
 
     UNSAVED = "unsaved"                              # 專案有未存檔的改動
     NOT_CHINESE_ORCHESTRA = "not_chinese_orchestra"  # 專案不是國樂團
+
+
+class FunctionProblem(Enum):
+    """HuaXia 發譜函式不能用的原因"""
+
+    MISSING = "missing"                    # HuaXia 沒有發譜函式（合併請求還沒合併生效）
+    VERSION_MISMATCH = "version_mismatch"  # 介面版本與這版泠靈要的不同
+
+
+@dataclass(frozen=True)
+class PublishReadiness:
+    """按下發譜時 HuaXia 那一側的檢查結果（PublishService.prepare）
+
+    Attributes:
+        not_officer: 不是幹部時的分類（已登出）；是幹部時為 None
+        function_problem: 發譜函式不能用的原因；能用時為 None
+        function_version: HuaXia 回報的介面版本；沒有發譜函式或沒查到時為 None
+        pieces: 可以挑的曲目（未封存，依曲名）；不能發時為空
+        discord_name: 登入的 Discord 帳號名稱
+    """
+
+    not_officer: Optional[NotOfficer] = None
+    function_problem: Optional[FunctionProblem] = None
+    function_version: Optional[int] = None
+    pieces: List[HuaXiaPiece] = field(default_factory=list)
+    discord_name: str = ""
+
+    @property
+    def ready(self) -> bool:
+        """可以開啟發譜預覽"""
+        return self.not_officer is None and self.function_problem is None
 
 
 @dataclass(frozen=True)
@@ -93,3 +130,37 @@ def _renamed(project: Project, group: Group) -> bool:
     except (KeyError, UnsafeFolderNameError):
         return False
     return bool(entries) and all(same_path(entry.original_path, entry.new_path) for entry in entries)
+
+
+class PublishService:
+    """發譜到 HuaXia：按下發譜時 HuaXia 那一側的檢查"""
+
+    def __init__(self, auth: HuaXiaAuthService):
+        """
+        Args:
+            auth: HuaXia 登入服務（全程式一份）；請求經它的用戶端送出
+        """
+        self._auth = auth
+        self._client = auth.client
+
+    def prepare(self) -> PublishReadiness:
+        """重查幹部身分、查發譜函式的版本，都過了才讀可以挑的曲目；不是幹部時已登出
+
+        Returns:
+            檢查結果；不能發時寫明原因
+
+        Raises:
+            HuaXiaError: 沒有登入、登入已失效或連不上 HuaXia
+        """
+        not_officer = self._auth.recheck_officer()
+        if not_officer is not None:
+            return PublishReadiness(not_officer=not_officer)
+        token = self._auth.access_token()
+        version = self._client.publish_interface_version(token)
+        if version is None:
+            return PublishReadiness(function_problem=FunctionProblem.MISSING)
+        if version != PUBLISH_INTERFACE_VERSION:
+            return PublishReadiness(function_problem=FunctionProblem.VERSION_MISMATCH, function_version=version)
+        return PublishReadiness(
+            function_version=version, pieces=self._client.pieces(token), discord_name=self._auth.status().discord_name,
+        )
