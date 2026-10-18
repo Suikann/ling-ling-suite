@@ -16,8 +16,8 @@ from core.constants import (
     ATOMIC_WRITE_RETRIES, ATOMIC_WRITE_RETRY_INTERVAL, ATOMIC_WRITE_TEMP_SUFFIX, PDF_EXTENSION,
 )
 
-# 算 MD5 時一次讀多少位元組
-_MD5_CHUNK_SIZE = 1024 * 1024
+# 算 MD5、SHA-256 時一次讀多少位元組
+_DIGEST_CHUNK_SIZE = 1024 * 1024
 
 
 class FileService:
@@ -118,9 +118,21 @@ class FileService:
         Raises:
             OSError: 檔案讀不到
         """
-        digest = hashlib.md5()
+        return self._digest(path, hashlib.md5())
+
+    def sha256(self, path: str) -> str:
+        """檔案內容的 SHA-256（十六進位小寫），分段讀取
+
+        Raises:
+            OSError: 檔案讀不到
+        """
+        return self._digest(path, hashlib.sha256())
+
+    @staticmethod
+    def _digest(path: str, digest) -> str:
+        """分段讀完檔案餵給 digest（hashlib 的雜湊物件），回傳十六進位的結果"""
         with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(_MD5_CHUNK_SIZE), b""):
+            for chunk in iter(lambda: f.read(_DIGEST_CHUNK_SIZE), b""):
                 digest.update(chunk)
         return digest.hexdigest()
 

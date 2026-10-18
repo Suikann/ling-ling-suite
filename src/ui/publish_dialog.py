@@ -15,7 +15,7 @@
   預設勾選；本專案沒有、HuaXia 也沒有的聲部預設不建，可以勾「在 HuaXia 建」。有衝突、還沒挑或要建的聲部
   沒填最少人數時寫出原因，「下一步」按不下去。覆寫與建立的勾選只在這次預覽，不記在專案。
 - 「檔案」：每個群組列出要發的分譜與總譜、會被取代的那份（同一個聲部底下、泠靈發的，publish_service.plan_files）
-  與同聲部別人放的檔（不動）。本機找不到的檔跳過並寫出來，只在譜庫的旁邊放「從譜庫下載回來」（關掉預覽，
+  與同聲部別人放的檔（不動）；HuaXia 上已有內容相同那份的標成不重傳。本機找不到的檔跳過並寫出來，只在譜庫的旁邊放「從譜庫下載回來」（關掉預覽，
   交給主視窗下載回原位）。超過大小上限的檔第一次進這一步時在背景逐份壓縮（壓縮檔在壓縮服務的暫存資料夾，
   原檔不動），底部顯示進度與「取消壓縮」；每份顯示壓縮狀態與「開啟」「比較」（共用的比較畫面）「不發這份」。
 - 「公演」：複選本學期、還沒結束的公演（PublishReadiness.concerts），逐場說明掛上後的影響；可以不掛。
@@ -651,12 +651,18 @@ class PublishPreviewDialog(QDialog):
         table.horizontalHeader().setStretchLastSection(True)
         too_large = set(id(file) for file in oversized(plan, self._compressor.size_limit))
         for row, file in enumerate(files):
-            replaced = _score_titles(file.replaces) if file.replaces else t("publish.files.new")
+            if file.unchanged:
+                replaced = t("publish.files.unchanged")
+            else:
+                replaced = _score_titles(file.replaces) if file.replaces else t("publish.files.new")
             others = t("publish.files.untouched", titles=_score_titles(file.others)) if file.others else ""
             texts = (_file_voice(file), os.path.basename(file.path), size_text(file.size), replaced, others)
             for column, text in enumerate(texts):
                 table.setItem(row, column, QTableWidgetItem(text))
-            table.item(row, 3).setForeground(QColor(_REPLACE_COLOR if file.replaces else _NEW_COLOR))
+            if file.unchanged:
+                table.item(row, 3).setForeground(QColor(_NOTE_COLOR))
+            else:
+                table.item(row, 3).setForeground(QColor(_REPLACE_COLOR if file.replaces else _NEW_COLOR))
             table.item(row, 4).setForeground(QColor(UNSYNCED_COLOR))
             if id(file) in too_large:
                 table.item(row, 2).setForeground(QColor(_BLOCKED_COLOR))
@@ -912,6 +918,9 @@ class PublishPreviewDialog(QDialog):
         layout.addWidget(_named_label("confirm_files", t(
             "publish.confirm.files", count=len(plan.uploads), size=size_text(plan.size), replaced=len(plan.replaces),
         )))
+        if plan.unchanged:
+            unchanged = "、".join(os.path.basename(f.path) for f in plan.unchanged)
+            layout.addWidget(_named_label("confirm_unchanged", t("publish.confirm.unchanged", files=unchanged)))
         not_sent = [os.path.basename(f.path) for f in plan.skipped + plan.dropped]
         if not_sent:
             layout.addWidget(_named_label("confirm_not_sent", t("publish.confirm.not_sent", files="、".join(not_sent))))

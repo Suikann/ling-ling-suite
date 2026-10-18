@@ -7,6 +7,7 @@
 「公演」步複選候選場次；「確認」步的合計與前幾步一致。主視窗接假 Google 與假 HuaXia，不測畫面。
 """
 import datetime
+import hashlib
 import os
 import sys
 import unittest
@@ -91,6 +92,25 @@ class TestFilesStep(FilesWindowTestCase):
             pipa = file_row(dialog, "烽火操", "琵琶")
             self.assertEqual(pipa[3:], [t("publish.files.new"), t("publish.files.untouched", titles="弓法版")])
             self.assertEqual(file_row(dialog, "烽火操", t("publish.files.score"))[1], "00-總譜.pdf")
+        self.publish(operate=operate)
+
+    def test_an_unchanged_file_is_marked_and_not_uploaded_again(self):
+        with open(os.path.join(self.out, "01-二胡 I.pdf"), "rb") as f:
+            same = lingling_storage_path(self.fenghuo, hashlib.sha256(f.read()).hexdigest())
+        self.huaxia.add_score(self.fenghuo, self.erhu, same, title="二胡一")
+
+        def operate(dialog):
+            go_to(dialog, 2)
+            self.assertEqual(file_row(dialog, "烽火操", "二胡 I")[3], t("publish.files.unchanged"))
+            for _ in range(2):
+                button(dialog, "publish.next").click()
+            self.assertEqual(
+                confirm_text(dialog, "烽火操", "confirm_files"),
+                t("publish.confirm.files", count=2, size=size_text(6), replaced=0),
+            )
+            self.assertEqual(
+                confirm_text(dialog, "烽火操", "confirm_unchanged"), t("publish.confirm.unchanged", files="01-二胡 I.pdf"),
+            )
         self.publish(operate=operate)
 
     def test_a_catalog_only_file_is_skipped_with_a_download_button(self):

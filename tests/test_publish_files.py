@@ -7,6 +7,7 @@
 總譜是聲部空白、泠靈發的那份；別人放的檔只標出、不取代；只在譜庫與找不到的檔跳過。
 """
 import datetime
+import hashlib
 import os
 import shutil
 import sys
@@ -19,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.models import CatalogLink, FileInfo, Headcount, HuaXiaLink, Project
 from services.file_service import FileService
 from services.huaxia_client import lingling_storage_path
-from services.publish_service import plan_files, plan_voices
+from services.publish_service import Fingerprints, group_publish, plan_deletions, plan_files, plan_voices
 from test_publish_preflight import PrepareTestCase
 
 
@@ -60,6 +61,19 @@ class FilesTestCase(PrepareTestCase):
         readiness = self.service.prepare()
         voices = plan_voices(self.project, self.group, readiness.parts.get(self.fenghuo, []))
         return plan_files(self.group, voices, readiness.scores.get(self.fenghuo, []), FileService())
+
+    def publish(self):
+        """重新按下發譜，算出這個群組這次要寫進 HuaXia 的內容（含清舊檔要刪的 Storage 檔）"""
+        readiness = self.service.prepare()
+        voices = plan_voices(self.project, self.group, readiness.parts.get(self.fenghuo, []))
+        files = plan_files(self.group, voices, readiness.scores.get(self.fenghuo, []), FileService())
+        plan = group_publish(self.group, voices, files, {}, set(), [], 10 ** 9, Fingerprints(FileService()))
+        return plan_deletions([plan], readiness.scores)[0]
+
+    def stored(self, index: int) -> str:
+        """這個群組第 index 份本機檔（0 總譜、1 二胡 I、2 琵琶）照現在的內容發出去時的 Storage 路徑"""
+        with open(self.paths[index], "rb") as f:
+            return lingling_storage_path(self.fenghuo, hashlib.sha256(f.read()).hexdigest())
 
     def file(self, plan, path):
         """檔案計畫裡這份本機檔"""
@@ -105,6 +119,44 @@ class TestReplacing(FilesTestCase):
         pipa = self.file(self.plan(), self.paths[2])
         self.assertIsNone(pipa.part)
         self.assertEqual((pipa.replaces, pipa.others), ([], []))
+
+
+class TestNeverDeletingFilesInUse(FilesTestCase):
+    """泠靈的 Storage 路徑只看曲目與內容：內容沒變的不重傳也不取代，清舊檔不刪還有登記或這次還要用的檔"""
+
+    def test_an_unchanged_file_is_already_there(self):
+        mine = self.huaxia.add_score(self.fenghuo, self.erhu, self.stored(1))
+        erhu = self.file(self.plan(), self.paths[1])
+        self.assertTrue(erhu.unchanged)
+        self.assertEqual(erhu.replaces, [])
+        plan = self.publish()
+        self.assertNotIn(self.paths[1], [upload.file.path for upload in plan.uploads])
+        self.assertEqual([file.path for file in plan.unchanged], [self.paths[1]])
+        self.assertNotIn(mine, [score.id for score in plan.replaces])
+        self.assertEqual(plan.deletes, [])
+
+    def test_a_replaced_file_is_deleted_once_nothing_points_to_it(self):
+        old = lingling_storage_path(self.fenghuo, fingerprint(1))
+        self.huaxia.add_score(self.fenghuo, self.erhu, old)
+        self.huaxia.add_score(self.fenghuo, self.erhu, old)
+        self.assertEqual(self.publish().deletes, [old])
+
+    def test_a_file_another_voice_still_uses_is_not_deleted(self):
+        shared = self.stored(2)
+        erhu = self.huaxia.add_score(self.fenghuo, self.erhu, shared)
+        self.huaxia.add_score(self.fenghuo, self.pipa, shared)
+        plan = self.publish()
+        self.assertEqual([score.id for score in plan.replaces], [erhu])
+        self.assertTrue(self.file(self.plan(), self.paths[2]).unchanged)
+        self.assertEqual(plan.deletes, [])
+
+    def test_a_file_this_publish_uses_again_is_not_deleted(self):
+        moved = self.stored(2)
+        erhu = self.huaxia.add_score(self.fenghuo, self.erhu, moved)
+        plan = self.publish()
+        self.assertEqual([score.id for score in plan.replaces], [erhu])
+        self.assertIn(self.paths[2], [upload.file.path for upload in plan.uploads])
+        self.assertEqual(plan.deletes, [])
 
 
 class TestSkipping(FilesTestCase):

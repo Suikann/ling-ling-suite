@@ -36,7 +36,9 @@ from core.voice_names import duplicate_rows, same_voice
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
 from services.compression_service import CompressionResult
 from services.file_service import FileService
-from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaEvent, HuaXiaPart, HuaXiaPiece, HuaXiaScore
+from services.huaxia_client import (
+    PUBLISH_INTERFACE_VERSION, HuaXiaEvent, HuaXiaPart, HuaXiaPiece, HuaXiaScore, lingling_storage_path,
+)
 
 # HuaXia 場次類型裡的「公演」（events.kinds）
 CONCERT_KIND = "concert"
@@ -347,16 +349,46 @@ def plan_voices(
     return VoicePlan(voice_rows, unpaired, conflicts, undecided, unfilled, creates, updates)
 
 
+class Fingerprints:
+    """本機檔內容的 SHA-256；記著算過的，檔案的大小與修改時間沒變就不重算（預覽每次重排都要用）"""
+
+    def __init__(self, file_service: FileService):
+        """
+        Args:
+            file_service: 讀檔案內容與大小、修改時間
+        """
+        self._files = file_service
+        self._known: Dict[str, Tuple[Tuple[int, int], str]] = {}
+
+    def sha256(self, path: str) -> str:
+        """這份檔目前內容的 SHA-256（十六進位小寫）
+
+        Raises:
+            OSError: 檔案讀不到
+        """
+        stamp = self._files.stamp(path)
+        known = self._known.get(path)
+        if known is None or known[0] != stamp:
+            known = (stamp, self._files.sha256(path))
+            self._known[path] = known
+        return known[1]
+
+
 @dataclass(frozen=True)
 class PublishFile:
     """群組要發的一份本機檔（總譜或一個聲部的分譜）與它在 HuaXia 上要取代的
+
+    泠靈的 Storage 路徑只由曲目編號與內容決定（lingling_storage_path），所以同一個聲部底下泠靈發的樂譜裡，
+    路徑就是這次內容的那份（current）就是這份檔本身：內容沒變（unchanged），不重傳也不取代它；其餘的都取代。
 
     Attributes:
         voice: 泠靈的聲部名稱；總譜為空字串
         part: 對到的 HuaXia 聲部；總譜、或聲部要在 HuaXia 新建時為 None
         path: 本機的檔（輸出位置）
         size: 檔案大小（位元組）；本機找不到時為 None
-        replaces: 要取代的：同一個聲部（總譜是聲部空白）底下、泠靈發的樂譜
+        piece_id: 群組對到的 HuaXia 曲目編號；新建、還沒產生編號時為空字串
+        sha256: 要傳的內容的 SHA-256：本機那份的，改傳壓縮檔時是壓縮檔的（group_publish）；本機找不到時為 None
+        lingling: 同一個聲部（總譜是聲部空白）底下、泠靈發的樂譜
         others: 同一個聲部底下其他人放的樂譜（一律不動，只標出）
         catalog_only: 本機找不到、譜庫裡有一份（只在譜庫），這次跳過
     """
@@ -365,9 +397,30 @@ class PublishFile:
     part: Optional[HuaXiaPart]
     path: str
     size: Optional[int]
-    replaces: List[HuaXiaScore] = field(default_factory=list)
+    piece_id: str = ""
+    sha256: Optional[str] = None
+    lingling: List[HuaXiaScore] = field(default_factory=list)
     others: List[HuaXiaScore] = field(default_factory=list)
     catalog_only: bool = False
+
+    @property
+    def storage_path(self) -> Optional[str]:
+        """這次的內容在 Storage 的路徑；曲目還沒有編號或本機找不到時為 None"""
+        if not self.piece_id or self.sha256 is None:
+            return None
+        return lingling_storage_path(self.piece_id, self.sha256)
+
+    @property
+    def unchanged(self) -> bool:
+        """HuaXia 上這個聲部已登記著內容相同的那份（泠靈上次發的），不必重傳"""
+        path = self.storage_path
+        return path is not None and any(score.file_path == path for score in self.lingling)
+
+    @property
+    def replaces(self) -> List[HuaXiaScore]:
+        """要取代（撤掉登記）的：同一個聲部底下泠靈發的、內容不是這次這份的樂譜"""
+        path = self.storage_path
+        return [score for score in self.lingling if path is None or score.file_path != path]
 
     @property
     def score(self) -> bool:
@@ -397,11 +450,15 @@ class FilePlan:
         return [file for file in self.files if file.missing]
 
 
-def plan_files(group: Group, voices: VoicePlan, scores: List[HuaXiaScore], file_service: FileService) -> FilePlan:
+def plan_files(
+    group: Group, voices: VoicePlan, scores: List[HuaXiaScore], file_service: FileService,
+    fingerprints: Optional[Fingerprints] = None,
+) -> FilePlan:
     """群組每份要發的檔在 HuaXia 上要取代哪份、同聲部有哪些別人放的檔；不改專案
 
     分譜依本專案有的聲部配到的分譜（Group.pairing），對到 voices 裡那一列的 HuaXia 聲部；要取代的是那個聲部底下、
-    泠靈發的樂譜（以泠靈的 Storage 路徑格式辨認，不看樂譜名稱），總譜是聲部空白（不含舊的分組樂譜）、泠靈發的。
+    泠靈發的樂譜（以泠靈的 Storage 路徑格式辨認，不看樂譜名稱），總譜是聲部空白（不含舊的分組樂譜）、泠靈發的；
+    其中內容與本機這份相同的那份不取代，這份檔也不重傳（PublishFile.unchanged）。
     要在 HuaXia 新建的聲部沒有要取代的。本機找不到的檔跳過，群組記著譜庫裡有一份的標成只在譜庫。
 
     Args:
@@ -409,10 +466,13 @@ def plan_files(group: Group, voices: VoicePlan, scores: List[HuaXiaScore], file_
         voices: 群組的聲部對到 HuaXia 的結果（plan_voices）
         scores: 群組對到的 HuaXia 曲目上登記的樂譜；新建、HuaXia 上還沒有的曲目為空
         file_service: 讀本機檔案大小
+        fingerprints: 算本機檔內容的 SHA-256（預覽傳同一份以免重算）；省略時以 file_service 建一份
 
     Returns:
         各份檔與要取代的
     """
+    fingerprints = fingerprints or Fingerprints(file_service)
+    piece_id = group.huaxia_link.piece_id if group.huaxia_link else ""
     parts = {row.index: row.part for row in voices.rows}
     entries = [(voice.voice, parts.get(voice.index), voice.file) for voice in group.pairing() if voice.file]
     if group.score_file is not None:
@@ -425,9 +485,11 @@ def plan_files(group: Group, voices: VoicePlan, scores: List[HuaXiaScore], file_
             under = [score for score in scores if score.part_id == part.id]
         else:
             under = [score for score in scores if score.part_id is None and not score.section]
-        found = file_service.file_exists(file.original_path)
+        path = file.original_path
+        found = file_service.file_exists(path)
         files.append(PublishFile(
-            voice, part, file.original_path, file_service.file_size(file.original_path) if found else None,
+            voice, part, path, file_service.file_size(path) if found else None, piece_id,
+            fingerprints.sha256(path) if found else None,
             [score for score in under if score.lingling], [score for score in under if not score.lingling],
             catalog_only=not found and group.has_catalog_copy(file),
         ))
@@ -456,25 +518,34 @@ class GroupPublish:
         link: 對到的 HuaXia 曲目（現有的或新建的）
         voices: 要新建與覆寫的聲部（plan_voices）
         uploads: 要傳的檔，依檔案計畫的順序
+        unchanged: HuaXia 上已登記著內容相同的那份、不必重傳的檔
         too_large: 超過大小上限、還沒有壓縮好的檔（壓縮中、壓縮失敗或仍超過）；有的話還不能發
         skipped: 本機找不到、這次跳過的檔（含只在譜庫的）
         dropped: 譜務選了「不發這份」的檔
         events: 要掛的公演
+        deletes: 清舊檔（第 3 段）要刪的 Storage 檔（plan_deletions 算出；之前為空）
     """
 
     group: Group
     link: HuaXiaLink
     voices: VoicePlan
     uploads: List[Upload]
+    unchanged: List[PublishFile]
     too_large: List[PublishFile]
     skipped: List[PublishFile]
     dropped: List[PublishFile]
     events: List[HuaXiaEvent]
+    deletes: List[str] = field(default_factory=list)
 
     @property
     def replaces(self) -> List[HuaXiaScore]:
-        """要撤掉登記並刪掉檔案本體的樂譜（泠靈發的舊檔）"""
-        return [score for upload in self.uploads for score in upload.file.replaces]
+        """要撤掉登記的樂譜（泠靈發的舊檔）；檔案本體要不要刪看 deletes"""
+        return [score for file in self.sent for score in file.replaces]
+
+    @property
+    def sent(self) -> List[PublishFile]:
+        """切換後在 HuaXia 上登記著的檔：要傳的與不必重傳的"""
+        return [upload.file for upload in self.uploads] + self.unchanged
 
     @property
     def size(self) -> int:
@@ -489,11 +560,12 @@ def oversized(files: FilePlan, size_limit: int) -> List[PublishFile]:
 
 def group_publish(
     group: Group, voices: VoicePlan, files: FilePlan, compressed: Dict[str, CompressionResult], dropped: Set[str],
-    events: List[HuaXiaEvent], size_limit: int,
+    events: List[HuaXiaEvent], size_limit: int, fingerprints: Fingerprints,
 ) -> GroupPublish:
     """把一個群組在預覽各步的結果合成這次發譜要寫進 HuaXia 的內容
 
-    超過大小上限的檔改傳壓縮好（CompressionStatus.COMPRESSED）的壓縮檔；還沒有壓縮好的列在 too_large。
+    超過大小上限的檔改傳壓縮好（CompressionStatus.COMPRESSED）的壓縮檔，內容指紋也換成壓縮檔的；還沒有壓縮好的
+    列在 too_large。HuaXia 上已登記著內容相同那份的檔列在 unchanged，不傳。清舊檔要刪的由 plan_deletions 另算。
 
     Args:
         group: 群組（已對到曲目）
@@ -503,23 +575,61 @@ def group_publish(
         dropped: 選了「不發這份」的本機檔路徑
         events: 要掛的公演
         size_limit: 單檔大小上限（位元組）
+        fingerprints: 算壓縮檔內容的 SHA-256
     """
-    uploads, too_large, skipped_by_choice = [], [], []
+    uploads, unchanged, too_large, skipped_by_choice = [], [], [], []
     for file in files.publishing:
         if file.path in dropped:
             skipped_by_choice.append(file)
             continue
+        path, size = file.path, file.size
         if file.size > size_limit:
             result = compressed.get(file.path)
             if result is None or result.status is not CompressionStatus.COMPRESSED:
                 too_large.append(file)
                 continue
-            uploads.append(Upload(file, result.output_path, result.compressed_size))
+            path, size = result.output_path, result.compressed_size
+            file = replace(file, sha256=fingerprints.sha256(path))
+        if file.unchanged:
+            unchanged.append(file)
         else:
-            uploads.append(Upload(file, file.path, file.size))
+            uploads.append(Upload(file, path, size))
     return GroupPublish(
-        group, group.huaxia_link, voices, uploads, too_large, files.skipped, skipped_by_choice, list(events),
+        group, group.huaxia_link, voices, uploads, unchanged, too_large, files.skipped, skipped_by_choice,
+        list(events),
     )
+
+
+def plan_deletions(plans: List[GroupPublish], scores: Dict[str, List[HuaXiaScore]]) -> List[GroupPublish]:
+    """算出各群組清舊檔（第 3 段）要刪的 Storage 檔，回傳填好 deletes 的各群組（順序不變）
+
+    泠靈的 Storage 路徑只由曲目與內容決定，同一份內容（例如兩個聲部的 PDF 相同）共用一個檔。被取代的樂譜的檔
+    只在切換後沒有任何樂譜登記還指著它（讀到的所有樂譜扣掉這次撤掉登記的）、這次發譜也沒有再用到它（要傳的與
+    不必重傳的）時才刪；同一個檔只算在第一個取代它的群組。發譜的第 3 段只能刪這裡算出的檔，而且要在撤掉指著它的
+    登記的那些群組都切換成功之後。
+
+    Args:
+        plans: 這次發譜的各群組（group_publish）
+        scores: 按下發譜時讀到的樂譜，以曲目編號為鍵（PublishReadiness.scores）
+
+    Returns:
+        各群組，deletes 填好
+    """
+    unregistered = {score.id for plan in plans for score in plan.replaces}
+    in_use = {
+        score.file_path for found in scores.values() for score in found if score.id not in unregistered
+    }
+    in_use |= {file.storage_path for plan in plans for file in plan.sent if file.storage_path}
+    taken: Set[str] = set()
+    settled = []
+    for plan in plans:
+        deletes = []
+        for score in plan.replaces:
+            if score.file_path and score.file_path not in in_use and score.file_path not in taken:
+                taken.add(score.file_path)
+                deletes.append(score.file_path)
+        settled.append(replace(plan, deletes=deletes))
+    return settled
 
 
 class PublishStep(Enum):
@@ -563,6 +673,7 @@ class PublishPreview:
         self.readiness = readiness
         self.size_limit = size_limit
         self._file_service = file_service
+        self._fingerprints = Fingerprints(file_service)
         # 開啟預覽時各群組對到的曲目：改選別首再選回來時找回手動挑的聲部配對
         self._opened_links = {check.group.id: check.group.huaxia_link for check in checks}
         # 各群組這次在「聲部」步的決定，以群組 ID 為鍵；改選曲目時清掉
@@ -650,18 +761,18 @@ class PublishPreview:
         新建的曲目已有編號、而且 HuaXia 上已經有它時，用它已登記的樂譜。
         """
         scores = self.readiness.scores.get(group.huaxia_link.piece_id, [])
-        return plan_files(group, self.voice_plan(group), scores, self._file_service)
+        return plan_files(group, self.voice_plan(group), scores, self._file_service, self._fingerprints)
 
     def publish_plan(self) -> List[GroupPublish]:
-        """每個沒擋下的群組這次發譜要寫進 HuaXia 的全部內容（依目前的選擇），依專案中的順序"""
+        """每個沒擋下的群組這次發譜要寫進 HuaXia 的全部內容（依目前的選擇，含清舊檔要刪的），依專案中的順序"""
         events = [event for event in self.readiness.concerts if event.id in self.chosen_events]
-        return [
+        return plan_deletions([
             group_publish(
                 group, self.voice_plan(group), self.file_plan(group), self.compressed, self.dropped, events,
-                self.size_limit,
+                self.size_limit, self._fingerprints,
             )
             for group in self.groups
-        ]
+        ], self.readiness.scores)
 
     def oversized_paths(self) -> List[str]:
         """沒擋下的群組裡超過大小上限、要先壓縮的本機檔，依群組與檔案計畫的順序"""
