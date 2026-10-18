@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QComboBox, QLabel, QMessageBox, QPushButton, QRadioButton, QTableWidget, QTabWidget, QWidget,
 )
 
-from core.constants import CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, HuaXiaEnsemble
+from core.constants import CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, HuaXiaEnsemble, OrchestraType
 from core.locale import t
 from core.models import FileInfo, Headcount, HuaXiaLink, NewHuaXiaPiece, Project
 from fake_google_catalog import FakeGoogle
@@ -161,6 +161,11 @@ class PublishWindowTestCase(MainWindowTestCase):
                     f.write("pdf")
         return project
 
+    def save(self):
+        """從選單儲存專案"""
+        with answering_prompts():
+            self.trigger_menu(t("menu.file.save"))
+
     def publish_button(self) -> QPushButton:
         """主視窗的「發譜」"""
         return next(b for b in self.window.findChildren(QPushButton) if b.text() == t("publish.button"))
@@ -210,6 +215,13 @@ class TestPressingPublish(PublishWindowTestCase):
         self.assertIn(t("publish.blocked.unsaved"), [text for _, text in shown])
         self.assertEqual((self.google.requests, len(self.huaxia.requests)), before)
 
+    def test_a_western_orchestra_project_is_blocked(self):
+        self.window.project.set_orchestra_type(OrchestraType.WESTERN)
+        self.save()
+        shown, opened = self.publish()
+        self.assertEqual(opened, [])
+        self.assertIn(t("publish.blocked.not_chinese_orchestra"), [text for _, text in shown])
+
     def test_a_missing_publish_function_explains_the_merge_request(self):
         self.huaxia.install_publish_function(None)
         shown, opened = self.publish()
@@ -231,6 +243,15 @@ class TestPieceStep(PublishWindowTestCase):
             self.assertIn(t("publish.group.not_renamed"), blocked_reason(dialog, "春江花月夜"))
             self.assertIsNone(group_cell(dialog, "春江花月夜").findChild(QRadioButton))
             self.assertEqual(blocked_reason(dialog, "烽火操"), "")
+        _, opened = self.publish(operate=operate)
+        self.assertEqual(len(opened), 1)
+
+    def test_a_voice_without_a_minimum_headcount_is_named(self):
+        self.window.project.set_headcount(self.window.project.groups[0], 1, Headcount())
+        self.save()
+
+        def operate(dialog):
+            self.assertIn(t("publish.group.unfilled", voices="琵琶"), blocked_reason(dialog, "烽火操"))
         _, opened = self.publish(operate=operate)
         self.assertEqual(len(opened), 1)
 
