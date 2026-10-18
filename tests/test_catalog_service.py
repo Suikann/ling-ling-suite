@@ -73,6 +73,20 @@ class TestOverview(CatalogTestCase):
         self.catalog.overview(self.root)
         self.assertEqual(self.google.requests, few)
 
+    def test_voice_names_used_in_the_catalog_are_ranked_by_how_often_they_are_used(self):
+        for n, name in enumerate(["琵琶", "二胡 I", "中胡", "二胡 I", "琵琶", "二胡 I", " ", "二胡1"]):
+            add_row(self.google, SHEET_PARTS, id=f"t{n}", edition_id="e1", instrument_name=name)
+        overview = self.catalog.overview(self.root)
+        self.assertEqual(overview.voice_names, ["二胡 I", "琵琶", "中胡", "二胡1"])
+
+    def test_reading_voice_names_adds_no_request(self):
+        for n in range(30):
+            add_row(self.google, SHEET_PARTS, id=f"t{n}", edition_id="e1", instrument_name=f"聲部{n}")
+        overview = self.catalog.overview(self.root)
+        self.assertEqual(len(overview.voice_names), 30)
+        # 試算表一次、根資料夾一次，跟沒有聲部名稱時一樣
+        self.assertEqual(self.google.requests, 2)
+
     def test_lists_every_page_of_a_large_folder(self):
         self.google.drive.page_size = 2
         overview = self.catalog.overview(self.root)

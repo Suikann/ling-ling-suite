@@ -14,7 +14,7 @@
 使用範例：
     from services.catalog_service import CatalogService
     catalog = CatalogService(sheets, drive)          # 兩個關口；真的 Google 見 services/google_catalog.py
-    overview = catalog.overview(root_folder_id)      # 曲目、作曲家、根資料夾內容
+    overview = catalog.overview(root_folder_id)      # 曲目、作曲家、根資料夾內容、用過的聲部名稱
     detail = catalog.piece_detail(piece_id)
     platform = catalog.publishing_platform()         # 社團設定啟用的發譜平台，沒有時為 None
     rows = catalog.new_rows(SHEET_PIECES, [{"title": "春江花月夜"}])
@@ -32,6 +32,7 @@ from core.catalog_constants import (
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY
+from core.voice_suggestions import ranked_by_usage
 from core.catalog_models import (
     CatalogOverview, Composer, DriveFile, Edition, EditionFiles, FolderContents, Movement, Part, Performance, Piece,
     PieceDetail,
@@ -197,9 +198,9 @@ class CatalogService:
     # --- 讀取 ---
 
     def overview(self, root_folder_id: str) -> CatalogOverview:
-        """讀譜庫視窗開啟時要的全部：曲目、作曲家、哪個資料夾屬於哪首曲目，以及根資料夾的內容
+        """讀譜庫視窗開啟時要的全部：曲目、作曲家、哪個資料夾屬於哪首曲目、根資料夾的內容，與用過的聲部名稱
 
-        試算表只讀一次，請求數不隨曲目數增加。
+        試算表只讀一次（分譜工作表一起讀，聲部名稱不另外發請求），請求數不隨曲目數增加。
 
         Args:
             root_folder_id: 譜庫根資料夾的 Drive ID
@@ -212,7 +213,9 @@ class CatalogService:
         """
         if not root_folder_id:
             raise CatalogError(CatalogErrorKind.NOT_FOUND, f"{CATALOG_ROOT_FOLDER_ID_KEY} is empty")
-        pieces_rows, composer_rows, edition_rows = self._read_sheets(SHEET_PIECES, SHEET_COMPOSERS, SHEET_EDITIONS)
+        pieces_rows, composer_rows, edition_rows, part_rows = self._read_sheets(
+            SHEET_PIECES, SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_PARTS,
+        )
         pieces = _models(pieces_rows, SHEET_PIECES, Piece)
         pieces_by_id = {piece.id: piece for piece in pieces}
         folder_pieces = {
@@ -225,6 +228,7 @@ class CatalogService:
             composers=_models(composer_rows, SHEET_COMPOSERS, Composer),
             folder_pieces=folder_pieces,
             root=self.folder_contents(root_folder_id),
+            voice_names=ranked_by_usage(part.instrument_name for part in _models(part_rows, SHEET_PARTS, Part)),
         )
 
     def folder_contents(self, folder_id: str) -> FolderContents:

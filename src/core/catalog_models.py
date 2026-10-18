@@ -135,8 +135,10 @@ class EditionFiles:
 
 @dataclass(frozen=True)
 class CatalogOverview:
-    """譜庫視窗開啟時要的全部：曲目、作曲家、哪個資料夾屬於哪首曲目，以及譜庫根資料夾的內容"""
+    """譜庫視窗開啟時要的全部：曲目、作曲家、哪個資料夾屬於哪首曲目、譜庫根資料夾的內容，
+    以及各樂器表用過的聲部名稱（依使用次數排序，給自動完成）"""
     pieces: List[Piece] = field(default_factory=list)
     composers: List[Composer] = field(default_factory=list)
     folder_pieces: Dict[str, Piece] = field(default_factory=dict)
     root: FolderContents = field(default_factory=FolderContents)
+    voice_names: List[str] = field(default_factory=list)
