@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QGroupBox, QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QTableWidget,
+    QCheckBox, QComboBox, QDialog, QGroupBox, QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QTableWidget,
     QTabWidget, QWidget,
 )
 
@@ -44,7 +44,7 @@ from ui.publish_dialog import PublishPreviewDialog
 
 @contextmanager
 def previewing(operate: Callable[[PublishPreviewDialog], None] = lambda dialog: None):
-    """模擬發譜預覽開啟後由 operate 操作、再按取消關閉
+    """模擬發譜預覽開啟後由 operate 操作、再按取消關閉（operate 已按下「發譜」時不再按取消）
 
     Yields:
         開啟過的預覽（離開區塊時 operate 拋出的例外判定失敗）
@@ -57,7 +57,8 @@ def previewing(operate: Callable[[PublishPreviewDialog], None] = lambda dialog: 
             operate(dialog)
         except Exception as e:
             errors.append(e)
-        dialog.reject()
+        if dialog.result() != QDialog.Accepted:
+            dialog.reject()
         return dialog.result()
 
     with mock.patch.object(PublishPreviewDialog, "exec", fake_exec):

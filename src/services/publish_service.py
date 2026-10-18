@@ -34,7 +34,7 @@ from core.models import CatalogChange, Group, Headcount, HuaXiaLink, Project
 from core.naming import is_renamed
 from core.voice_names import duplicate_rows, same_voice
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
-from services.compression_service import CompressionResult
+from services.compression_service import CompressionResult, CompressionService
 from services.file_service import FileService
 from services.huaxia_client import (
     PUBLISH_INTERFACE_VERSION, HuaXiaEvent, HuaXiaPart, HuaXiaPiece, HuaXiaScore, lingling_storage_path,
@@ -794,6 +794,23 @@ class PublishPreview:
         return [
             file.path for group in self.groups for file in oversized(self.file_plan(group), self.size_limit)
         ]
+
+    def close(self, compressor: CompressionService, publishing: bool) -> None:
+        """關閉預覽時收拾壓縮檔：按下「發譜」（publishing）時留下要傳的（交給發譜，publish_plan 照樣交出，
+        發譜結束時由發譜丟掉），其餘的與取消時的全部丟掉
+
+        Args:
+            compressor: 產生這些壓縮檔的壓縮服務
+            publishing: 是按下「發譜」關閉的
+        """
+        uploading = {upload.path for plan in self.publish_plan() for upload in plan.uploads} if publishing else set()
+        kept = {}
+        for path, result in self.compressed.items():
+            if result.output_path in uploading:
+                kept[path] = result
+            else:
+                compressor.discard(result)
+        self.compressed = kept
 
     def step_ready(self, step: PublishStep) -> bool:
         """這一步是否都決定好了（「下一步」）：「曲目」要每個沒擋下的群組都對到曲目，「聲部」要沒有群組還不能發"""

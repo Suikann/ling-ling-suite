@@ -25,7 +25,8 @@
   每個群組要寫進 HuaXia 的全部內容由 publish_plan() 交出（publish_service.group_publish），確認步的文字也由它算。
   超過上限的檔都壓縮好（或選了不發）、壓縮做完，「發譜」才按得下去。
 
-關閉預覽時停下還在跑的壓縮並丟掉暫存的壓縮檔。
+關閉預覽時停下還在跑的壓縮。按下「發譜」時，要傳的壓縮檔留著交給發譜（publish_plan() 在關閉後照樣交出，
+發譜結束時要丟掉），其餘的與取消時的壓縮檔都丟掉。
 
 使用範例：
     dialog = PublishPreviewDialog(project, check_groups(project), readiness, parent, compressor=compressor,
@@ -380,14 +381,13 @@ class PublishPreviewDialog(QDialog):
         return self._preview.publish_plan()
 
     def done(self, code: int):
-        """關閉預覽：停下還在跑的壓縮（之後它不再碰這個對話框），丟掉暫存的壓縮檔"""
+        """關閉預覽：停下還在跑的壓縮（之後它不再碰這個對話框）；按下「發譜」時留下要傳的壓縮檔
+        （publish_plan 照樣交出），其餘的與取消時的全部丟掉（PublishPreview.close）"""
         if self._compress_task is not None:
             self._compress_task.cancel()
             self._compress_task.abandon()
             self._compress_task = None
-        for result in self._preview.compressed.values():
-            self._compressor.discard(result)
-        self._preview.compressed = {}
+        self._preview.close(self._compressor, publishing=code == QDialog.Accepted)
         super().done(code)
 
     def _go(self, step: PublishStep):
