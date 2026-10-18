@@ -3,7 +3,8 @@
 存檔衝突畫面（原型 #60 存檔衝突的變體 C）
 
 存檔時譜庫裡有格子被別人改過，列出這次會寫進譜庫的全部改動：群組、項目、原本（快照）、改成、譜庫現在，
-以及要怎麼做。衝突的列標紅，要逐項選「用我的」或「用譜庫的」，全部選完才能按「寫入並存檔」；
+以及要怎麼做。衝突的列標紅，要逐項選「用我的」或「用譜庫的」，全部選完才能按「寫入並存檔」
+（譜庫視窗寫聲部組對照時按鈕是「寫入」）；
 其餘的列寫出照寫、譜庫已採用或無法寫回（已有 Drive 檔案的聲部，要到譜庫視窗處理）。
 比對與選擇的意義見 core/catalog_sync.py；這裡只顯示比對結果、收集選擇。
 
@@ -44,11 +45,12 @@ _VERDICT_TEXT = {
 class CatalogConflictDialog(QDialog):
     """存檔衝突畫面：列出這次會寫進譜庫的全部改動，衝突的標紅、逐項選邊"""
 
-    def __init__(self, outcome: SyncOutcome, parent: Optional[QWidget] = None):
+    def __init__(self, outcome: SyncOutcome, parent: Optional[QWidget] = None, confirm_text: str = ""):
         """
         Args:
-            outcome: 有衝突、還沒寫入的比對結果（CatalogService.sync_instrumentation）
+            outcome: 有衝突、還沒寫入的比對結果（CatalogService.sync_instrumentation、sync_section_map）
             parent: 父元件
+            confirm_text: 確定按鈕的文字；省略時為「寫入並存檔」（存檔時寫回）
         """
         super().__init__(parent)
         self.setWindowTitle(t("catalog.sync.title"))
@@ -65,7 +67,7 @@ class CatalogConflictDialog(QDialog):
         self._table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self._table)
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
-        self._confirm = QPushButton(t("catalog.sync.confirm"))
+        self._confirm = QPushButton(confirm_text or t("catalog.sync.confirm"))
         buttons.addButton(self._confirm, QDialogButtonBox.AcceptRole)
         self._confirm.clicked.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -112,7 +114,7 @@ class CatalogConflictDialog(QDialog):
             self._table.setItem(row, len(_HEADERS) - 1, QTableWidgetItem(t(_VERDICT_TEXT[review.verdict])))
 
     def _update_confirm(self) -> None:
-        """每個衝突都選了邊才能按「寫入並存檔」"""
+        """每個衝突都選了邊才能按確定"""
         self._confirm.setEnabled(all(combo.currentData() is not None for _, _, combo in self._choices))
 
 

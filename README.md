@@ -77,6 +77,7 @@ A group can be linked to a piece, edition and movement in the catalog (the club'
 
 - Pressing **Save** on the project also writes the group's changed voices, order, headcounts, duration and sections to the catalog; nothing is written until you save. Only changed cells are written. If someone else changed the same cell in the catalog, every change of this save is listed first, with the conflicts in red for you to choose a side
 - When offline or the catalog can't be written, the project is still saved; the changes not written are marked "Unsynced" in the instrumentation table with the catalog's current value, and retried on the next save or when the project is opened
+- The section map is shared by the whole club: in the catalog window, click "Section Map" on the toolbar. Each section is a column; drag instruments to another column and save to write them to the catalog. You can switch between Chinese and Western orchestra, search instruments, and see how many pieces in the catalog use each instrument
 - Deleting a voice in a linked group deletes it from the score; if this concert just lacks the part, uncheck "In Project" instead. A voice that already has a Drive file can't be deleted from the group; handle it in the catalog window
 - **After upgrading, do not open the catalog with an older version of Ling Ling**: its part status menu creates fake voices, its deletions shift row numbers, and its updates overwrite the first columns with old data
 

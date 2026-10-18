@@ -4,14 +4,16 @@
 
 以 Drive 資料夾內容為主體，使用者可為資料夾加上元資料（曲目資訊、演出紀錄等）。
 讀寫（曲目清單、作曲家、版本、資料夾與版本資料夾的檔，以及曲目、作曲家、版本、樂章、演出紀錄的增刪改、
-建資料夾、搬檔與 Drive 重新命名）都經譜庫服務（services/catalog_service.py）在背景執行；
+建資料夾、搬檔與 Drive 重新命名，以及全社團聲部組對照的編輯）都經譜庫服務（services/catalog_service.py）在背景執行；
 讀不到時頂端顯示錯誤提示列（ui/catalog_error_bar.py）並寫進紀錄檔，內容區寫「讀不到」，不顯示成空清單；
 寫不進去時提示列以「寫不進譜庫」開頭，按「重試」以同一批資料重送（新增的列不會重複）。
+工具列的「聲部組對照」在右側面板開聲部組對照的編輯器（ui/section_map_editor.py），按儲存才寫入，
+寫入走存檔寫回的同一套比對，被別人改過時開衝突畫面（ui/catalog_conflict_dialog.py）選邊。
 讀到總覽（連上譜庫）後另在背景讀社團設定，把啟用的發譜平台記在偏好設定（services/club_settings_service.py）；
 這一項讀不到時沿用記住的結果，不顯示提示列。
 """
 import threading
-from typing import Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QStackedWidget,
     QTreeWidget, QTreeWidgetItem, QLabel, QLineEdit, QPushButton,
@@ -22,13 +24,14 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCursor
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_ORCHESTRA_TYPE, OrchestraType
 from core.locale import t
 from core.catalog_constants import (
     PerformanceStatus, SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PERFORMANCES, SHEET_PIECES,
 )
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import Composer, DriveFile, EditionFiles, Piece, Edition, PieceDetail
+from core.catalog_sync import Decision, SyncField, SyncItem, SyncOutcome
 from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingRows
@@ -39,6 +42,7 @@ from services.google_catalog import open_google_catalog
 from services.preferences_service import PreferencesService
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.catalog_tasks import CatalogTasks
+from ui.section_map_editor import SectionMapEditor
 
 
 _FOLDER_ICON = "\U0001f4c1 "
@@ -251,7 +255,7 @@ class CatalogWindow(QMainWindow):
             self._catalog = None
 
     def _build_ui(self):
-        """排出工具列（新增資料夾、重新整理、搜尋）、錯誤提示列、左邊的樹狀清單與右邊的詳細面板、狀態列"""
+        """排出工具列（新增資料夾、重新整理、聲部組對照、搜尋）、錯誤提示列、左邊的樹狀清單與右邊的詳細面板、狀態列"""
         self._toolbar = QToolBar()
         self._toolbar.setMovable(False)
         self.addToolBar(self._toolbar)
@@ -262,6 +266,9 @@ class CatalogWindow(QMainWindow):
         refresh_btn = QPushButton(t("catalog.toolbar.refresh"))
         refresh_btn.clicked.connect(self._refresh_all)
         self._toolbar.addWidget(refresh_btn)
+        section_map_btn = QPushButton(t("catalog.sections.title"))
+        section_map_btn.clicked.connect(lambda: self._show_section_map())
+        self._toolbar.addWidget(section_map_btn)
         self._toolbar.addSeparator()
         self._search_entry = QLineEdit()
         self._search_entry.setPlaceholderText(t("catalog.toolbar.search"))
@@ -464,6 +471,76 @@ class CatalogWindow(QMainWindow):
         self._write(
             t("catalog.toolbar.new_folder"), lambda catalog: catalog.create_folder(name, parent_id),
             lambda folder: self._refresh_all(), file_name=lambda: name,
+        )
+
+    # --- 聲部組對照 ---
+
+    def _show_section_map(self, orchestra_type: OrchestraType = DEFAULT_ORCHESTRA_TYPE):
+        """經譜庫服務讀全社團的聲部組對照，讀到後在右側面板顯示編輯器
+
+        Args:
+            orchestra_type: 一開始顯示哪一套（寫入後重新讀取時維持原本顯示的那套）
+        """
+        self._clear_detail()
+        self._current_detail = None
+        loading = QLabel(t("catalog.loading"))
+        loading.setAlignment(Qt.AlignCenter)
+        self._detail_layout.addWidget(loading)
+        version = self._detail_version
+
+        def on_done(entries):
+            """讀到了：換成編輯器"""
+            if version == self._detail_version:
+                self._clear_detail()
+                editor = SectionMapEditor(entries, orchestra_type)
+                editor.save_requested.connect(
+                    lambda: self._save_section_map(editor.changes(), editor.orchestra_type(), {}),
+                )
+                self._detail_layout.addWidget(editor)
+
+        def unreadable():
+            """讀不到：詳細面板寫「讀不到」"""
+            if version == self._detail_version:
+                self._clear_detail()
+                self._detail_layout.addWidget(self._unreadable_label())
+
+        self._read(
+            lambda catalog: catalog.section_map(), on_done, unreadable, lambda: self._show_section_map(orchestra_type),
+        )
+
+    def _save_section_map(
+        self, items: Dict[OrchestraType, List[SyncItem]], orchestra_type: OrchestraType,
+        decisions: Dict[str, Dict[Tuple[SyncField, object], Decision]],
+    ):
+        """把編輯器改過的樂器寫進譜庫；被別人改過時開衝突畫面，選邊後帶著選擇再寫一次，寫好後重新讀取對照
+
+        Args:
+            items: 改過的樂器（SectionMapEditor.changes）
+            orchestra_type: 編輯器正在顯示的樂團類型
+            decisions: 先前在衝突畫面的選擇：樂團類型的值 → （SyncItem.key → Decision）
+        """
+        if not items:
+            return
+        operator = self._auth.account_email or ""
+        version = self._detail_version
+
+        def done(outcome: SyncOutcome):
+            """寫好就重新讀取；有衝突就開衝突畫面"""
+            if outcome.written:
+                if version == self._detail_version:
+                    self._show_section_map(orchestra_type)
+                return
+            from ui.catalog_conflict_dialog import CatalogConflictDialog
+            dialog = CatalogConflictDialog(outcome, self, confirm_text=t("catalog.sections.confirm"))
+            if dialog.exec() != QDialog.Accepted:
+                return
+            chosen = {key: dict(value) for key, value in decisions.items()}
+            for group_id, picked in dialog.decisions().items():
+                chosen.setdefault(group_id, {}).update(picked)
+            self._save_section_map(items, orchestra_type, chosen)
+
+        self._write(
+            t("catalog.sections.title"), lambda catalog: catalog.sync_section_map(items, operator, decisions), done,
         )
 
     # --- 資料夾詳細 ---

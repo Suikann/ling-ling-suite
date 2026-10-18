@@ -745,6 +745,15 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.unsynced.blank": "空白",
         "catalog.unsynced.title": "未同步",
         "catalog.unsynced.close": "「{groups}」的編制還沒同步到譜庫，下次開啟專案時再試。\n\n仍要關閉嗎？",
+        "catalog.sections.title": "聲部組對照",
+        "catalog.sections.intro": "全社團共用。把樂器拖到別的聲部組，按儲存才寫進譜庫。",
+        "catalog.sections.orchestra": "樂團類型",
+        "catalog.sections.search": "搜尋樂器...",
+        "catalog.sections.unclassified": "未歸類",
+        "catalog.sections.column": "{section}（{count}）",
+        "catalog.sections.item": "{instrument}（{count} 首）",
+        "catalog.sections.save": "儲存",
+        "catalog.sections.confirm": "寫入",
     },
     LOCALE_EN: {
         # 應用程式
@@ -1460,6 +1469,15 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.unsynced.blank": "blank",
         "catalog.unsynced.title": "Unsynced",
         "catalog.unsynced.close": "The instrumentation of \"{groups}\" isn't synced to the catalog yet. It will retry when the project is opened.\n\nClose anyway?",
+        "catalog.sections.title": "Section Map",
+        "catalog.sections.intro": "Shared by the whole club. Drag instruments to another section; nothing is written until you save.",
+        "catalog.sections.orchestra": "Orchestra",
+        "catalog.sections.search": "Search instruments...",
+        "catalog.sections.unclassified": "Unclassified",
+        "catalog.sections.column": "{section} ({count})",
+        "catalog.sections.item": "{instrument} ({count} pieces)",
+        "catalog.sections.save": "Save",
+        "catalog.sections.confirm": "Write",
     },
 }
 
