@@ -221,6 +221,12 @@ class TestConflicts(PlanTestCase):
         self.assertEqual(plan.conflicts, [(web, ["二胡 I", "二胡 II"])])
         self.assertTrue(plan.blocked)
 
+    def test_a_part_chosen_by_another_voice_is_still_offered(self):
+        self.voices(("二胡 I", Headcount(6)), ("二胡 II", Headcount(6)))
+        web = part("p1", "二胡")
+        self.project.choose_huaxia_part(self.group, "二胡 I", "p1")
+        self.assertEqual(self.row(self.plan([web]), "二胡 II").options, [web])
+
     def test_a_remembered_part_is_not_offered_to_the_name_rule_again(self):
         self.voices(("二胡 I", Headcount(6)), ("二胡", Headcount(2)))
         web = part("p1", "二胡")

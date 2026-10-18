@@ -132,7 +132,7 @@ class PartMatch(Enum):
     NONE = "none"            # 沒對上（或這次選了新建）
 
 
-@dataclass(frozen=True)
+@dataclass
 class VoiceDecisions:
     """譜務這次在「聲部」步的決定（不記在專案；手動挑的配對另經 Project.choose_huaxia_part 記住）
 
@@ -193,7 +193,8 @@ class VoiceRow:
         section: 泠靈的聲部組
         match: 怎麼對到的
         part: 對到的 HuaXia 聲部；沒對上時為 None
-        options: 可以改選的 HuaXia 聲部：名稱規則對到多個時只有那幾個，否則是對到的與還沒被配對的
+        options: 可以改選的 HuaXia 聲部，依 HuaXia 的排序：名稱規則對到多個時只有那幾個，否則是名稱規則沒配給
+            其他聲部的（別的聲部手動挑過的也列，挑了會成為衝突）
         can_create: 可以選新建（名稱規則對到多個時不行）
         headcount_differs: 對到的 HuaXia 聲部人數與泠靈不同（本專案有的列才比）
         section_differs: 對到的 HuaXia 聲部的聲部組與泠靈不同（泠靈是「其他」時不比）
@@ -245,7 +246,7 @@ class VoicePlan:
 
 
 def plan_voices(
-    project: Project, group: Group, parts: List[HuaXiaPart], decisions: VoiceDecisions = VoiceDecisions(),
+    project: Project, group: Group, parts: List[HuaXiaPart], decisions: Optional[VoiceDecisions] = None,
 ) -> VoicePlan:
     """把群組的每個聲部對到它對到的 HuaXia 曲目上的聲部，算出要新建與覆寫的內容；不改專案
 
@@ -256,11 +257,12 @@ def plan_voices(
         project: 專案（聲部組以它的對照為準）
         group: 群組；對到新建的曲目時 parts 為空
         parts: 群組對到的 HuaXia 曲目上已有的聲部
-        decisions: 譜務這次的決定
+        decisions: 譜務這次的決定；省略時全照預設
 
     Returns:
         配對結果與要寫的內容
     """
+    decisions = decisions or VoiceDecisions()
     link = group.huaxia_link
     by_id = {part.id: part for part in parts}
     rows = list(zip(group.instruments, group.present, group.headcounts))
@@ -288,19 +290,24 @@ def plan_voices(
             matches[index] = (PartMatch.AMBIGUOUS, None)
     assigned = [part.id for _match, part in matches.values() if part is not None]
     unpaired = [part for part in parts if part.id not in assigned]
+    named = {index: part.id for index, (match, part) in matches.items() if match is PartMatch.NAME}
     next_sort = max((part.sort for part in parts), default=0)
     voice_rows, creates, updates, undecided, unfilled = [], [], [], [], []
     for index, (voice, present, headcount) in enumerate(rows):
         match, part = matches[index]
         section = project.section_of(voice)
         several = len(candidates[index]) > 1 and index not in decisions.new
-        options = candidates[index] if several else ([part] if part else []) + unpaired
+        options = candidates[index] if several else [
+            option for option in parts if all(i == index or found != option.id for i, found in named.items())
+        ]
         row = VoiceRow(index, voice, present, headcount, section, match, part, options, can_create=not several)
         if part is not None and present:
             headcount_differs = part.needed.strip() != headcount.text() or part.needed_min != headcount.minimum
             section_differs = section != OTHER_SECTION and part.section != section
             overwrite = (headcount_differs or section_differs) and index not in decisions.keep
-            row = replace(row, headcount_differs=headcount_differs, section_differs=section_differs, overwrite=overwrite)
+            row = replace(
+                row, headcount_differs=headcount_differs, section_differs=section_differs, overwrite=overwrite,
+            )
             if overwrite:
                 updates.append(PartUpdate(
                     part.id, part.name, headcount.text() if headcount_differs else None,

@@ -18,7 +18,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PySide6.QtWidgets import (
-    QComboBox, QLabel, QMessageBox, QPushButton, QRadioButton, QTableWidget, QTabWidget, QWidget,
+    QCheckBox, QComboBox, QGroupBox, QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QTableWidget,
+    QTabWidget, QWidget,
 )
 
 from core.constants import CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, HuaXiaEnsemble, OrchestraType
@@ -91,6 +92,41 @@ def choose(dialog: PublishPreviewDialog, name: str, option: str, piece: int = 0)
         cell.findChild(QComboBox, "existing_pieces").setCurrentIndex(piece)
     button = next(b for b in cell.findChildren(QRadioButton) if b.text() == t(f"publish.piece.{option}"))
     button.click()
+
+
+def button(dialog: PublishPreviewDialog, key: str) -> QPushButton:
+    """預覽底部這個字串鍵的按鈕"""
+    return next(b for b in dialog.findChildren(QPushButton) if b.text() == t(key))
+
+
+def voices_group(dialog: PublishPreviewDialog, name: str) -> QGroupBox:
+    """「聲部」步裡這個群組的那一塊"""
+    return next(box for box in dialog.findChildren(QGroupBox, "voices_group") if box.title() == name)
+
+
+def voice_cell(dialog: PublishPreviewDialog, group: str, voice: str) -> QWidget:
+    """「聲部」步裡這個群組這個聲部那一列的「決定」欄"""
+    table = voices_group(dialog, group).findChild(QTableWidget, "voices_table")
+    row = next(r for r in range(table.rowCount()) if table.item(r, 0).text() == voice)
+    return table.cellWidget(row, 4)
+
+
+def part_choices(dialog: PublishPreviewDialog, group: str, voice: str) -> list:
+    """這個聲部可以挑的 HuaXia 聲部（選單的各項）"""
+    combo = voice_cell(dialog, group, voice).findChild(QComboBox, "part_choice")
+    return [combo.itemText(i) for i in range(combo.count())]
+
+
+def choose_part(dialog: PublishPreviewDialog, group: str, voice: str, text: str):
+    """這個聲部在選單裡挑寫著 text 的那一項"""
+    combo = voice_cell(dialog, group, voice).findChild(QComboBox, "part_choice")
+    combo.setCurrentIndex(combo.findText(text))
+
+
+def voices_problem(dialog: PublishPreviewDialog, group: str) -> str:
+    """「聲部」步裡這個群組不能發的原因；沒有時為空字串"""
+    label = voices_group(dialog, group).findChild(QLabel, "voices_problem")
+    return label.text() if label is not None and not label.isHidden() else ""
 
 
 class PublishWindowTestCase(MainWindowTestCase):
@@ -277,6 +313,90 @@ class TestPieceStep(PublishWindowTestCase):
         label = self.window.findChild(InstrumentationTable).findChild(QLabel, "huaxia_piece")
         self.assertFalse(label.isHidden())
         self.assertEqual(label.text(), t("publish.huaxia_piece", title="長城隨想－烽火操"))
+
+
+class TestNextStep(PublishWindowTestCase):
+    """「下一步」要每個沒擋下的群組都對到曲目才按得下去"""
+
+    def test_next_waits_for_every_group_that_can_be_published_to_have_a_piece(self):
+        def operate(dialog):
+            self.assertFalse(button(dialog, "publish.next").isEnabled())
+            choose(dialog, "烽火操", "existing")
+            self.assertTrue(button(dialog, "publish.next").isEnabled())
+        self.publish(operate=operate)
+
+    def test_a_new_piece_without_a_title_is_not_enough(self):
+        def operate(dialog):
+            choose(dialog, "烽火操", "new")
+            title = group_cell(dialog, "烽火操").findChildren(QLineEdit)[0]
+            title.setText(" ")
+            title.editingFinished.emit()
+            self.assertFalse(button(dialog, "publish.next").isEnabled())
+        self.publish(operate=operate)
+
+
+class TestVoicesStep(PublishWindowTestCase):
+    """「聲部」步：每個群組列出泠靈的聲部對到 HuaXia 的哪個聲部、變動與決定"""
+
+    def to_voices(self, dialog: PublishPreviewDialog):
+        """「烽火操」挑現有的曲目，按下一步"""
+        choose(dialog, "烽火操", "existing")
+        button(dialog, "publish.next").click()
+
+    def test_several_name_matches_offer_only_those(self):
+        self.huaxia.add_part(self.fenghuo, "二胡I", sort=1)
+        self.huaxia.add_part(self.fenghuo, "二胡 1", sort=2)
+        self.huaxia.add_part(self.fenghuo, "高胡", sort=3)
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            self.assertEqual(part_choices(dialog, "烽火操", "二胡 I"), ["二胡I", "二胡 1"])
+            combo = voice_cell(dialog, "烽火操", "二胡 I").findChild(QComboBox, "part_choice")
+            self.assertEqual(combo.currentIndex(), -1)
+            self.assertIn(t("publish.voices.undecided", voices="二胡 I"), voices_problem(dialog, "烽火操"))
+        self.publish(operate=operate)
+
+    def test_conflicting_choices_show_why_and_block_the_next_step(self):
+        self.huaxia.add_part(self.fenghuo, "高胡")
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            dialog.add_step(2, QWidget())
+            self.assertTrue(button(dialog, "publish.next").isEnabled())
+            choose_part(dialog, "烽火操", "二胡 I", "高胡")
+            choose_part(dialog, "烽火操", "琵琶", "高胡")
+            self.assertIn(
+                t("publish.voices.conflict", part="高胡", voices="二胡 I、琵琶"), voices_problem(dialog, "烽火操"),
+            )
+            self.assertFalse(button(dialog, "publish.next").isEnabled())
+        self.publish(operate=operate)
+
+    def test_a_chosen_part_is_remembered_in_the_project(self):
+        web = self.huaxia.add_part(self.fenghuo, "二胡")
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            self.assertEqual(
+                part_choices(dialog, "烽火操", "二胡 I"), [t("publish.voices.new", voice="二胡 I"), "二胡"],
+            )
+            choose_part(dialog, "烽火操", "二胡 I", "二胡")
+        self.publish(operate=operate)
+        self.assertEqual(self.window.project.groups[0].huaxia_link.part_ids, {"二胡 I": web})
+
+    def test_differences_are_overwritten_by_default(self):
+        self.huaxia.add_part(self.fenghuo, "二胡1", needed="6", needed_min=6, section="拉弦")
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            self.assertTrue(voice_cell(dialog, "烽火操", "二胡 I").findChild(QCheckBox, "overwrite").isChecked())
+        self.publish(operate=operate)
+
+    def test_a_blocked_group_shows_its_reason(self):
+        def operate(dialog):
+            self.to_voices(dialog)
+            label = voices_group(dialog, "春江花月夜").findChild(QLabel, "blocked_reason")
+            self.assertIn(t("publish.group.not_renamed"), label.text())
+        self.publish(operate=operate)
 
 
 if __name__ == "__main__":
