@@ -212,7 +212,7 @@ class CatalogLinkDialog(QDialog):
             )
         pending = self._pending
         previous = self._previous
-        group_name = self._group.name
+        group_id, group_name = self._group.id, self._group.name
 
         def work() -> Tuple[CatalogPlace, List[RevertRow]]:
             """新建還沒有的部分再讀那處，或直接讀那處；改連到別處時一併讀群組在原處寫過的編制（背景執行緒）"""
@@ -224,7 +224,9 @@ class CatalogLinkDialog(QDialog):
             here = (place.edition_id, place.movement_id)
             if previous is None or here == (previous.edition_id, previous.movement_id):
                 return place, []
-            return place, catalog.revert_rows(previous.edition_id, previous.movement_id, group_name, orchestra_type)
+            return place, catalog.revert_rows(
+                previous.edition_id, previous.movement_id, group_id, group_name, orchestra_type,
+            )
 
         def failed(error: CatalogError):
             """讀寫失敗：顯示提示列，重試時以同樣的選擇再送一次"""

@@ -3,7 +3,8 @@
 存入紀錄與撤銷存入的對話框（原型 #65 撤銷存入的變體 A）
 
 DepositLogDialog 列出動到這個版本的每次存入與撤銷存入（新的在前），選一次存入按「撤銷存入…」。
-DepositRevertDialog 是撤銷的預覽：左邊勾群組（寫出連到哪裡），右邊是所選群組的頁面——上方各下場的份數
+DepositRevertDialog 是撤銷的預覽：左邊勾群組（寫出連到哪裡；撤銷會毀掉唯一一份的群組不能勾），右邊是所選群組的頁面——
+不撤銷時一列紅色說明原因，上方各下場的份數
 （丟進 Drive 垃圾桶、還原存入前的內容、移除登記、無法還原、不動），本機已清除時一列藍色提示寫明會先下載回原位並核對；
 中間是逐聲部的「現在譜庫裡 → 撤銷後 → 原因」；下面是「一起撤掉這個群組寫進某處的編制」勾選框加四欄編制清單
 （ui/catalog_revert_dialog.py 的 revert_table，與改連共用），預設不勾；底部註明移除的檔放進 Drive 垃圾桶、30 天內可救回。
@@ -18,6 +19,7 @@ DepositRevertDialog 是撤銷的預覽：左邊勾群組（寫出連到哪裡）
         choices = dialog.choices()
     QMessageBox.warning(window, title, skipped_text(outcome))   # 撤銷後，有沒撤銷的群組時
 """
+import os
 from typing import List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import Qt
@@ -29,7 +31,9 @@ from PySide6.QtWidgets import (
 
 from core.catalog_errors import CATALOG_ERROR_RULES
 from core.catalog_revert import revert_count
-from core.deposit_revert import Deposit, RevertAction, RevertChoice, RevertFile, RevertGroup, RevertPreview
+from core.deposit_revert import (
+    Deposit, RevertAction, RevertBlock, RevertChoice, RevertFile, RevertGroup, RevertPreview,
+)
 from core.locale import t
 from ui.catalog_revert_dialog import revert_table
 from services.deposit_revert_service import RevertOutcome
@@ -46,6 +50,7 @@ _ACTION_COLORS = {
 }
 _GRAY = "#7a7f93"
 _DOWNLOAD_STYLE = "background-color: #253c63; color: #8fb8ff; border-radius: 5px; padding: 6px 10px;"
+_BLOCK_STYLE = "background-color: #5a2129; color: #ff8a8a; border-radius: 5px; padding: 6px 10px;"
 # 存入紀錄表的欄位（介面字串鍵的結尾）
 _LOG_COLUMNS = ("time", "operator", "kind", "groups", "count")
 # 撤銷預覽對照表的欄位（介面字串鍵的結尾）
@@ -67,6 +72,20 @@ def count_texts(group: RevertGroup) -> List[Tuple[RevertAction, str]]:
         (action, t("revert.count", kind=t(f"revert.action.{action.value}"), count=counts[action]))
         for action in RevertAction if counts.get(action)
     ]
+
+
+def block_text(group: RevertGroup) -> str:
+    """群組不撤銷的原因；可以撤銷時為空字串"""
+    if group.block is RevertBlock.NOT_OPEN:
+        return t("revert.block.not_open")
+    if group.block is RevertBlock.NO_LOCAL_COPY:
+        return t("revert.block.no_local_copy", files="、".join(_names(group.uncovered)))
+    return ""
+
+
+def _names(files: Sequence[RevertFile]) -> List[str]:
+    """檔的本機檔名"""
+    return [os.path.basename(file.entry.local_path) for file in files]
 
 
 def file_cells(file: RevertFile) -> Tuple[str, str, str, str]:
@@ -165,6 +184,12 @@ class RevertGroupPage(QWidget):
         heading = QLabel(f"{group.name} → {group_place(group)}")
         heading.setStyleSheet("font-weight: bold;")
         layout.addWidget(heading)
+        self.block_notice: Optional[QLabel] = None
+        if group.block is not None:
+            self.block_notice = QLabel(block_text(group))
+            self.block_notice.setWordWrap(True)
+            self.block_notice.setStyleSheet(_BLOCK_STYLE)
+            layout.addWidget(self.block_notice)
         strip = QHBoxLayout()
         self.counts: List[QLabel] = []
         for action, text in count_texts(group):
@@ -245,8 +270,12 @@ class DepositRevertDialog(QDialog):
         only = len(preview.groups) == 1
         for group in preview.groups:
             item = QListWidgetItem(f"{group.name}\n{group_place(group)}", self.groups)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked if only else Qt.Unchecked)
+            if group.block is None:
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked if only else Qt.Unchecked)
+            else:
+                item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
+                item.setForeground(QColor(_GRAY))
             page = RevertGroupPage(group)
             self.pages.append(page)
             self._pages.addWidget(page)
@@ -277,7 +306,7 @@ class DepositRevertDialog(QDialog):
         return [
             RevertChoice(group, page.instrumentation.isChecked())
             for row, (group, page) in enumerate(zip(self._preview.groups, self.pages))
-            if self.groups.item(row).checkState() == Qt.Checked
+            if group.block is None and self.groups.item(row).checkState() == Qt.Checked
         ]
 
     def _update_confirm(self, *_args) -> None:
@@ -286,12 +315,20 @@ class DepositRevertDialog(QDialog):
 
 
 def skipped_text(outcome: RevertOutcome) -> str:
-    """沒撤銷的群組與原因（本機已清除的檔沒有全部下載回來：哪些、為什麼）；都撤銷了時為空字串"""
-    parts = []
+    """沒撤銷的群組與檔、原因（本機已清除的檔沒有全部下載回來、會毀掉唯一的一份、預覽之後在 Drive 上改過）；
+    都撤銷了時為空字串"""
+    parts = [
+        t("revert.refused", group=group.name, reason=block_text(group) if group.block else t(
+            "revert.block.no_local_copy", files="、".join(_names(group.kept_locally())),
+        ))
+        for group, _ in outcome.refused
+    ]
     for group, download in outcome.skipped:
         detail = not_downloaded_text(download)
         if not detail and download.error is not None:
             rule = CATALOG_ERROR_RULES[download.error.kind]
             detail = f"{t(rule.title_key)}：{t(rule.advice_key)}"
         parts.append("\n".join(text for text in (t("revert.skipped", group=group.name), detail) if text))
+    if outcome.changed:
+        parts.append(t("revert.changed", files="、".join(_names(outcome.changed))))
     return "\n\n".join(parts)

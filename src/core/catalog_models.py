@@ -11,6 +11,11 @@ from core.models import Headcount
 from core.voice_names import voice_key
 
 
+def _same_group(row_group_id: str, row_group: str, group_id: str, group_name: str) -> bool:
+    """紀錄的一列是不是這個群組的：列有群組 ID 時比 ID（同名的群組分得開、改名後也認得），沒有時（舊的列）比群組名稱"""
+    return row_group_id == group_id if row_group_id else row_group == group_name
+
+
 def sort_order_key(value: str) -> Tuple[int, int]:
     """排序欄（sort_order）的排序鍵：數字依大小排，空白或不是數字的排在最後（排序穩定，同值時保留工作表的順序）"""
     value = value.strip()
@@ -103,6 +108,11 @@ class InstrumentationLogEntry:
     old_value: str = ""
     new_value: str = ""
     group: str = ""
+    group_id: str = ""
+
+    def written_by(self, group_id: str, group_name: str) -> bool:
+        """這一列是不是這個群組寫的：有群組 ID 時比 ID，舊的列（沒有群組 ID）比群組名稱"""
+        return _same_group(self.group_id, self.group, group_id, group_name)
 
 
 @dataclass(frozen=True)
@@ -126,6 +136,16 @@ class DepositLogEntry:
     revision_after: str = ""
     revision_before: str = ""
     reverts: str = ""
+    group_id: str = ""
+
+    @property
+    def group_key(self) -> str:
+        """認群組用的鍵：群組 ID；舊的列（沒有群組 ID）是群組名稱"""
+        return self.group_id or self.group
+
+    def written_by(self, group_id: str, group_name: str) -> bool:
+        """這一列是不是這個群組存入的：有群組 ID 時比 ID，舊的列（沒有群組 ID）比群組名稱"""
+        return _same_group(self.group_id, self.group, group_id, group_name)
 
 
 @dataclass(frozen=True)

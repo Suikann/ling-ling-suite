@@ -12,7 +12,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.catalog_constants import SHEET_INSTRUMENTATION_LOG, SHEET_PARTS
+from core.catalog_constants import SHEET_HEADERS, SHEET_INSTRUMENTATION_LOG, SHEET_PARTS
 from core.catalog_revert import KeepReason, RevertOutcome, pending_revert, revert_count
 from core.catalog_sync import WriteSource, place_writes
 from core.models import Headcount, LinkChoice, Project
@@ -49,7 +49,7 @@ class RelinkTestCase(SyncTestCase):
 
     def revert_rows(self):
         """讀出這個群組在第一樂章寫過的編制"""
-        return self.catalog.revert_rows("e1", "m1", self.group.name, self.project.orchestra_type)
+        return self.catalog.revert_rows("e1", "m1", self.group.id, self.group.name, self.project.orchestra_type)
 
 
 class TestRevertRows(RelinkTestCase):
@@ -93,7 +93,32 @@ class TestRevertRows(RelinkTestCase):
 
     def test_other_places_list_nothing(self):
         self.part("二胡 I", "1", movement="")
-        self.assertEqual(self.catalog.revert_rows("e1", "", self.group.name, self.project.orchestra_type), [])
+        self.assertEqual(
+            self.catalog.revert_rows("e1", "", self.group.id, self.group.name, self.project.orchestra_type), [],
+        )
+
+    def test_a_renamed_group_still_finds_its_writes(self):
+        self.project.update_group(self.group, name="改過名字的群組")
+        self.assertEqual([row.voice for row in self.revert_rows()], ["琵琶", "揚琴", "笛子"])
+
+    def test_another_group_with_the_same_name_counts_as_someone_else(self):
+        project = Project()
+        group = project.add_group(self.group.name, "總譜")
+        project.link_group(group, self.catalog.read_place("e1", "m1", project.orchestra_type))
+        project.set_headcount(group, group.instruments.index("琵琶"), Headcount(4))
+        outcome = self.catalog.sync_instrumentation(
+            place_writes(project), project.orchestra_type, OTHER, WriteSource.SAVE, {},
+        )
+        self.assertTrue(outcome.written)
+        pipa = self.revert_rows()[0]
+        self.assertEqual((pipa.voice, pipa.keep_reason, pipa.changed_by), ("琵琶", KeepReason.CHANGED, OTHER))
+
+    def test_rows_written_before_group_ids_are_matched_by_name(self):
+        column = SHEET_HEADERS[SHEET_INSTRUMENTATION_LOG].index("group_id")
+        rows = self.google.sheets.rows(SHEET_INSTRUMENTATION_LOG)
+        for number in range(2, len(rows) + 1):
+            self.google.sheets.set_cell(SHEET_INSTRUMENTATION_LOG, f"{chr(ord('A') + column)}{number}", "")
+        self.assertEqual([row.voice for row in self.revert_rows()], ["琵琶", "揚琴", "笛子"])
 
     def sheet_row(self, voice: str) -> int:
         """分譜工作表裡第一樂章這個聲部所在的列號（從 1 起算）"""

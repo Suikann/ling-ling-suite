@@ -19,7 +19,7 @@
     platform = catalog.publishing_platform()         # 社團設定啟用的發譜平台，沒有時為 None
     place = catalog.read_place(edition_id, movement_id, OrchestraType.CHINESE)  # 群組要連的一處
     outcome = catalog.sync_instrumentation(place_writes(project), project.orchestra_type, email, WriteSource.SAVE, {})
-    rows = catalog.revert_rows(edition_id, movement_id, group.name, OrchestraType.CHINESE)  # 改連時撤得掉的編制
+    rows = catalog.revert_rows(edition_id, movement_id, group.id, group.name, OrchestraType.CHINESE)  # 改連時撤得掉的編制
     page = catalog.edition_page(edition_id, movement_id, OrchestraType.CHINESE)  # 版本頁：登記與沒登記的檔
     catalog.register_files(PendingRegistration(edition_id, movement_id, {"琵琶": pdf}))  # 失敗時以同一個物件重送
     places = catalog.deposit_places([("e1", "m1")])  # 存入前：那處的登記與版本資料夾裡的檔
@@ -158,6 +158,15 @@ def _register_row(batch: "_Batch", target: Tuple[int, Part], file: DriveFile) ->
     if part.file_name.strip() != file.name:
         batch.set(SHEET_PARTS, row, "file_name", file.name)
     return old if old != file.id else ""
+
+
+def _registered_by(part: Part, entry: DepositLogEntry) -> bool:
+    """分譜列是不是存入紀錄這一列登記的：同一處、登記同一個 Drive 檔，而且是同一聲部（總譜列對總譜）"""
+    return (
+        (part.edition_id, part.movement_id) == (entry.edition_id, entry.movement_id)
+        and part.drive_file_id.strip() == entry.drive_file_id
+        and (_is_true(part.is_score) or voice_key(part.instrument_name) == voice_key(entry.voice))
+    )
 
 
 def _add_score_row(batch: "_Batch", edition_id: str, movement_id: str, file: DriveFile) -> None:
@@ -505,7 +514,7 @@ def _log_record(
     return {
         "time": stamp, "operator": operator, "source": source.value, "edition_id": write.edition_id,
         "movement_id": write.movement_id, "voice": item.voice, "field": item.field.value, "old_value": old,
-        "new_value": new, "group": write.group_name,
+        "new_value": new, "group": write.group_name, "group_id": write.group_id if write.edition_id else "",
     }
 
 
@@ -916,7 +925,7 @@ class CatalogService:
         )
 
     def revert_rows(
-        self, edition_id: str, movement_id: str, group_name: str, orchestra_type: OrchestraType,
+        self, edition_id: str, movement_id: str, group_id: str, group_name: str, orchestra_type: OrchestraType,
     ) -> List[RevertRow]:
         """讀出一個群組寫進一處的編制，分成撤掉後刪掉、改回原值與不動（改連時問要不要撤掉；兩次請求）
 
@@ -925,7 +934,8 @@ class CatalogService:
         Args:
             edition_id: 那處的版本 ID
             movement_id: 那處的樂章 ID；整首為空字串
-            group_name: 群組名稱（編制寫入紀錄的「群組」欄）
+            group_id: 群組 ID（編制寫入紀錄的群組 ID 欄）
+            group_name: 群組名稱（編制寫入紀錄的「群組」欄；沒有群組 ID 的舊列以它認）
             orchestra_type: 專案的樂團類型
 
         Returns:
@@ -946,7 +956,7 @@ class CatalogService:
                 return []
             raise
         entries = _models(tables[SHEET_INSTRUMENTATION_LOG], SHEET_INSTRUMENTATION_LOG, InstrumentationLogEntry)
-        return revert_rows(entries, edition_id, movement_id, current.voices, current.filed, group_name)
+        return revert_rows(entries, edition_id, movement_id, current.voices, current.filed, group_id, group_name)
 
     def section_map(self) -> Dict[OrchestraType, List[SectionMapEntry]]:
         """讀全社團的聲部組對照，每個樂團類型一套，連同譜庫裡用到、還沒歸類的樂器與各樂器用到幾首（兩次請求）
@@ -1182,6 +1192,7 @@ class CatalogService:
                 "movement_id": record.movement_id, "group": record.group_name, "voice": record.voice or record.score_label,
                 "local_path": record.local_path, "drive_file_id": file.id, "action": record.action.value,
                 "revision_after": file.head_revision, "revision_before": record.revision_before,
+                "group_id": record.group_id,
             })
         if batch.cells:
             for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
@@ -1311,7 +1322,7 @@ class CatalogService:
         places = {}
         for key in dict.fromkeys((entry.edition_id, entry.movement_id) for entry in ours):
             places[key] = self._revert_place(catalog, *key)
-        files = {file_id: self._drive_file(file_id) for file_id in dict.fromkeys(e.drive_file_id for e in ours) if file_id}
+        files = {file_id: self.drive_file(file_id) for file_id in dict.fromkeys(e.drive_file_id for e in ours) if file_id}
         revisions: Dict[str, List[DriveRevision]] = {}
         for entry in ours:
             if entry.drive_file_id not in revisions and needs_revisions(entry, files.get(entry.drive_file_id)):
@@ -1373,7 +1384,8 @@ class CatalogService:
     def record_revert(self, deposit_id: str, done: Sequence[Tuple[RevertFile, str]], operator: str) -> None:
         """撤銷存入後移除登記並寫存入紀錄：寫入前一刻才讀分譜工作表找列號，全部以一個請求寫入
 
-        丟進垃圾桶與只移除登記的檔，登記它的分譜列（含總譜列）清空 drive_file_id、file_name；每份撤掉的檔一列存入紀錄，
+        丟進垃圾桶與只移除登記的檔，那次存入的那處、那個聲部（總譜為總譜列）登記它的分譜列清空 drive_file_id、file_name，
+        同一個檔另外登記在別處的列不動；每份撤掉的檔一列存入紀錄，
         這一批共用一個新抽的存入編號，reverts 記被撤銷的存入編號。只新增、不修改存入紀錄。請求數固定：
         列出工作表名稱、讀取、寫入各一次，存入紀錄還沒建立時另建一次。
 
@@ -1405,7 +1417,7 @@ class CatalogService:
             entry = reverted.entry
             if reverted.action in UNREGISTERING:
                 for row, part in parts:
-                    if part.drive_file_id.strip() == entry.drive_file_id:
+                    if _registered_by(part, entry):
                         batch.set(SHEET_PARTS, row, "drive_file_id", "")
                         batch.set(SHEET_PARTS, row, "file_name", "")
             batch.add(SHEET_DEPOSIT_LOG, {
@@ -1413,7 +1425,7 @@ class CatalogService:
                 "movement_id": entry.movement_id, "group": entry.group, "voice": entry.voice,
                 "local_path": entry.local_path, "drive_file_id": entry.drive_file_id, "action": reverted.action.value,
                 "revision_after": head, "revision_before": reverted.file.head_revision if reverted.file else "",
-                "reverts": deposit_id,
+                "reverts": deposit_id, "group_id": entry.group_id,
             })
         if batch.cells:
             for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
@@ -1853,8 +1865,12 @@ class CatalogService:
             pending += [(path + (folder.name,), folder.id) for folder in contents.folders]
         return tree
 
-    def _drive_file(self, file_id: str) -> Optional[DriveFile]:
-        """Drive 上一個檔現在的樣子（在垃圾桶裡的也取得到）；已經沒有時為 None"""
+    def drive_file(self, file_id: str) -> Optional[DriveFile]:
+        """Drive 上一個檔現在的樣子（一次請求；在垃圾桶裡的也取得到）；已經沒有時為 None
+
+        Raises:
+            CatalogError: 讀不到
+        """
         try:
             return self._call(lambda: self._drive.get_file(file_id))
         except CatalogError as error:
@@ -1864,7 +1880,7 @@ class CatalogService:
 
     def _live_file(self, file_id: str) -> Optional[DriveFile]:
         """Drive 上還在（不在垃圾桶）的檔；已經沒有或在垃圾桶裡時為 None"""
-        file = self._drive_file(file_id)
+        file = self.drive_file(file_id)
         return None if file is None or file.trashed else file
 
     def _list_files(self, query: str) -> List[DriveFile]:

@@ -76,12 +76,16 @@ SHEET_HEADERS = {
     SHEET_INSTRUMENTATION_LOG: [
         "id", "time", "operator", "source", "edition_id", "movement_id", "voice", "field", "old_value", "new_value",
         "group",
+        # 新增的欄只加在後面：群組 ID（同名的群組分得開，群組改名後也認得出；舊的列空白，以群組名稱認）
+        "group_id",
     ],
     SHEET_DEPOSIT_LOG: [
         "id", "deposit_id", "time", "operator", "edition_id", "movement_id", "group", "voice", "local_path",
         "drive_file_id", "action", "revision_after", "revision_before",
         # 新增的欄只加在後面：撤銷存入的列記被撤銷的存入編號
         "reverts",
+        # 群組 ID（同名的群組分得開，群組改名後也認得出；舊的列空白，以群組名稱認）
+        "group_id",
     ],
 }
 

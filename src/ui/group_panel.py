@@ -5,7 +5,7 @@
 提供群組標籤管理與檔案清單。分頁只表達使用者的意圖，修改一律透過專案的編輯操作立即寫入；
 影響其他分頁的修改（群組新增或刪除、檔案在群組與未分組之間搬動）以 groups_changed 通知主視窗重建分頁。
 群組分頁標出未存入的檔（存入譜庫後本機又改過，推算在存入服務）與只在譜庫的檔（本機沒有、譜庫裡有一份，見
-Project.catalog_only_paths），主視窗切回分頁或視窗時以 show_undeposited 照磁碟現況重新比對。
+DepositService.catalog_only），主視窗切回分頁或視窗時以 show_undeposited 照磁碟現況重新比對。
 有只在譜庫的檔時旁邊出現「從譜庫下載回來」，按下以 download_requested 交給主視窗在背景下載回原位。
 """
 from typing import List, Optional, Set
@@ -322,8 +322,8 @@ class GroupTab(QWidget):
     def _catalog_only(self) -> Set[str]:
         """群組裡只在譜庫的檔（本機找不到、譜庫裡有一份）的路徑比對鍵"""
         files = ([self.group.score_file] if self.group.score_file else []) + self.group.files
-        missing = [f.original_path for f in files if not self._file_service.file_exists(f.original_path)]
-        return {path_key(path) for path in self.project.catalog_only_paths(missing)}
+        paths = [f.original_path for f in files]
+        return {path_key(path) for path in self._deposit_service.catalog_only(self.project, paths)}
 
     def _file_text(self, file: FileInfo, catalog_only: Set[str]) -> str:
         """檔案的顯示名稱；只在譜庫的加上標示"""

@@ -14,22 +14,27 @@
   Drive 上已沒有這個檔或在垃圾桶裡、那次只改了檔名或位置、那次沒有改動
 本機已清除（只在譜庫）的檔要撤銷時，先下載回原位並核對，才動 Drive 上的那份。
 
+撤銷不毀掉唯一的一份（RevertBlock）：要丟進垃圾桶或還原的檔，Drive 上那份可能是那次存入內容唯一的一份，所以
+群組要在開著的專案裡（存入紀錄的群組 ID；舊的列沒有時以群組名稱認），而且每份這樣的檔本機都有內容相同的一份
+（MD5 相同），或本機已清除、會先下載回原位；不然整個群組不撤銷。只移除登記的檔不動 Drive，不必有本機那份。
+
 「一起撤掉編制」沿用改連的判斷（core/catalog_revert.py 的 revert_rows），只看那次存入之前這個群組寫進那處的編制；
 這次會移除登記的聲部不算已登記 Drive 檔案，所以那次新增、連同分譜一起存入的聲部也撤得掉。
 
 使用範例：
     from core.deposit_revert import deposits, revert_preview
     history = deposits(catalog.deposit_log(), edition_id)
-    preview = revert_preview(catalog.revert_reading(deposit_id, orchestra_type), deposit_id, catalog_only)
+    local = LocalProject.of(project, catalog_only_paths)
+    preview = revert_preview(catalog.revert_reading(deposit_id, orchestra_type), deposit_id, local, local_md5s)
 """
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Collection, Dict, List, Optional, Sequence, Tuple
+from typing import Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from core.catalog_models import CatalogPlace, DepositLogEntry, DriveFile, DriveRevision, InstrumentationLogEntry
 from core.catalog_revert import RevertRow, revert_rows
 from core.deposit import DepositAction
-from core.models import Headcount
+from core.models import Headcount, Project
 from core.paths import path_key
 
 
@@ -46,6 +51,12 @@ class RevertAction(Enum):
 REVERTING = frozenset({RevertAction.TRASH, RevertAction.RESTORE, RevertAction.UNREGISTER})
 # 要移除分譜列登記的下場
 UNREGISTERING = frozenset({RevertAction.TRASH, RevertAction.UNREGISTER})
+
+
+class RevertBlock(Enum):
+    """整個群組不撤銷的原因：撤銷會毀掉那次存入內容唯一的一份"""
+    NOT_OPEN = "not_open"            # 存入時的專案沒開著，核對不到本機那份
+    NO_LOCAL_COPY = "no_local_copy"  # 本機沒有內容相同的一份（找不到、或之後改過）
 
 
 class KeptBecause(Enum):
@@ -77,8 +88,8 @@ class Deposit:
 
     @property
     def groups(self) -> List[str]:
-        """這次的群組名稱，依紀錄的順序、不重複"""
-        return list(dict.fromkeys(entry.group for entry in self.entries))
+        """這次的群組名稱，依紀錄的順序；同一個群組只列一次"""
+        return list({entry.group_key: entry.group for entry in self.entries}.values())
 
 
 @dataclass(frozen=True)
@@ -112,6 +123,37 @@ class RevertReading:
 
 
 @dataclass(frozen=True)
+class LocalProject:
+    """撤銷時開著的專案：那次存入的群組在不在裡面、哪些檔本機已清除（呼叫端在主執行緒以專案與磁碟現況判定）
+
+    Attributes:
+        group_ids: 專案裡的群組 ID
+        group_names: 專案裡的群組名稱（存入紀錄的舊列沒有群組 ID 時以名稱認）
+        catalog_only: 本機已清除、只在譜庫的檔的路徑比對鍵（core.paths.path_key）
+    """
+    group_ids: FrozenSet[str] = frozenset()
+    group_names: FrozenSet[str] = frozenset()
+    catalog_only: FrozenSet[str] = frozenset()
+
+    @classmethod
+    def of(cls, project: Project, catalog_only: Iterable[str]) -> "LocalProject":
+        """開著的專案
+
+        Args:
+            project: 開著的專案
+            catalog_only: 那次存入的檔裡，本機已清除、只在譜庫的本機路徑（Project.catalog_only_paths）
+        """
+        return cls(
+            frozenset(group.id for group in project.groups), frozenset(group.name for group in project.groups),
+            frozenset(path_key(path) for path in catalog_only),
+        )
+
+    def has_group(self, entry: DepositLogEntry) -> bool:
+        """存入這一列的群組在不在這個專案裡"""
+        return entry.group_id in self.group_ids if entry.group_id else entry.group in self.group_names
+
+
+@dataclass(frozen=True)
 class RevertFile:
     """那次存入的一份檔撤銷後的下場
 
@@ -132,25 +174,39 @@ class RevertFile:
     later: Optional[DepositLogEntry] = None
     download: bool = False
 
+    @property
+    def destroys(self) -> bool:
+        """撤銷時會動到 Drive 上的內容（丟進垃圾桶或還原舊版本），本機要有那次存入的內容"""
+        return (
+            self.action is RevertAction.RESTORE
+            or (self.action is RevertAction.TRASH and self.file is not None and not self.file.trashed)
+        )
+
 
 @dataclass(frozen=True)
 class RevertGroup:
     """那次存入的一個群組
 
     Attributes:
+        group_id: 群組 ID（存入紀錄的群組 ID 欄；舊的列沒有時為空字串）
         name: 群組名稱（紀錄的「群組」欄）
         edition_id: 連到的版本 ID
         movement_id: 連到的樂章 ID；整首為空字串
         place: 那處的曲名、版本、樂章；已不在譜庫時為 None
         files: 每份檔的下場，依紀錄的順序
         instrumentation: 一起撤掉編制時，這個群組在那次存入之前寫進那處的聲部（core/catalog_revert.py 的四欄表）
+        block: 整個群組不撤銷的原因；可以撤銷時為 None
+        uncovered: 本機沒有內容相同的一份、又不能先下載回來的檔（RevertBlock.NO_LOCAL_COPY）
     """
+    group_id: str
     name: str
     edition_id: str
     movement_id: str
     place: Optional[CatalogPlace]
     files: List[RevertFile] = field(default_factory=list)
     instrumentation: List[RevertRow] = field(default_factory=list)
+    block: Optional[RevertBlock] = None
+    uncovered: List[RevertFile] = field(default_factory=list)
 
     def counts(self) -> Dict[RevertAction, int]:
         """各下場的份數（沒有的不列）"""
@@ -166,6 +222,10 @@ class RevertGroup:
     def downloads(self) -> List[RevertFile]:
         """撤銷前要先下載回原位的檔"""
         return [file for file in self.reverting() if file.download]
+
+    def kept_locally(self) -> List[RevertFile]:
+        """要動 Drive 上的內容、本機留著那次存入內容的檔（撤銷前一刻再核對一次 MD5）"""
+        return [file for file in self.reverting() if file.destroys and not file.download]
 
 
 @dataclass(frozen=True)
@@ -212,18 +272,21 @@ def needs_revisions(entry: DepositLogEntry, file: Optional[DriveFile]) -> bool:
     )
 
 
-def revert_preview(reading: RevertReading, deposit_id: str, catalog_only: Collection[str]) -> RevertPreview:
-    """依讀到的譜庫現況，決定撤銷那次存入時每個群組每份檔的下場（規則見模組說明）
+def revert_preview(
+    reading: RevertReading, deposit_id: str, local: LocalProject, local_md5s: Mapping[str, str],
+) -> RevertPreview:
+    """依讀到的譜庫現況，決定撤銷那次存入時每個群組每份檔的下場與不撤銷的群組（規則見模組說明）
 
     Args:
         reading: 讀到的譜庫現況
         deposit_id: 要撤銷的存入編號
-        catalog_only: 本機已清除、只在譜庫的檔的本機路徑（呼叫端以專案判定；路徑以 core.paths 判定同一性）
+        local: 開著的專案
+        local_md5s: 那次存入的檔裡本機有的：路徑比對鍵（core.paths.path_key）→ 本機檔案的 MD5
 
     Returns:
         那次存入與它的每個群組；存入紀錄裡沒有這個存入編號時沒有群組
     """
-    cleared = {path_key(path) for path in catalog_only}
+    cleared = local.catalog_only
     deposit = next((d for d in deposits(reading.entries) if d.deposit_id == deposit_id), None)
     if deposit is None:
         return RevertPreview(Deposit(deposit_id, "", ""))
@@ -235,12 +298,26 @@ def revert_preview(reading: RevertReading, deposit_id: str, catalog_only: Collec
         outcome = _classify(entry, reading.files.get(entry.drive_file_id), reading.revisions.get(entry.drive_file_id), later)
         if outcome.action in REVERTING and path_key(entry.local_path) in cleared:
             outcome = replace(outcome, download=True)
-        files.setdefault((entry.group, entry.edition_id, entry.movement_id), []).append(outcome)
+        files.setdefault((entry.group_key, entry.edition_id, entry.movement_id), []).append(outcome)
     groups = [
-        _group(name, edition_id, movement_id, group_files, reading, deposit.time)
-        for (name, edition_id, movement_id), group_files in files.items()
+        _guard(_group(group_files[0].entry, group_files, reading, deposit.time), local, local_md5s)
+        for group_files in files.values()
     ]
     return RevertPreview(deposit, groups)
+
+
+def _guard(group: RevertGroup, local: LocalProject, local_md5s: Mapping[str, str]) -> RevertGroup:
+    """撤銷會毀掉唯一的一份時整個群組不撤銷：群組不在開著的專案裡，或要動 Drive 內容的檔本機沒有內容相同的一份"""
+    destroying = [file for file in group.reverting() if file.destroys]
+    if not destroying:
+        return group
+    if not local.has_group(destroying[0].entry):
+        return replace(group, block=RevertBlock.NOT_OPEN)
+    uncovered = [
+        file for file in destroying
+        if not file.download and local_md5s.get(path_key(file.entry.local_path)) != file.file.md5
+    ]
+    return replace(group, block=RevertBlock.NO_LOCAL_COPY, uncovered=uncovered) if uncovered else group
 
 
 def _classify(
@@ -276,15 +353,16 @@ def _classify(
     return RevertFile(entry, RevertAction.RESTORE, file, restore_to=previous)
 
 
-def _group(
-    name: str, edition_id: str, movement_id: str, files: List[RevertFile], reading: RevertReading, until: str,
-) -> RevertGroup:
-    """一個群組：每份檔的下場，加上那次存入之前它寫進那處、撤得掉的編制"""
+def _group(first: DepositLogEntry, files: List[RevertFile], reading: RevertReading, until: str) -> RevertGroup:
+    """一個群組（以它的第一列認出是誰、連到哪裡）：每份檔的下場，加上那次存入之前它寫進那處、撤得掉的編制"""
+    edition_id, movement_id = first.edition_id, first.movement_id
     here = reading.places.get((edition_id, movement_id), RevertPlace(None))
     if here.place is None:
-        return RevertGroup(name, edition_id, movement_id, None, files)
+        return RevertGroup(first.group_id, first.group, edition_id, movement_id, None, files)
     leaving = {file.entry.drive_file_id for file in files if file.action in UNREGISTERING}
     filed = [voice for file_id, voice in here.registered.items() if file_id not in leaving]
     voices: List[Tuple[str, Headcount]] = list(here.place.voices)
-    rows = revert_rows(reading.instrumentation, edition_id, movement_id, voices, filed, name, until)
-    return RevertGroup(name, edition_id, movement_id, here.place, files, rows)
+    rows = revert_rows(
+        reading.instrumentation, edition_id, movement_id, voices, filed, first.group_id, first.group, until,
+    )
+    return RevertGroup(first.group_id, first.group, edition_id, movement_id, here.place, files, rows)

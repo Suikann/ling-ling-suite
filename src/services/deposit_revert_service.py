@@ -3,11 +3,15 @@
 撤銷存入
 
 從存入紀錄挑一次存入、再挑其中的群組，撤掉那次的結果（每份檔的下場怎麼決定在 core/deposit_revert.py）：
-preview 讀譜庫現況交回每個群組每份檔的下場；revert 照選的群組逐一去做，碰譜庫一律經譜庫服務（CatalogService）：
+preview 讀譜庫現況與本機檔案的 MD5，交回每個群組每份檔的下場與不撤銷的群組（撤銷會毀掉唯一的一份）；
+revert 照選的群組逐一去做，碰譜庫一律經譜庫服務（CatalogService）：
 
+0. 預覽時就不撤銷的群組（RevertBlock）不做，交回原因
 1. 群組裡要撤銷、本機已清除的檔，先以「從譜庫下載」的同一套做法（DownloadService.put_back）下載回原位並核對 MD5；
-   有任何一份沒放回去（下載失敗、MD5 不符、原位有別的檔），這個群組就不撤銷，交回原因，其他群組照常
-2. 逐份動 Drive：那次新上傳的丟進垃圾桶（不永久刪除），那次更新內容的還原成存入前的版本，只登記的不動 Drive
+   有任何一份沒放回去（下載失敗、MD5 不符、原位有別的檔），這個群組就不撤銷，交回原因，其他群組照常。
+   本機留著的檔再算一次 MD5，預覽之後本機改過或不見的，這個群組也不撤銷
+2. 逐份動 Drive：動之前重讀那份檔，版本或垃圾桶狀態跟預覽時不同（預覽之後在 Drive 上改過）的不動、交回；
+   那次新上傳的丟進垃圾桶（不永久刪除），那次更新內容的還原成存入前的版本，只登記的不動 Drive
 3. 做完（或取消、中途失敗）後以一次試算表寫入移除登記，並每份撤掉的檔寫一列存入紀錄
 4. 選了「一起撤掉編制」的群組，做完之後把撤得掉的編制以寫回譜庫的同一套比對寫進那處（編制寫入紀錄的來源記撤銷）
 
@@ -16,24 +20,28 @@ preview 讀譜庫現況交回每個群組每份檔的下場；revert 照選的�
 
 使用範例：
     from services.deposit_revert_service import DepositRevertService
-    service = DepositRevertService(download_service, log)
-    preview = service.preview(deposit_id, catalog, project.orchestra_type, catalog_only_paths)
+    service = DepositRevertService(file_service, download_service, log)
+    preview = service.preview(deposit_id, catalog, project.orchestra_type, LocalProject.of(project, catalog_only))
     outcome = service.revert(preview, [RevertChoice(group, True)], catalog, email, orchestra_type, should_cancel, report)
 """
 from dataclasses import dataclass, field
-from typing import Callable, Collection, Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from core.catalog_download import DownloadItem
 from core.catalog_errors import CatalogError
 from core.catalog_revert import pending_revert, revert_count
 from core.catalog_sync import WriteSource, revert_write
 from core.constants import OrchestraType
-from core.deposit_revert import RevertAction, RevertChoice, RevertFile, RevertGroup, RevertPreview, revert_preview
+from core.deposit_revert import (
+    LocalProject, RevertAction, RevertBlock, RevertChoice, RevertFile, RevertGroup, RevertPreview, revert_preview,
+)
 from core.locale import t
 from core.log_entry import LogEntry
+from core.paths import path_key
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.download_service import DownloadOutcome, DownloadProgress, DownloadService
+from services.file_service import FileService
 
 
 class RevertProgress(NamedTuple):
@@ -50,6 +58,8 @@ class RevertOutcome:
     Attributes:
         done: 撤掉了的每份檔（已寫進存入紀錄）
         skipped: 本機已清除的檔沒全部下載回來而不撤銷的群組，與那次下載的結果（原因）
+        refused: 撤銷會毀掉唯一的一份而不撤銷的群組與原因（預覽時就是，或預覽之後本機那份改過、不見了）
+        changed: 預覽之後 Drive 上的那份又變了（版本或垃圾桶狀態不同）而沒撤的檔
         fingerprints: 下載回原位的每份檔的指紋：本機路徑 → 譜庫那份的 MD5
         instrumentation: 撤掉了編制的群組
         total: 要做的份數（下載回原位與動 Drive）
@@ -58,6 +68,8 @@ class RevertOutcome:
     """
     done: List[RevertFile] = field(default_factory=list)
     skipped: List[Tuple[RevertGroup, DownloadOutcome]] = field(default_factory=list)
+    refused: List[Tuple[RevertGroup, RevertBlock]] = field(default_factory=list)
+    changed: List[RevertFile] = field(default_factory=list)
     fingerprints: Dict[str, str] = field(default_factory=dict)
     instrumentation: List[RevertGroup] = field(default_factory=list)
     total: int = 0
@@ -78,25 +90,27 @@ class RevertOutcome:
 class DepositRevertService:
     """撤銷存入的預覽與執行"""
 
-    def __init__(self, downloads: DownloadService, log: Optional[ActivityLog] = None):
+    def __init__(self, file_service: FileService, downloads: DownloadService, log: Optional[ActivityLog] = None):
         """
         Args:
+            file_service: 讀本機檔案的 MD5（核對本機留著那次存入的內容）
             downloads: 下載服務（本機已清除的檔先下載回原位）
             log: 紀錄檔，撤掉的每份檔寫一筆；省略時不寫
         """
+        self._files = file_service
         self._downloads = downloads
         self._log = log
 
     def preview(
-        self, deposit_id: str, catalog: CatalogService, orchestra_type: OrchestraType, catalog_only: Collection[str],
+        self, deposit_id: str, catalog: CatalogService, orchestra_type: OrchestraType, local: LocalProject,
     ) -> RevertPreview:
-        """讀譜庫現況，算出撤銷那次存入時每個群組每份檔的下場與撤得掉的編制
+        """讀譜庫現況與本機檔案的 MD5，算出撤銷那次存入時每個群組每份檔的下場、撤得掉的編制與不撤銷的群組
 
         Args:
             deposit_id: 要撤銷的存入編號
             catalog: 譜庫服務
             orchestra_type: 專案的樂團類型
-            catalog_only: 那次存入的檔裡，本機已清除、只在譜庫的本機路徑（呼叫端在主執行緒以專案判定）
+            local: 開著的專案（呼叫端在主執行緒以專案與磁碟現況判定）
 
         Returns:
             那次存入與它的每個群組
@@ -104,7 +118,14 @@ class DepositRevertService:
         Raises:
             CatalogError: 讀不到譜庫
         """
-        return revert_preview(catalog.revert_reading(deposit_id, orchestra_type), deposit_id, catalog_only)
+        reading = catalog.revert_reading(deposit_id, orchestra_type)
+        paths = {entry.local_path for entry in reading.entries if entry.deposit_id == deposit_id}
+        md5s = {}
+        for path in paths:
+            md5 = self._local_md5(path)
+            if md5:
+                md5s[path_key(path)] = md5
+        return revert_preview(reading, deposit_id, local, md5s)
 
     def revert(
         self, preview: RevertPreview, choices: Sequence[RevertChoice], catalog: CatalogService, operator: str,
@@ -124,10 +145,13 @@ class DepositRevertService:
         Returns:
             撤銷的結果；失敗不丟出，記在 error
         """
+        refused = [(c.group, c.group.block) for c in choices if c.group.block is not None]
+        choices = [c for c in choices if c.group.block is None]
         total = sum(len(c.group.downloads()) + len(c.group.reverting()) for c in choices)
         counter = _Counter(total, report)
         done: List[Tuple[RevertFile, str]] = []
         skipped: List[Tuple[RevertGroup, DownloadOutcome]] = []
+        changed: List[RevertFile] = []
         fingerprints: Dict[str, str] = {}
         finished: List[RevertChoice] = []
         error: Optional[CatalogError] = None
@@ -144,11 +168,17 @@ class DepositRevertService:
                     if restored.error is not None or restored.not_done:
                         skipped.append((group, restored))
                         continue
+                if any(self._local_md5(f.entry.local_path) != f.file.md5 for f in group.kept_locally()):
+                    refused.append((group, RevertBlock.NO_LOCAL_COPY))
+                    continue
                 for file in group.reverting():
                     if should_cancel():
                         cancelled = True
                         break
                     counter.start(file.file.name if file.file else file.entry.voice)
+                    if not self._unchanged(catalog, file):
+                        changed.append(file)
+                        continue
                     done.append((file, self._revert_file(catalog, file)))
                 if cancelled:
                     break
@@ -167,7 +197,7 @@ class DepositRevertService:
         if reverted_groups and error is None:
             try:
                 catalog.sync_instrumentation([
-                    revert_write(group.name, group.name, pending_revert(
+                    revert_write(group.group_id, group.name, pending_revert(
                         group.edition_id, group.movement_id, group.instrumentation,
                     )) for group in reverted_groups
                 ], orchestra_type, operator, WriteSource.UNDO, {})
@@ -175,9 +205,22 @@ class DepositRevertService:
                 error = e
                 reverted_groups = []
         return RevertOutcome(
-            [file for file, _ in done], skipped, fingerprints, reverted_groups if error is None else [], total, error,
-            cancelled,
+            [file for file, _ in done], skipped, refused, changed, fingerprints,
+            reverted_groups if error is None else [], total, error, cancelled,
         )
+
+    def _local_md5(self, path: str) -> str:
+        """本機檔案的 MD5；讀不到（不在了）時為空字串"""
+        try:
+            return self._files.md5(path)
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _unchanged(catalog: CatalogService, file: RevertFile) -> bool:
+        """動 Drive 之前重讀那份檔：版本與垃圾桶狀態跟預覽時相同才撤（預覽之後在 Drive 上改過的不動）"""
+        now = catalog.drive_file(file.entry.drive_file_id)
+        return now is not None and (now.head_revision, now.trashed) == (file.file.head_revision, file.file.trashed)
 
     def _put_back(
         self, group: RevertGroup, catalog: CatalogService, should_cancel: Callable[[], bool], counter: "_Counter",

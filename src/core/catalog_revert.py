@@ -7,6 +7,7 @@
 撤銷存入的「一起撤掉編制」共用這套判斷與確認框的四欄表。
 
 - 只撤聲部的增刪與人數；順序、時長與聲部組不撤，這個群組刪掉的聲部也不加回去
+- 紀錄的哪些列是這個群組寫的，以群組 ID 認（同名的群組分得開，群組改名後也認得）；沒有群組 ID 的舊列以群組名稱認
 - 「之後沒人改過」以紀錄判斷：這個群組在那處對一個聲部的寫入之後，同一聲部的增刪或人數還有別人（別的群組、譜庫視窗）
   的寫入，就是之後被改過，寫出最後是誰在何時改的；紀錄裡沒有、譜庫現在的值卻跟它寫的不同，是在試算表上被改過
 - 新增的聲部已登記 Drive 檔案時不刪
@@ -17,7 +18,7 @@
 
 使用範例：
     from core.catalog_revert import pending_revert, revert_count
-    rows = catalog.revert_rows(link.edition_id, link.movement_id, group.name, project.orchestra_type)
+    rows = catalog.revert_rows(link.edition_id, link.movement_id, group.id, group.name, project.orchestra_type)
     if revert_count(rows):
         project.queue_catalog_revert(group, pending_revert(link.edition_id, link.movement_id, rows))
 """
@@ -86,7 +87,7 @@ class _Run:
 
 def revert_rows(
     entries: Sequence[InstrumentationLogEntry], edition_id: str, movement_id: str,
-    voices: Sequence[Tuple[str, Headcount]], filed: Sequence[str], group_name: str, until: str = "",
+    voices: Sequence[Tuple[str, Headcount]], filed: Sequence[str], group_id: str, group_name: str, until: str = "",
 ) -> List[RevertRow]:
     """這個群組寫進一處的編制，每個聲部一列，依譜庫現在的順序（譜庫已沒有的排在最後）
 
@@ -96,7 +97,8 @@ def revert_rows(
         movement_id: 那處的樂章 ID；整首為空字串
         voices: 那處現在的聲部與人數，依譜庫的順序
         filed: 那處已登記 Drive 檔案的聲部
-        group_name: 群組名稱（紀錄的「群組」欄）
+        group_id: 群組 ID（紀錄的群組 ID 欄）
+        group_name: 群組名稱（紀錄的「群組」欄；沒有群組 ID 的舊列以它認）
         until: 只看這個時間（紀錄的寫法）以前這個群組的寫入，之後它自己的寫入也算之後被改過（撤銷存入只撤那次存入
             之前寫的）；空字串表示不限
 
@@ -108,7 +110,7 @@ def revert_rows(
         if (entry.edition_id, entry.movement_id) != (edition_id, movement_id) or entry.field not in _FIELDS:
             continue
         key = voice_key(entry.voice)
-        mine = entry.group == group_name and (not until or entry.time <= until)
+        mine = entry.written_by(group_id, group_name) and (not until or entry.time <= until)
         if mine and entry.source == WriteSource.UNDO.value:
             runs.pop(key, None)
         elif mine and entry.source == WriteSource.SAVE.value:

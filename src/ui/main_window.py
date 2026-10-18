@@ -23,7 +23,7 @@ from core.catalog_constants import PublishingPlatform
 from core.catalog_errors import CatalogFailure, as_catalog_error
 from core.catalog_sync import PlaceWrite, SyncOutcome, WriteSource, place_writes
 from core.clear_local import ClearPlan
-from core.deposit_revert import RevertChoice, RevertPreview
+from core.deposit_revert import LocalProject, RevertChoice, RevertPreview
 from core.launch_env import app_version, current_build
 from core.locale import t, get_locale, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
@@ -236,7 +236,7 @@ class MainWindow(QMainWindow):
         self._deposit_service = DepositService(self.file_service, self._log)
         self._clear_service = ClearLocalService(self.file_service, self._log, standard_folders=_standard_folders())
         self._download_service = DownloadService(self.file_service, self._log)
-        self._revert_service = DepositRevertService(self._download_service, self._log)
+        self._revert_service = DepositRevertService(self.file_service, self._download_service, self._log)
         # 上次存入中斷（取消或中途失敗）前完成了幾份；0 表示上次沒有中斷，存入預覽據此提示
         self._deposit_interrupted = 0
         # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀
@@ -1320,7 +1320,7 @@ class MainWindow(QMainWindow):
         from ui.catalog_window import CatalogWindow
         self._catalog_window = CatalogWindow(
             self._auth_service, self._preferences, log=self._log, huaxia_auth=self._huaxia_auth,
-            voice_candidates=self._voice_candidates, reverter=self,
+            voice_candidates=self._voice_candidates, reverter=self, downloads=self._download_service,
         )
         self._catalog_window.show()
 
@@ -1534,16 +1534,22 @@ class MainWindow(QMainWindow):
         if text:
             QMessageBox.warning(self, t("download.title"), text)
 
-    def catalog_only_paths(self, paths: Sequence[str]) -> List[str]:
-        """這些本機路徑裡本機已清除、只在譜庫的（譜庫視窗撤銷存入前判定要不要先下載回原位）
+    def revert_reader(self, deposit_id: str, paths: Sequence[str]) -> Callable[["CatalogService"], RevertPreview]:
+        """譜庫視窗要撤銷一次存入：記下開著的專案（群組、本機已清除的檔、樂團類型），交回在背景讀預覽的函式
+
+        預覽照開著的專案判定：那次存入的群組不在這個專案、或本機沒有那次存入的內容時，那個群組不撤銷。
 
         Args:
+            deposit_id: 要撤銷的存入編號
             paths: 那次存入的檔的本機路徑
 
         Returns:
-            本機找不到、專案記著譜庫裡有一份的那些
+            以譜庫服務讀撤銷預覽的函式（背景執行緒呼叫）
         """
-        return self.project.catalog_only_paths(p for p in paths if not self.file_service.file_exists(p))
+        local = LocalProject.of(self.project, self._deposit_service.catalog_only(self.project, paths))
+        orchestra_type = self.project.orchestra_type
+        service = self._revert_service
+        return lambda catalog: service.preview(deposit_id, catalog, orchestra_type, local)
 
     def revert_deposit(
         self, preview: RevertPreview, choices: Sequence[RevertChoice], done: Callable[[RevertOutcome], None],

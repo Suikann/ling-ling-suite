@@ -20,7 +20,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QPushButton, QTabWidget, QTreeWidget
 
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY
-from core.deposit_revert import RevertAction, RevertChoice, deposits
+from core.deposit_revert import LocalProject, RevertAction, RevertBlock, RevertChoice, deposits
+from core.models import Project
 from core.locale import t
 from fake_google_catalog import ROOT
 from services.activity_log import ActivityLog
@@ -83,6 +84,24 @@ class TestRevertDialog(ClearedTestCase):
         self.assertFalse(self.dialog.pages[1].instrumentation.isEnabled())
 
 
+class TestRefusedGroupInDialog(ClearedTestCase):
+    """撤銷會毀掉唯一一份的群組：不能勾，頁面寫出原因"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_a_group_of_a_project_that_is_not_open_cannot_be_checked(self):
+        preview = self.preview(self.deposit_id, local=LocalProject.of(Project(), ()))
+        dialog = DepositRevertDialog(preview)
+        self.addCleanup(dialog.deleteLater)
+        self.assertEqual(preview.groups[0].block, RevertBlock.NOT_OPEN)
+        self.assertFalse(dialog.groups.item(0).flags() & Qt.ItemIsUserCheckable)
+        self.assertEqual(dialog.pages[0].block_notice.text(), t("revert.block.not_open"))
+        self.assertEqual(dialog.choices(), [])
+        self.assertFalse(dialog.confirm.isEnabled())
+
+
 class RevertWindowTestCase(DepositWindowTestCase):
     """主視窗開著已存入譜庫的專案（情境見 DepositFixture）"""
 
@@ -94,8 +113,11 @@ class RevertWindowTestCase(DepositWindowTestCase):
 
     def preview(self):
         """撤銷那次存入的預覽"""
-        service = DepositRevertService(DownloadService(FileService(), temp_dir=os.path.join(self.temp, "t")))
-        return service.preview(self.deposit_id, self.catalog, self.window.project.orchestra_type, [])
+        service = DepositRevertService(
+            FileService(), DownloadService(FileService(), temp_dir=os.path.join(self.temp, "t")),
+        )
+        local = LocalProject.of(self.window.project, [])
+        return service.preview(self.deposit_id, self.catalog, self.window.project.orchestra_type, local)
 
 
 class TestRevertInMainWindow(RevertWindowTestCase):

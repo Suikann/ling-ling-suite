@@ -34,6 +34,7 @@ from fake_google_catalog import FakeGoogle
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.club_settings_service import ClubSettingsService
+from services.download_service import DownloadService
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
 from services.preferences_service import PreferencesService
@@ -97,6 +98,7 @@ class CatalogWindowTestCase(unittest.TestCase):
         factory = (lambda: CatalogService(self.google.sheets, self.google.drive, sleep=lambda s: None)) if use_fake else None
         window = CatalogWindow(
             self.auth, self.preferences, catalog_factory=factory, log=ActivityLog(FileService(), self.log_dir),
+            downloads=DownloadService(FileService(), temp_dir=os.path.join(self.temp_dir, "download-temp")),
         )
         self.addCleanup(window.deleteLater)
         self.addCleanup(window.close)

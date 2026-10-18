@@ -44,9 +44,8 @@ from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingRows
 from services.club_settings_service import ClubSettingsService
-from services.deposit_revert_service import DepositRevertService, RevertOutcome
+from services.deposit_revert_service import RevertOutcome
 from services.download_service import DownloadOutcome, DownloadService
-from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
 from services.huaxia_auth_service import HuaXiaAuthService
 from services.google_catalog import open_google_catalog
@@ -66,10 +65,10 @@ _PDF_ICON = "\U0001f4c4 "
 
 
 class DepositReverter(Protocol):
-    """在背景撤銷存入的一方（主視窗）：判定哪些檔本機已清除，鎖住專案執行撤銷，結束時把指紋交回專案"""
+    """撤銷存入的一方（主視窗）：以開著的專案讀預覽，鎖住專案在背景執行撤銷，結束時把指紋交回專案"""
 
-    def catalog_only_paths(self, paths: Sequence[str]) -> List[str]:
-        """這些本機路徑裡本機已清除、只在譜庫的（主執行緒呼叫）"""
+    def revert_reader(self, deposit_id: str, paths: Sequence[str]) -> Callable[[CatalogService], RevertPreview]:
+        """主執行緒記下開著的專案（群組、本機已清除的檔、樂團類型），交回在背景以譜庫服務讀預覽的函式"""
 
     def revert_deposit(
         self, preview: RevertPreview, choices: Sequence[RevertChoice], done: Callable[[RevertOutcome], None],
@@ -88,6 +87,7 @@ class CatalogWindow(QMainWindow):
         huaxia_auth: Optional[HuaXiaAuthService] = None,
         voice_candidates: Optional[VoiceCandidates] = None,
         reverter: Optional[DepositReverter] = None,
+        downloads: Optional[DownloadService] = None,
     ):
         """
         Args:
@@ -100,6 +100,7 @@ class CatalogWindow(QMainWindow):
             huaxia_auth: HuaXia 登入服務，交給譜庫設定的 HuaXia 登入區；省略時譜庫設定沒有 HuaXia 登入區
             voice_candidates: 聲部名稱自動完成的候選來源，讀到譜庫總覽時記下用過的聲部名稱；省略時不記
             reverter: 撤銷存入在背景執行的一方（主視窗）；省略時版本頁沒有「存入紀錄…」
+            downloads: 下載服務（主視窗那一份）；省略時版本頁沒有「下載…」
         """
         super().__init__(parent)
         self._auth = auth_service
@@ -111,9 +112,8 @@ class CatalogWindow(QMainWindow):
         self._catalog_lock = threading.Lock()
         self._log = log or ActivityLog()
         self._club_settings = ClubSettingsService(preferences, self._log)
-        self._downloads = DownloadService(FileService(), self._log)
+        self._downloads = downloads
         self._reverter = reverter
-        self._revert_service = DepositRevertService(self._downloads, self._log)
         # 進行中的一般下載（一次一件）
         self._download_task: Optional[BackgroundTask] = None
         self._pieces: List[Piece] = []
@@ -1067,9 +1067,10 @@ class CatalogWindow(QMainWindow):
         rename_btn = QPushButton(t("catalog.drive.apply_template"))
         rename_btn.clicked.connect(lambda: self._open_drive_rename(page.selected_edition(), detail))
         page.actions.addWidget(rename_btn)
-        download_btn = QPushButton(t("catalog.download.button"))
-        download_btn.clicked.connect(lambda: self._download_files(page.folder_pdfs(), detail.piece.title))
-        page.actions.addWidget(download_btn)
+        if self._downloads is not None:
+            download_btn = QPushButton(t("catalog.download.button"))
+            download_btn.clicked.connect(lambda: self._download_files(page.folder_pdfs(), detail.piece.title))
+            page.actions.addWidget(download_btn)
         if self._reverter is not None:
             log_btn = QPushButton(t("deposit_log.button"))
             log_btn.clicked.connect(lambda: self._show_deposit_log(page, detail.piece.title, version))
@@ -1117,8 +1118,7 @@ class CatalogWindow(QMainWindow):
             piece_title: 曲名，失敗時記進詳細資料與紀錄檔
             version: 建出版本頁時的詳細面板版本
         """
-        catalog_only = self._reverter.catalog_only_paths([entry.local_path for entry in deposit.entries])
-        service = self._revert_service
+        read = self._reverter.revert_reader(deposit.deposit_id, [entry.local_path for entry in deposit.entries])
 
         def done(preview: RevertPreview):
             """讀到了：開預覽，勾了群組按下就交給主視窗"""
@@ -1139,10 +1139,7 @@ class CatalogWindow(QMainWindow):
             if not self._reverter.revert_deposit(preview, choices, finished):
                 QMessageBox.information(self, t("revert.confirm"), t("revert.busy"))
 
-        self._read(
-            lambda catalog: service.preview(deposit.deposit_id, catalog, DEFAULT_ORCHESTRA_TYPE, catalog_only),
-            done, lambda: None, lambda: self._revert_deposit(deposit, page, piece_title, version), piece_title,
-        )
+        self._read(read, done, lambda: None, lambda: self._revert_deposit(deposit, page, piece_title, version), piece_title)
 
     def _revert_finished(self, outcome: RevertOutcome, retry: Callable[[], None]):
         """撤銷存入結束（進度與完成幾份在主視窗的狀態列）：中途失敗時頂端提示列寫出已撤掉幾份、按「重試」再開一次預覽；

@@ -13,11 +13,13 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.catalog_constants import SHEET_DEPOSIT_LOG, SHEET_EDITIONS, SHEET_INSTRUMENTATION_LOG, SHEET_PARTS, SHEET_PIECES
+from core.catalog_constants import (
+    SHEET_DEPOSIT_LOG, SHEET_EDITIONS, SHEET_HEADERS, SHEET_INSTRUMENTATION_LOG, SHEET_PARTS, SHEET_PIECES,
+)
 from core.catalog_revert import RevertOutcome
 from core.catalog_sync import WriteSource, place_writes
 from core.locale import t
-from core.deposit_revert import KeptBecause, RevertAction, RevertChoice, deposits
+from core.deposit_revert import KeptBecause, LocalProject, RevertAction, RevertBlock, RevertChoice, deposits
 from core.models import Headcount, Project
 from services.activity_log import ActivityLog
 from services.clear_local_service import ClearLocalService
@@ -46,7 +48,7 @@ class RevertTestCase(DepositFixture, unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.temp)
         self.build(self.VOICES)
         downloads = DownloadService(FileService(), temp_dir=os.path.join(self.temp, "appdata-temp"))
-        self.reverter = DepositRevertService(downloads)
+        self.reverter = DepositRevertService(FileService(), downloads)
 
     def archive(self) -> str:
         """把專案的檔存進譜庫、指紋交回專案，回傳這次的存入編號"""
@@ -58,13 +60,17 @@ class RevertTestCase(DepositFixture, unittest.TestCase):
         self.project.mark_saved()
         return deposits(self.catalog.deposit_log())[0].deposit_id
 
-    def preview(self, deposit_id: str, catalog_only=()):
-        """撤銷那次存入的預覽"""
-        return self.reverter.preview(deposit_id, self.catalog, self.project.orchestra_type, catalog_only)
+    def preview(self, deposit_id: str, catalog_only=(), local=None):
+        """撤銷那次存入的預覽；預設開著的是這個專案"""
+        local = local if local is not None else LocalProject.of(self.project, catalog_only)
+        return self.reverter.preview(deposit_id, self.catalog, self.project.orchestra_type, local)
 
-    def revert(self, deposit_id: str, instrumentation: bool = False, names=None, catalog_only=()):
+    def revert(self, deposit_id: str, instrumentation: bool = False, names=None, catalog_only=(), local=None):
         """預覽後撤銷那次存入的群組（預設全部），回傳（預覽，結果）"""
-        preview = self.preview(deposit_id, catalog_only)
+        return self.revert_preview(self.preview(deposit_id, catalog_only, local), instrumentation, names)
+
+    def revert_preview(self, preview, instrumentation: bool = False, names=None):
+        """照預覽撤銷群組（預設全部），回傳（預覽，結果）"""
         choices = [
             RevertChoice(group, instrumentation) for group in preview.groups if names is None or group.name in names
         ]
@@ -116,7 +122,7 @@ class TestNewUploads(RevertTestCase):
         deposit_id = self.archive()
         log_dir = os.path.join(self.temp, "logs")
         downloads = DownloadService(FileService(), temp_dir=os.path.join(self.temp, "appdata-temp"))
-        self.reverter = DepositRevertService(downloads, ActivityLog(FileService(), log_dir))
+        self.reverter = DepositRevertService(FileService(), downloads, ActivityLog(FileService(), log_dir))
         self.revert(deposit_id)
         text = "".join(read(os.path.join(log_dir, name)).decode("utf-8") for name in os.listdir(log_dir))
         self.assertEqual(text.count(t("revert.log.action", action=t("revert.action.trash"))), 3)
@@ -218,6 +224,105 @@ class TestChangedAfterwards(RevertTestCase):
         self.assertEqual((pipa.action, pipa.kept, pipa.later.deposit_id), (RevertAction.KEEP, KeptBecause.REDEPOSITED, second))
         self.assertEqual(outcome.completed, 0)
         self.assertEqual(self.google.drive.content(self.registered_ids()["琵琶"]), b"new pipa")
+
+
+class TestOnlyCopy(RevertTestCase):
+    """撤銷不毀掉唯一的一份：要丟進垃圾桶或還原的檔，存入時的專案要開著、本機有內容相同的一份（或已清除、先下載回來）"""
+
+    def test_a_group_whose_project_is_not_open_is_refused_and_drive_is_untouched(self):
+        deposit_id = self.archive()
+        ids = self.registered_ids()
+        preview, outcome = self.revert(deposit_id, local=LocalProject.of(Project(), ()))
+        self.assertEqual(preview.groups[0].block, RevertBlock.NOT_OPEN)
+        self.assertEqual([(group.name, block) for group, block in outcome.refused], [("江樓鐘鼓", RevertBlock.NOT_OPEN)])
+        self.assertEqual(outcome.completed, 0)
+        self.assertFalse(any(self.google.drive.is_trashed(file_id) for file_id in ids.values()))
+        self.assertEqual(self.registered_ids(), ids)
+
+    def test_a_group_whose_local_file_changed_is_refused(self):
+        deposit_id = self.archive()
+        self.write_local(self.parts[1], b"edited locally")
+        preview, outcome = self.revert(deposit_id)
+        group = preview.groups[0]
+        self.assertEqual(group.block, RevertBlock.NO_LOCAL_COPY)
+        self.assertEqual([os.path.basename(f.entry.local_path) for f in group.uncovered], ["琵琶.pdf"])
+        self.assertEqual(outcome.completed, 0)
+        self.assertFalse(self.google.drive.is_trashed(self.registered_ids()["琵琶"]))
+
+    def test_a_missing_local_file_that_is_not_only_in_the_catalog_is_refused(self):
+        deposit_id = self.archive()
+        os.remove(self.parts[1].original_path)
+        preview, outcome = self.revert(deposit_id)
+        self.assertEqual(preview.groups[0].block, RevertBlock.NO_LOCAL_COPY)
+        self.assertEqual(outcome.completed, 0)
+
+    def test_a_local_file_changed_after_the_preview_stops_the_group(self):
+        deposit_id = self.archive()
+        preview = self.preview(deposit_id)
+        self.assertIsNone(preview.groups[0].block)
+        self.write_local(self.parts[1], b"edited after the preview")
+        _, outcome = self.revert_preview(preview)
+        self.assertEqual([block for _, block in outcome.refused], [RevertBlock.NO_LOCAL_COPY])
+        self.assertEqual(outcome.completed, 0)
+        self.assertFalse(self.google.drive.is_trashed(self.registered_ids()["琵琶"]))
+
+    def test_a_renamed_group_is_still_the_group_that_made_the_deposit(self):
+        deposit_id = self.archive()
+        self.project.update_group(self.group, name="改過名字的群組")
+        preview, outcome = self.revert(deposit_id)
+        self.assertIsNone(preview.groups[0].block)
+        self.assertEqual(outcome.completed, 3)
+
+    def test_rows_written_before_group_ids_are_matched_by_group_name(self):
+        deposit_id = self.archive()
+        column = SHEET_HEADERS[SHEET_DEPOSIT_LOG].index("group_id")
+        for number in range(2, len(self.google.sheets.rows(SHEET_DEPOSIT_LOG)) + 1):
+            self.google.sheets.set_cell(SHEET_DEPOSIT_LOG, f"{chr(ord('A') + column)}{number}", "")
+        preview, outcome = self.revert(deposit_id)
+        self.assertIsNone(preview.groups[0].block)
+        self.assertEqual(outcome.completed, 3)
+
+    def test_removing_only_registrations_needs_no_local_copy(self):
+        parts_folder = self.google.drive.add_folder("分譜", self.folder)
+        self.google.drive.add_file("琵琶.pdf", parts_folder, "琵琶".encode())
+        self.google.drive.add_file("二胡 I.pdf", parts_folder, "二胡 I".encode())
+        self.google.drive.add_file("總譜.pdf", self.folder, b"score")
+        deposit_id = self.archive()
+        preview, outcome = self.revert(deposit_id, local=LocalProject.of(Project(), ()))
+        self.assertIsNone(preview.groups[0].block)
+        self.assertEqual(outcome.completed, 3)
+
+
+class TestRecheckedBeforeActing(RevertTestCase):
+    """動 Drive 之前一刻重讀：預覽之後在 Drive 上又改過的檔不動，列出來"""
+
+    def test_a_file_changed_on_drive_after_the_preview_is_kept(self):
+        deposit_id = self.archive()
+        preview = self.preview(deposit_id)
+        pipa = self.registered_ids()["琵琶"]
+        self.google.drive.set_content(pipa, b"edited on the web after the preview")
+        _, outcome = self.revert_preview(preview)
+        self.assertEqual([os.path.basename(f.entry.local_path) for f in outcome.changed], ["琵琶.pdf"])
+        self.assertFalse(self.google.drive.is_trashed(pipa))
+        self.assertEqual(self.registered_ids()["琵琶"], pipa)
+        self.assertEqual(outcome.completed, 2)
+
+
+class TestRegistrationsElsewhere(RevertTestCase):
+    """移除登記只動那次存入的那處、那個聲部的列；同一個檔另外登記在別處的不動"""
+
+    def test_a_registration_of_the_same_file_at_another_place_stays(self):
+        deposit_id = self.archive()
+        pipa = self.registered_ids()["琵琶"]
+        add_row(
+            self.google, SHEET_PARTS, id="pt8", edition_id="e1", movement_id="", instrument_name="琵琶",
+            sort_order="1", drive_file_id=pipa, file_name="琵琶.pdf",
+        )
+        _, outcome = self.revert(deposit_id)
+        self.assertEqual(outcome.completed, 3)
+        rows = {r["id"]: r["drive_file_id"] for r in records(self.google, SHEET_PARTS)}
+        self.assertEqual(rows["pt8"], pipa)
+        self.assertEqual(rows["pt2"], "")
 
 
 class ClearedTestCase(RevertTestCase):
