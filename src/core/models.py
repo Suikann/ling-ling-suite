@@ -1928,6 +1928,21 @@ class Project:
         if self._put_fingerprints(fingerprints):
             self._changed()
 
+    def forget_deposits(self, paths: Iterable[str]) -> None:
+        """撤銷存入之後：撤掉的檔拿掉存入指紋（譜庫不再有這份內容），不再算未存入或只在譜庫
+
+        Args:
+            paths: 撤掉的檔的本機路徑；路徑以 core.paths 判定同一性
+        """
+        keys = {path_key(path) for path in paths}
+        changed = False
+        for ref in self.file_refs():
+            if ref.file.deposit_md5 and path_key(ref.file.original_path) in keys:
+                ref.file.deposit_md5 = ""
+                changed = True
+        if changed:
+            self._changed()
+
     def _put_fingerprints(self, fingerprints: Mapping[str, str]) -> bool:
         """把存入指紋寫進路徑相符的檔案資訊（不發通知），回傳有沒有改到"""
         keyed = {path_key(path): md5 for path, md5 in fingerprints.items() if md5}

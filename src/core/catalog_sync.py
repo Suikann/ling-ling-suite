@@ -24,7 +24,7 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple
 
 from core.catalog_models import SectionMapEntry
-from core.models import CatalogChangeKind, Headcount, Project, format_duration
+from core.models import CatalogChangeKind, CatalogRevert, Headcount, Project, format_duration
 from core.sections import stored_section
 from core.voice_names import VoiceKey, instrument_key, voice_key
 
@@ -189,15 +189,23 @@ def place_writes(project: Project) -> List[PlaceWrite]:
                 group.id, group.name, link.edition_id, link.movement_id, list(group.instruments), items,
                 confirm=link.confirm_voices,
             ))
-        for revert in link.reverts:
-            items = [SyncItem(SyncField.VOICE, voice, True, False) for voice in revert.remove]
-            items += [
-                SyncItem(SyncField.HEADCOUNT, voice, written, original) for voice, written, original in revert.restore
-            ]
-            writes.append(PlaceWrite(
-                group.id, group.name, revert.edition_id, revert.movement_id, [], items, revert=True,
-            ))
+        writes += [revert_write(group.id, group.name, revert) for revert in link.reverts]
     return writes
+
+
+def revert_write(group_id: str, group_name: str, revert: CatalogRevert) -> PlaceWrite:
+    """撤掉一個群組寫進一處的編制要寫的格子：要刪的聲部各一格（有→沒有）、要改回的人數各一格（那次寫的→原值）
+
+    改連後存檔時（place_writes）與撤銷存入的「一起撤掉編制」共用。
+
+    Args:
+        group_id: 群組 ID（衝突選擇的鍵；撤掉沒有衝突）
+        group_name: 群組名稱（寫進編制寫入紀錄）
+        revert: 要撤掉的（core/catalog_revert.py 的 pending_revert）
+    """
+    items = [SyncItem(SyncField.VOICE, voice, True, False) for voice in revert.remove]
+    items += [SyncItem(SyncField.HEADCOUNT, voice, written, original) for voice, written, original in revert.restore]
+    return PlaceWrite(group_id, group_name, revert.edition_id, revert.movement_id, [], items, revert=True)
 
 
 def section_map_items(entries: Sequence[SectionMapEntry], chosen: Mapping[str, str]) -> List[SyncItem]:

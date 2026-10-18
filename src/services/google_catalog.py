@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, 
 from core.catalog_constants import DRIVE_FOLDER_MIME, DRIVE_PDF_MIME
 from core.catalog_errors import CatalogError, CatalogErrorKind, exception_message
 from core.constants import CATALOG_SPREADSHEET_ID_KEY
-from core.catalog_models import DriveFile, DriveListing
+from core.catalog_models import DriveFile, DriveListing, DriveRevision
 from services.catalog_ports import CellWrite, sheet_range
 from services.catalog_service import CatalogService
 from services.google_auth_service import GoogleAuthService, LoginReason
@@ -47,6 +47,8 @@ _DRIVE_ONE_FILE_FIELDS = "id, name, mimeType, parents, md5Checksum, headRevision
 _RESUMABLE_THRESHOLD = 5 * 1024 * 1024
 _RESUMABLE_CHUNK_SIZE = 5 * 1024 * 1024
 _DRIVE_FILE_FIELDS = f"nextPageToken, files({_DRIVE_ONE_FILE_FIELDS})"
+# 列出版本時一頁最多幾個（API 上限 1000；Drive 最多留最近 100 個版本，一頁就列完）
+_REVISION_PAGE_SIZE = 1000
 
 
 def open_google_catalog(auth: GoogleAuthService, spreadsheet_id: str) -> CatalogService:
@@ -289,6 +291,26 @@ class GoogleDrive(_Gateway):
     def download(self, file_id: str) -> bytes:
         """下載內容（files.get，alt=media），回傳原始位元組"""
         return self._send(self._api.files().get_media(fileId=file_id)) or b""
+
+    def list_revisions(self, file_id: str) -> List[DriveRevision]:
+        """列出 Drive 還留著的版本（revisions.list），由舊到新"""
+        response = self._execute(self._api.revisions().list(
+            fileId=file_id, fields="revisions(id,md5Checksum,keepForever)", pageSize=_REVISION_PAGE_SIZE,
+        ))
+        return [
+            DriveRevision(item["id"], item.get("md5Checksum", ""), bool(item.get("keepForever", False)))
+            for item in response.get("revisions", [])
+        ]
+
+    def keep_revision(self, file_id: str, revision_id: str, keep: bool) -> None:
+        """設定版本的 keepForever（revisions.update）"""
+        self._execute(self._api.revisions().update(
+            fileId=file_id, revisionId=revision_id, body={"keepForever": keep}, fields="id",
+        ))
+
+    def download_revision(self, file_id: str, revision_id: str) -> bytes:
+        """下載一個版本的內容（revisions.get，alt=media），回傳原始位元組"""
+        return self._send(self._api.revisions().get_media(fileId=file_id, revisionId=revision_id)) or b""
 
 
 def _drive_file(item: dict) -> DriveFile:

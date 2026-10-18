@@ -25,9 +25,13 @@
     places = catalog.deposit_places([("e1", "m1")])  # 存入前：那處的登記與版本資料夾裡的檔
     catalog.record_deposits(records, email)          # 存入後：登記分譜列並寫存入紀錄（一次寫入）
     content = catalog.download_file(drive_file)      # 從譜庫下載：一個檔的內容，呼叫端拿 md5 核對
+    history = catalog.deposit_log()                  # 存入紀錄的全部列（撤銷存入挑一次存入）
+    reading = catalog.revert_reading(deposit_id, OrchestraType.CHINESE)  # 撤銷存入前：那次每份檔與各處的現況
+    catalog.record_revert(deposit_id, done, email)   # 撤銷存入後：移除登記並寫存入紀錄（一次寫入）
     rows = catalog.new_rows(SHEET_PIECES, [{"title": "春江花月夜"}])
     ids = catalog.add_rows(rows)                     # 失敗時以同一個 rows 重送，不會重複新增
 """
+import hashlib
 import time
 import uuid
 from dataclasses import fields, replace
@@ -43,9 +47,9 @@ from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, OrchestraType
 from core.voice_suggestions import ranked_by_usage
 from core.catalog_models import (
-    CatalogOverview, CatalogPlace, Composer, DriveFile, Edition, EditionFiles, EditionPage, FolderContents, FolderPdf,
-    InstrumentationLogEntry, LinkTargets, Movement, Part, Performance, Piece, PieceDetail, Registration,
-    SectionMapEntry, sort_order_key,
+    CatalogOverview, CatalogPlace, Composer, DepositLogEntry, DriveFile, DriveRevision, Edition, EditionFiles,
+    EditionPage, FolderContents, FolderPdf, InstrumentationLogEntry, LinkTargets, Movement, Part, Performance, Piece,
+    PieceDetail, Registration, SectionMapEntry, sort_order_key,
 )
 from core.catalog_revert import RevertRow, revert_rows
 from core.catalog_sync import (
@@ -53,6 +57,7 @@ from core.catalog_sync import (
     final_voices, review_items, value_text,
 )
 from core.deposit import SCORE_VOICE, DepositRecord, PlaceFiles, folder_key
+from core.deposit_revert import UNREGISTERING, RevertFile, RevertPlace, RevertReading, needs_revisions
 from core.log_entry import now
 from core.models import Headcount
 from core.sections import stored_section
@@ -1267,6 +1272,154 @@ class CatalogService:
         """
         return self._call(lambda: self._drive.download(file.id))
 
+    def deposit_log(self) -> List[DepositLogEntry]:
+        """讀存入紀錄的全部列，依紀錄的順序（列出工作表名稱、讀取各一次請求）
+
+        Returns:
+            每一列；還沒有存入紀錄時為空清單
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        if SHEET_DEPOSIT_LOG not in self._call(self._sheets.sheet_titles):
+            return []
+        return _models(self._read_sheets(SHEET_DEPOSIT_LOG)[0], SHEET_DEPOSIT_LOG, DepositLogEntry)
+
+    def revert_reading(self, deposit_id: str, orchestra_type: OrchestraType) -> RevertReading:
+        """讀撤銷一次存入要的譜庫現況：存入紀錄、那次各處的編制與登記、編制寫入紀錄，以及那次每份檔在 Drive 上的樣子
+
+        試算表列出工作表名稱、讀取各一次請求；Drive 每份檔取一次中繼資料，那次更新了內容、內容沒再變過的檔
+        另列一次版本（下場怎麼決定見 core/deposit_revert.py）。
+
+        Args:
+            deposit_id: 要撤銷的存入編號
+            orchestra_type: 專案的樂團類型（讀那處的編制用）
+
+        Returns:
+            讀到的現況；存入紀錄裡沒有這個存入編號時沒有檔與處
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        titles = self._call(self._sheets.sheet_titles)
+        logs = [sheet for sheet in (SHEET_DEPOSIT_LOG, SHEET_INSTRUMENTATION_LOG) if sheet in titles]
+        sheets = _place_sheets(titles) + logs
+        tables = dict(zip(sheets, self._read_sheets(*sheets)))
+        entries = _models(tables.get(SHEET_DEPOSIT_LOG, []), SHEET_DEPOSIT_LOG, DepositLogEntry)
+        ours = [entry for entry in entries if entry.deposit_id == deposit_id]
+        catalog = _PlaceTables(tables, orchestra_type)
+        places = {}
+        for key in dict.fromkeys((entry.edition_id, entry.movement_id) for entry in ours):
+            places[key] = self._revert_place(catalog, *key)
+        files = {file_id: self._drive_file(file_id) for file_id in dict.fromkeys(e.drive_file_id for e in ours) if file_id}
+        revisions: Dict[str, List[DriveRevision]] = {}
+        for entry in ours:
+            if entry.drive_file_id not in revisions and needs_revisions(entry, files.get(entry.drive_file_id)):
+                revisions[entry.drive_file_id] = self._call(lambda: self._drive.list_revisions(entry.drive_file_id))
+        instrumentation = _models(
+            tables.get(SHEET_INSTRUMENTATION_LOG, []), SHEET_INSTRUMENTATION_LOG, InstrumentationLogEntry,
+        )
+        return RevertReading(entries, files, revisions, places, instrumentation)
+
+    def _revert_place(self, catalog: "_PlaceTables", edition_id: str, movement_id: str) -> RevertPlace:
+        """撤銷時的一處：曲名、版本、樂章、編制，與分譜列登記的檔；已不在譜庫時沒有內容"""
+        try:
+            place = self._place(catalog, edition_id, movement_id)
+        except CatalogError as error:
+            if error.kind is not CatalogErrorKind.GONE:
+                raise
+            return RevertPlace(None)
+        registered = {
+            part.drive_file_id.strip(): part.instrument_name
+            for _, part in catalog._voice_rows(edition_id, movement_id) if part.drive_file_id.strip()
+        }
+        return RevertPlace(place, registered)
+
+    def trash_file(self, file_id: str) -> None:
+        """把 Drive 上的檔丟進垃圾桶（一次請求），約 30 天內可從垃圾桶救回
+
+        Raises:
+            CatalogError: 丟不進去
+        """
+        self._call(lambda: self._drive.move_to_trash(file_id))
+
+    def restore_revision(self, file: DriveFile, revision: DriveRevision) -> DriveFile:
+        """把 Drive 上的檔的內容還原成一個舊版本：先把那個版本設成永久保留，下載並核對 MD5，再傳回同一個檔（檔案 ID 不變）
+
+        傳回之後舊版本的內容已是目前的內容，再把它的永久保留拿掉（不然它會一直佔著 Drive 的空間與每個檔 200 個的上限）；
+        這一步失敗不影響還原，舊版本只是多留著。請求數固定四次。
+
+        Args:
+            file: 要還原的檔
+            revision: 要還原成的版本（Drive 還留著的）
+
+        Returns:
+            還原後的檔（新的 headRevisionId）
+
+        Raises:
+            CatalogError: 還原不了，內容沒變；版本已被 Drive 清掉時為找不到，下載的內容跟版本的 MD5 不符時為其他
+        """
+        self._call(lambda: self._drive.keep_revision(file.id, revision.id, True))
+        content = self._call(lambda: self._drive.download_revision(file.id, revision.id))
+        if revision.md5 and hashlib.md5(content).hexdigest() != revision.md5:
+            raise CatalogError(CatalogErrorKind.OTHER, f"revision {revision.id} of {file.id} does not match its MD5")
+        restored = self._call(lambda: self._drive.update_content(file.id, content))
+        try:
+            self._call(lambda: self._drive.keep_revision(file.id, revision.id, False))
+        except CatalogError:
+            pass
+        return restored
+
+    def record_revert(self, deposit_id: str, done: Sequence[Tuple[RevertFile, str]], operator: str) -> None:
+        """撤銷存入後移除登記並寫存入紀錄：寫入前一刻才讀分譜工作表找列號，全部以一個請求寫入
+
+        丟進垃圾桶與只移除登記的檔，登記它的分譜列（含總譜列）清空 drive_file_id、file_name；每份撤掉的檔一列存入紀錄，
+        這一批共用一個新抽的存入編號，reverts 記被撤銷的存入編號。只新增、不修改存入紀錄。請求數固定：
+        列出工作表名稱、讀取、寫入各一次，存入紀錄還沒建立時另建一次。
+
+        Args:
+            deposit_id: 被撤銷的存入編號
+            done: 撤掉了的每份檔與撤銷後 Drive 上那份的版本 ID
+            operator: 操作者（登入的 email），寫進存入紀錄
+
+        Raises:
+            CatalogError: 讀不到或寫不進去（沒有任何一格被寫入）
+        """
+        titles = set(self._call(self._sheets.sheet_titles))
+        has_log = SHEET_DEPOSIT_LOG in titles
+        ranges = [_whole_sheet(SHEET_PARTS)]
+        if has_log:
+            ranges += [sheet_range(SHEET_DEPOSIT_LOG, "1:1"), sheet_range(SHEET_DEPOSIT_LOG, "A:B")]
+        values = self._call(lambda: self._sheets.read_ranges(ranges))
+        tables = {SHEET_PARTS: values[0]}
+        deposit_ids: Set[str] = set()
+        if has_log:
+            header, ids = values[1:]
+            tables[SHEET_DEPOSIT_LOG] = header[:1] + ids[1:]
+            deposit_ids = {row[1] for row in ids[1:] if len(row) > 1}
+        batch = _Batch(tables, self._draw_ids)
+        parts = _numbered(values[0], SHEET_PARTS, Part)
+        revert_id = self._draw_ids(deposit_ids, 1)[0]
+        stamp = now().strftime("%Y-%m-%d %H:%M:%S")
+        for reverted, head in done:
+            entry = reverted.entry
+            if reverted.action in UNREGISTERING:
+                for row, part in parts:
+                    if part.drive_file_id.strip() == entry.drive_file_id:
+                        batch.set(SHEET_PARTS, row, "drive_file_id", "")
+                        batch.set(SHEET_PARTS, row, "file_name", "")
+            batch.add(SHEET_DEPOSIT_LOG, {
+                "deposit_id": revert_id, "time": stamp, "operator": operator, "edition_id": entry.edition_id,
+                "movement_id": entry.movement_id, "group": entry.group, "voice": entry.voice,
+                "local_path": entry.local_path, "drive_file_id": entry.drive_file_id, "action": reverted.action.value,
+                "revision_after": head, "revision_before": reverted.file.head_revision if reverted.file else "",
+                "reverts": deposit_id,
+            })
+        if batch.cells:
+            for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
+                self._call(lambda: self._sheets.add_sheet(sheet))
+            self._call(lambda: self._sheets.write_cells(batch.cells))
+
     def subfolders(self, folder_id: str) -> List[DriveFile]:
         """列出 Drive 資料夾裡的子資料夾（依名稱排序，不含垃圾桶裡的）
 
@@ -1700,15 +1853,19 @@ class CatalogService:
             pending += [(path + (folder.name,), folder.id) for folder in contents.folders]
         return tree
 
-    def _live_file(self, file_id: str) -> Optional[DriveFile]:
-        """Drive 上還在（不在垃圾桶）的檔；已經沒有或在垃圾桶裡時為 None"""
+    def _drive_file(self, file_id: str) -> Optional[DriveFile]:
+        """Drive 上一個檔現在的樣子（在垃圾桶裡的也取得到）；已經沒有時為 None"""
         try:
-            file = self._call(lambda: self._drive.get_file(file_id))
+            return self._call(lambda: self._drive.get_file(file_id))
         except CatalogError as error:
             if error.kind is CatalogErrorKind.NOT_FOUND:
                 return None
             raise
-        return None if file.trashed else file
+
+    def _live_file(self, file_id: str) -> Optional[DriveFile]:
+        """Drive 上還在（不在垃圾桶）的檔；已經沒有或在垃圾桶裡時為 None"""
+        file = self._drive_file(file_id)
+        return None if file is None or file.trashed else file
 
     def _list_files(self, query: str) -> List[DriveFile]:
         """列出符合查詢的全部檔案（逐頁請求）"""

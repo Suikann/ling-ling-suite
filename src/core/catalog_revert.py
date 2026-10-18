@@ -86,7 +86,7 @@ class _Run:
 
 def revert_rows(
     entries: Sequence[InstrumentationLogEntry], edition_id: str, movement_id: str,
-    voices: Sequence[Tuple[str, Headcount]], filed: Sequence[str], group_name: str,
+    voices: Sequence[Tuple[str, Headcount]], filed: Sequence[str], group_name: str, until: str = "",
 ) -> List[RevertRow]:
     """這個群組寫進一處的編制，每個聲部一列，依譜庫現在的順序（譜庫已沒有的排在最後）
 
@@ -97,6 +97,8 @@ def revert_rows(
         voices: 那處現在的聲部與人數，依譜庫的順序
         filed: 那處已登記 Drive 檔案的聲部
         group_name: 群組名稱（紀錄的「群組」欄）
+        until: 只看這個時間（紀錄的寫法）以前這個群組的寫入，之後它自己的寫入也算之後被改過（撤銷存入只撤那次存入
+            之前寫的）；空字串表示不限
 
     Returns:
         每個這個群組寫過的聲部一列；它刪掉的聲部與人數寫回原值的不列
@@ -106,7 +108,7 @@ def revert_rows(
         if (entry.edition_id, entry.movement_id) != (edition_id, movement_id) or entry.field not in _FIELDS:
             continue
         key = voice_key(entry.voice)
-        mine = entry.group == group_name
+        mine = entry.group == group_name and (not until or entry.time <= until)
         if mine and entry.source == WriteSource.UNDO.value:
             runs.pop(key, None)
         elif mine and entry.source == WriteSource.SAVE.value:

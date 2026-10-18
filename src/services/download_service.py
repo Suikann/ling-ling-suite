@@ -25,6 +25,7 @@
     outcome = service.restore(sources, catalog, should_cancel, report)  # 背景執行緒
     project.record_fingerprints(outcome.fingerprints)
     outcome = service.download(folder_items(pdfs, folder, True), catalog, should_cancel, report)
+    outcome = service.put_back([DownloadItem(drive_file, path)], catalog, should_cancel, report)  # 撤銷存入前
 """
 import os
 import uuid
@@ -163,6 +164,23 @@ class DownloadService:
             outcome.saved, outcome.skipped, outcome.occupied, outcome.mismatched, unavailable, outcome.failed,
             outcome.total, outcome.error, outcome.cancelled,
         )
+
+    def put_back(
+        self, items: Sequence[DownloadItem], catalog: CatalogService, should_cancel: Callable[[], bool],
+        report: Callable[[DownloadProgress], None],
+    ) -> DownloadOutcome:
+        """把指定的 Drive 檔下載回本機的原位：逐份下載、核對 MD5，原位已有別的檔時不覆蓋（撤銷存入先放回本機已清除的檔）
+
+        Args:
+            items: 要下載的 Drive 檔與要放回的本機路徑
+            catalog: 譜庫服務
+            should_cancel: 是否已要求取消
+            report: 回報進度
+
+        Returns:
+            下載的結果
+        """
+        return self._run(items, catalog, False, should_cancel, report)
 
     def download(
         self, items: Sequence[DownloadItem], catalog: CatalogService, should_cancel: Callable[[], bool],

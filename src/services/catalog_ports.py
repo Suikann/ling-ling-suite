@@ -16,7 +16,7 @@
 """
 from typing import Dict, List, Mapping, Protocol, Sequence, Tuple
 
-from core.catalog_models import DriveFile, DriveListing
+from core.catalog_models import DriveFile, DriveListing, DriveRevision
 
 # 一個範圍與要寫進去的值（由左上角往右下填）
 CellWrite = Tuple[str, List[List[str]]]
@@ -211,4 +211,31 @@ class DrivePort(Protocol):
 
         Raises:
             CatalogError: 下載失敗；沒有這個檔時為找不到
+        """
+
+    def list_revisions(self, file_id: str) -> List[DriveRevision]:
+        """列出檔案 Drive 還留著的版本（revisions.list，一頁最多 1000 個；Drive 最多留最近 100 個版本，一頁就列完）
+
+        Returns:
+            由舊到新，最後一個是目前的內容
+
+        Raises:
+            CatalogError: 列出失敗；沒有這個檔時為找不到
+        """
+
+    def keep_revision(self, file_id: str, revision_id: str, keep: bool) -> None:
+        """設定一個版本要不要永久保留（revisions.update 的 keepForever）；沒設的舊版本約 30 天後會被 Drive 清掉
+
+        Raises:
+            CatalogError: 設定失敗；版本已被清掉時為找不到
+        """
+
+    def download_revision(self, file_id: str, revision_id: str) -> bytes:
+        """下載檔案的一個版本的內容（revisions.get，alt=media）
+
+        Returns:
+            那個版本內容的原始位元組
+
+        Raises:
+            CatalogError: 下載失敗；版本已被清掉時為找不到
         """

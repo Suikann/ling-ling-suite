@@ -106,6 +106,29 @@ class InstrumentationLogEntry:
 
 
 @dataclass(frozen=True)
+class DepositLogEntry:
+    """存入紀錄的一列：一次存入（或撤銷存入）裡的一份檔（欄位見 core/catalog_constants.py 的 SHEET_DEPOSIT_LOG）
+
+    存入時 action 是 core/deposit.py 的 DepositAction 的值、reverts 空白；撤銷存入時 action 是
+    core/deposit_revert.py 的 RevertAction 的值、reverts 是被撤銷的那次存入編號。
+    """
+    id: str = ""
+    deposit_id: str = ""
+    time: str = ""
+    operator: str = ""
+    edition_id: str = ""
+    movement_id: str = ""
+    group: str = ""
+    voice: str = ""
+    local_path: str = ""
+    drive_file_id: str = ""
+    action: str = ""
+    revision_after: str = ""
+    revision_before: str = ""
+    reverts: str = ""
+
+
+@dataclass(frozen=True)
 class Performance:
     """演出紀錄"""
     id: str = ""
@@ -151,6 +174,20 @@ class DriveFile:
     md5: str = ""
     head_revision: str = ""
     trashed: bool = False
+
+
+@dataclass(frozen=True)
+class DriveRevision:
+    """Drive 檔案留著的一個版本（舊內容約 30 天或最近 100 個版本之後會被 Drive 清掉，設了 keepForever 的除外）
+
+    Attributes:
+        id: 版本 ID
+        md5: 這個版本內容的 MD5（md5Checksum）
+        keep_forever: 是否設成永久保留
+    """
+    id: str
+    md5: str = ""
+    keep_forever: bool = False
 
 
 @dataclass(frozen=True)

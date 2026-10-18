@@ -9,7 +9,8 @@
 
 試算表照 Google 的行為：讀取時每列結尾的空格與結尾的空列不回傳；batchUpdate 全成或全不成；
 範圍的工作表不存在時整個請求失敗。Drive 解析查詢字串裡的字串值（反斜線跳脫），沒跳脫好的查詢會失敗；檔案的每次內容是一個版本，
-以預先要到的 ID 建檔重送時回 409（已經存在）；可以讓某個檔下載時內容壞掉（corrupt_downloads）。
+以預先要到的 ID 建檔重送時回 409（已經存在）；可以讓某個檔下載時內容壞掉（corrupt_downloads）；
+舊版本可以設成永久保留（keepForever），也可以扮演 Drive 清掉了某個舊版本（purge_revision）。
 
 使用範例：
     from fake_google_catalog import FakeGoogle
@@ -31,7 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from core.catalog_constants import DRIVE_FOLDER_MIME, DRIVE_PDF_MIME, DRIVE_SPREADSHEET_MIME
 from core.catalog_errors import CatalogError, CatalogErrorKind
-from core.catalog_models import DriveFile, DriveListing
+from core.catalog_models import DriveFile, DriveListing, DriveRevision
 
 # 假 Drive 的根資料夾（My Drive）
 ROOT = "root"
@@ -306,6 +307,7 @@ class _DriveItem:
     parents: List[str]
     revisions: List[Tuple[str, bytes]] = field(default_factory=list)
     trashed: bool = False
+    kept: set = field(default_factory=set)
 
     @property
     def content(self) -> bytes:
@@ -378,6 +380,16 @@ class FakeDrive:
     def revisions(self, file_id: str) -> List[str]:
         """檔案各次內容的版本 ID，由舊到新"""
         return [revision for revision, _ in self._items[file_id].revisions]
+
+    def purge_revision(self, file_id: str, revision_id: str) -> None:
+        """Drive 清掉了檔案的一個舊版本（超過約 30 天或不在最近 100 個版本裡）"""
+        item = self._items[file_id]
+        item.revisions = [(revision, content) for revision, content in item.revisions if revision != revision_id]
+
+    def kept_revisions(self, file_id: str) -> List[str]:
+        """檔案設成永久保留的版本 ID，由舊到新"""
+        item = self._items[file_id]
+        return [revision for revision, _ in item.revisions if revision in item.kept]
 
     def set_content(self, file_id: str, content: bytes) -> None:
         """換掉檔案的內容（例如另一台電腦在 Drive 網頁上傳了新版本），成為新的版本"""
@@ -486,6 +498,38 @@ class FakeDrive:
             content = self._item(file_id).content
             return content + b" corrupted" if file_id in self._corrupt else content
         return self._google.request(handle)
+
+    def list_revisions(self, file_id: str) -> List[DriveRevision]:
+        """列出檔案還留著的版本，由舊到新；沒有這個檔時找不到"""
+        def handle():
+            """每個版本的 ID、MD5 與是否永久保留"""
+            item = self._item(file_id)
+            return [
+                DriveRevision(revision, hashlib.md5(content).hexdigest(), revision in item.kept)
+                for revision, content in item.revisions
+            ]
+        return self._google.request(handle)
+
+    def keep_revision(self, file_id: str, revision_id: str, keep: bool) -> None:
+        """設定版本要不要永久保留；版本已被清掉時找不到"""
+        def handle():
+            """記下或拿掉永久保留"""
+            item = self._item(file_id)
+            self._revision(item, revision_id)
+            (item.kept.add if keep else item.kept.discard)(revision_id)
+        self._google.request(handle)
+
+    def download_revision(self, file_id: str, revision_id: str) -> bytes:
+        """下載一個版本的內容；版本已被清掉時找不到"""
+        return self._google.request(lambda: self._revision(self._item(file_id), revision_id))
+
+    @staticmethod
+    def _revision(item: _DriveItem, revision_id: str) -> bytes:
+        """取一個版本的內容；沒有時照 Drive 回 404"""
+        for revision, content in item.revisions:
+            if revision == revision_id:
+                return content
+        raise CatalogError(CatalogErrorKind.NOT_FOUND, f"Revision not found: {revision_id}.")
 
     @staticmethod
     def _relocate(item: _DriveItem, name: str, add_parent: str, remove_parents: Sequence[str]) -> None:

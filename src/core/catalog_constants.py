@@ -37,7 +37,8 @@ SHEET_SECTIONS = "聲部組對照"
 # 編制寫入紀錄：每次寫回譜庫的每一格改動一列，只新增、不修改；來源與欄位寫 WriteSource、SyncField 的值
 SHEET_INSTRUMENTATION_LOG = "編制寫入紀錄"
 # 存入紀錄：一次存入一個存入編號、每份檔一列，只新增、不修改；動作寫 DepositAction 的值，
-# 版本 ID 是 Drive 檔案寫入後與被蓋掉的版本（headRevisionId；沒寫內容時兩者相同）
+# 版本 ID 是 Drive 檔案寫入後與被蓋掉的版本（headRevisionId；沒寫內容時兩者相同）。
+# 撤銷存入也是一個新的存入編號、每份撤掉的檔一列：動作寫 RevertAction 的值，reverts 是被撤銷的那次存入編號
 SHEET_DEPOSIT_LOG = "存入紀錄"
 
 SHEET_HEADERS = {
@@ -79,6 +80,8 @@ SHEET_HEADERS = {
     SHEET_DEPOSIT_LOG: [
         "id", "deposit_id", "time", "operator", "edition_id", "movement_id", "group", "voice", "local_path",
         "drive_file_id", "action", "revision_after", "revision_before",
+        # 新增的欄只加在後面：撤銷存入的列記被撤銷的存入編號
+        "reverts",
     ],
 }
 

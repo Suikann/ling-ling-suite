@@ -207,6 +207,21 @@
 - **一般下載的入口**：譜庫視窗版本頁的「下載…」開挑選視窗（`ui/catalog_download_dialog.py` 的 `CatalogDownloadDialog`），列出版本資料夾裡全部的 PDF（`EditionPagePanel.folder_pdfs`），預設勾「整個版本（保留子資料夾）」；取消它可以逐份勾選。按「下載」後選資料夾，在背景下載（`CatalogWindow._run_download`），狀態列顯示進度與取消鈕，一次一件，關閉視窗時下載進行中先問要不要取消。結束後狀態列寫出完成幾份，沒下載好的依原因列出；中途失敗時頂端提示列寫出已完成幾份，按「重試」以同樣的檔再下載一次（已下載的略過）
 - **下載回原位的入口**：群組分頁有只在譜庫的檔時出現「從譜庫下載回來」（`GroupTab.download_requested`），作用於這個群組；重新命名預覽說明跳過只在譜庫的檔時，旁邊也有這個按鈕（關掉預覽，作用於這次要重新命名的群組）。兩者都經 `MainWindow.download_back(group_ids)`，發譜預覽也可以逐群組呼叫。同存入在背景執行（`_run_in_background`，`locks_project`），狀態列顯示進度與取消，期間鎖住專案編輯、存檔與檔案操作。結束後把指紋交回專案（`record_fingerprints`），開始前沒有未存檔的改動時只存專案檔；目前的群組分頁照磁碟現況重新比對（停在原本的分頁），沒放回去的檔依原因列出（`ui/widgets.py` 的 `not_downloaded_text`）。讀不到譜庫或下載到一半失敗時頂端顯示提示列，寫出已完成幾份，按「重試」再下載一次
 
+### 撤銷存入
+
+存錯版本或樂章時，從存入紀錄挑一次存入、再挑其中的群組，撤掉那次的結果。每份檔的下場在 `core/deposit_revert.py`（`revert_preview`），讀譜庫與照決定去做在 `services/deposit_revert_service.py` 的 `DepositRevertService`（`preview`、`revert`），碰譜庫經譜庫服務（`deposit_log`、`revert_reading`、`trash_file`、`restore_revision`、`record_revert`）：
+
+- **一次存入**（`deposits`）：存入紀錄依存入編號分成一次一次的存入，撤銷存入也是一次（`reverts` 欄記被撤銷的存入編號），新的在前
+- **只撤內容還跟那次寫入一樣的部分**：Drive 檔案目前的版本 ID（`headRevisionId`）仍是那次寫入的版本（存入紀錄的 `revision_after`）才撤
+  - 那次新上傳的（`TRASH`）：移除分譜列的登記，檔丟進 Drive 垃圾桶（不永久刪除，30 天內可救回）；上次撤銷已丟進垃圾桶、登記沒寫進去的，只補移除登記
+  - 那次更新內容的（`RESTORE`）：被蓋掉的舊版本（`revision_before`）Drive 還留著就還原：把那個版本設成 `keepForever`、下載並以版本的 MD5 核對，再以 `files.update` 傳回同一個檔（檔案 ID 與登記不變）；傳回後舊版本的內容已是目前的內容，把 `keepForever` 改回 false（改不回去不影響還原）。舊版本已被 Drive 清掉的列為無法還原（`LOST`），不動
+  - 那次登記的是 Drive 上原有、內容相同的同名檔（`UNREGISTER`）：只移除登記，檔不動
+  - 不動（`KeptBecause`）：已經撤銷過、之後又存入過（存入紀錄裡之後還有這個檔的列，連同那次的時間列出）、之後 Drive 上的內容改過、Drive 上已沒有或在垃圾桶裡、那次只改了檔名或位置、那次跳過
+- **本機已清除的群組**：要撤銷、本機已清除（只在譜庫，呼叫端以 `Project.catalog_only_paths` 判定）的檔，先以從譜庫下載的同一套做法（`DownloadService.put_back`）下載回原位並核對 MD5，再動 Drive 上的那份。有任何一份沒放回去（下載失敗、MD5 不符、原位有別的檔），這個群組就不撤銷，交回那次下載的結果當原因（`RevertOutcome.skipped`），其他群組照常
+- **一起撤掉編制**（每個群組一個勾選，預設不勾）：沿用改連的判斷（`core/catalog_revert.py` 的 `revert_rows`），只看那次存入之前這個群組寫進那處的編制（`until`），之後它自己或別人的寫入都算之後被改過；這次會移除登記的聲部不算已登記 Drive 檔案，所以那次新增、連同分譜一起存入的聲部也撤得掉。寫入走寫回譜庫的同一套比對（`core/catalog_sync.py` 的 `revert_write`，與改連存檔時共用），編制寫入紀錄的來源記撤銷
+- **紀錄**：Drive 上的事逐份做完後（取消、中途失敗時也是，只算已做完的），以一次試算表寫入移除登記，並每份撤掉的檔寫一列存入紀錄（新的存入編號，動作是 `RevertAction` 的值，寫入後與之前的版本 ID，`reverts` 記被撤銷的存入編號）；只新增、不修改。編制的撤掉另是編制寫入紀錄的新列。撤掉的每份檔也寫一筆紀錄檔
+- **指紋**：下載回原位的檔交回指紋（`RevertOutcome.fingerprints`，經 `Project.record_fingerprints`）；撤掉的檔譜庫不再有這份內容，經 `Project.forget_deposits` 拿掉存入指紋
+
 ### 對到 HuaXia 曲目
 
 一個群組對一首 HuaXia 曲目（spec #82）：整首群組在 HuaXia 就是一首曲目，要照「一個樂章一首曲目」排人就每個樂章各開一個群組。

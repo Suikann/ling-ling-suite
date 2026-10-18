@@ -323,6 +323,40 @@ class TestDriveDownloads(unittest.TestCase):
         self.assertIs(raised.exception.kind, CatalogErrorKind.NOT_FOUND)
 
 
+class TestDriveRevisions(unittest.TestCase):
+    """Drive 留著的版本：列出、設定永久保留與下載一個版本，各一次請求"""
+
+    def test_lists_revisions_oldest_first_in_one_request(self):
+        http = HttpMockSequence([ok({"revisions": [
+            {"id": "r1", "md5Checksum": "aaa", "keepForever": True}, {"id": "r2", "md5Checksum": "bbb"},
+        ]})])
+        revisions = GoogleDrive(http=http).list_revisions("f1")
+        self.assertEqual(
+            [(r.id, r.md5, r.keep_forever) for r in revisions], [("r1", "aaa", True), ("r2", "bbb", False)],
+        )
+        self.assertIn("/files/f1/revisions", http.request_sequence[0][0])
+        self.assertEqual(len(http.request_sequence), 1)
+
+    def test_sets_keep_forever_on_one_revision(self):
+        http = HttpMockSequence([ok({"id": "r1"})])
+        GoogleDrive(http=http).keep_revision("f1", "r1", True)
+        self.assertIn("/files/f1/revisions/r1", http.request_sequence[0][0])
+        self.assertEqual(http.request_sequence[0][1], "PATCH")
+        self.assertEqual(sent_body(http, 0), {"keepForever": True})
+
+    def test_downloads_one_revision(self):
+        http = HttpMockSequence([({"status": "200"}, b"%PDF old")])
+        self.assertEqual(GoogleDrive(http=http).download_revision("f1", "r1"), b"%PDF old")
+        self.assertIn("/files/f1/revisions/r1", http.request_sequence[0][0])
+        self.assertEqual(sent_query(http, 0)["alt"], ["media"])
+
+    def test_a_purged_revision_is_not_found(self):
+        http = HttpMockSequence([({"status": "404"}, json.dumps({"error": {"message": "Revision not found"}}))])
+        with self.assertRaises(CatalogError) as raised:
+            GoogleDrive(http=http).download_revision("f1", "r1")
+        self.assertIs(raised.exception.kind, CatalogErrorKind.NOT_FOUND)
+
+
 class TestOpenGoogleCatalog(unittest.TestCase):
     """拿不到憑證或沒設定試算表時，依原因分類"""
 
