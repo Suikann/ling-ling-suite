@@ -4,10 +4,12 @@
 
 實作試算表關口與 Drive 關口（services/catalog_ports.py），注入給譜庫服務。每次呼叫計為一次請求（requests），
 可以設定在第 N 次請求時丟出某類錯誤（fail_at，可選擇在請求已經生效之後才丟出，扮演回應沒收到），
-或在第 N 次請求之前讓「另一台電腦」改動譜庫（before_request）。每次寫入多格送出的內容依序記在 sheets.writes。
+或在第 N 次請求之前讓「另一台電腦」改動譜庫（before_request）。每次寫入多格送出的內容依序記在 sheets.writes；
+試算表與 Drive 的請求另外分開計數（sheets_requests、drive_requests）。
 
 試算表照 Google 的行為：讀取時每列結尾的空格與結尾的空列不回傳；batchUpdate 全成或全不成；
-範圍的工作表不存在時整個請求失敗。Drive 解析查詢字串裡的字串值（反斜線跳脫），沒跳脫好的查詢會失敗。
+範圍的工作表不存在時整個請求失敗。Drive 解析查詢字串裡的字串值（反斜線跳脫），沒跳脫好的查詢會失敗；檔案的每次內容是一個版本，
+以預先要到的 ID 建檔重送時回 409（已經存在）。
 
 使用範例：
     from fake_google_catalog import FakeGoogle
@@ -50,6 +52,7 @@ class FakeGoogle:
     def __init__(self):
         """從沒有請求、沒有排定錯誤的狀態開始，建出共用請求計數的試算表與 Drive"""
         self.requests = 0
+        self._by_port = {"sheets": 0, "drive": 0}
         self._failures: Dict[int, _Failure] = {}
         self._changes: Dict[int, List[Callable[[], None]]] = {}
         self.sheets = FakeSheets(self)
@@ -75,9 +78,25 @@ class FakeGoogle:
         """第 number 次請求之前，讓另一台電腦做 change（不算這邊的請求）"""
         self._changes.setdefault(number, []).append(change)
 
-    def request(self, handle: Callable[[], object]) -> object:
-        """執行一次請求：先套用另一台電腦的改動，再依排定的錯誤丟出或執行 handle"""
+    @property
+    def sheets_requests(self) -> int:
+        """試算表關口的請求數"""
+        return self._by_port["sheets"]
+
+    @property
+    def drive_requests(self) -> int:
+        """Drive 關口的請求數"""
+        return self._by_port["drive"]
+
+    def request(self, handle: Callable[[], object], port: str = "drive") -> object:
+        """執行一次請求：先套用另一台電腦的改動，再依排定的錯誤丟出或執行 handle
+
+        Args:
+            handle: 請求的內容
+            port: 哪個關口的請求（"sheets" 或 "drive"），分別計數
+        """
         self.requests += 1
+        self._by_port[port] += 1
         for change in self._changes.pop(self.requests, []):
             change()
         failure = self._failures.pop(self.requests, None)
@@ -183,7 +202,7 @@ class FakeSheets:
 
     def read_ranges(self, ranges: Sequence[str]) -> List[List[List[str]]]:
         """讀多個範圍；任一工作表不存在時整個請求失敗"""
-        return self._google.request(lambda: [self._read(text) for text in ranges])
+        return self._google.request(lambda: [self._read(text) for text in ranges], "sheets")
 
     def write_cells(self, data: Sequence[Tuple[str, List[List[str]]]]) -> None:
         """一次寫入多個範圍，全成或全不成"""
@@ -197,7 +216,7 @@ class FakeSheets:
                     for j, value in enumerate(line):
                         self._put(self._tabs[sheet], row + i, col + j, str(value))
             self.writes.append([(text, [list(line) for line in values]) for text, values in data])
-        self._google.request(handle)
+        self._google.request(handle, "sheets")
 
     def append_rows(self, sheet: str, rows: Sequence[List[str]]) -> None:
         """在最後一列有內容的列之後新增多列"""
@@ -205,7 +224,7 @@ class FakeSheets:
             """接在最後一列有內容的列之後"""
             tab = self._tab(sheet)
             tab[:] = _trimmed(tab) + [[str(value) for value in row] for row in rows]
-        self._google.request(handle)
+        self._google.request(handle, "sheets")
 
     def add_sheet(self, title: str) -> None:
         """建立一張空的工作表；已有同名的時失敗"""
@@ -215,11 +234,11 @@ class FakeSheets:
                 raise CatalogError(CatalogErrorKind.OTHER, f"A sheet with the name \"{title}\" already exists.")
             self._tabs[title] = []
             self._sheet_ids[title] = next(self._next_sheet_id)
-        self._google.request(handle)
+        self._google.request(handle, "sheets")
 
     def sheet_ids(self) -> Dict[str, int]:
         """每張工作表的 sheetId"""
-        return self._google.request(lambda: dict(self._sheet_ids))
+        return self._google.request(lambda: dict(self._sheet_ids), "sheets")
 
     def delete_rows(self, rows: Sequence[Tuple[int, int]]) -> None:
         """刪掉多列（sheetId、從 0 起算的列號，都以刪除前為準），全成或全不成"""
@@ -233,11 +252,11 @@ class FakeSheets:
                 tab = self._tabs[titles[sheet_id]]
                 if row < len(tab):
                     del tab[row]
-        self._google.request(handle)
+        self._google.request(handle, "sheets")
 
     def sheet_titles(self) -> List[str]:
         """列出所有工作表的名稱"""
-        return self._google.request(lambda: list(self._tabs))
+        return self._google.request(lambda: list(self._tabs), "sheets")
 
     def create_spreadsheet(self, title: str, sheets: Mapping[str, Sequence[str]]) -> str:
         """建立新的試算表（放在 Drive 的根資料夾）：每張工作表有標題列並凍結；假 Google 只有一份試算表，以它為這份"""
@@ -247,7 +266,7 @@ class FakeSheets:
             self._sheet_ids = {name: next(self._next_sheet_id) for name in sheets}
             self._frozen = {name: 1 for name in sheets}
             return self._google.drive.add_file(title, ROOT, b"", DRIVE_SPREADSHEET_MIME)
-        return self._google.request(handle)
+        return self._google.request(handle, "sheets")
 
     def _tab(self, title: str) -> List[List[str]]:
         """取工作表；不存在時照 Google 回 400"""
@@ -279,19 +298,28 @@ class FakeSheets:
 
 @dataclass
 class _DriveItem:
-    """假 Drive 上的一個檔案或資料夾"""
+    """假 Drive 上的一個檔案或資料夾；檔案的每次內容是一個版本（revisions，最後一個是目前的內容）"""
 
     id: str
     name: str
     mime_type: str
     parents: List[str]
-    content: bytes = b""
+    revisions: List[Tuple[str, bytes]] = field(default_factory=list)
     trashed: bool = False
+
+    @property
+    def content(self) -> bytes:
+        """目前的內容"""
+        return self.revisions[-1][1] if self.revisions else b""
 
     def as_file(self) -> DriveFile:
         """以關口回傳的形狀呈現"""
-        md5 = "" if self.mime_type.startswith("application/vnd.google-apps.") else hashlib.md5(self.content).hexdigest()
-        return DriveFile(self.id, self.name, self.mime_type, tuple(self.parents), md5)
+        if self.mime_type.startswith("application/vnd.google-apps."):
+            return DriveFile(self.id, self.name, self.mime_type, tuple(self.parents), trashed=self.trashed)
+        return DriveFile(
+            self.id, self.name, self.mime_type, tuple(self.parents), hashlib.md5(self.content).hexdigest(),
+            self.revisions[-1][0] if self.revisions else "", self.trashed,
+        )
 
 
 class FakeDrive:
@@ -306,6 +334,13 @@ class FakeDrive:
         self._google = google
         self._items: Dict[str, _DriveItem] = {}
         self._ids = (f"drive-{n}" for n in itertools.count(1))
+        self._generated = (f"gen-{n}" for n in itertools.count(1))
+        self._revision_ids = (f"rev-{n}" for n in itertools.count(1))
+        # generate_ids 發出、還沒用掉的 ID（以指定 ID 建檔只收這些，照 Drive 的規定）
+        self._issued: set = set()
+        # 第幾次上傳要丟出的錯誤（fail_upload）與已經上傳了幾次
+        self._upload_failures: Dict[int, Tuple[CatalogErrorKind, bool]] = {}
+        self._uploads = 0
         self.page_size = 100
 
     # --- 測試直接操作（不算請求）---
@@ -334,6 +369,26 @@ class FakeDrive:
         """資料夾裡不在垃圾桶的檔案與資料夾"""
         return [item.as_file() for item in self._items.values() if folder_id in item.parents and not item.trashed]
 
+    def content(self, file_id: str) -> bytes:
+        """檔案目前的內容"""
+        return self._items[file_id].content
+
+    def revisions(self, file_id: str) -> List[str]:
+        """檔案各次內容的版本 ID，由舊到新"""
+        return [revision for revision, _ in self._items[file_id].revisions]
+
+    def set_content(self, file_id: str, content: bytes) -> None:
+        """換掉檔案的內容（例如另一台電腦在 Drive 網頁上傳了新版本），成為新的版本"""
+        self._items[file_id].revisions.append((next(self._revision_ids), content))
+
+    def fail_upload(self, number: int, kind: CatalogErrorKind, applied: bool = False) -> None:
+        """第 number 次上傳（upload，從 1 起算）丟出 kind 類的錯誤；applied 時照常上傳之後才丟出（回應沒收到）"""
+        self._upload_failures[number] = (kind, applied)
+
+    def files_named(self, name: str) -> List[DriveFile]:
+        """名稱是 name、不在垃圾桶的檔案（不分資料夾）"""
+        return [item.as_file() for item in self._items.values() if item.name == name and not item.trashed]
+
     # --- Drive 關口 ---
 
     def list_files(self, query: str, page_token: str = "") -> DriveListing:
@@ -355,13 +410,50 @@ class FakeDrive:
         """取檔案的中繼資料；沒有這個檔時找不到"""
         return self._google.request(lambda: self._item(file_id).as_file())
 
-    def create_folder(self, name: str, parent: str) -> DriveFile:
-        """在 parent 裡建立資料夾"""
+    def create_folder(self, name: str, parent: str, file_id: str = "") -> DriveFile:
+        """在 parent 裡建立資料夾；給了 file_id 時以它為 ID（那個 ID 已有檔案時回 409）"""
         def handle():
             """確認上層資料夾存在後建立"""
             if parent != ROOT:
                 self._item(parent)
-            return self._items[self._add(name, DRIVE_FOLDER_MIME, parent, b"")].as_file()
+            return self._items[self._add(name, DRIVE_FOLDER_MIME, parent, b"", self._claim(file_id))].as_file()
+        return self._google.request(handle)
+
+    def generate_ids(self, count: int) -> List[str]:
+        """發出 count 個之後可以拿來建檔的 ID"""
+        def handle():
+            """發 ID 並記下"""
+            ids = [next(self._generated) for _ in range(count)]
+            self._issued.update(ids)
+            return ids
+        return self._google.request(handle)
+
+    def upload(self, file_id: str, name: str, parent: str, content: bytes) -> DriveFile:
+        """以預先要到的 ID 上傳一個 PDF；那個 ID 已有檔案時回 409"""
+        self._uploads += 1
+        if self._uploads in self._upload_failures:
+            kind, applied = self._upload_failures.pop(self._uploads)
+            self._google.fail_at(self._google.requests + 1, kind, applied=applied)
+
+        def handle():
+            """確認上層資料夾存在後建立"""
+            if parent != ROOT:
+                self._item(parent)
+            return self._items[self._add(name, DRIVE_PDF_MIME, parent, content, self._claim(file_id))].as_file()
+        return self._google.request(handle)
+
+    def update_content(
+        self, file_id: str, content: bytes, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = (),
+    ) -> DriveFile:
+        """換掉內容（新的版本），同時改名與搬移"""
+        def handle():
+            """確認檔案與目標資料夾存在後更新"""
+            item = self._item(file_id)
+            if add_parent and add_parent != ROOT:
+                self._item(add_parent)
+            item.revisions.append((next(self._revision_ids), content))
+            self._relocate(item, name, add_parent, remove_parents)
+            return item.as_file()
         return self._google.request(handle)
 
     def rename_or_move(self, file_id: str, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = ()) -> None:
@@ -371,11 +463,7 @@ class FakeDrive:
             item = self._item(file_id)
             if add_parent and add_parent != ROOT:
                 self._item(add_parent)
-            if name:
-                item.name = name
-            if add_parent or remove_parents:
-                kept = [p for p in item.parents if p not in remove_parents]
-                item.parents = kept + ([add_parent] if add_parent and add_parent not in kept else [])
+            self._relocate(item, name, add_parent, remove_parents)
         self._google.request(handle)
 
     def move_to_trash(self, file_id: str) -> None:
@@ -385,16 +473,37 @@ class FakeDrive:
             self._item(file_id).trashed = True
         self._google.request(handle)
 
+    @staticmethod
+    def _relocate(item: _DriveItem, name: str, add_parent: str, remove_parents: Sequence[str]) -> None:
+        """改名、加進 add_parent 並離開 remove_parents"""
+        if name:
+            item.name = name
+        if add_parent or remove_parents:
+            kept = [p for p in item.parents if p not in remove_parents]
+            item.parents = kept + ([add_parent] if add_parent and add_parent not in kept else [])
+
+    def _claim(self, file_id: str) -> str:
+        """以指定 ID 建檔前的檢查：已有檔案時照 Drive 回 409，不是 generate_ids 發出的 ID 時回 400"""
+        if not file_id:
+            return ""
+        if file_id in self._items:
+            raise CatalogError(CatalogErrorKind.EXISTS, f"A file already exists with the provided ID: {file_id}.")
+        if file_id not in self._issued:
+            raise CatalogError(CatalogErrorKind.OTHER, f"The provided file ID is not usable: {file_id}.")
+        self._issued.discard(file_id)
+        return file_id
+
     def _item(self, file_id: str) -> _DriveItem:
         """取一個項目；沒有時照 Drive 回 404"""
         if file_id not in self._items:
             raise CatalogError(CatalogErrorKind.NOT_FOUND, f"File not found: {file_id}.")
         return self._items[file_id]
 
-    def _add(self, name: str, mime_type: str, parent: str, content: bytes) -> str:
-        """加一個項目，回傳 ID"""
-        item_id = next(self._ids)
-        self._items[item_id] = _DriveItem(item_id, name, mime_type, [parent], content)
+    def _add(self, name: str, mime_type: str, parent: str, content: bytes, item_id: str = "") -> str:
+        """加一個項目（檔案有第一個版本），回傳 ID；沒給 ID 時自己編一個"""
+        item_id = item_id or next(self._ids)
+        revisions = [] if mime_type == DRIVE_FOLDER_MIME else [(next(self._revision_ids), content)]
+        self._items[item_id] = _DriveItem(item_id, name, mime_type, [parent], revisions)
         return item_id
 
 

@@ -36,6 +36,9 @@ SHEET_DURATIONS = "時長"
 SHEET_SECTIONS = "聲部組對照"
 # 編制寫入紀錄：每次寫回譜庫的每一格改動一列，只新增、不修改；來源與欄位寫 WriteSource、SyncField 的值
 SHEET_INSTRUMENTATION_LOG = "編制寫入紀錄"
+# 存入紀錄：一次存入一個存入編號、每份檔一列，只新增、不修改；動作寫 DepositAction 的值，
+# 版本 ID 是 Drive 檔案寫入後與被蓋掉的版本（headRevisionId；沒寫內容時兩者相同）
+SHEET_DEPOSIT_LOG = "存入紀錄"
 
 SHEET_HEADERS = {
     SHEET_COMPOSERS: [
@@ -72,6 +75,10 @@ SHEET_HEADERS = {
     SHEET_INSTRUMENTATION_LOG: [
         "id", "time", "operator", "source", "edition_id", "movement_id", "voice", "field", "old_value", "new_value",
         "group",
+    ],
+    SHEET_DEPOSIT_LOG: [
+        "id", "deposit_id", "time", "operator", "edition_id", "movement_id", "group", "voice", "local_path",
+        "drive_file_id", "action", "revision_after", "revision_before",
     ],
 }
 

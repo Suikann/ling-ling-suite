@@ -3,7 +3,8 @@
 譜庫的錯誤類別
 
 譜庫讀寫失敗時，Google 回的失敗分成六類（斷網、要重新登入 Google、沒有權限、找不到、達到用量上限、其他），
-另有一類「已經不在譜庫」：要改的紀錄在寫入前一刻已被另一台電腦刪掉，重送不會成功，處理按鈕是重新讀取。
+另有一類「已經不在譜庫」：要改的紀錄在寫入前一刻已被另一台電腦刪掉，重送不會成功，處理按鈕是重新讀取；
+以及「已經存在」：以預先向 Drive 要的檔案 ID 建檔，重送時 Drive 回 409，譜庫服務認得它是上一次建好的那份，不會到畫面上。
 每類有自己的標題、怎麼辦與處理按鈕（CATALOG_ERROR_RULES）。Google 的例外由通事（services/google_catalog.py）
 轉成 CatalogError；畫面上的提示列與紀錄檔都以 CatalogFailure 記下的同一份內容呈現（log_entry() 是紀錄檔的一筆，
 detail_text() 是它的內容）。
@@ -34,6 +35,7 @@ class CatalogErrorKind(Enum):
     RATE_LIMITED = "rate_limited"    # 達到用量上限（429 與用量類的 403）
     OTHER = "other"                  # 其他
     GONE = "gone"                    # 已經不在譜庫：要改的紀錄被另一台電腦刪了
+    EXISTS = "exists"                # 已經存在（409）：以預先要的 ID 建檔重送時，那個 ID 已經有檔
 
 
 class CatalogRemedy(Enum):
@@ -70,6 +72,9 @@ CATALOG_ERROR_RULES = {
         "catalog.error.other.title", "catalog.error.other.advice", CatalogRemedy.RETRY),
     CatalogErrorKind.GONE: CatalogErrorRule(
         "catalog.error.gone.title", "catalog.error.gone.advice", CatalogRemedy.RELOAD),
+    # 譜庫服務自己處理（重送時那個 ID 的檔就是上一次建好的），照理不會到畫面上；到了就當成其他
+    CatalogErrorKind.EXISTS: CatalogErrorRule(
+        "catalog.error.other.title", "catalog.error.other.advice", CatalogRemedy.RETRY),
 }
 
 # 處理按鈕的介面字串

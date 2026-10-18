@@ -21,18 +21,20 @@
     outcome = catalog.sync_instrumentation(place_writes(project), project.orchestra_type, email, WriteSource.SAVE, {})
     page = catalog.edition_page(edition_id, movement_id, OrchestraType.CHINESE)  # 版本頁：登記與沒登記的檔
     catalog.register_files(PendingRegistration(edition_id, movement_id, {"琵琶": pdf}))  # 失敗時以同一個物件重送
+    places = catalog.deposit_places([("e1", "m1")])  # 存入前：那處的登記與版本資料夾裡的檔
+    catalog.record_deposits(records, email)          # 存入後：登記分譜列並寫存入紀錄（一次寫入）
     rows = catalog.new_rows(SHEET_PIECES, [{"title": "春江花月夜"}])
     ids = catalog.add_rows(rows)                     # 失敗時以同一個 rows 重送，不會重複新增
 """
 import time
 import uuid
-from dataclasses import fields
+from dataclasses import fields, replace
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Type, TypeVar
 
 from core.catalog_constants import (
     CATALOG_TRUE, CATALOG_TRUE_VALUES, CLUB_SETTING_PUBLISHING_PLATFORM, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME,
     DRIVE_SPREADSHEET_MIME, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, SHEET_COMPOSERS, SHEET_DURATIONS,
-    SHEET_EDITIONS, SHEET_HEADERS, SHEET_INSTRUMENTATION_LOG, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES,
+    SHEET_DEPOSIT_LOG, SHEET_EDITIONS, SHEET_HEADERS, SHEET_INSTRUMENTATION_LOG, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES,
     SHEET_PIECES, SHEET_SECTIONS, PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
@@ -46,6 +48,7 @@ from core.catalog_sync import (
     CurrentPlace, Decision, ItemReview, PlaceReview, PlaceWrite, SyncField, SyncItem, SyncOutcome, Verdict, WriteSource,
     final_voices, review_items, value_text,
 )
+from core.deposit import SCORE_VOICE, DepositRecord, PlaceFiles, folder_key
 from core.log_entry import now
 from core.models import Headcount
 from core.sections import stored_section
@@ -130,6 +133,18 @@ def _voice_parts(parts: List[Tuple[int, Part]]) -> List[Tuple[int, Part]]:
         seen.add(key)
         voices.append((row, part))
     return voices
+
+
+def _score_part(parts: List[Tuple[int, Part]]) -> Optional[Tuple[int, Part]]:
+    """一處的總譜列與列號：依排序欄排在最前面的總譜列；沒有時為 None"""
+    scores = [pair for pair in parts if _is_true(pair[1].is_score)]
+    return min(scores, key=lambda pair: sort_order_key(pair[1].sort_order)) if scores else None
+
+
+def _relocation(file: DriveFile, folder_id: str) -> Tuple[str, List[str]]:
+    """把檔搬進 folder_id 要加進的資料夾（已經在裡面時為空字串）與要離開的資料夾"""
+    add = folder_id if folder_id not in file.parents else ""
+    return add, [parent for parent in file.parents if parent != folder_id]
 
 
 def _headcount(part: Part) -> Headcount:
@@ -993,6 +1008,187 @@ class CatalogService:
         outcome.written = True
         return outcome
 
+    def deposit_places(self, places: Sequence[Tuple[str, str]]) -> Dict[Tuple[str, str], PlaceFiles]:
+        """讀存入前要的：各處（版本、樂章）的聲部與已登記的檔，以及版本資料夾裡的子資料夾與 PDF
+
+        試算表只讀一次，請求數不隨聲部數增加；Drive 每個版本資料夾與底下的每個子資料夾各列一次，
+        登記的檔不在版本資料夾裡時另取一次中繼資料。登記的檔已不在 Drive 或在垃圾桶裡時當成沒登記。
+
+        Args:
+            places: （版本 ID，樂章 ID；整首為空字串）
+
+        Returns:
+            每一處的樣子
+
+        Raises:
+            CatalogError: 讀不到；版本已不在譜庫時為已經不在譜庫
+        """
+        edition_rows, part_rows = self._read_sheets(SHEET_EDITIONS, SHEET_PARTS)
+        editions = {edition.id: edition for edition in _models(edition_rows, SHEET_EDITIONS, Edition)}
+        parts = _numbered(part_rows, SHEET_PARTS, Part)
+        claimed = frozenset(part.drive_file_id.strip() for _, part in parts if part.drive_file_id.strip())
+        trees: Dict[str, Tuple[Dict[Tuple[str, ...], str], Dict[Tuple[str, ...], List[DriveFile]]]] = {}
+        result = {}
+        for edition_id, movement_id in places:
+            if edition_id not in editions:
+                raise CatalogError(CatalogErrorKind.GONE, f"edition {edition_id} is no longer in the catalog")
+            folder_id = editions[edition_id].drive_folder_id.strip()
+            if folder_id and folder_id not in trees:
+                trees[folder_id] = self._folder_tree(folder_id)
+            folders, files = trees.get(folder_id, ({}, {}))
+            here = [(row, part) for row, part in parts if part.edition_id == edition_id and part.movement_id == movement_id]
+            voices = _voice_parts(here)
+            score = _score_part(here)
+            listed = [(part.instrument_name, part) for _, part in voices] + ([(SCORE_VOICE, score[1])] if score else [])
+            in_tree = {file.id: file for pdfs in files.values() for file in pdfs}
+            registered = []
+            for voice, part in listed:
+                file_id = part.drive_file_id.strip()
+                file = in_tree.get(file_id) or (self._live_file(file_id) if file_id else None)
+                if file is not None:
+                    registered.append((voice, file))
+            result[(edition_id, movement_id)] = PlaceFiles(
+                edition_id, movement_id, folder_id, [part.instrument_name for _, part in voices], registered,
+                folders, files, claimed,
+            )
+        return result
+
+    def record_deposits(self, records: Sequence[DepositRecord], operator: str) -> None:
+        """存入後登記分譜列並寫存入紀錄：寫入前一刻才讀分譜工作表找列號，全部以一個請求寫入
+
+        每份檔的分譜列（總譜為那處的總譜列，還沒有就新增一列）改登記成存入後的 Drive 檔案與檔名，只送值變了的格子；
+        聲部的列已被刪掉時不登記。每份檔一列存入紀錄，這一批共用一個新抽的存入編號。請求數固定：
+        列出工作表名稱、讀取、寫入各一次，存入紀錄還沒建立時另建一次。
+
+        Args:
+            records: 存入了的每份檔
+            operator: 操作者（登入的 email），寫進存入紀錄
+
+        Raises:
+            CatalogError: 讀不到或寫不進去（沒有任何一格被寫入）
+        """
+        titles = set(self._call(self._sheets.sheet_titles))
+        has_log = SHEET_DEPOSIT_LOG in titles
+        ranges = [_whole_sheet(SHEET_PARTS)]
+        if has_log:
+            # 紀錄只會越來越長：只讀標題列與 ID、存入編號兩欄
+            ranges += [sheet_range(SHEET_DEPOSIT_LOG, "1:1"), sheet_range(SHEET_DEPOSIT_LOG, "A:B")]
+        values = self._call(lambda: self._sheets.read_ranges(ranges))
+        tables = {SHEET_PARTS: values[0]}
+        deposit_ids: Set[str] = set()
+        if has_log:
+            header, ids = values[1:]
+            tables[SHEET_DEPOSIT_LOG] = header[:1] + ids[1:]
+            deposit_ids = {row[1] for row in ids[1:] if len(row) > 1}
+        batch = _Batch(tables, self._draw_ids)
+        parts = _numbered(values[0], SHEET_PARTS, Part)
+        deposit_id = self._draw_ids(deposit_ids, 1)[0]
+        stamp = now().strftime("%Y-%m-%d %H:%M:%S")
+        added_scores: Set[Tuple[str, str]] = set()
+        for record in records:
+            file = record.drive_file
+            here = [
+                (row, part) for row, part in parts
+                if part.edition_id == record.edition_id and part.movement_id == record.movement_id
+            ]
+            if record.voice == SCORE_VOICE:
+                target = _score_part(here)
+            else:
+                key = voice_key(record.voice)
+                target = next((pair for pair in _voice_parts(here) if voice_key(pair[1].instrument_name) == key), None)
+            if target is not None:
+                row, part = target
+                for column, value in (("drive_file_id", file.id), ("file_name", file.name)):
+                    if getattr(part, column).strip() != value:
+                        batch.set(SHEET_PARTS, row, column, value)
+            elif record.voice == SCORE_VOICE and (record.edition_id, record.movement_id) not in added_scores:
+                added_scores.add((record.edition_id, record.movement_id))
+                batch.add(SHEET_PARTS, {
+                    "edition_id": record.edition_id, "movement_id": record.movement_id,
+                    "instrument_name": record.score_label, "is_score": CATALOG_TRUE, "drive_file_id": file.id,
+                    "file_name": file.name,
+                })
+            batch.add(SHEET_DEPOSIT_LOG, {
+                "deposit_id": deposit_id, "time": stamp, "operator": operator, "edition_id": record.edition_id,
+                "movement_id": record.movement_id, "group": record.group_name, "voice": record.voice or record.score_label,
+                "local_path": record.local_path, "drive_file_id": file.id, "action": record.action.value,
+                "revision_after": file.head_revision, "revision_before": record.revision_before,
+            })
+        if batch.cells:
+            for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
+                self._call(lambda: self._sheets.add_sheet(sheet))
+            self._call(lambda: self._sheets.write_cells(batch.cells))
+
+    def drive_ids(self, count: int) -> List[str]:
+        """預先向 Drive 要 count 個檔案 ID（一次請求）；以它們建檔，重送時不會建出第二份
+
+        Raises:
+            CatalogError: 要不到
+        """
+        return self._call(lambda: self._drive.generate_ids(count))
+
+    def upload_file(self, file_id: str, name: str, folder_id: str, content: bytes) -> DriveFile:
+        """以預先要到的 ID 把 PDF 上傳到 Drive 資料夾；上一次其實已經上傳了（Drive 回已經存在）時取那一份
+
+        Args:
+            file_id: drive_ids 要到的 ID
+            name: 檔名
+            folder_id: 資料夾的 Drive ID
+            content: 內容
+
+        Returns:
+            上傳後的檔案
+
+        Raises:
+            CatalogError: 上傳失敗；以同一個 ID 再呼叫一次不會產生第二份
+        """
+        try:
+            return self._call(lambda: self._drive.upload(file_id, name, folder_id, content))
+        except CatalogError as error:
+            if error.kind is not CatalogErrorKind.EXISTS:
+                raise
+            return self._call(lambda: self._drive.get_file(file_id))
+
+    def update_file(self, file: DriveFile, content: bytes, name: str, folder_id: str) -> DriveFile:
+        """換掉 Drive 上一個檔的內容（檔案 ID 不變，舊內容成為版本），檔名與所在資料夾改成 name、folder_id（一次請求）
+
+        Args:
+            file: 列出或取得時拿到的檔案（以它的名稱與 parents 決定要不要改名、搬移）
+            content: 新內容
+            name: 檔名
+            folder_id: 要放的資料夾
+
+        Returns:
+            更新後的檔案
+
+        Raises:
+            CatalogError: 更新失敗
+        """
+        add, remove = _relocation(file, folder_id)
+        return self._call(lambda: self._drive.update_content(
+            file.id, content, name if name != file.name else "", add, remove,
+        ))
+
+    def place_file(self, file: DriveFile, name: str, folder_id: str) -> DriveFile:
+        """把 Drive 上的檔改名成 name、搬進 folder_id（一次請求；都已經是了時不送請求）
+
+        Args:
+            file: 列出或取得時拿到的檔案
+            name: 檔名
+            folder_id: 要放的資料夾
+
+        Returns:
+            改名與搬移後的檔案（內容與版本不變）
+
+        Raises:
+            CatalogError: 改不了
+        """
+        add, remove = _relocation(file, folder_id)
+        if name == file.name and not add and not remove:
+            return file
+        self._call(lambda: self._drive.rename_or_move(file.id, name if name != file.name else "", add, remove))
+        return replace(file, name=name, parents=(folder_id,))
+
     def subfolders(self, folder_id: str) -> List[DriveFile]:
         """列出 Drive 資料夾裡的子資料夾（依名稱排序，不含垃圾桶裡的）
 
@@ -1240,13 +1436,23 @@ class CatalogService:
         pending._activate_edition = True
         return piece_id
 
-    def create_folder(self, name: str, parent_id: str) -> DriveFile:
+    def create_folder(self, name: str, parent_id: str, file_id: str = "") -> DriveFile:
         """在 Drive 資料夾裡建立子資料夾
+
+        Args:
+            name: 資料夾名稱
+            parent_id: 上層資料夾的 Drive ID
+            file_id: 預先以 drive_ids 要到的 ID；給了時重送不會建出第二個（上一次其實已建好時取那一個）
 
         Raises:
             CatalogError: 建不起來
         """
-        return self._call(lambda: self._drive.create_folder(name, parent_id))
+        try:
+            return self._call(lambda: self._drive.create_folder(name, parent_id, file_id))
+        except CatalogError as error:
+            if error.kind is not CatalogErrorKind.EXISTS or not file_id:
+                raise
+            return self._call(lambda: self._drive.get_file(file_id))
 
     def move_file(self, file: DriveFile, folder_id: str) -> None:
         """把 Drive 上的檔案或資料夾搬進 folder_id，離開原本所在的資料夾；已經在裡面時不送請求
@@ -1411,6 +1617,35 @@ class CatalogService:
         """列出 Drive 資料夾裡符合 conditions（Drive 查詢條件，以 and 連接）的全部檔案，不含垃圾桶裡的"""
         query = " and ".join([f"{drive_literal(folder_id)} in parents", *conditions, "trashed = false"])
         return self._list_files(query)
+
+    def _folder_tree(
+        self, folder_id: str,
+    ) -> Tuple[Dict[Tuple[str, ...], str], Dict[Tuple[str, ...], List[DriveFile]]]:
+        """列出 Drive 資料夾與底下各層子資料夾：比對鍵（folder_key）→ 資料夾 ID、比對鍵 → 裡面的 PDF；每個資料夾列一次"""
+        folders = {(): folder_id}
+        files: Dict[Tuple[str, ...], List[DriveFile]] = {}
+        pending = [((), folder_id)]
+        while pending:
+            path, current = pending.pop(0)
+            for child in self._children(current):
+                if child.mime_type == DRIVE_FOLDER_MIME:
+                    key = path + folder_key([child.name])
+                    if key not in folders:
+                        folders[key] = child.id
+                        pending.append((key, child.id))
+                elif child.mime_type == DRIVE_PDF_MIME:
+                    files.setdefault(path, []).append(child)
+        return folders, files
+
+    def _live_file(self, file_id: str) -> Optional[DriveFile]:
+        """Drive 上還在（不在垃圾桶）的檔；已經沒有或在垃圾桶裡時為 None"""
+        try:
+            file = self._call(lambda: self._drive.get_file(file_id))
+        except CatalogError as error:
+            if error.kind is CatalogErrorKind.NOT_FOUND:
+                return None
+            raise
+        return None if file.trashed else file
 
     def _list_files(self, query: str) -> List[DriveFile]:
         """列出符合查詢的全部檔案（逐頁請求）"""

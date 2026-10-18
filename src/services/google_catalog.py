@@ -14,11 +14,12 @@
     setup = open_google_drive(auth)                       # 還沒有譜庫試算表時（譜庫設定）
     error = catalog_error_from(exception)                 # CatalogError，kind 為六種類別之一
 """
+import io
 import json
 import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from core.catalog_constants import DRIVE_FOLDER_MIME
+from core.catalog_constants import DRIVE_FOLDER_MIME, DRIVE_PDF_MIME
 from core.catalog_errors import CatalogError, CatalogErrorKind, exception_message
 from core.constants import CATALOG_SPREADSHEET_ID_KEY
 from core.catalog_models import DriveFile, DriveListing
@@ -36,11 +37,15 @@ _STATUS_KINDS = {
     401: CatalogErrorKind.SIGN_IN,
     403: CatalogErrorKind.NO_PERMISSION,
     404: CatalogErrorKind.NOT_FOUND,
+    409: CatalogErrorKind.EXISTS,
     429: CatalogErrorKind.RATE_LIMITED,
 }
 # Drive 列出檔案時一頁最多幾筆（API 上限 1000）
 _DRIVE_PAGE_SIZE = 1000
-_DRIVE_ONE_FILE_FIELDS = "id, name, mimeType, parents, md5Checksum"
+_DRIVE_ONE_FILE_FIELDS = "id, name, mimeType, parents, md5Checksum, headRevisionId, trashed"
+# 比這大的檔改用 resumable 上傳（分段送出，斷線時不必整份重送）；一段的大小要是 256 KB 的倍數
+_RESUMABLE_THRESHOLD = 5 * 1024 * 1024
+_RESUMABLE_CHUNK_SIZE = 5 * 1024 * 1024
 _DRIVE_FILE_FIELDS = f"nextPageToken, files({_DRIVE_ONE_FILE_FIELDS})"
 
 
@@ -237,10 +242,33 @@ class GoogleDrive(_Gateway):
         """取一個檔案的中繼資料（files.get）"""
         return _drive_file(self._execute(self._api.files().get(fileId=file_id, fields=_DRIVE_ONE_FILE_FIELDS)))
 
-    def create_folder(self, name: str, parent: str) -> DriveFile:
-        """在 parent 裡建立資料夾（files.create）"""
+    def create_folder(self, name: str, parent: str, file_id: str = "") -> DriveFile:
+        """在 parent 裡建立資料夾（files.create）；給了 file_id 時以它為 ID"""
+        body = {"name": name, "mimeType": DRIVE_FOLDER_MIME, "parents": [parent]}
+        if file_id:
+            body["id"] = file_id
+        return _drive_file(self._execute(self._api.files().create(body=body, fields=_DRIVE_ONE_FILE_FIELDS)))
+
+    def generate_ids(self, count: int) -> List[str]:
+        """預先要 count 個檔案 ID（files.generateIds）"""
+        response = self._execute(self._api.files().generateIds(count=count, space="drive", type="files"))
+        return list(response.get("ids", []))
+
+    def upload(self, file_id: str, name: str, parent: str, content: bytes) -> DriveFile:
+        """以指定 ID 上傳 PDF（files.create）；大檔用 resumable 上傳"""
         return _drive_file(self._execute(self._api.files().create(
-            body={"name": name, "mimeType": DRIVE_FOLDER_MIME, "parents": [parent]}, fields=_DRIVE_ONE_FILE_FIELDS,
+            body={"id": file_id, "name": name, "parents": [parent]}, media_body=_media(content),
+            fields=_DRIVE_ONE_FILE_FIELDS,
+        )))
+
+    def update_content(
+        self, file_id: str, content: bytes, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = (),
+    ) -> DriveFile:
+        """換掉內容並改名、搬移（files.update）；大檔用 resumable 上傳"""
+        return _drive_file(self._execute(self._api.files().update(
+            fileId=file_id, body={"name": name} if name else {}, media_body=_media(content),
+            addParents=add_parent or None, removeParents=",".join(remove_parents) or None,
+            fields=_DRIVE_ONE_FILE_FIELDS,
         )))
 
     def rename_or_move(self, file_id: str, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = ()) -> None:
@@ -260,6 +288,16 @@ def _drive_file(item: dict) -> DriveFile:
     return DriveFile(
         id=item["id"], name=item.get("name", ""), mime_type=item.get("mimeType", ""),
         parents=tuple(item.get("parents", [])), md5=item.get("md5Checksum", ""),
+        head_revision=item.get("headRevisionId", ""), trashed=bool(item.get("trashed", False)),
+    )
+
+
+def _media(content: bytes):
+    """要上傳的 PDF 內容；大於 _RESUMABLE_THRESHOLD 時用 resumable 上傳"""
+    from googleapiclient.http import MediaIoBaseUpload
+    return MediaIoBaseUpload(
+        io.BytesIO(content), mimetype=DRIVE_PDF_MIME, chunksize=_RESUMABLE_CHUNK_SIZE,
+        resumable=len(content) > _RESUMABLE_THRESHOLD,
     )
 
 
@@ -267,7 +305,7 @@ def catalog_error_from(error: BaseException) -> CatalogError:
     """把 Google 程式庫或傳輸層丟出的例外轉成譜庫錯誤
 
     401、續期被拒（invalid_grant）為要重新登入；403 為沒有權限，用量類的 403 與 429 為達到用量上限；
-    404 為找不到；連不上、逾時為斷網；其餘為其他。
+    404 為找不到；409 為已經存在（以預先要的 ID 建檔重送時）；連不上、逾時為斷網；其餘為其他。
 
     Args:
         error: 呼叫 Google 時丟出的例外

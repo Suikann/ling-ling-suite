@@ -117,12 +117,24 @@ class PieceDetail:
 
 @dataclass(frozen=True)
 class DriveFile:
-    """Drive 上的一個檔案或資料夾"""
+    """Drive 上的一個檔案或資料夾
+
+    Attributes:
+        id: 檔案 ID
+        name: 名稱
+        mime_type: mimeType
+        parents: 所在的資料夾
+        md5: 內容的 MD5（md5Checksum）；資料夾與 Google 文件為空字串
+        head_revision: 目前內容的版本 ID（headRevisionId）；資料夾與 Google 文件為空字串
+        trashed: 是否在垃圾桶裡
+    """
     id: str
     name: str
     mime_type: str = ""
     parents: Tuple[str, ...] = ()
     md5: str = ""
+    head_revision: str = ""
+    trashed: bool = False
 
 
 @dataclass(frozen=True)

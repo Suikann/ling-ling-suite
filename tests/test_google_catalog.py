@@ -65,6 +65,7 @@ class TestErrorKinds(unittest.TestCase):
             (http_error(403, "Insufficient permissions", reason="insufficientFilePermissions"),
              CatalogErrorKind.NO_PERMISSION),
             (http_error(404, "Requested entity was not found."), CatalogErrorKind.NOT_FOUND),
+            (http_error(409, "A file already exists with the provided ID."), CatalogErrorKind.EXISTS),
             (http_error(429, "Quota exceeded for quota metric 'Write requests'", rpc_reason="RATE_LIMIT_EXCEEDED"),
              CatalogErrorKind.RATE_LIMITED),
             (http_error(403, "Rate Limit Exceeded", reason="rateLimitExceeded"), CatalogErrorKind.RATE_LIMITED),
@@ -248,6 +249,57 @@ class TestDriveWriteRequests(unittest.TestCase):
         self.assertEqual(sent_body(http, 0), {"trashed": True})
         self.assertIn("/files/f1", http.request_sequence[0][0])
         self.assertEqual(http.request_sequence[0][1], "PATCH")
+
+
+class TestDriveUploads(unittest.TestCase):
+    """存入用的 Drive 請求：預先要 ID、以指定 ID 上傳、換內容連同改名與搬移；大檔用 resumable 上傳"""
+
+    FILE = {
+        "id": "gen-1", "name": "琵琶.pdf", "mimeType": "application/pdf", "parents": ["d1"], "md5Checksum": "abc",
+        "headRevisionId": "r2", "trashed": False,
+    }
+
+    def test_generates_ids_in_one_request(self):
+        http = HttpMockSequence([ok({"ids": ["gen-1", "gen-2"]})])
+        self.assertEqual(GoogleDrive(http=http).generate_ids(2), ["gen-1", "gen-2"])
+        self.assertIn("/files/generateIds", http.request_sequence[0][0])
+        self.assertEqual(sent_query(http, 0)["count"], ["2"])
+
+    def test_uploads_with_the_given_id_in_one_multipart_request(self):
+        http = HttpMockSequence([ok(self.FILE)])
+        file = GoogleDrive(http=http).upload("gen-1", "琵琶.pdf", "d1", b"%PDF small")
+        self.assertEqual((file.id, file.md5, file.head_revision, file.trashed), ("gen-1", "abc", "r2", False))
+        self.assertEqual(sent_query(http, 0)["uploadType"], ["multipart"])
+        body = http.request_sequence[0][2]
+        self.assertIn(b'"id": "gen-1"', body)
+        self.assertIn(b"%PDF small", body)
+        self.assertEqual(len(http.request_sequence), 1)
+
+    def test_a_large_file_is_uploaded_resumably_in_chunks(self):
+        content = b"x" * (6 * 1024 * 1024)
+        http = HttpMockSequence([
+            ({"status": "200", "location": "https://upload.example/session"}, ""),
+            ({"status": "308", "range": f"bytes=0-{5 * 1024 * 1024 - 1}"}, ""),
+            ok(self.FILE),
+        ])
+        file = GoogleDrive(http=http).upload("gen-1", "琵琶.pdf", "d1", content)
+        self.assertEqual(file.id, "gen-1")
+        self.assertEqual(sent_query(http, 0)["uploadType"], ["resumable"])
+        self.assertEqual([request[0] for request in http.request_sequence[1:]], ["https://upload.example/session"] * 2)
+
+    def test_updates_content_with_rename_and_move_in_one_request(self):
+        http = HttpMockSequence([ok(self.FILE)])
+        file = GoogleDrive(http=http).update_content("f1", b"%PDF new", name="b.pdf", add_parent="d2", remove_parents=["d1"])
+        self.assertEqual(file.head_revision, "r2")
+        self.assertIn("/upload/drive/v3/files/f1", http.request_sequence[0][0])
+        self.assertEqual(sent_query(http, 0)["addParents"], ["d2"])
+        self.assertEqual(sent_query(http, 0)["removeParents"], ["d1"])
+        self.assertIn(b'"name": "b.pdf"', http.request_sequence[0][2])
+
+    def test_creates_a_folder_with_a_given_id(self):
+        http = HttpMockSequence([ok({"id": "gen-3", "name": "分譜", "mimeType": DRIVE_FOLDER_MIME, "parents": ["d1"]})])
+        GoogleDrive(http=http).create_folder("分譜", "d1", "gen-3")
+        self.assertEqual(sent_body(http, 0)["id"], "gen-3")
 
 
 class TestOpenGoogleCatalog(unittest.TestCase):

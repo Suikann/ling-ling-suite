@@ -5,6 +5,7 @@
 提供檔案系統操作：列出、重新命名、建立目錄、原子寫入等。
 """
 import errno
+import hashlib
 import json
 import os
 import shutil
@@ -14,6 +15,9 @@ from typing import Any, List
 from core.constants import (
     ATOMIC_WRITE_RETRIES, ATOMIC_WRITE_RETRY_INTERVAL, ATOMIC_WRITE_TEMP_SUFFIX, PDF_EXTENSION,
 )
+
+# 算 MD5 時一次讀多少位元組
+_MD5_CHUNK_SIZE = 1024 * 1024
 
 
 class FileService:
@@ -98,6 +102,27 @@ class FileService:
         """
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
+
+    def read_bytes(self, path: str) -> bytes:
+        """讀取整個檔案的內容
+
+        Raises:
+            OSError: 檔案讀不到
+        """
+        with open(path, "rb") as f:
+            return f.read()
+
+    def md5(self, path: str) -> str:
+        """檔案內容的 MD5（十六進位，跟 Drive 的 md5Checksum 同一種寫法），分段讀取
+
+        Raises:
+            OSError: 檔案讀不到
+        """
+        digest = hashlib.md5()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(_MD5_CHUNK_SIZE), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def write_json_atomic(self, path: str, data: Any) -> None:
         """將資料序列化為 JSON 並原子寫入

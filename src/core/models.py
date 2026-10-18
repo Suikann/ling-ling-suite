@@ -31,6 +31,7 @@ from core.voice_names import (
 if TYPE_CHECKING:
     from core.catalog_models import CatalogPlace
     from core.catalog_sync import SyncOutcome
+    from core.deposit import DepositRecord
 
 
 class DuplicateVoiceError(ValueError):
@@ -78,18 +79,31 @@ class ReadOnlyProjectError(Exception):
 
 @dataclass
 class FileInfo:
-    """檔案資訊"""
+    """檔案資訊
+
+    Attributes:
+        original_path: 本機路徑
+        display_name: 顯示名稱
+        deposit_md5: 存入指紋：最後一次存入譜庫時，譜庫裡那份內容的 MD5；沒存入過為空字串
+    """
     original_path: str
     display_name: str
+    deposit_md5: str = ""
 
     def to_data(self) -> Dict[str, str]:
-        """專案檔中存的內容"""
-        return {"original_path": self.original_path, "display_name": self.display_name}
+        """專案檔中存的內容；沒存入過的不寫存入指紋"""
+        data = {"original_path": self.original_path, "display_name": self.display_name}
+        if self.deposit_md5:
+            data["deposit_md5"] = self.deposit_md5
+        return data
 
     @classmethod
     def from_data(cls, data: Dict[str, str]) -> "FileInfo":
         """由專案檔中的內容還原"""
-        return cls(original_path=data["original_path"], display_name=data["display_name"])
+        return cls(
+            original_path=data["original_path"], display_name=data["display_name"],
+            deposit_md5=data.get("deposit_md5", ""),
+        )
 
 
 class VoicePart(NamedTuple):
@@ -1678,6 +1692,28 @@ class Project:
         group.catalog_link = replace(link, confirm_voices=confirm, snapshot=replace(
             link.snapshot, voices=[(name, old or headcount) for (name, headcount), old in zip(voices, olds)],
         ))
+
+    def record_deposit(self, records: Iterable["DepositRecord"]) -> None:
+        """存入譜庫之後：每份存進去的檔記下存入指紋（譜庫裡那份的 MD5），快照記下這些聲部已有 Drive 檔案
+
+        Args:
+            records: 存入了的每份檔（DepositService.deposit 的結果）；本機路徑以 core.paths 判定同一性
+        """
+        records = list(records)
+        fingerprints = {path_key(record.local_path): record.drive_file.md5 for record in records}
+        for ref in self.file_refs():
+            md5 = fingerprints.get(path_key(ref.file.original_path))
+            if md5:
+                ref.file.deposit_md5 = md5
+        for group in self.groups:
+            link = group.catalog_link
+            voices = [record.voice for record in records if record.group_id == group.id and record.voice]
+            if link is None or not voices:
+                continue
+            filed = list(link.snapshot.filed)
+            filed += [voice for voice in voices if not any(same_voice(voice, known) for known in filed)]
+            group.catalog_link = replace(link, snapshot=replace(link.snapshot, filed=filed))
+        self._changed()
 
     def link_movements(self, groups: Iterable[Group], piece_name: str) -> None:
         """把群組連成同一首曲目的各樂章：曲名一致、樂章編號依序，沒有樂章名稱的以群組名稱補上"""

@@ -118,7 +118,7 @@ class SheetsPort(Protocol):
 
 
 class DrivePort(Protocol):
-    """Drive 關口：一次呼叫一次請求"""
+    """Drive 關口：一次呼叫一次請求（resumable 上傳的大檔除外：內容分段送出）"""
 
     def list_files(self, query: str, page_token: str = "") -> DriveListing:
         """以 Drive 的查詢字串列出檔案的一頁（files.list，依名稱排序）
@@ -128,24 +128,65 @@ class DrivePort(Protocol):
             page_token: 上一頁回傳的 next_page_token；第一頁為空字串
 
         Returns:
-            這一頁的檔案（含 mimeType、parents 與 md5Checksum）與下一頁的 token
+            這一頁的檔案（含 mimeType、parents、md5Checksum、headRevisionId 與 trashed）與下一頁的 token
 
         Raises:
             CatalogError: 列出失敗
         """
 
     def get_file(self, file_id: str) -> DriveFile:
-        """取一個檔案的中繼資料（files.get，含 parents 與 md5Checksum）
+        """取一個檔案的中繼資料（files.get，含 parents、md5Checksum、headRevisionId 與 trashed；在垃圾桶裡的也取得到）
 
         Raises:
             CatalogError: 讀取失敗；沒有這個檔或存取被拒時為找不到
         """
 
-    def create_folder(self, name: str, parent: str) -> DriveFile:
+    def create_folder(self, name: str, parent: str, file_id: str = "") -> DriveFile:
         """在 parent 裡建立資料夾（files.create）
 
+        Args:
+            name: 資料夾名稱
+            parent: 上層資料夾的 ID
+            file_id: 預先以 generate_ids 要到的 ID；空字串時由 Drive 給
+
         Raises:
-            CatalogError: 建立失敗
+            CatalogError: 建立失敗；file_id 已經有檔案時（重送）為已經存在
+        """
+
+    def generate_ids(self, count: int) -> List[str]:
+        """預先向 Drive 要 count 個檔案 ID（files.generateIds），之後以它們建檔，重送時不會建出第二份
+
+        Raises:
+            CatalogError: 要不到
+        """
+
+    def upload(self, file_id: str, name: str, parent: str, content: bytes) -> DriveFile:
+        """以預先要到的 ID 在 parent 裡上傳一個 PDF（files.create，大檔用 resumable 上傳）
+
+        Returns:
+            上傳後的檔案（含 md5Checksum 與 headRevisionId）
+
+        Raises:
+            CatalogError: 上傳失敗；file_id 已經有檔案時（重送）為已經存在
+        """
+
+    def update_content(
+        self, file_id: str, content: bytes, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = (),
+    ) -> DriveFile:
+        """換掉檔案的內容（files.update，檔案 ID 不變，舊內容成為 Drive 的版本），同一個請求裡改名與搬移
+
+        Args:
+            file_id: 檔案 ID
+            content: 新內容
+            name: 不為空時改成這個名稱
+            add_parent: 不為空時加進這個資料夾
+            remove_parents: 離開這些資料夾
+
+        Returns:
+            更新後的檔案（含新的 md5Checksum 與 headRevisionId）
+
+        Raises:
+            CatalogError: 更新失敗，內容、名稱與位置都沒變
         """
 
     def rename_or_move(self, file_id: str, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = ()) -> None:
