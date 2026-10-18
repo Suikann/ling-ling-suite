@@ -35,6 +35,7 @@ from services.club_settings_service import ClubSettingsService
 from services.compression_output_service import CompressionBatch, CompressionOutputService
 from services.compression_service import CompressionResult, CompressionService
 from services.deposit_service import DepositOutcome, DepositProgress, DepositService
+from services.download_service import DownloadOutcome, DownloadProgress, DownloadService
 from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
@@ -55,7 +56,7 @@ from ui.catalog_error_bar import CatalogErrorBar
 from ui.compress_pdf import size_text
 from ui.instrumentation_table import InstrumentationTable
 from ui.waiting_dialog import run_while_waiting
-from ui.widgets import ask_save_path
+from ui.widgets import ask_save_path, not_downloaded_text
 
 if TYPE_CHECKING:
     from services.catalog_service import CatalogService
@@ -84,6 +85,9 @@ class _BackgroundTexts(NamedTuple):
 _COMPRESS_TEXTS = _BackgroundTexts("compress.cancel", "compress.cancelling", "compress.error", "compress.close.message")
 _DEPOSIT_TEXTS = _BackgroundTexts("deposit.cancel", "deposit.cancelling", "deposit.error", "deposit.close.message")
 _CLEAR_TEXTS = _BackgroundTexts("clear.cancel", "clear.cancelling", "clear.error", "clear.close.message")
+_DOWNLOAD_TEXTS = _BackgroundTexts(
+    "download.cancel", "download.cancelling", "download.error", "download.close.message",
+)
 # 清除本機檔案不刪的系統標準使用者資料夾（含在地化的名稱，例如 Linux 的「桌面」）
 _STANDARD_LOCATIONS = (
     QStandardPaths.HomeLocation, QStandardPaths.DesktopLocation, QStandardPaths.DocumentsLocation,
@@ -101,6 +105,12 @@ def _describe_deposit(progress: DepositProgress) -> tuple:
 def _describe_clear(progress: ClearProgress) -> tuple:
     """清除的進度轉成（狀態列文字，已完成數，總數）"""
     text = t("clear.progress", done=progress.done, total=progress.total, name=progress.file_name)
+    return text, progress.done, progress.total
+
+
+def _describe_download(progress: DownloadProgress) -> tuple:
+    """下載的進度轉成（狀態列文字，已完成數，總數）"""
+    text = t("download.progress", done=progress.done, total=progress.total, name=progress.file_name)
     return text, progress.done, progress.total
 
 
@@ -216,6 +226,7 @@ class MainWindow(QMainWindow):
         self._log = log or ActivityLog(self.file_service)
         self._deposit_service = DepositService(self.file_service, self._log)
         self._clear_service = ClearLocalService(self.file_service, self._log, standard_folders=_standard_folders())
+        self._download_service = DownloadService(self.file_service, self._log)
         # 上次存入中斷（取消或中途失敗）前完成了幾份；0 表示上次沒有中斷，存入預覽據此提示
         self._deposit_interrupted = 0
         # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀
@@ -230,7 +241,7 @@ class MainWindow(QMainWindow):
         self._task: Optional[BackgroundTask] = None
         self._task_texts = _COMPRESS_TEXTS
         self._task_status = ""
-        # 進行中的背景工作是否連專案編輯也鎖住（存入譜庫、清除本機檔案：結束時要把指紋寫回專案並存檔）
+        # 進行中的背景工作是否連專案編輯也鎖住（存入譜庫、清除本機檔案、下載回原位：結束時要把指紋寫回專案並存檔）
         self._task_locks_project = False
         self._project_path: Optional[str] = None
         self._suggested_name: str = ""
@@ -420,6 +431,7 @@ class MainWindow(QMainWindow):
         from ui.group_panel import GroupTab
         tab = GroupTab(group, self.project, self.file_service, self.import_service, self._deposit_service)
         tab.groups_changed.connect(self._rebuild_tabs)
+        tab.download_requested.connect(lambda group_id: self.download_back([group_id]))
         self._tab_widget.addTab(tab, group.name or group.id[:8])
 
     def _current_group(self) -> Optional[Group]:
@@ -811,7 +823,10 @@ class MainWindow(QMainWindow):
         def check() -> RenameVerdict:
             assign_default_sections(self.project, selected_ids)
             return self._history.check_rename(self.project, selected_ids)
-        dialog = PreviewDialog(self.project, check, self._execute_rename, self)
+        groups = selected_ids if selected_ids is not None else [group.id for group in self.project.groups]
+        dialog = PreviewDialog(
+            self.project, check, self._execute_rename, self, download_back=lambda: self.download_back(groups),
+        )
         dialog.exec()
 
     def _execute_rename(self, verdict: RenameVerdict):
@@ -1203,7 +1218,7 @@ class MainWindow(QMainWindow):
 
         唯讀的專案（較新版本建立的專案檔）存不了檔，所以停用存檔、另存，以及所有會改專案或搬動、
         產生它引用的檔案的操作：關閉時才不會有存不了的修改。分頁仍可切換，只停用內容。
-        背景工作進行中停用會動到檔案的操作；鎖住專案的背景工作（存入譜庫、清除本機檔案）進行中，比照唯讀停用專案編輯與存檔。
+        背景工作進行中停用會動到檔案的操作；鎖住專案的背景工作（存入譜庫、清除本機檔案、下載回原位）進行中，比照唯讀停用專案編輯與存檔。
         """
         busy = self._task is not None
         editable = not self.project.read_only and not (busy and self._task_locks_project)
@@ -1449,6 +1464,65 @@ class MainWindow(QMainWindow):
         kept = [item.path for item in outcome.changed] + [item.path for item, _ in outcome.failed]
         if kept:
             QMessageBox.warning(self, t("clear.title"), t("clear.kept", count=len(kept), files="\n".join(kept)))
+
+    def download_back(self, group_ids: Sequence[str]):
+        """「從譜庫下載回來」：把這些群組裡只在譜庫的檔在背景下載回原位，下載後群組恢復正常
+
+        群組分頁與重新命名預覽的按鈕都經這裡（發譜預覽也可以逐群組呼叫）。讀不到譜庫或下載到一半失敗時
+        頂端顯示提示列，寫出已完成幾份，按「重試」再下載一次（已放回去的略過）。不放上復原堆疊。
+
+        Args:
+            group_ids: 要下載回原位的群組
+        """
+        if self._task is not None:
+            return
+        project = self.project
+        groups = self._download_service.restore_sources(project, group_ids)
+        if not groups or not self._catalog_ready():
+            return
+        service = self._download_service
+        factory = self._catalog_factory
+        clean = not project.is_modified()
+
+        def work(should_cancel, report) -> DownloadOutcome:
+            """在背景接譜庫、下載回原位"""
+            try:
+                catalog = factory()
+            except Exception as e:
+                return DownloadOutcome(total=sum(len(g.sources) for g in groups), error=as_catalog_error(e))
+            return service.restore(groups, catalog, should_cancel, report)
+
+        def finished(outcome: DownloadOutcome, _cancelled: bool):
+            """下載結束"""
+            self._download_back_finished(outcome, clean, lambda: self.download_back(group_ids))
+
+        self._run_in_background(work, _describe_download, finished, _DOWNLOAD_TEXTS, locks_project=True)
+
+    def _download_back_finished(self, outcome: DownloadOutcome, clean: bool, retry: Callable[[], None]):
+        """下載回原位結束（做完、取消或中途失敗）：新的指紋交回專案，開始前沒有未存檔的改動時只存專案檔；
+        重畫分頁，沒放回去的檔列出來
+
+        Args:
+            outcome: 下載的結果
+            clean: 開始前專案是否沒有未存檔的改動（有的話不替使用者存檔）
+            retry: 提示列按「重試」時再下載一次
+        """
+        if outcome.fingerprints:
+            self.project.record_fingerprints(outcome.fingerprints)
+            if clean and self._project_path and not self.project.read_only and self.project.is_modified():
+                self._write_project_file(self._project_path)
+        self._rebuild_tabs()
+        if outcome.error is not None:
+            failure = CatalogFailure.from_error(outcome.error, t("download.title"))
+            self._catalog_error_bar.show_failure(t("download.stopped", count=outcome.completed), failure, retry)
+            self._set_status(t("status.ready"))
+        else:
+            self._catalog_error_bar.clear()
+            key = "download.cancelled" if outcome.cancelled else "download.done"
+            self._set_status(t(key, count=outcome.completed))
+        text = not_downloaded_text(outcome)
+        if text:
+            QMessageBox.warning(self, t("download.title"), text)
 
     def _link_group_by_id(self, group_id: str):
         """存入預覽的「連到譜庫…」：切到那個群組，開連線對話框"""

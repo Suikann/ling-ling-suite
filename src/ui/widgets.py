@@ -12,7 +12,22 @@ from core.constants import PDF_EXTENSION
 from core.filename import ensure_extension
 from core.locale import t
 from core.models import Group, Project
+from services.download_service import DownloadOutcome
 from services.file_service import FileService
+
+
+def not_downloaded_text(outcome: DownloadOutcome) -> str:
+    """沒下載好的檔依原因列出；都下載好了時為空字串（下載回原位與一般下載共用）"""
+    reasons = (
+        ("download.reason.occupied", [item.target for item in outcome.occupied]),
+        ("download.reason.mismatched", [item.target for item in outcome.mismatched]),
+        ("download.reason.unavailable", list(outcome.unavailable)),
+        ("download.reason.failed", [f"{item.target}（{reason}）" for item, reason in outcome.failed]),
+    )
+    parts = [t(key, files="\n".join(files)) for key, files in reasons if files]
+    if not parts:
+        return ""
+    return "\n\n".join([t("download.not_done", count=len(outcome.not_done))] + parts)
 
 
 def ensure_file_exists(parent: QWidget, path: str, file_service: FileService) -> bool:

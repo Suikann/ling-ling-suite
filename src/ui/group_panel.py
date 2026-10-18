@@ -6,6 +6,7 @@
 影響其他分頁的修改（群組新增或刪除、檔案在群組與未分組之間搬動）以 groups_changed 通知主視窗重建分頁。
 群組分頁標出未存入的檔（存入譜庫後本機又改過，推算在存入服務）與只在譜庫的檔（本機沒有、譜庫裡有一份，見
 Project.catalog_only_paths），主視窗切回分頁或視窗時以 show_undeposited 照磁碟現況重新比對。
+有只在譜庫的檔時旁邊出現「從譜庫下載回來」，按下以 download_requested 交給主視窗在背景下載回原位。
 """
 from typing import List, Optional, Set
 from PySide6.QtWidgets import (
@@ -117,6 +118,8 @@ class GroupTab(QWidget):
     """群組標籤"""
 
     groups_changed = Signal()
+    # 按了「從譜庫下載回來」：群組 ID（下載經主視窗在背景執行）
+    download_requested = Signal(str)
 
     def __init__(
         self, group: Group, project: Project, file_service: FileService, import_service: ImportService,
@@ -206,11 +209,17 @@ class GroupTab(QWidget):
         self._undeposited_bar.setStyleSheet(f"color: {_UNDEPOSITED_COLOR.name()};")
         self._undeposited_bar.hide()
         layout.addWidget(self._undeposited_bar)
+        catalog_only_row = QHBoxLayout()
         self._catalog_only_label = QLabel("")
         self._catalog_only_label.setWordWrap(True)
         self._catalog_only_label.setStyleSheet("color: #7a7f93; font-size: 12px;")
         self._catalog_only_label.setVisible(False)
-        layout.addWidget(self._catalog_only_label)
+        catalog_only_row.addWidget(self._catalog_only_label, stretch=1)
+        self._download_back_btn = QPushButton(t("download.back"))
+        self._download_back_btn.clicked.connect(lambda: self.download_requested.emit(self.group.id))
+        self._download_back_btn.setVisible(False)
+        catalog_only_row.addWidget(self._download_back_btn)
+        layout.addLayout(catalog_only_row)
         layout.addWidget(QLabel(t("group.file_list")))
         self._file_list = DragListWidget()
         self._file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -282,7 +291,10 @@ class GroupTab(QWidget):
         self.show_undeposited()
 
     def show_undeposited(self):
-        """照磁碟現況重新比對群組的檔：未存入的分譜與總譜改用橘字、只在譜庫的加上標示，清單上方寫出是哪幾份"""
+        """照磁碟現況重新比對群組的檔：未存入的分譜與總譜改用橘字、只在譜庫的加上標示，清單上方寫出是哪幾份
+
+        有只在譜庫的檔時才顯示「從譜庫下載回來」。
+        """
         stale = [ref.file for ref in self._deposit_service.undeposited(self.project) if ref.group is self.group]
         ids = {id(file) for file in stale}
         catalog_only = self._catalog_only()
@@ -305,6 +317,7 @@ class GroupTab(QWidget):
         self._undeposited_bar.setVisible(bool(stale))
         self._catalog_only_label.setText(t("catalog_only.group", count=len(catalog_only)))
         self._catalog_only_label.setVisible(bool(catalog_only))
+        self._download_back_btn.setVisible(bool(catalog_only))
 
     def _catalog_only(self) -> Set[str]:
         """群組裡只在譜庫的檔（本機找不到、譜庫裡有一份）的路徑比對鍵"""
