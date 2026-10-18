@@ -16,7 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from core.constants import MAX_RECENT_PROJECTS, WORKSPACE_META_FILE, WorkspaceStatus
-from core.models import FileInfo, Group, Headcount, Project
+from core.catalog_models import CatalogPlace
+from core.models import CatalogChange, CatalogChangeKind, FileInfo, Group, Headcount, Project
 from services.preferences_service import PreferencesService
 from services.project_access import ProjectAccess
 from services.project_service import ProjectService
@@ -182,6 +183,33 @@ class TestSave(ProjectAccessTestCase):
         project.set_master_template("{曲名}.pdf")
         self.assertTrue(project.is_modified())
         self.assertFalse(self.access.matches_file(project, path))
+
+
+class TestCatalogLinkSurvivesReopen(ProjectAccessTestCase):
+    """群組連到譜庫的哪一處、那處的快照與待寫入的改動存進專案檔，重新開啟後還在"""
+
+    def test_link_snapshot_and_pending_changes_are_there_after_reopening(self):
+        project = Project()
+        group = project.add_group("江樓鐘鼓", "總譜")
+        project.set_instruments(group, ["揚琴"])
+        place = CatalogPlace(
+            edition_id="e1", movement_id="m1", piece_title="春江花月夜", edition_label="彭修文編",
+            movement_name="江樓鐘鼓", duration_seconds=425, sections={"揚琴": "彈撥"},
+        )
+        project.link_group(group, place)
+        project.set_headcount(group, 0, Headcount(1))
+        path = os.path.join(self.temp_dir, "linked.llproj")
+        self.assertIsNone(self.access.save(project, path).error)
+        reopened = self._access().open(path).project
+        link = reopened.groups[0].catalog_link
+        self.assertEqual(link, group.catalog_link)
+        self.assertEqual((link.edition_id, link.movement_id, link.piece_title), ("e1", "m1", "春江花月夜"))
+        self.assertEqual((link.snapshot.duration_seconds, link.snapshot.sections), (425, {"揚琴": "彈撥"}))
+        self.assertEqual(reopened.catalog_changes(reopened.groups[0]), [
+            CatalogChange(CatalogChangeKind.VOICES, "", (), ("揚琴",)),
+            CatalogChange(CatalogChangeKind.HEADCOUNT, "揚琴", None, Headcount(1)),
+        ])
+        self.assertFalse(reopened.is_modified())
 
 
 class TestRecentList(ProjectAccessTestCase):

@@ -2,10 +2,12 @@
 """
 譜庫資料模型
 
-定義譜庫系統的核心資料結構：試算表各工作表的一列，以及 Drive 上的檔案與資料夾內容。
+定義譜庫系統的核心資料結構：試算表各工作表的一列、Drive 上的檔案與資料夾內容，以及群組連線時讀到的一處編制。
 """
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+
+from core.models import Headcount
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,10 @@ class Part:
     drive_file_id: str = ""
     file_name: str = ""
     notes: str = ""
+    headcount_min: str = ""
+    headcount_max: str = ""
+    headcount_open_ended: str = ""
+    is_score: str = ""
 
 
 @dataclass(frozen=True)
@@ -142,3 +148,27 @@ class CatalogOverview:
     folder_pieces: Dict[str, Piece] = field(default_factory=dict)
     root: FolderContents = field(default_factory=FolderContents)
     voice_names: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CatalogPlace:
+    """譜庫裡的一處（一個版本的整首或其中一個樂章）：編制、時長，連同社團的聲部組對照
+
+    Attributes:
+        edition_id: 版本 ID
+        movement_id: 樂章 ID；整首為空字串
+        piece_title: 曲名
+        edition_label: 版本的標示（沒有時為出版者，都沒有時為空字串）
+        movement_name: 樂章名稱（沒有名稱時為樂章編號）；整首為空字串
+        voices: 聲部名稱與人數，依分譜工作表的順序；不含總譜列
+        duration_seconds: 時長（秒）；未填為 None
+        sections: 社團的聲部組對照裡這個樂團類型的部分：樂器（第一次寫入的寫法）→ 聲部組
+    """
+    edition_id: str
+    movement_id: str = ""
+    piece_title: str = ""
+    edition_label: str = ""
+    movement_name: str = ""
+    voices: List[Tuple[str, Headcount]] = field(default_factory=list)
+    duration_seconds: Optional[int] = None
+    sections: Dict[str, str] = field(default_factory=dict)

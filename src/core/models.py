@@ -7,16 +7,27 @@
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional, Tuple
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, FrozenSet, Iterable, List, NamedTuple, Optional, Tuple
 from core.constants import (
     DEFAULT_MASTER_TEMPLATE, DEFAULT_ORCHESTRA_TYPE, DEFAULT_PARTS_SUBFOLDER_NAME, DEFAULT_SUBFOLDER_TEMPLATE,
     INSTRUMENTATION_FILE_VERSION, LEGACY_PROJECT_FILE_VERSIONS, PROJECT_FILE_VERSION, OperationKind,
     OrchestraType, PartsOutputMode, WorkspaceStatus,
 )
 from core.paths import path_key
-from core.sections import guess_orchestra_type, migrate_sections, put_section, section_for, section_options
-from core.template_engine import convert_template_language, detect_piece_name, detect_score_index
-from core.voice_names import distinct_voices, match_by_voice, same_instrument, same_voice, voice_index
+from core.sections import (
+    guess_orchestra_type, migrate_sections, put_section, section_for, section_options, stored_section,
+)
+from core.template_engine import (
+    convert_template_language, detect_piece_name, detect_score_index, extract_instruments_from_filenames,
+)
+from core.voice_names import (
+    distinct_voices, duplicate_rows, instrument_key, match_by_voice, same_instrument, same_voice, voice_index,
+    voice_key,
+)
+
+if TYPE_CHECKING:
+    from core.catalog_models import CatalogPlace
 
 
 class DuplicateVoiceError(ValueError):
@@ -29,6 +40,18 @@ class DuplicateVoiceError(ValueError):
     def __init__(self, existing: str):
         super().__init__(f"樂器表已有同一聲部：{existing}")
         self.existing = existing
+
+
+class DuplicateVoicesError(ValueError):
+    """群組的樂器表有重名的列（舊專案留下的）、不能連到譜庫時丟出
+
+    Attributes:
+        rows: 與另一列同一聲部的每一列（從 0 起算，見 core.voice_names.duplicate_rows）
+    """
+
+    def __init__(self, rows: List[int]):
+        super().__init__(f"樂器表有重名的列：{rows}")
+        self.rows = rows
 
 
 class ReadOnlyProjectError(Exception):
@@ -133,6 +156,119 @@ def format_duration(seconds: Optional[int]) -> str:
     return f"{minutes}:{rest:02d}"
 
 
+class CatalogChangeKind(Enum):
+    """群組相對於譜庫快照的一種改動"""
+    VOICES = "voices"          # 聲部清單（增刪、名稱、順序）
+    HEADCOUNT = "headcount"    # 一個聲部的人數
+    DURATION = "duration"      # 時長
+    SECTION = "section"        # 一種樂器在社團對照裡的聲部組
+
+
+class CatalogChange(NamedTuple):
+    """一項待寫進譜庫的改動（群組目前的值相對於連線時的快照）
+
+    Attributes:
+        kind: 改動的種類
+        voice: 聲部（人數）或樂器的一個聲部寫法（聲部組）；聲部清單與時長為空字串
+        old: 快照裡的值：聲部清單為名稱的 tuple，人數為 Headcount（快照沒有這個聲部時為 None），
+            時長為秒數或 None，聲部組為名稱（社團對照沒有時為空字串）
+        new: 群組目前的值，形式同 old
+    """
+    kind: CatalogChangeKind
+    voice: str
+    old: Any
+    new: Any
+
+
+@dataclass
+class CatalogSnapshot:
+    """群組連到的那處在譜庫裡的編制與時長，連同社團對照裡群組各樂器的聲部組（最後一次從譜庫讀到或寫進去的）
+
+    Attributes:
+        voices: 聲部名稱與人數，依譜庫的順序
+        duration_seconds: 時長（秒）；未填為 None
+        sections: 社團對照裡有的、群組樂器表裡各樂器的聲部組（樂器的一個聲部寫法 → 聲部組）；沒有的樂器不列
+    """
+    voices: List[Tuple[str, Headcount]] = field(default_factory=list)
+    duration_seconds: Optional[int] = None
+    sections: Dict[str, str] = field(default_factory=dict)
+
+    def to_data(self) -> Dict[str, Any]:
+        """專案檔中存的內容"""
+        return {
+            "voices": [{"name": name, "headcount": headcount.to_data()} for name, headcount in self.voices],
+            "duration_seconds": self.duration_seconds,
+            "sections": dict(self.sections),
+        }
+
+    @classmethod
+    def from_data(cls, data: Dict[str, Any]) -> "CatalogSnapshot":
+        """由專案檔中的內容還原"""
+        return cls(
+            voices=[(v["name"], Headcount.from_data(v.get("headcount") or {})) for v in data.get("voices", [])],
+            duration_seconds=data.get("duration_seconds") or None,
+            sections=dict(data.get("sections") or {}),
+        )
+
+
+@dataclass
+class CatalogLink:
+    """群組連到譜庫的哪一處（版本的整首或一個樂章），以及那處的快照
+
+    曲名、版本與樂章的名稱記下來給群組面板顯示，不必連網；譜庫裡改名時，下次讀到那處再更新。
+
+    Attributes:
+        edition_id: 版本 ID
+        movement_id: 樂章 ID；整首為空字串
+        piece_title: 曲名
+        edition_label: 版本的標示
+        movement_name: 樂章名稱；整首為空字串
+        snapshot: 那處的快照，待寫入的改動相對於它計算（Project.catalog_changes）
+    """
+    edition_id: str
+    movement_id: str = ""
+    piece_title: str = ""
+    edition_label: str = ""
+    movement_name: str = ""
+    snapshot: CatalogSnapshot = field(default_factory=CatalogSnapshot)
+
+    def to_data(self) -> Dict[str, Any]:
+        """專案檔中存的內容"""
+        return {
+            "edition_id": self.edition_id,
+            "movement_id": self.movement_id,
+            "piece_title": self.piece_title,
+            "edition_label": self.edition_label,
+            "movement_name": self.movement_name,
+            "snapshot": self.snapshot.to_data(),
+        }
+
+    @classmethod
+    def from_data(cls, data: Dict[str, Any]) -> "CatalogLink":
+        """由專案檔中的內容還原"""
+        return cls(
+            edition_id=data.get("edition_id", ""),
+            movement_id=data.get("movement_id", ""),
+            piece_title=data.get("piece_title", ""),
+            edition_label=data.get("edition_label", ""),
+            movement_name=data.get("movement_name", ""),
+            snapshot=CatalogSnapshot.from_data(data.get("snapshot") or {}),
+        )
+
+
+class LinkResult(NamedTuple):
+    """群組連到譜庫的結果（Project.link_group）
+
+    Attributes:
+        needs_merge: 群組與譜庫那處都已有編制，要由合併差異表決定，群組沒有連上、沒有改動
+        guessed: 分譜檔名認不出聲部、依位置猜的聲部，依樂器表順序
+        moved: 譜庫的聲部不夠配、移到未分組的分譜，依原順序
+    """
+    needs_merge: bool = False
+    guessed: List[str] = []
+    moved: List[FileInfo] = []
+
+
 @dataclass
 class Group:
     """群組：一首曲目，或其中一個樂章，及其分譜與總譜
@@ -162,6 +298,7 @@ class Group:
     score_label: str = ""
     use_small_template: bool = False
     small_template: str = ""
+    catalog_link: Optional[CatalogLink] = None
 
     def __post_init__(self):
         self.present = _present_flags(self.present, len(self.instruments))
@@ -187,6 +324,7 @@ class Group:
             "genre": self.genre,
             "use_small_template": self.use_small_template,
             "small_template": self.small_template,
+            "catalog_link": self.catalog_link.to_data() if self.catalog_link else None,
         }
 
     @classmethod
@@ -211,6 +349,7 @@ class Group:
             genre=data.get("genre", ""),
             use_small_template=data.get("use_small_template", False),
             small_template=data.get("small_template", ""),
+            catalog_link=CatalogLink.from_data(data["catalog_link"]) if data.get("catalog_link") else None,
         )
 
     def update(self, **fields: Any) -> None:
@@ -1076,6 +1215,83 @@ class Project:
         _place_rows(group, rest[:at] + [current[i] for i in moving] + rest[at:])
         self._changed()
 
+    # --- 連到譜庫 ---
+
+    def link_group(self, group: Group, place: "CatalogPlace") -> LinkResult:
+        """把群組連到譜庫的一處（版本的整首或一個樂章）：編制與時長以譜庫為定本，記下連線與那處的快照
+
+        - 那處還沒有任何聲部：群組的編制留著，成為下次存檔要寫進去的改動（catalog_changes）
+        - 群組還沒有樂器表：樂器表與人數換成譜庫的；分譜依檔名取出的聲部名稱以同一聲部的規則配給譜庫的聲部，
+          認不出的依原順序填進剩下的聲部（回報為依位置猜的），聲部不夠配的分譜移到未分組；
+          群組有分譜時，沒配到分譜的聲部為本專案沒有
+        - 兩邊都有編制：不連，回報 needs_merge，由合併差異表決定
+        - 時長：譜庫有就用譜庫的，沒有時群組的成為改動
+        - 聲部組：社團對照有的樂器以社團的為準寫進專案的對照；沒有的樂器沿用專案的值，成為改動
+
+        Args:
+            group: 要連線的群組
+            place: 譜庫服務讀到的那一處（CatalogService.read_place）
+
+        Returns:
+            連線結果
+
+        Raises:
+            DuplicateVoicesError: 樂器表有重名的列，群組不變
+        """
+        duplicates = duplicate_rows(group.instruments)
+        if duplicates:
+            raise DuplicateVoicesError(duplicates)
+        if place.voices and group.instruments:
+            return LinkResult(needs_merge=True)
+        result = _take_catalog_voices(group, place.voices) if place.voices else LinkResult()
+        self.ungrouped_files.extend(result.moved)
+        if place.duration_seconds:
+            group.duration_seconds = place.duration_seconds
+        club_sections = {}
+        for voice in _distinct_instruments(group.instruments):
+            club = stored_section(voice, place.sections)
+            if club:
+                put_section(self.instrument_sections, voice, club)
+                club_sections[voice] = club
+        group.catalog_link = CatalogLink(
+            edition_id=place.edition_id,
+            movement_id=place.movement_id,
+            piece_title=place.piece_title,
+            edition_label=place.edition_label,
+            movement_name=place.movement_name,
+            snapshot=CatalogSnapshot(list(place.voices), place.duration_seconds, club_sections),
+        )
+        self._changed()
+        return result
+
+    def catalog_changes(self, group: Group) -> List[CatalogChange]:
+        """群組待寫進譜庫的改動：目前的編制、時長與聲部組相對於連線快照的差異；沒連到譜庫時為空清單
+
+        依序為聲部清單（同一聲部的另一種寫法不算改動）、各聲部的人數（快照沒有的聲部只在有填時列出）、
+        時長、各樂器的聲部組（社團對照沒有的樂器以專案的值列出）。
+        """
+        link = group.catalog_link
+        if link is None:
+            return []
+        snapshot = link.snapshot
+        changes = []
+        old_voices = tuple(name for name, _ in snapshot.voices)
+        if [voice_key(v) for v in old_voices] != [voice_key(v) for v in group.instruments]:
+            changes.append(CatalogChange(CatalogChangeKind.VOICES, "", old_voices, tuple(group.instruments)))
+        olds = match_by_voice(snapshot.voices, group.instruments)
+        for voice, old, new in zip(group.instruments, olds, group.headcounts):
+            if (old is None and new.filled) or (old is not None and old != new):
+                changes.append(CatalogChange(CatalogChangeKind.HEADCOUNT, voice, old, new))
+        if snapshot.duration_seconds != group.duration_seconds:
+            changes.append(CatalogChange(
+                CatalogChangeKind.DURATION, "", snapshot.duration_seconds, group.duration_seconds,
+            ))
+        for voice in _distinct_instruments(group.instruments):
+            old, new = stored_section(voice, snapshot.sections), self.section_of(voice)
+            if old != new:
+                changes.append(CatalogChange(CatalogChangeKind.SECTION, voice, old, new))
+        return changes
+
     def link_movements(self, groups: Iterable[Group], piece_name: str) -> None:
         """把群組連成同一首曲目的各樂章：曲名一致、樂章編號依序，沒有樂章名稱的以群組名稱補上"""
         for number, group in enumerate(groups, start=1):
@@ -1276,6 +1492,44 @@ def _place_rows(group: Group, rows: List[_VoiceRow]) -> None:
         [row.headcount for row in rows],
     )
     group.files = [row.part for row in rows if row.part is not None] + extras
+
+
+def _take_catalog_voices(group: Group, voices: List[Tuple[str, Headcount]]) -> LinkResult:
+    """群組還沒有樂器表時換成譜庫的聲部：分譜依檔名配聲部，認不出的依位置猜，聲部不夠配的拿出群組（不發通知）
+
+    Returns:
+        依位置猜的聲部與拿出群組的分譜（呼叫端放進未分組）
+    """
+    names = [name for name, _ in voices]
+    files = list(group.files)
+    slots: Dict[int, FileInfo] = {}
+    unmatched: List[FileInfo] = []
+    file_voices = extract_instruments_from_filenames([f.display_name for f in files]) if files else []
+    for file, file_voice in zip(files, file_voices):
+        index = voice_index(names, file_voice)
+        if index is not None and index not in slots:
+            slots[index] = file
+        else:
+            unmatched.append(file)
+    free = [i for i in range(len(names)) if i not in slots]
+    for index, file in zip(free, unmatched):
+        slots[index] = file
+    guessed = sorted(free[:len(unmatched)])
+    present = [i in slots for i in range(len(names))] if files else None
+    group.assign_instruments(names, present, [headcount for _, headcount in voices])
+    group.files = [slots[i] for i in sorted(slots)]
+    return LinkResult(guessed=[names[i] for i in guessed], moved=unmatched[len(free):])
+
+
+def _distinct_instruments(voices: Iterable[str]) -> List[str]:
+    """每種樂器第一次出現的聲部寫法，依原順序（聲部組以樂器為單位）"""
+    seen = set()
+    result = []
+    for voice in voices:
+        if instrument_key(voice) not in seen:
+            seen.add(instrument_key(voice))
+            result.append(voice)
+    return result
 
 
 def _refuse_duplicate_voice(instruments: Iterable[str], name: str) -> None:

@@ -30,6 +30,10 @@ SHEET_PARTS = "分譜"
 SHEET_PERFORMANCES = "演出紀錄"
 # 社團設定：「鍵、值」兩欄，由譜務在試算表上手動填寫
 SHEET_CLUB_SETTINGS = "社團設定"
+# 時長：每個（版本、樂章或整首）一列，記秒數；樂章欄空白就是整首
+SHEET_DURATIONS = "時長"
+# 聲部組對照：（樂團類型、樂器）→ 聲部組，全社團共用；樂團類型寫 OrchestraType 的值
+SHEET_SECTIONS = "聲部組對照"
 
 SHEET_HEADERS = {
     SHEET_COMPOSERS: [
@@ -52,6 +56,8 @@ SHEET_HEADERS = {
     SHEET_PARTS: [
         "id", "edition_id", "movement_id", "instrument_name",
         "sort_order", "status", "drive_file_id", "file_name", "notes",
+        # 新增的欄只加在後面：人數（最少留空＝未填，最多留空＝等於最少）、是否「以上」、是否為總譜列
+        "headcount_min", "headcount_max", "headcount_open_ended", "is_score",
     ],
     SHEET_PERFORMANCES: [
         "id", "piece_id", "edition_id", "performance_date",
@@ -59,7 +65,13 @@ SHEET_HEADERS = {
         "program_order", "notes",
     ],
     SHEET_CLUB_SETTINGS: ["鍵", "值"],
+    SHEET_DURATIONS: ["id", "edition_id", "movement_id", "seconds"],
+    SHEET_SECTIONS: ["id", "orchestra_type", "instrument", "section"],
 }
+
+# 是非欄（是否「以上」、是否為總譜列）寫入時的「是」；讀取時這些寫法都算是，其餘（含空白）算否
+CATALOG_TRUE = "TRUE"
+CATALOG_TRUE_VALUES = frozenset({"TRUE", "1", "Y", "YES", "是"})
 
 
 class PublishingPlatform(str, Enum):

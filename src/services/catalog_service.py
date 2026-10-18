@@ -23,20 +23,22 @@
 import time
 import uuid
 from dataclasses import fields
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Type, TypeVar
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Type, TypeVar
 
 from core.catalog_constants import (
-    CLUB_SETTING_PUBLISHING_PLATFORM, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME, DRIVE_SPREADSHEET_MIME,
-    PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, SHEET_COMPOSERS, SHEET_EDITIONS, SHEET_HEADERS, SHEET_MOVEMENTS,
-    SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, PublishingPlatform,
+    CATALOG_TRUE_VALUES, CLUB_SETTING_PUBLISHING_PLATFORM, DRIVE_FOLDER_MIME, DRIVE_PDF_MIME, DRIVE_SPREADSHEET_MIME,
+    PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, SHEET_COMPOSERS, SHEET_DURATIONS, SHEET_EDITIONS, SHEET_HEADERS,
+    SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, SHEET_SECTIONS, PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, OrchestraType
 from core.voice_suggestions import ranked_by_usage
 from core.catalog_models import (
-    CatalogOverview, Composer, DriveFile, Edition, EditionFiles, FolderContents, Movement, Part, Performance, Piece,
-    PieceDetail,
+    CatalogOverview, CatalogPlace, Composer, DriveFile, Edition, EditionFiles, FolderContents, Movement, Part,
+    Performance, Piece, PieceDetail,
 )
+from core.models import Headcount
+from core.voice_names import instrument_key, voice_key
 from services.catalog_ports import CellWrite, DrivePort, SheetsPort, sheet_range
 
 T = TypeVar("T")
@@ -93,6 +95,53 @@ def _models(rows: List[List[str]], sheet: str, model_class: Type[T]) -> List[T]:
         }
         result.append(model_class(**values))
     return result
+
+
+def _is_true(value: str) -> bool:
+    """是非欄的值是否為「是」（寫法見 CATALOG_TRUE_VALUES）"""
+    return value.strip().upper() in CATALOG_TRUE_VALUES
+
+
+def _count(value: str) -> Optional[int]:
+    """人數或秒數欄的值；空白或不是正整數時為 None"""
+    value = value.strip()
+    return int(value) if value.isdigit() and int(value) > 0 else None
+
+
+def _sort_key(value: str) -> Tuple[int, int]:
+    """排序欄的值：數字依大小排，空白或不是數字的排在最後（同值時保留工作表的順序）"""
+    value = value.strip()
+    return (0, int(value)) if value.isdigit() else (1, 0)
+
+
+def _place_voices(parts: List[Part]) -> List[Tuple[str, Headcount]]:
+    """一處的聲部與人數：依排序欄排，略過總譜列；同一聲部有兩列時只認排在前面那一列"""
+    seen = set()
+    voices = []
+    for part in sorted(parts, key=lambda p: _sort_key(p.sort_order)):
+        key = voice_key(part.instrument_name)
+        if _is_true(part.is_score) or not part.instrument_name.strip() or key in seen:
+            continue
+        seen.add(key)
+        headcount = Headcount(
+            _count(part.headcount_min), _count(part.headcount_max), _is_true(part.headcount_open_ended),
+        )
+        voices.append((part.instrument_name, headcount.normalized()))
+    return voices
+
+
+def _club_sections(records: List[Dict[str, str]], orchestra_type: OrchestraType) -> Dict[str, str]:
+    """社團聲部組對照裡這個樂團類型的部分：樂器 → 聲部組；同一樂器有幾列時只認排在前面那一列"""
+    sections: Dict[str, str] = {}
+    seen = set()
+    for record in records:
+        instrument, section = record["instrument"].strip(), record["section"].strip()
+        if record["orchestra_type"].strip() != orchestra_type.value or not instrument or not section:
+            continue
+        if instrument_key(instrument) not in seen:
+            seen.add(instrument_key(instrument))
+            sections[instrument] = section
+    return sections
 
 
 def _records(rows: List[List[str]], sheet: str) -> List[Dict[str, str]]:
@@ -165,6 +214,47 @@ class PendingCatalog:
         self.name = name
         self.folder_id = folder_id
         self.spreadsheet_id = ""
+
+
+class PendingPlace:
+    """要在譜庫新建的一處：還沒有的曲目（連同作曲家）、版本（連同 Drive 資料夾）與樂章
+
+    已有的部分給 ID，其餘依曲名、作曲家、樂章編號與名稱新建。CatalogService.create_place 建好一部分就記下來：
+    之後中途失敗時以同一個物件重送，只補上缺的，不產生重複的列與資料夾。
+    """
+
+    def __init__(
+        self, title: str, composer: str = "", root_folder_id: str = "", piece_id: str = "", edition_id: str = "",
+        movement_id: str = "", new_movement: bool = False, movement_number: str = "", movement_name: str = "",
+    ):
+        """
+        Args:
+            title: 曲名（新建曲目的曲名，也是新版本資料夾的名稱）
+            composer: 作曲家（新建曲目時以名稱找已有的作曲家，沒有就新增）；空字串表示不填
+            root_folder_id: 譜庫根資料夾的 Drive ID（新版本的資料夾建在這裡）
+            piece_id: 已有的曲目 ID；空字串表示新建
+            edition_id: 已有的版本 ID；空字串表示新建
+            movement_id: 已有的樂章 ID；空字串表示整首或新建（見 new_movement）
+            new_movement: 是否新建樂章（否則 movement_id 空白就是整首）
+            movement_number: 新樂章的編號；空字串時接在已有的樂章之後
+            movement_name: 新樂章的名稱
+        """
+        self.title = title
+        self.composer = composer
+        self.root_folder_id = root_folder_id
+        self.piece_id = piece_id
+        self.edition_id = edition_id
+        self.movement_id = movement_id
+        self.new_movement = new_movement and not movement_id
+        self.movement_number = movement_number
+        self.movement_name = movement_name
+        self.folder_id = ""
+        self.composer_id = ""
+        self._composer_rows: Optional[PendingRows] = None
+        self._piece_rows: Optional[PendingRows] = None
+        self._edition_rows: Optional[PendingRows] = None
+        self._movement_rows: Optional[PendingRows] = None
+        self._activate_edition = False
 
 
 class CatalogService:
@@ -331,6 +421,57 @@ class CatalogService:
                 return PUBLISHING_PLATFORM_NAMES.get(value)
         return None
 
+    def read_place(self, edition_id: str, movement_id: str, orchestra_type: OrchestraType) -> CatalogPlace:
+        """讀譜庫裡的一處（版本的整首或一個樂章）：編制、時長，連同社團的聲部組對照（兩次請求）
+
+        先列出工作表名稱，時長與聲部組對照這兩張還沒建立時當成空的；分譜工作表沒有人數欄時人數未填。
+
+        Args:
+            edition_id: 版本 ID
+            movement_id: 樂章 ID；整首為空字串
+            orchestra_type: 專案的樂團類型（聲部組對照只取這一套）
+
+        Returns:
+            這一處
+
+        Raises:
+            CatalogError: 讀不到；版本或樂章已不在譜庫時為已經不在譜庫
+        """
+        titles = set(self._call(self._sheets.sheet_titles))
+        sheets = [SHEET_PIECES, SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS] + [
+            sheet for sheet in (SHEET_DURATIONS, SHEET_SECTIONS) if sheet in titles
+        ]
+        tables = dict(zip(sheets, self._read_sheets(*sheets)))
+        edition = next((e for e in _models(tables[SHEET_EDITIONS], SHEET_EDITIONS, Edition) if e.id == edition_id), None)
+        if edition is None:
+            raise CatalogError(CatalogErrorKind.GONE, f"edition {edition_id} is no longer in the catalog")
+        movement = None
+        if movement_id:
+            movement = next(
+                (m for m in _models(tables[SHEET_MOVEMENTS], SHEET_MOVEMENTS, Movement) if m.id == movement_id), None,
+            )
+            if movement is None:
+                raise CatalogError(CatalogErrorKind.GONE, f"movement {movement_id} is no longer in the catalog")
+        piece = next((p for p in _models(tables[SHEET_PIECES], SHEET_PIECES, Piece) if p.id == edition.piece_id), Piece())
+        parts = [
+            p for p in _models(tables[SHEET_PARTS], SHEET_PARTS, Part)
+            if p.edition_id == edition_id and p.movement_id == movement_id
+        ]
+        duration = next((
+            _count(r["seconds"]) for r in _records(tables.get(SHEET_DURATIONS, []), SHEET_DURATIONS)
+            if r["edition_id"] == edition_id and r["movement_id"] == movement_id
+        ), None)
+        return CatalogPlace(
+            edition_id=edition_id,
+            movement_id=movement_id,
+            piece_title=piece.title,
+            edition_label=edition.edition_label or edition.publisher,
+            movement_name=(movement.name or movement.movement_number) if movement else "",
+            voices=_place_voices(parts),
+            duration_seconds=duration,
+            sections=_club_sections(_records(tables.get(SHEET_SECTIONS, []), SHEET_SECTIONS), orchestra_type),
+        )
+
     def subfolders(self, folder_id: str) -> List[DriveFile]:
         """列出 Drive 資料夾裡的子資料夾（依名稱排序，不含垃圾桶裡的）
 
@@ -361,11 +502,13 @@ class CatalogService:
         """
         return PendingRows(sheet, records)
 
-    def new_movement(self, piece_id: str) -> PendingRows:
+    def new_movement(self, piece_id: str, number: str = "", name: str = "") -> PendingRows:
         """準備一首曲目的新樂章：寫入前一刻才讀這首曲目已有的樂章，編號與排序接在它們之後（一次請求）
 
         Args:
             piece_id: 曲目 ID
+            number: 樂章編號；空字串時接在已有的樂章之後
+            name: 樂章名稱
 
         Returns:
             待新增的一列；交給 add_rows 送出，失敗時以同一個物件重送
@@ -375,8 +518,10 @@ class CatalogService:
         """
         rows = self._read_sheets(SHEET_MOVEMENTS)[0]
         count = sum(1 for movement in _models(rows, SHEET_MOVEMENTS, Movement) if movement.piece_id == piece_id)
-        number = str(count + 1)
-        return self.new_rows(SHEET_MOVEMENTS, [{"piece_id": piece_id, "movement_number": number, "sort_order": number}])
+        order = str(count + 1)
+        return self.new_rows(SHEET_MOVEMENTS, [{
+            "piece_id": piece_id, "movement_number": number or order, "name": name, "sort_order": order,
+        }])
 
     def add_rows(self, rows: PendingRows) -> List[str]:
         """新增一批列：先讀這張工作表的 ID 欄，再以一次請求新增
@@ -458,6 +603,68 @@ class CatalogService:
             )
         self.move_file(self._call(lambda: self._drive.get_file(pending.spreadsheet_id)), pending.folder_id)
         return pending.spreadsheet_id
+
+    def create_place(self, pending: PendingPlace, orchestra_type: OrchestraType) -> CatalogPlace:
+        """在譜庫新建群組要連的一處：建出還沒有的曲目、版本（連同根資料夾下的 Drive 資料夾）與樂章，再讀出那處
+
+        新建的曲目以新版本為使用中的版本。建好一部分就記在 pending：中途失敗時以同一個 pending 再呼叫一次，
+        只補上缺的。
+
+        Args:
+            pending: 要新建的一處；上一次失敗時傳入同一個
+            orchestra_type: 專案的樂團類型（讀聲部組對照用）
+
+        Returns:
+            新建好的那一處（read_place 讀到的）
+
+        Raises:
+            CatalogError: 寫不進去；以同一個 pending 再呼叫一次即可補齊。要新建版本卻沒設定根資料夾時為找不到
+        """
+        if not pending.edition_id and not pending.root_folder_id:
+            raise CatalogError(CatalogErrorKind.NOT_FOUND, f"{CATALOG_ROOT_FOLDER_ID_KEY} is empty")
+        if not pending.piece_id:
+            pending.piece_id = self._create_piece(pending)
+        if not pending.edition_id:
+            if not pending.folder_id:
+                pending.folder_id = self.create_folder(pending.title, pending.root_folder_id).id
+            if pending._edition_rows is None:
+                pending._edition_rows = self.new_rows(
+                    SHEET_EDITIONS, [{"piece_id": pending.piece_id, "drive_folder_id": pending.folder_id}],
+                )
+            pending.edition_id = self.add_rows(pending._edition_rows)[0]
+        if pending._activate_edition:
+            self.update_record(SHEET_PIECES, pending.piece_id, {"active_edition_id": pending.edition_id})
+            pending._activate_edition = False
+        if pending.new_movement and not pending.movement_id:
+            if pending._movement_rows is None:
+                pending._movement_rows = self.new_movement(
+                    pending.piece_id, pending.movement_number, pending.movement_name,
+                )
+            pending.movement_id = self.add_rows(pending._movement_rows)[0]
+        return self.read_place(pending.edition_id, pending.movement_id, orchestra_type)
+
+    def _create_piece(self, pending: PendingPlace) -> str:
+        """新增 pending 的曲目（作曲家以名稱找已有的，沒有就新增），回傳曲目 ID；之後要把新版本設為使用中"""
+        composer = pending.composer.strip()
+        if composer and not pending.composer_id:
+            if pending._composer_rows is None:
+                existing = next((
+                    c for c in _models(self._read_sheets(SHEET_COMPOSERS)[0], SHEET_COMPOSERS, Composer)
+                    if c.name.strip() == composer
+                ), None)
+                if existing is not None:
+                    pending.composer_id = existing.id
+                else:
+                    pending._composer_rows = self.new_rows(SHEET_COMPOSERS, [{"name": composer}])
+            if pending._composer_rows is not None:
+                pending.composer_id = self.add_rows(pending._composer_rows)[0]
+        if pending._piece_rows is None:
+            pending._piece_rows = self.new_rows(
+                SHEET_PIECES, [{"title": pending.title, "composer_id": pending.composer_id}],
+            )
+        piece_id = self.add_rows(pending._piece_rows)[0]
+        pending._activate_edition = True
+        return piece_id
 
     def create_folder(self, name: str, parent_id: str) -> DriveFile:
         """在 Drive 資料夾裡建立子資料夾

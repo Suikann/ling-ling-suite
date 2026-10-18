@@ -318,6 +318,10 @@ class FakeDrive:
         """檔案目前的樣子"""
         return self._items[file_id].as_file()
 
+    def children(self, folder_id: str) -> List[DriveFile]:
+        """資料夾裡不在垃圾桶的檔案與資料夾"""
+        return [item.as_file() for item in self._items.values() if folder_id in item.parents and not item.trashed]
+
     # --- Drive 關口 ---
 
     def list_files(self, query: str, page_token: str = "") -> DriveListing:

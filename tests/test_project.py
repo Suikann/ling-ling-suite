@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from core.constants import PROJECT_FILE_VERSION, OrchestraType
 from core.models import (
-    DuplicateVoiceError, FileInfo, Group, Headcount, Project, SplitPlacement, SplitResult, UndoMapping,
+    CatalogLink, CatalogSnapshot, DuplicateVoiceError, FileInfo, Group, Headcount, Project, SplitPlacement, SplitResult, UndoMapping,
     format_duration, sum_headcounts,
 )
 from services.project_service import ProjectService
@@ -109,6 +109,10 @@ def _rich_group(name: str, parts: list) -> Group:
         piece_name="命運", movement_number="1", movement_name="Allegro", composer="Beethoven",
         genre="交響曲", score_file=_info(_path(name, "Score.pdf")), score_label="總譜",
         use_small_template=True, small_template="{樂器}.pdf",
+        catalog_link=CatalogLink(
+            edition_id="e1", movement_id="m1", piece_title="命運", edition_label="Bärenreiter", movement_name="Allegro",
+            snapshot=CatalogSnapshot([(p, Headcount(2)) for p in parts], 470, {parts[0]: "木管"}),
+        ),
     )
 
 
@@ -143,7 +147,7 @@ def _saved_fields(owner, data: dict, label: str):
 
 
 def _changed(value):
-    """與原值不同的新值（不改動原值本身）"""
+    """與原值不同的新值（不改動原值本身）；資料類別能以預設值建立時換成預設值（必填的欄位），否則換成 None"""
     if isinstance(value, bool):
         return not value
     if isinstance(value, Enum):
@@ -157,7 +161,10 @@ def _changed(value):
     if isinstance(value, dict):
         return {**value, "x": 0}
     if dataclasses.is_dataclass(value):
-        return None
+        try:
+            return type(value)()
+        except TypeError:
+            return None
     raise AssertionError(f"沒有為 {type(value).__name__} 準備改值方式")
 
 
