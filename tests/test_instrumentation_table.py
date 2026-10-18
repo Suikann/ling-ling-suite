@@ -71,6 +71,12 @@ class TestDraggingVoices(InstrumentationTableTestCase):
         self.assertEqual(self.shown_voices(), ["Horn", "Flute", "Oboe"])
         self.assertTrue(self.project.is_modified())
 
+    def test_dropping_a_row_announces_the_voice_list_change(self):
+        emitted = []
+        self.editor.instruments_changed.connect(lambda: emitted.append(True))
+        self.table.rows_dropped.emit([2], 0)
+        self.assertEqual(emitted, [True])
+
 
 class TestRenamingVoices(InstrumentationTableTestCase):
     """改聲部名稱：分譜留在原位；與另一列同一聲部時說明原因並還原"""
@@ -144,6 +150,12 @@ class TestSectionsByInstrument(InstrumentationTableTestCase):
         self.assertEqual([c.currentData() for c in self.combos()], ["低音", "低音", "拉弦"])
         self.assertEqual([self.project.section_of(v) for v in self.VOICES], ["低音", "低音", "拉弦"])
 
+    def test_changing_a_section_does_not_announce_a_voice_list_change(self):
+        emitted = []
+        self.editor.instruments_changed.connect(lambda: emitted.append(True))
+        combo = self.combos()[0]
+        combo.setCurrentIndex(combo.findData("低音"))
+        self.assertEqual(emitted, [])
 
 
 class TestHeadcountColumns(InstrumentationTableTestCase):
@@ -213,6 +225,15 @@ class TestCopyInstrumentation(InstrumentationTableTestCase):
         self.assertEqual([h.text() for h in self.group.headcounts], ["2", "", "4-6"])
         self.assertIn(t("instrumentation.copy_unmatched", voices="Oboe"), self.shown_texts())
         self.assertEqual(combo.currentIndex(), 0)
+
+    def test_copying_headcounts_does_not_announce_a_voice_list_change(self):
+        self.project.groups.append(Group(name="第一樂章", instruments=["Flute"], headcounts=[Headcount(2)]))
+        self.editor.show_group(self.group)
+        emitted = []
+        self.editor.instruments_changed.connect(lambda: emitted.append(True))
+        combo = next(c for c in self.editor.findChildren(QComboBox) if c.itemText(0) == t("instrumentation.copy_from"))
+        combo.setCurrentIndex(1)
+        self.assertEqual(emitted, [])
 
 
 class TestOldHeadcountDialogIsGone(InstrumentationTableTestCase):

@@ -9,7 +9,8 @@
 另有載入預設樂器表、從其他群組複製編制、從檔名擷取與匯出樂器表。
 
 元件不依賴主視窗：帶入專案後以 show_group 顯示任何一個群組；修改一律經專案的編輯操作立即寫入，
-改了聲部清單時再發出 instruments_changed（人數與時長不影響配對，只寫入不重畫）。
+只有改了聲部清單（增刪、改名、排序、本專案有）時再發出 instruments_changed。人數、時長、
+複製編制與聲部組不影響配對，不發出：人數與時長只寫入不重畫，複製編制與聲部組只重畫這張表。
 上方的 header 版面預留給連線。
 
 使用範例：
@@ -325,7 +326,7 @@ class InstrumentationTable(QWidget):
         self._notice.setVisible(bool(text))
 
     def _changed(self, moved: Optional[List[FileInfo]] = None):
-        """編輯操作完成後：重畫、寫出移到未分組的分譜、發出 instruments_changed"""
+        """改了聲部清單的編輯操作完成後：重畫、寫出移到未分組的分譜、發出 instruments_changed"""
         self._fill()
         self._show_moved(moved or [])
         self.instruments_changed.emit()
@@ -386,7 +387,7 @@ class InstrumentationTable(QWidget):
         if index <= 0 or self._group is None or index > len(self._copy_sources):
             return
         unmatched = self._project.copy_instrumentation(self._group, self._copy_sources[index - 1])
-        self._changed()
+        self._fill()
         self._show_notice(t("instrumentation.copy_unmatched", voices="、".join(unmatched)) if unmatched else "")
 
     def _on_section_chosen(self, voice: str, combo: QComboBox):
@@ -394,7 +395,7 @@ class InstrumentationTable(QWidget):
         if self._filling or self._group is None:
             return
         self._project.set_section(self._group, voice, combo.currentData())
-        self._changed()
+        self._fill()
 
     def _on_preset_selected(self, index: int):
         if index <= 0:

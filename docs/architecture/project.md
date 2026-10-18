@@ -6,7 +6,7 @@
 
 - UI 只表達意圖並立即寫入：修改一律呼叫 `Project` 的公開編輯操作（`update_group`、`add_group`、`move_to_group`、`apply_split`、`guess_piece_name`…，完整清單看 `Project` 的公開方法），不直接指定 `Project`、`Group`、`FileInfo` 的欄位
 - 舊欄位鏡像（`selected_instruments`、`use_parts_subfolder`）由編輯操作與載入流程維持，呼叫端不碰
-- 群組分頁、編制表、預覽對話框不呼叫主視窗的私有方法：群組分頁以 `groups_changed` 讓主視窗重建分頁（影響其他分頁的修改），編制表發出 `instruments_changed`（主視窗據此重新顯示各分頁），預覽對話框用主視窗注入的 callback（`check`、`on_execute`）
+- 群組分頁、編制表、預覽對話框不呼叫主視窗的私有方法：群組分頁以 `groups_changed` 讓主視窗重建分頁（影響其他分頁的修改），編制表改了聲部清單時發出 `instruments_changed`（主視窗據此重新顯示各分頁），預覽對話框用主視窗注入的 callback（`check`、`on_execute`）
 - 同一份樂器表不重名：新增（`add_instrument`）或改名（`rename_instrument`）成與其他列同一聲部的名稱（`core/voice_names.py` 的規則，例如已有「二胡 I」時的「二胡1」）時丟出 `DuplicateVoiceError`、樂器表不變，編制表顯示說明並還原名稱；改成自己的另一種寫法不算重名。整份換掉樂器表（`set_instruments`：預設樂器表、從檔名擷取）、移動與移除不檢查，舊專案已有的重名原樣保留
 - 編制表顯示目前分頁那個群組的編制；目前分頁不是群組（未分組）時清空並停用，輸入的聲部才不會沒有地方寫入（`InstrumentationTable.show_group`）
 
@@ -15,8 +15,9 @@
 主視窗左欄就是編制表（`ui/instrumentation_table.py` 的 `InstrumentationTable`），取代原本的樂器表清單；左欄與右邊之間的分隔線可以拖寬。聲部的增刪與順序只在這張表，每個動作經下一節的編輯操作：
 
 - 欄位：本專案有、聲部、最少、最多、以上、聲部組，聲部組旁寫出會跟著改的其他編號（`same_instrument_voices`）。欄位依 `COLUMNS` 的順序排；表格上方是群組的時長（分、秒）
-- 人數三欄（`set_headcount`）與時長（`set_duration`）打完（按 Enter 或離開欄位）才寫入，寫入後只把整理過的值填回那一列，不重畫整張表；勾「以上」時清空並停用最多。人數與時長不影響配對，不發出 `instruments_changed`
+- 人數三欄（`set_headcount`）與時長（`set_duration`）打完（按 Enter 或離開欄位）才寫入，寫入後只把整理過的值填回那一列，不重畫整張表；勾「以上」時清空並停用最多
 - 「從其他群組複製編制」選單列出專案裡的其他群組，選了就 `copy_instrumentation`，表格下方寫出對應不到、人數已留空的聲部
+- 只有改了聲部清單（增刪、改名、拖動、本專案有）才發出 `instruments_changed`；人數、時長、複製編制與聲部組不影響配對，不發出（複製編制與聲部組只重畫這張表）
 - 舊的「編制設定」對話框（編輯人數）已拿掉，人數只在這張表填
 - 拖動列：`move_instruments`，分譜跟著聲部走；分譜在群組分頁單獨拖動（`reorder_files`），只改配對
 - 雙擊改聲部名稱：`rename_instrument`；清空名稱等於移除那一列
