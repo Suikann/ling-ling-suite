@@ -71,6 +71,25 @@ After upgrading, do not open project files saved by the new version with an olde
 5. **Configure naming format** at the bottom (e.g., `{Number}-{PieceName}-{Instrument}.pdf`)
 6. **Preview & Rename** to execute
 
+## Catalog
+
+A group can be linked to a piece, edition and movement in the catalog (the club's Google spreadsheet plus Drive). Once linked, the catalog holds the instrumentation and duration:
+
+- Pressing **Save** on the project also writes the group's changed voices, order, headcounts, duration and sections to the catalog; nothing is written until you save. Only changed cells are written. If someone else changed the same cell in the catalog, every change of this save is listed first, with the conflicts in red for you to choose a side
+- Deleting a voice in a linked group deletes it from the score; if this concert just lacks the part, uncheck "In Project" instead. A voice that already has a Drive file can't be deleted from the group; handle it in the catalog window
+- **After upgrading, do not open the catalog with an older version of Ling Ling**: its part status menu creates fake voices, its deletions shift row numbers, and its updates overwrite the first columns with old data
+
+### If the spreadsheet gets corrupted
+
+When rows were written to the wrong place or a sheet was deleted, restore it from Google Sheets' version history (neither Ling Ling nor the API can restore versions):
+
+1. Open the catalog spreadsheet in a browser with the catalog account
+2. Choose File → Version history → See version history
+3. Pick a point in time before the problem on the right and check its content
+4. Click "Restore this version"
+
+Every change anyone made to the spreadsheet after that point is rolled back too, so check with the other score librarians first and redo the changes worth keeping afterwards.
+
 ## Known Limitations
 
 - **Paths are compared case-insensitively**: on every platform, paths that differ only in letter case count as the same file. On Linux, when one folder holds both `Flute.pdf` and `flute.pdf`, Ling Ling Suite treats them as one file; a move first checks whether the destination is a different file and refuses to overwrite it, so no file is damaged.
