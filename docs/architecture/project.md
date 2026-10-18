@@ -127,7 +127,7 @@
 
 開啟專案時，連到譜庫的群組從譜庫更新快照（ADR 0002：譜庫是定本，專案只存快照）。
 
-- **讀取**：各群組連到的那處以 `CatalogService.read_places` 一起讀（兩次請求，不隨群組數增加），交給 `Project.refresh_catalog(group, place)`
+- **讀取**：各群組連到的那處以 `CatalogService.read_places` 一起讀（兩次請求，不隨群組數增加），交給 `Project.refresh_catalog(group, place)`。一處已不在譜庫時只有那一處讀成 None：那個群組照快照，其他群組照常更新，頂端提示列寫出是哪些群組（「…連到的那處已不在譜庫，編制照專案裡的」，按「重新讀取」再讀一次）
 - **人數與時長直接套用**：譜庫的值跟快照不同時，群組還是快照的值就改成譜庫的，快照跟著改；群組另有還沒寫回的值（例如未同步）時兩邊都不動，存檔時照「寫回譜庫」的比對列為衝突
 - **其他**：曲名、版本與樂章的名稱、已有 Drive 檔案的聲部（`CatalogSnapshot.filed`）、各樂器被其他曲目用到幾首換成讀到的。聲部組不在這裡更新
 - **聲部清單變了**（增刪、名稱、順序）：不自動套用。譜庫的清單跟群組的一樣時快照直接換成譜庫的；不一樣時記下讀到的那處（只在記憶體，不進專案檔），`Project.catalog_list_change(group)` 回報差異（`CatalogListChange`：譜庫的清單、只在譜庫的、只在群組的、換了相對順序的聲部）。還沒決定時配對與命名照專案的清單，快照的清單也不變，所以存檔不寫清單，下次開啟再讀到同樣的差異
@@ -154,9 +154,9 @@
 
 ### 存入譜庫
 
-已重新命名、已連到譜庫的群組的總譜與分譜，上傳到那個版本的 Drive 資料夾並登記到分譜工作表的聲部；本機那份不動。預覽（`DepositService.preview`）與執行（`DepositService.deposit`）在 `services/deposit_service.py`，每份檔的動作在 `core/deposit.py`，碰譜庫經譜庫服務（`deposit_places`、`deposit_log`、`drive_ids`、`begin_deposit`、`upload_file`、`update_file`、`place_file`、`record_deposits`）：
+已重新命名、已連到譜庫的群組的總譜與分譜，上傳到那個版本的 Drive 資料夾並登記到分譜工作表的聲部；本機那份不動。預覽（`DepositService.preview`）與執行（`DepositService.deposit`）在 `services/deposit_service.py`，每份檔的動作在 `core/deposit.py`，碰譜庫經譜庫服務（`place_files`、`deposit_log`、`drive_ids`、`begin_deposit`、`upload_file`、`update_file`、`place_file`、`record_deposits`）：
 
-- **能存入的群組**（`deposit_sources`）：連到譜庫、而且已重新命名＝總譜與每份配到聲部的分譜都在命名格式算出的位置（有輸出位置時比整條路徑，就地改名時比檔名與上層資料夾，不分大小寫）。其餘整個群組不存入（`DepositBlock`：沒連到譜庫、還沒重新命名、沒有檔、有本機找不到的檔、檔都只在譜庫、版本沒有 Drive 資料夾）。只在譜庫的檔（見下方「只在譜庫」）跳過，群組其餘的照常存入；只在譜庫以外的找不到才擋下整個群組。多於聲部數的分譜不改名，也不存入
+- **能存入的群組**（`deposit_sources`）：連到譜庫、而且已重新命名＝總譜與每份配到聲部的分譜都在命名格式算出的位置（有輸出位置時比整條路徑，就地改名時比檔名與上層資料夾，不分大小寫）。其餘整個群組不存入（`DepositBlock`：沒連到譜庫、還沒重新命名、沒有檔、有本機找不到的檔、檔都只在譜庫、版本沒有 Drive 資料夾、連到的那處已不在譜庫）。讀各處的登記（`CatalogService.place_files`，存入、清除與下載回原位共用）時一處已不在譜庫只少那一處，其他群組照常。只在譜庫的檔（見下方「只在譜庫」）跳過，群組其餘的照常存入；只在譜庫以外的找不到才擋下整個群組。多於聲部數的分譜不改名，也不存入
 - **放在 Drive 的哪裡**：版本資料夾就是群組的資料夾，底下的子資料夾與本機相同；開啟子資料夾輸出時，群組那一層不帶到 Drive，分譜資料夾、聲部組資料夾照帶。還沒有的子資料夾以預先要到的 ID 建立
 - **每份檔的動作**（`DepositAction`，比對都以 Drive 的 `md5Checksum` 與本機的 MD5）：
   - 聲部已登記了 Drive 上還在的檔：內容、檔名與資料夾都相同就跳過；只有檔名或資料夾不同就搬移；內容不同就以 `files.update` 換掉同一個檔的內容（ID 不變，舊內容成為 Drive 的版本），同一個請求裡改名、搬移
@@ -177,9 +177,9 @@
 
 ### 清除本機檔案
 
-確認譜庫裡有內容相同的一份之後，永久刪掉本機的總譜與分譜，連同清空後變空的資料夾。預覽（`ClearLocalService.preview`）與執行（`ClearLocalService.clear`）在 `services/clear_local_service.py`，每份檔的歸類與要刪的資料夾在 `core/clear_local.py`，讀譜庫各處登記的 Drive 檔沿用存入的 `CatalogService.deposit_places`：
+確認譜庫裡有內容相同的一份之後，永久刪掉本機的總譜與分譜，連同清空後變空的資料夾。預覽（`ClearLocalService.preview`）與執行（`ClearLocalService.clear`）在 `services/clear_local_service.py`，每份檔的歸類與要刪的資料夾在 `core/clear_local.py`，讀譜庫各處登記的 Drive 檔沿用存入的 `CatalogService.place_files`：
 
-- **核對**（`classify`）：本機算 MD5，跟那處這個聲部（總譜為總譜列）登記的 Drive 檔的 `md5Checksum` 比對，一致才可清除。內容不一致是「跟譜庫裡的不一樣，請先重新存入」；沒登記、登記的檔已不在 Drive、在垃圾桶裡或不在版本資料夾裡（`PlaceFiles.holds`；例如別人分享進來、擁有者刪得掉的檔）是「譜庫裡沒有」；群組沒連到譜庫、分譜沒配到聲部是「還沒存入」。本機已經沒有的檔是只在譜庫（見下一節）或找不到
+- **核對**（`classify`）：本機算 MD5，跟那處這個聲部（總譜為總譜列）登記的 Drive 檔的 `md5Checksum` 比對，一致才可清除。內容不一致是「跟譜庫裡的不一樣，請先重新存入」；沒登記、登記的檔已不在 Drive、在垃圾桶裡或不在版本資料夾裡（`PlaceFiles.holds`；例如別人分享進來、擁有者刪得掉的檔）是「譜庫裡沒有」，連到的那處已不在譜庫時群組的檔都是（其他群組照常清除）；群組沒連到譜庫、分譜沒配到聲部是「還沒存入」。本機已經沒有的檔是只在譜庫（見下一節）或找不到
 - **斷網**：預覽讀不到譜庫就丟出 `CatalogError`，什麼都不刪
 - **只刪勾了的群組裡可清除的**：沒有可清除檔案的群組不能勾（`GroupClear.choosable`）；刪之前一刻重讀譜庫那幾處的登記與 Drive 上的檔，再照同一套核對，預覽之後登記換了、Drive 上那份改過或丟進垃圾桶的不刪（`ClearOutcome.catalog_changed`），重讀不到時什麼都不刪（`ClearOutcome.error`，主視窗頂端顯示提示列）；每份刪之前再算一次本機 MD5，預覽之後內容變了的不刪（`ClearOutcome.changed`），刪不掉的記在 `failed`，都不丟出。要求取消時做完目前這一份就停
 - **永久刪除**：經 `FileService.delete_permanently`，不進資源回收桶；這是泠靈唯一的永久刪除，其他刪除照舊走資源回收桶。不放上復原堆疊。清除的每份檔寫一筆紀錄檔
@@ -201,10 +201,10 @@
 
 ### 從譜庫下載
 
-只在譜庫的檔下載回原位，或把版本資料夾的檔下載到自選的資料夾。要下載哪些檔、放哪裡在 `core/catalog_download.py`（`restore_items`、`folder_items`），下載與核對在 `services/download_service.py` 的 `DownloadService`，碰譜庫經譜庫服務（`deposit_places` 讀那處的登記、`download_file` 下載內容）：
+只在譜庫的檔下載回原位，或把版本資料夾的檔下載到自選的資料夾。要下載哪些檔、放哪裡在 `core/catalog_download.py`（`restore_items`、`folder_items`），下載與核對在 `services/download_service.py` 的 `DownloadService`，碰譜庫經譜庫服務（`place_files` 讀那處的登記、`download_file` 下載內容）：
 
 - **同一套下載與核對**：每份先下載到暫存資料夾（使用者資料目錄的 `temp/`，見 [data-storage.md](data-storage.md)），以 Drive 的 `md5Checksum` 核對暫存檔，一致才搬到要放的位置（資料夾不在就建）；不一致（`mismatched`）、下載中斷或取消時暫存檔丟掉，要放的位置不留半份檔案。讀不到譜庫或下載失敗時停下，已下載的保留，錯誤記在 `error`；要求取消時做完目前這一份就停。再按一次就補齊。下載的每份檔寫一筆紀錄檔，不放上復原堆疊
-- **下載回原位**（`restore_sources` 在主執行緒找出群組裡只在譜庫的檔，`restore` 在背景下載）：下載的是群組連到的那處現在登記給這個聲部（總譜為總譜列）的 Drive 檔，放回清除前的路徑與檔名（`FileInfo.original_path`，清除沒有改它）。清除之後又重新存入過時下載的就是最新的，交回的指紋（`DownloadOutcome.fingerprints`）是那份的 MD5，經 `Project.record_fingerprints` 換掉記下的存入指紋。原位置已經有內容相同的檔算已經放回去；有別的檔時不覆蓋，列在 `occupied`。那處已經沒登記、或登記的檔已不在 Drive、在垃圾桶裡的列在 `unavailable`
+- **下載回原位**（`restore_sources` 在主執行緒找出群組裡只在譜庫的檔，`restore` 在背景下載）：下載的是群組連到的那處現在登記給這個聲部（總譜為總譜列）的 Drive 檔，放回清除前的路徑與檔名（`FileInfo.original_path`，清除沒有改它）。清除之後又重新存入過時下載的就是最新的，交回的指紋（`DownloadOutcome.fingerprints`）是那份的 MD5，經 `Project.record_fingerprints` 換掉記下的存入指紋。原位置已經有內容相同的檔算已經放回去；有別的檔時不覆蓋，列在 `occupied`。那處已經沒登記、那處已不在譜庫、或登記的檔已不在 Drive、在垃圾桶裡的列在 `unavailable`，其他群組照常下載
 - **一般下載**（`download`）：整個版本保留版本資料夾底下的子資料夾，只勾幾份時都放在自選的資料夾裡。Drive 上的資料夾名稱與檔名照檔名清理的規則換掉非法字元，「.」「..」換成底線，放的位置不會跑出自選的資料夾。目的資料夾已有同名檔時，內容相同就略過，不同就照重新命名的規則加「 (1)」後綴（`core/filename.py` 的 `numbered`），加了後綴的那份已經有、內容也相同時一樣略過，所以再按一次不會多出一份；絕不覆蓋
 - **一般下載的入口**：譜庫視窗版本頁的「下載…」開挑選視窗（`ui/catalog_download_dialog.py` 的 `CatalogDownloadDialog`），列出版本資料夾裡全部的 PDF（`EditionPagePanel.folder_pdfs`），預設勾「整個版本（保留子資料夾）」；取消它可以逐份勾選。按「下載」後選資料夾，在背景下載（`CatalogWindow._run_download`），狀態列顯示進度與取消鈕，一次一件，關閉視窗時下載進行中先問要不要取消。結束後狀態列寫出完成幾份，沒下載好的依原因列出；中途失敗時頂端提示列寫出已完成幾份，按「重試」以同樣的檔再下載一次（已下載的略過）
 - **下載回原位的入口**：群組分頁有只在譜庫的檔時出現「從譜庫下載回來」（`GroupTab.download_requested`），作用於這個群組；重新命名預覽說明跳過只在譜庫的檔時，旁邊也有這個按鈕（關掉預覽，作用於這次要重新命名的群組）。兩者都經 `MainWindow.download_back(group_ids)`，發譜預覽也可以逐群組呼叫。同存入在背景執行（`_run_in_background`，`locks_project`），狀態列顯示進度與取消，期間鎖住專案編輯、存檔與檔案操作。結束後把指紋交回專案（`record_fingerprints`），開始前沒有未存檔的改動時只存專案檔；目前的群組分頁照磁碟現況重新比對（停在原本的分頁），沒放回去的檔依原因列出（`ui/widgets.py` 的 `not_downloaded_text`）。讀不到譜庫或下載到一半失敗時頂端顯示提示列，寫出已完成幾份，按「重試」再下載一次

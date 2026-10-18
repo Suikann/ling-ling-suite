@@ -20,7 +20,7 @@ from core.constants import (
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
 from core.catalog_constants import PublishingPlatform
-from core.catalog_errors import CatalogFailure, as_catalog_error
+from core.catalog_errors import CatalogError, CatalogErrorKind, CatalogFailure, as_catalog_error
 from core.catalog_sync import PlaceWrite, SyncOutcome, WriteSource, place_writes
 from core.clear_local import ClearPlan
 from core.deposit_revert import LocalProject, RevertChoice, RevertPreview
@@ -692,7 +692,8 @@ class MainWindow(QMainWindow):
         """開啟專案時從譜庫更新連到譜庫的群組的快照：人數與時長直接套用，聲部清單變了時由編制表頂端的提示列決定
 
         各處一起讀（背景執行、期間顯示等待視窗）。開啟時沒有未存檔的改動、更新後有改動時再存一次專案檔。
-        讀不到時照快照開啟，頂端顯示提示列，按處理按鈕再讀一次；唯讀的專案不更新。
+        讀不到時照快照開啟，頂端顯示提示列，按處理按鈕再讀一次；連到的那處已不在譜庫的群組照快照，其他群組照常更新，
+        提示列寫出是哪些群組。唯讀的專案不更新。
         """
         groups = [group for group in self.project.groups if group.catalog_link is not None]
         if self.project.read_only or not self._project_path or not groups:
@@ -711,11 +712,24 @@ class MainWindow(QMainWindow):
             return
         self._catalog_error_bar.clear()
         modified = self.project.is_modified()
+        gone = []
         for group, place in zip(groups, places):
-            self.project.refresh_catalog(group, place)
+            if place is None:
+                gone.append(group.name)
+            else:
+                self.project.refresh_catalog(group, place)
         self._instrumentation_table.refresh()
         if not modified and self.project.is_modified():
             self._write_project_file(self._project_path)
+        if gone:
+            names = "、".join(gone)
+            failure = CatalogFailure.from_error(
+                CatalogError(CatalogErrorKind.GONE, f"places of {names} are no longer in the catalog"),
+                t("catalog.refresh.title"),
+            )
+            self._catalog_error_bar.show_failure(
+                t("catalog.refresh.gone", groups=names), failure, self._refresh_from_catalog,
+            )
 
     def _confirm_unsynced(self) -> bool:
         """專案還有未同步的群組時提醒一次（關閉專案或程式前），回傳可不可以繼續關閉"""

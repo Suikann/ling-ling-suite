@@ -160,7 +160,12 @@ class DepositService:
                 sources = self._read_local(sources, local)
             groups.append(sources)
         keys = sorted({(g.link.edition_id, g.link.movement_id) for g in groups if g.block is None})
-        places = catalog.deposit_places(keys) if keys else {}
+        places = catalog.place_files(keys) if keys else {}
+        groups = [
+            g.blocked(DepositBlock.PLACE_GONE)
+            if g.block is None and (g.link.edition_id, g.link.movement_id) not in places else g
+            for g in groups
+        ]
         history = catalog.deposit_log()
         return DepositPlan([
             plan_group(g, local, places.get((g.link.edition_id, g.link.movement_id)) if g.link else None)

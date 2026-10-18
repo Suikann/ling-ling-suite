@@ -22,7 +22,7 @@
     rows = catalog.revert_rows(edition_id, movement_id, group.id, group.name, OrchestraType.CHINESE)  # 改連時撤得掉的編制
     page = catalog.edition_page(edition_id, movement_id, OrchestraType.CHINESE)  # 版本頁：登記與沒登記的檔
     catalog.register_files(PendingRegistration(edition_id, movement_id, {"琵琶": pdf}))  # 失敗時以同一個物件重送
-    places = catalog.deposit_places([("e1", "m1")])  # 存入前：那處的登記與版本資料夾裡的檔
+    places = catalog.place_files([("e1", "m1")])  # 存入前：那處的登記與版本資料夾裡的檔
     deposit_id = catalog.begin_deposit(planned, email)  # 存入前：每份要做的檔寫一列「要做」
     catalog.record_deposits(deposit_id, records, email)  # 存入後：登記分譜列並寫存入紀錄（一次寫入）
     content = catalog.download_file(drive_file)      # 從譜庫下載：一個檔的內容，呼叫端拿 md5 核對
@@ -871,21 +871,23 @@ class CatalogService:
 
     def read_places(
         self, places: Sequence[Tuple[str, str]], orchestra_type: OrchestraType,
-    ) -> List[CatalogPlace]:
+    ) -> List[Optional[CatalogPlace]]:
         """讀譜庫裡的幾處（開啟專案時各群組連到的那處），內容同 read_place；請求數同樣是兩次，不隨處數增加
+
+        一處已不在譜庫時只有那一處是 None，其他處照常讀出。
 
         Args:
             places: 每一處的（版本 ID、樂章 ID；整首為空字串）
             orchestra_type: 專案的樂團類型（聲部組對照只取這一套）
 
         Returns:
-            依 places 順序的各處
+            依 places 順序的各處；版本或樂章已不在譜庫的那處為 None
 
         Raises:
-            CatalogError: 讀不到；任一處的版本或樂章已不在譜庫時為已經不在譜庫
+            CatalogError: 讀不到
         """
         catalog = self._place_tables(orchestra_type)
-        return [self._place(catalog, edition_id, movement_id) for edition_id, movement_id in places]
+        return [self._place_if_present(catalog, edition_id, movement_id) for edition_id, movement_id in places]
 
     def edition_page(self, edition_id: str, movement_id: str, orchestra_type: OrchestraType) -> EditionPage:
         """讀譜庫視窗的版本頁：一處的編制、各聲部與總譜列登記的檔，以及版本資料夾裡全部與沒登記的檔
@@ -947,6 +949,16 @@ class CatalogService:
             filed=current.filed,
             other_pieces=catalog.other_pieces(edition_id),
         )
+
+    @classmethod
+    def _place_if_present(cls, catalog: "_PlaceTables", edition_id: str, movement_id: str) -> Optional[CatalogPlace]:
+        """從讀到的各工作表組出一處；版本或樂章已不在譜庫時為 None"""
+        try:
+            return cls._place(catalog, edition_id, movement_id)
+        except CatalogError as error:
+            if error.kind is not CatalogErrorKind.GONE:
+                raise
+            return None
 
     def revert_rows(
         self, edition_id: str, movement_id: str, group_id: str, group_name: str, orchestra_type: OrchestraType,
@@ -1096,8 +1108,8 @@ class CatalogService:
         outcome.written = True
         return outcome
 
-    def deposit_places(self, places: Sequence[Tuple[str, str]]) -> Dict[Tuple[str, str], PlaceFiles]:
-        """讀存入前要的：各處（版本、樂章）的聲部與已登記的檔，以及版本資料夾裡的子資料夾與 PDF
+    def place_files(self, places: Sequence[Tuple[str, str]]) -> Dict[Tuple[str, str], PlaceFiles]:
+        """讀各處（版本、樂章）的聲部與已登記的檔，以及版本資料夾裡的子資料夾與 PDF（存入、清除本機檔案、下載回原位共用）
 
         試算表只讀一次，請求數不隨聲部數增加；Drive 每個版本資料夾與底下的每個子資料夾各列一次，
         登記的檔不在版本資料夾裡時另取一次中繼資料。登記的檔已不在 Drive 或在垃圾桶裡時當成沒登記。
@@ -1106,21 +1118,22 @@ class CatalogService:
             places: （版本 ID，樂章 ID；整首為空字串）
 
         Returns:
-            每一處的樣子
+            每一處的樣子；版本或樂章已不在譜庫的那處不在裡面（其他處照常）
 
         Raises:
-            CatalogError: 讀不到；版本已不在譜庫時為已經不在譜庫
+            CatalogError: 讀不到
         """
-        edition_rows, part_rows = self._read_sheets(SHEET_EDITIONS, SHEET_PARTS)
+        edition_rows, movement_rows, part_rows = self._read_sheets(SHEET_EDITIONS, SHEET_MOVEMENTS, SHEET_PARTS)
         editions = {edition.id: edition for edition in _models(edition_rows, SHEET_EDITIONS, Edition)}
+        movements = {movement.id for movement in _models(movement_rows, SHEET_MOVEMENTS, Movement)}
         parts = _numbered(part_rows, SHEET_PARTS, Part)
         claimed = frozenset(part.drive_file_id.strip() for _, part in parts if part.drive_file_id.strip())
         trees: Dict[str, Tuple[Dict[Tuple[str, ...], str], Dict[Tuple[str, ...], List[DriveFile]]]] = {}
         # 版本資料夾的樹：子資料夾以比對鍵（folder_key）認，同名（不分大小寫）的只認先列到的那個
         result = {}
         for edition_id, movement_id in places:
-            if edition_id not in editions:
-                raise CatalogError(CatalogErrorKind.GONE, f"edition {edition_id} is no longer in the catalog")
+            if edition_id not in editions or (movement_id and movement_id not in movements):
+                continue
             folder_id = editions[edition_id].drive_folder_id.strip()
             if folder_id and folder_id not in trees:
                 folders_by_key: Dict[Tuple[str, ...], str] = {}

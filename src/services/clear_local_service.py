@@ -23,7 +23,7 @@ UI 要在背景執行緒呼叫。
 """
 import os
 from dataclasses import dataclass, field
-from typing import Callable, Collection, Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Callable, Collection, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from core.clear_local import (
     ClearItem, ClearPlan, ClearStatus, GroupClear, classify, clear_sources, emptied_folders, standard_user_folders,
@@ -32,7 +32,7 @@ from core.catalog_errors import CatalogError
 from core.deposit import PlaceFiles
 from core.locale import t
 from core.log_entry import LogEntry
-from core.models import Project
+from core.models import CatalogLink, Project
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.file_service import FileService
@@ -75,6 +75,14 @@ class ClearOutcome:
     def freed(self) -> int:
         """釋放了多少空間（位元組）"""
         return sum(item.size for item in self.cleared)
+
+
+def _place(places: Mapping[Tuple[str, str], PlaceFiles], link: Optional[CatalogLink]) -> Optional[PlaceFiles]:
+    """群組連到的那處現在的登記；沒連到譜庫時為 None，那處已不在譜庫時是沒有任何登記的一處（檔都是譜庫裡沒有）"""
+    if link is None:
+        return None
+    key = (link.edition_id, link.movement_id)
+    return places.get(key) or PlaceFiles(link.edition_id, link.movement_id, "")
 
 
 class ClearLocalService:
@@ -121,10 +129,10 @@ class ClearLocalService:
             (g.link.edition_id, g.link.movement_id) for g in groups
             if g.link is not None and any(source.path in local for source in g.sources)
         })
-        places: Dict[Tuple[str, str], PlaceFiles] = catalog.deposit_places(keys) if keys else {}
+        places: Dict[Tuple[str, str], PlaceFiles] = catalog.place_files(keys) if keys else {}
         plan = []
         for sources in groups:
-            place = places.get((sources.link.edition_id, sources.link.movement_id)) if sources.link else None
+            place = _place(places, sources.link)
             items = []
             for source in sources.sources:
                 if source.path not in local:
@@ -158,12 +166,12 @@ class ClearLocalService:
         work = plan.chosen(group_ids)
         chosen = [group for group in plan.groups if group.group_id in group_ids and group.clearable]
         try:
-            places = catalog.deposit_places(sorted({group.place_key for group in chosen})) if chosen else {}
+            places = catalog.place_files(sorted({group.place_key for group in chosen})) if chosen else {}
         except CatalogError as e:
             return ClearOutcome(total=len(work), error=e)
         unchanged = {
             id(item) for group in chosen for item in group.clearable
-            if classify(item.source, item.md5, places.get(group.place_key)) is ClearStatus.CLEARABLE
+            if classify(item.source, item.md5, _place(places, group.sources.link)) is ClearStatus.CLEARABLE
         }
         cleared: List[ClearItem] = []
         changed: List[ClearItem] = []

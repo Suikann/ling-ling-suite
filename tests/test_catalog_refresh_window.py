@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton, QTableWidget, QWidget
 
-from core.catalog_constants import SHEET_DURATIONS, SHEET_PARTS
+from core.catalog_constants import SHEET_DURATIONS, SHEET_EDITIONS, SHEET_PARTS
 from core.catalog_errors import CatalogErrorKind
 from core.locale import t
 from core.models import Headcount
@@ -131,6 +131,24 @@ class TestListBarButtons(ListChangeWindowTestCase):
         self.assertEqual(sorted(voices), sorted(["二胡 I", "琵琶"]))
         self.assertFalse(self.is_marked_unsaved())
         self.assertTrue(self.table().findChild(QLabel, "catalog_keep_note").isHidden())
+
+
+class TestPlaceGoneOnOpen(RefreshWindowTestCase):
+    """一個群組連到的那處已不在譜庫：其他群組照常更新，那個群組照快照，提示列寫出是哪個群組"""
+
+    def test_other_groups_still_refresh_and_the_gone_group_is_named(self):
+        add_row(self.google, SHEET_EDITIONS, id="e2", piece_id="p1")
+        other = self.window.project.add_group("別處", "總譜")
+        self.window.project.link_group(other, self.connect().read_place("e2", "", self.window.project.orchestra_type))
+        self.save()
+        rows = self.google.sheets.rows(SHEET_EDITIONS)
+        self.google.sheets.set_cell(SHEET_EDITIONS, f"A{next(i + 1 for i, r in enumerate(rows) if r[:1] == ['e2'])}", "x")
+        self.google.sheets.set_cell(SHEET_PARTS, "J3", "4")
+        self.reopen()
+        self.assertEqual(self.group.headcounts[1], Headcount(4))
+        bar = self.window.findChild(CatalogErrorBar)
+        self.assertFalse(bar.isHidden())
+        self.assertIn(t("catalog.refresh.gone", groups="別處"), bar.findChild(QLabel).text())
 
 
 class TestCatalogUnreachableOnOpen(RefreshWindowTestCase):

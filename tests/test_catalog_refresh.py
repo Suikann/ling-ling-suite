@@ -38,10 +38,9 @@ class TestReadPlaces(ProjectLinkTestCase):
         self.assertEqual(places[0].duration_seconds, 425)
         self.assertEqual(self.google.requests, 2)
 
-    def test_a_place_no_longer_in_the_catalog_is_an_error(self):
-        with self.assertRaises(CatalogError) as caught:
-            self.catalog.read_places([("e1", "m1"), ("e9", "")], OrchestraType.CHINESE)
-        self.assertIs(caught.exception.kind, CatalogErrorKind.GONE)
+    def test_a_place_no_longer_in_the_catalog_is_none_and_the_others_are_read(self):
+        places = self.catalog.read_places([("e1", "m1"), ("e9", ""), ("e1", "m9")], OrchestraType.CHINESE)
+        self.assertEqual([place.edition_id if place else None for place in places], ["e1", None, None])
 
 
 class RefreshTestCase(ProjectLinkTestCase):

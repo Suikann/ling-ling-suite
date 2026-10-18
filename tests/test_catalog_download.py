@@ -90,6 +90,20 @@ class TestRestore(DownloadTestCase):
         self.assertEqual(read(self.parts[0].original_path), "二胡 I".encode())
 
 
+class TestRestorePlaceGone(DownloadTestCase):
+    """一個群組連到的那處已不在譜庫：它的檔列為譜庫裡沒有，其他群組照常下載回來"""
+
+    def test_the_other_groups_still_come_back(self):
+        self.clear()
+        gone = self.add_group_whose_place_goes()
+        self.project.record_fingerprints({gone.score_file.original_path: "f" * 32})
+        os.remove(gone.score_file.original_path)
+        outcome = self.restore()
+        self.assertIsNone(outcome.error)
+        self.assertEqual(outcome.unavailable, [gone.score_file.original_path])
+        self.assertEqual([read(path) for path in self.paths()], [b"score", "二胡 I".encode(), "琵琶".encode()])
+
+
 class TestVerifiedDownload(DownloadTestCase):
     """先存成暫存檔、比對 Drive 的 MD5 一致才改成正式檔名；不一致、中斷或取消時不留半份檔案"""
 

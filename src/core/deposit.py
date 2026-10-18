@@ -61,6 +61,7 @@ class DepositBlock(Enum):
     MISSING_FILES = "missing_files"  # 有本機找不到的檔（只在譜庫的不算）
     CATALOG_ONLY = "catalog_only"    # 檔都只在譜庫，本機沒有
     NO_FOLDER = "no_folder"          # 版本沒有 Drive 資料夾
+    PLACE_GONE = "place_gone"        # 連到的那處（版本或樂章）已不在譜庫
 
 
 def folder_key(folders: Sequence[str]) -> Tuple[str, ...]:

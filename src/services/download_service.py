@@ -155,7 +155,7 @@ class DownloadService:
         """
         keys = sorted({(g.link.edition_id, g.link.movement_id) for g in groups if g.link is not None})
         try:
-            places = catalog.deposit_places(keys) if keys else {}
+            places = catalog.place_files(keys) if keys else {}
         except CatalogError as error:
             return DownloadOutcome(total=sum(len(g.sources) for g in groups), error=error)
         items, unavailable = restore_items(groups, places)

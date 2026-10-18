@@ -80,6 +80,21 @@ class DepositFixture:
             f.write(content)
         return FileInfo(path, os.path.basename(path))
 
+    def add_group_whose_place_goes(self):
+        """第二個群組「將軍令」連到另一首曲目的整首、已重新命名；連完後那個版本從譜庫刪掉（扮演另一台電腦刪了），回傳群組"""
+        folder = self.google.drive.add_folder("將軍令")
+        add_row(self.google, SHEET_EDITIONS, id="e2", piece_id="p1", drive_folder_id=folder)
+        group = self.project.add_group("將軍令", "總譜")
+        self.project.update_group(group, piece_name="將軍令")
+        self.project.link_group(group, self.catalog.read_place("e2", "", self.project.orchestra_type))
+        score = self.put("將軍令/總譜.pdf", b"general score")
+        self.project.add_files([score], group)
+        self.project.set_score(group, score)
+        self.project.mark_saved()
+        rows = self.google.sheets.rows(SHEET_EDITIONS)
+        self.google.sheets.set_cell(SHEET_EDITIONS, f"A{next(i + 1 for i, r in enumerate(rows) if r[:1] == ['e2'])}", "x")
+        return group
+
     def drive_path(self, file_id: str) -> str:
         """Drive 上的檔在版本資料夾下的路徑（資料夾以 / 分隔）"""
         names = []
@@ -425,6 +440,13 @@ class TestNotDeposited(DepositTestCase):
         self.assertEqual(plan.groups[1].sources.group_id, other.id)
         self.assertEqual((plan.groups[1].block, plan.groups[1].items), (DepositBlock.NOT_LINKED, []))
         self.assertEqual(outcome.total, 3)
+
+    def test_a_group_whose_place_is_gone_is_not_deposited_and_the_others_are(self):
+        self.add_group_whose_place_goes()
+        plan, outcome = self.deposit()
+        self.assertEqual([group.block for group in plan.groups], [None, DepositBlock.PLACE_GONE])
+        self.assertIsNone(outcome.error)
+        self.assertEqual(outcome.completed, 3)
 
     def test_a_group_not_renamed_yet_is_not_deposited(self):
         self.project.set_master_template("{序號}_{樂器}")

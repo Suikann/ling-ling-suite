@@ -119,6 +119,18 @@ class TestOnlyInsideTheEditionFolder(ClearTestCase):
         self.assertTrue(os.path.exists(self.parts[1].original_path))
 
 
+class TestPlaceGone(ClearTestCase):
+    """一個群組連到的那處已不在譜庫：它的檔是譜庫裡沒有，其他群組照常清除"""
+
+    def test_the_other_groups_are_still_cleared(self):
+        gone = self.add_group_whose_place_goes()
+        plan, outcome = self.clear()
+        self.assertEqual({item.status for item in plan.groups[1].items}, {ClearStatus.NOT_IN_CATALOG})
+        self.assertEqual(plan.groups[1].group_id, gone.id)
+        self.assertEqual(len(outcome.cleared), 3)
+        self.assertTrue(os.path.exists(gone.score_file.original_path))
+
+
 class TestVerification(ClearTestCase):
     """核對：只刪本機 MD5 跟 Drive 上登記的那份一致的，其餘不刪並各自歸類"""
 
