@@ -19,7 +19,9 @@
   交給主視窗下載回原位）。超過大小上限的檔第一次進這一步時在背景逐份壓縮（壓縮檔在壓縮服務的暫存資料夾，
   原檔不動），底部顯示進度與「取消壓縮」；每份顯示壓縮狀態與「開啟」「比較」（共用的比較畫面）「不發這份」。
 - 「公演」：複選本學期、還沒結束的公演（PublishReadiness.concerts），逐場說明掛上後的影響；可以不掛。
-- 「確認」：每個群組列出曲目、要新建與覆寫的聲部、要傳的檔數與大小、要取代的份數與不發的檔，加上公演與合計。
+  群組的曲目已掛著的公演寫出是哪些群組，全部群組都已掛著的勾著、不能取消（泠靈不把曲目從場次移除）。
+- 「確認」：每個群組列出曲目、要新掛的公演（已掛著的不算）、要新建與覆寫的聲部、要傳的檔數與大小、要取代的份數、
+  不重傳與不發的檔，加上合計。
   每個群組要寫進 HuaXia 的全部內容由 publish_plan() 交出（publish_service.group_publish），確認步的文字也由它算。
   超過上限的檔都壓縮好（或選了不發）、壓縮做完，「發譜」才按得下去。
 
@@ -396,6 +398,8 @@ class PublishPreviewDialog(QDialog):
         elif step is PublishStep.FILES:
             self._start_compression()
             self._show_files()
+        elif step is PublishStep.EVENTS:
+            self._show_events()
         elif step is PublishStep.CONFIRM:
             self._show_confirm()
         self._stack.setCurrentWidget(self._pages[step])
@@ -832,10 +836,17 @@ class PublishPreviewDialog(QDialog):
     # --- 「公演」步 ---
 
     def _build_events_step(self) -> QWidget:
-        """「公演」步：每場候選公演一個勾選框與說明；沒有候選時寫明"""
-        scroll = QScrollArea()
-        scroll.setObjectName("events_step")
-        scroll.setWidgetResizable(True)
+        """「公演」步的頁面：切到這一步時才排（_show_events），群組對到的曲目可能改過"""
+        self._events_scroll = QScrollArea()
+        self._events_scroll.setObjectName("events_step")
+        self._events_scroll.setWidgetResizable(True)
+        return self._events_scroll
+
+    def _show_events(self):
+        """重排「公演」步：每場候選公演一個勾選框與說明，沒有候選時寫明
+
+        所有群組的曲目都已掛著的公演勾著、不能取消（泠靈不把曲目從場次移除）；有群組的曲目已掛著時寫出是哪些。
+        """
         content = QWidget()
         layout = QVBoxLayout(content)
         heading = QLabel(t("publish.events.heading"))
@@ -843,23 +854,34 @@ class PublishPreviewDialog(QDialog):
         layout.addWidget(heading)
         if not self._readiness.concerts:
             layout.addWidget(QLabel(t("publish.events.none")))
+        groups = self._preview.groups
         for event in self._readiness.concerts:
+            attached = self._preview.attached_groups(event.id)
+            everywhere = bool(attached) and len(attached) == len(groups)
             check = QCheckBox(_event_text(event))
             check.setObjectName("concert")
+            check.setChecked(everywhere or event.id in self._preview.chosen_events)
+            check.setEnabled(not everywhere)
             check.toggled.connect(lambda on, e=event.id: self._choose_event(e, on))
             layout.addWidget(check)
-            note = QLabel(t("publish.events.note"))
-            note.setObjectName("concert_note")
-            note.setWordWrap(True)
-            note.setStyleSheet(f"color: {_NOTE_COLOR}; margin-left: 20px;")
-            layout.addWidget(note)
+            notes = [t("publish.events.note")]
+            if attached:
+                notes.append(t("publish.events.attached", groups="、".join(group.name for group in attached)))
+            for text in notes:
+                note = QLabel(text)
+                note.setObjectName("concert_note")
+                note.setWordWrap(True)
+                note.setStyleSheet(f"color: {_NOTE_COLOR}; margin-left: 20px;")
+                layout.addWidget(note)
         unattached = QLabel(t("publish.events.unattached"))
         unattached.setWordWrap(True)
         unattached.setStyleSheet(f"color: {_NOTE_COLOR};")
         layout.addWidget(unattached)
         layout.addStretch()
-        scroll.setWidget(content)
-        return scroll
+        old = self._events_scroll.takeWidget()
+        self._events_scroll.setWidget(content)
+        if old is not None:
+            old.deleteLater()
 
     def _choose_event(self, event_id: str, on: bool):
         """勾選或取消一場公演"""
@@ -879,16 +901,11 @@ class PublishPreviewDialog(QDialog):
         return scroll
 
     def _show_confirm(self):
-        """重排「確認」步：每個要發的群組一塊，接著公演、合計與這次不發的群組"""
+        """重排「確認」步：每個要發的群組一塊（含它要新掛的公演），接著合計與這次不發的群組"""
         for widget in self._confirm_widgets:
             _discard(widget)
         plans = self.publish_plan()
         widgets: List[QWidget] = [self._confirm_box(plan) for plan in plans]
-        events = [event.title for event in self._readiness.concerts if event.id in self._preview.chosen_events]
-        widgets.append(_named_label(
-            "confirm_events",
-            t("publish.confirm.events", events="、".join(events)) if events else t("publish.confirm.no_events"),
-        ))
         total = sum(len(plan.uploads) for plan in plans)
         widgets.append(_named_label("confirm_total", t(
             "publish.confirm.total", groups=len(plans), count=total, size=size_text(sum(p.size for p in plans)),
@@ -915,6 +932,10 @@ class PublishPreviewDialog(QDialog):
         if plan.voices.updates:
             voices.append(t("publish.confirm.updates", voices="、".join(u.name for u in plan.voices.updates)))
         layout.addWidget(_named_label("confirm_voices", "\n".join(voices) or t("publish.confirm.voices_unchanged")))
+        events = "、".join(event.title for event in plan.events)
+        layout.addWidget(_named_label(
+            "confirm_events", t("publish.confirm.events", events=events) if events else t("publish.confirm.no_events"),
+        ))
         layout.addWidget(_named_label("confirm_files", t(
             "publish.confirm.files", count=len(plan.uploads), size=size_text(plan.size), replaced=len(plan.replaces),
         )))

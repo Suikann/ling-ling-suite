@@ -251,9 +251,24 @@ class TestEventsAndConfirm(FilesWindowTestCase):
             concerts[1].click()
             button(dialog, "publish.next").click()
             self.assertEqual(
-                dialog.findChild(QLabel, "confirm_events").text(), t("publish.confirm.events", events="期末公演"),
+                confirm_text(dialog, "烽火操", "confirm_events"), t("publish.confirm.events", events="期末公演"),
             )
             self.assertEqual([e.title for e in dialog.publish_plan()[0].events], ["期末公演"])
+        self.publish(operate=operate)
+
+    def test_a_concert_the_piece_is_already_on_is_checked_and_not_attached_again(self):
+        final = next(row["id"] for row in self.huaxia.tables["events"] if row["title"] == "期末公演")
+        self.huaxia.attach_piece(final, self.fenghuo)
+
+        def operate(dialog):
+            go_to(dialog, 3)
+            concerts = {c.text().split("　")[0]: c for c in dialog.findChildren(QCheckBox, "concert")}
+            self.assertTrue(concerts["期末公演"].isChecked())
+            self.assertFalse(concerts["期末公演"].isEnabled())
+            self.assertFalse(concerts["校慶音樂會"].isChecked())
+            button(dialog, "publish.next").click()
+            self.assertEqual(confirm_text(dialog, "烽火操", "confirm_events"), t("publish.confirm.no_events"))
+            self.assertEqual(dialog.publish_plan()[0].events, [])
         self.publish(operate=operate)
 
     def test_the_confirmation_adds_up_the_files(self):

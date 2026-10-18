@@ -70,6 +70,7 @@ class PublishReadiness:
         parts: 可以挑的曲目上已有的聲部，以曲目編號為鍵（依 HuaXia 的排序）；沒有聲部的曲目不在裡面
         scores: 可以挑的曲目上登記的樂譜，以曲目編號為鍵（依登記的先後）；沒有樂譜的曲目不在裡面
         concerts: 可以掛的公演：本學期、還沒結束、類型含公演的場次，依開始時間
+        attached: 可以挑的曲目已經掛著的公演（concerts 裡的），以曲目編號為鍵；沒掛的曲目不在裡面
         discord_name: 登入的 Discord 帳號名稱
     """
 
@@ -80,6 +81,7 @@ class PublishReadiness:
     parts: Dict[str, List[HuaXiaPart]] = field(default_factory=dict)
     scores: Dict[str, List[HuaXiaScore]] = field(default_factory=dict)
     concerts: List[HuaXiaEvent] = field(default_factory=list)
+    attached: Dict[str, Set[str]] = field(default_factory=dict)
     discord_name: str = ""
 
     @property
@@ -764,15 +766,28 @@ class PublishPreview:
         return plan_files(group, self.voice_plan(group), scores, self._file_service, self._fingerprints)
 
     def publish_plan(self) -> List[GroupPublish]:
-        """每個沒擋下的群組這次發譜要寫進 HuaXia 的全部內容（依目前的選擇，含清舊檔要刪的），依專案中的順序"""
-        events = [event for event in self.readiness.concerts if event.id in self.chosen_events]
+        """每個沒擋下的群組這次發譜要寫進 HuaXia 的全部內容（依目前的選擇，含清舊檔要刪的），依專案中的順序
+
+        要掛的公演是勾了的、群組的曲目還沒掛著的。
+        """
+        chosen = [event for event in self.readiness.concerts if event.id in self.chosen_events]
         return plan_deletions([
             group_publish(
-                group, self.voice_plan(group), self.file_plan(group), self.compressed, self.dropped, events,
+                group, self.voice_plan(group), self.file_plan(group), self.compressed, self.dropped,
+                [event for event in chosen if not self.is_attached(group, event.id)],
                 self.size_limit, self._fingerprints,
             )
             for group in self.groups
         ], self.readiness.scores)
+
+    def is_attached(self, group: Group, event_id: str) -> bool:
+        """群組對到的曲目已經掛著這場公演"""
+        link = group.huaxia_link
+        return link is not None and event_id in self.readiness.attached.get(link.piece_id, set())
+
+    def attached_groups(self, event_id: str) -> List[Group]:
+        """沒擋下的群組裡，對到的曲目已經掛著這場公演的"""
+        return [group for group in self.groups if self.is_attached(group, event_id)]
 
     def oversized_paths(self) -> List[str]:
         """沒擋下的群組裡超過大小上限、要先壓縮的本機檔，依群組與檔案計畫的順序"""
@@ -834,7 +849,8 @@ class PublishService:
         self._client = auth.client
 
     def prepare(self) -> PublishReadiness:
-        """重查幹部身分、查發譜函式的版本，都過了才讀可以挑的曲目、它們的聲部與樂譜，以及可以掛的公演；不是幹部時已登出
+        """重查幹部身分、查發譜函式的版本，都過了才讀可以挑的曲目、它們的聲部與樂譜，以及可以掛的公演與曲目
+        已經掛著哪幾場；不是幹部時已登出
 
         Returns:
             檢查結果；不能發時寫明原因
@@ -861,9 +877,13 @@ class PublishService:
             scores[score.piece_id].append(score)
         semester = self._client.current_semester(token)
         events = self._client.events(token, semester) if semester else []
+        concerts = upcoming_concerts(events, datetime.datetime.now(datetime.timezone.utc))
+        attached: Dict[str, Set[str]] = {}
+        for event_id, piece_id in self._client.event_pieces(token, [event.id for event in concerts]):
+            if piece_id in parts:
+                attached.setdefault(piece_id, set()).add(event_id)
         return PublishReadiness(
             function_version=version, pieces=pieces, parts={piece: found for piece, found in parts.items() if found},
-            scores={piece: found for piece, found in scores.items() if found},
-            concerts=upcoming_concerts(events, datetime.datetime.now(datetime.timezone.utc)),
+            scores={piece: found for piece, found in scores.items() if found}, concerts=concerts, attached=attached,
             discord_name=self._auth.status().discord_name,
         )

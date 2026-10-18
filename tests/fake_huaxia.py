@@ -14,9 +14,10 @@
   以 install_publish_function 裝上指定的版本。
 - 曲目（pieces）與聲部（piece_parts）：以 add_piece、add_part 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider
   （不實作 in_piece 的排人判斷）；聲部組沒給時照 HuaXia 的觸發器以 guess_section 依名稱補上。
-- 樂譜（scores）、學期（semesters）與場次（events）：以 add_score、add_semester、add_event 加入；樂譜的讀取權限
+- 樂譜（scores）、學期（semesters）與場次（events）：以 add_score、add_semester、add_event 加入，曲目掛上場次
+  （event_pieces）以 attach_piece 加入；樂譜的讀取權限
   簡化成 is_staff（幹部或老師，不實作排到聲部的人），場次照 can_see_event 簡化成幹部全看得到、其他社內成員看得到
-  不是只給幹部的場次，學期是 is_active。rename_score 扮演幹部在網頁上改了樂譜名稱。
+  不是只給幹部的場次，event_pieces 照它的場次，學期是 is_active。rename_score 扮演幹部在網頁上改了樂譜名稱。
 - Storage（bucket scores）：put_object 放檔，列出（POST /storage/v1/object/list/scores）回傳某個資料夾底下一層的
   檔與子資料夾，讀取權限簡化成 is_staff。
 
@@ -107,7 +108,7 @@ class FakeHuaXia:
         self.requests: List[Dict[str, Any]] = []
         self.tables: Dict[str, List[Dict[str, Any]]] = {
             "profiles": [], "user_roles": [], "pieces": [], "piece_parts": [], "scores": [], "semesters": [],
-            "events": [],
+            "events": [], "event_pieces": [],
         }
         # Storage bucket scores 裡的檔：路徑對應內容
         self.objects: Dict[str, bytes] = {}
@@ -237,6 +238,11 @@ class FakeHuaXia:
                 "audience": audience, "counts_attendance": True,
             })
             return event_id
+
+    def attach_piece(self, event_id: str, piece_id: str) -> None:
+        """把曲目掛上場次（event_pieces 的一列，幹部在網頁上掛的）"""
+        with self._lock:
+            self.tables["event_pieces"].append({"event_id": event_id, "piece_id": piece_id})
 
     def put_object(self, path: str, content: bytes = b"pdf") -> None:
         """在 Storage 的 bucket scores 放一個檔"""
@@ -583,4 +589,7 @@ _READ_POLICIES: Dict[str, Callable[[FakeHuaXia, Optional[str], Dict[str, Any]], 
     "scores": lambda fake, caller, row: fake._is_staff(caller),
     "semesters": lambda fake, caller, row: fake._is_active(caller),
     "events": lambda fake, caller, row: fake._can_see_event(caller, row),
+    "event_pieces": lambda fake, caller, row: any(
+        event["id"] == row["event_id"] and fake._can_see_event(caller, event) for event in fake.tables["events"]
+    ),
 }

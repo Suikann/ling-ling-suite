@@ -288,16 +288,17 @@ class HuaXiaClient:
 
     def select_all(
         self, table: str, access_token: str, columns: str, filters: Optional[Dict[str, str]] = None,
-        within: Optional[Tuple[str, List[str]]] = None,
+        within: Optional[Tuple[str, List[str]]] = None, order: str = "id.asc",
     ) -> List[Dict[str, Any]]:
-        """以使用者身分讀資料表裡符合篩選的所有列：依 id 分頁讀到回空為止，不受 HuaXia 一次最多回傳幾列限制
+        """以使用者身分讀資料表裡符合篩選的所有列：依 order 分頁讀到回空為止，不受 HuaXia 一次最多回傳幾列限制
 
         Args:
             table: 資料表名稱
             access_token: 使用者的 access token
-            columns: 要讀的欄位，以逗號分隔（要含 id）
+            columns: 要讀的欄位，以逗號分隔
             filters: 欄位名稱對應 PostgREST 的篩選（例如 "eq.false"）
             within: （欄位名稱，值）：只讀這個欄位是其中一個值的列；值是空的時不送請求、回傳空的
+            order: 分頁依的排序（PostgREST 的 order），要能唯一決定每一列的先後；預設依 id
 
         Returns:
             讀到的列（照 HuaXia 的 RLS，只有看得到的）
@@ -318,7 +319,7 @@ class HuaXiaClient:
             offset = 0
             while True:
                 page = self._call("GET", f"/rest/v1/{table}", access_token, params={
-                    "select": columns, "order": "id.asc", "offset": str(offset), "limit": str(_TABLE_PAGE_SIZE),
+                    "select": columns, "order": order, "offset": str(offset), "limit": str(_TABLE_PAGE_SIZE),
                     **batch,
                 })
                 if not isinstance(page, list):
@@ -444,6 +445,21 @@ class HuaXiaClient:
         except (KeyError, TypeError, ValueError) as e:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected events: {e}") from e
         return sorted(events, key=lambda event: event.starts_at)
+
+    def event_pieces(self, access_token: str, event_ids: List[str]) -> List[Tuple[str, str]]:
+        """這幾個場次掛著的曲目（event_pieces，全部讀完）：（場次編號，曲目編號）
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        rows = self.select_all(
+            "event_pieces", access_token, "event_id,piece_id", within=("event_id", list(event_ids)),
+            order="event_id.asc,piece_id.asc",
+        )
+        try:
+            return [(row["event_id"], row["piece_id"]) for row in rows]
+        except (KeyError, TypeError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected event pieces: {e}") from e
 
     # --- Storage ---
 

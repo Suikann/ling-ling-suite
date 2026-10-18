@@ -215,6 +215,14 @@ class TestConcerts(PrepareTestCase):
         self.huaxia.add_event(self.semester, "正在演", starts, starts + datetime.timedelta(hours=2))
         self.assertEqual(self.concerts(), ["正在演"])
 
+    def test_the_concerts_each_piece_is_already_on_are_read(self):
+        final = self.event("期末公演", 60)
+        self.event("校慶音樂會", 30)
+        past = self.event("期中音樂會", -3)
+        for event in (final, past):
+            self.huaxia.attach_piece(event, self.fenghuo)
+        self.assertEqual(self.service.prepare().attached, {self.fenghuo: {final}})
+
     def test_no_current_semester_offers_nothing(self):
         self.event("期末公演", 60)
         self.huaxia.add_semester("115-2", is_current=True)
