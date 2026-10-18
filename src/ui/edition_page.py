@@ -17,8 +17,9 @@
 使用範例：
     page = EditionPagePanel(detail, window._read, window._write, lambda: email, showing, voice_candidates)
     page.actions.addWidget(rename_button)   # 版本頁的其他入口（套用命名格式、下載、存入紀錄）
+    pdfs = page.folder_pdfs()               # 版本資料夾裡全部的 PDF（一般下載）
 """
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -140,6 +141,10 @@ class EditionPagePanel(QWidget):
         """選單選的版本；曲目沒有版本時為 None"""
         edition_id = self._edition_combo.currentData()
         return next((edition for edition in self._detail.editions if edition.id == edition_id), None)
+
+    def folder_pdfs(self) -> List[FolderPdf]:
+        """版本資料夾（含子資料夾）裡全部的 PDF（一般下載從這裡挑）；還沒讀到時是空的"""
+        return list(self._page.pdfs) if self._page is not None else []
 
     def _place_ids(self):
         """選單選的版本與樂章（整首為空字串）"""
