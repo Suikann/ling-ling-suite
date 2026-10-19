@@ -1261,7 +1261,8 @@ class Project:
 
         接手的群組依序為：引用被取代檔案的群組（重新分割，不另建群組、不留下空群組）、
         引用合併譜的群組（不論它是分譜還是總譜）；都沒有時另建一個以合併譜檔名命名的群組。
-        未分組裡的合併譜留在未分組。新分譜的聲部名稱成為接手群組的樂器表，並自動偵測總譜與曲名。
+        未分組裡的合併譜留在未分組。新分譜依它的聲部名稱進接手群組（規則見 _enter_split_parts），
+        群組原有的配對不動；沒有曲名才猜曲名。
 
         Args:
             result: 分割模組的執行結果
@@ -1286,9 +1287,9 @@ class Project:
             group = Group(name=name, score_label=score_label)
             self.groups.append(group)
         piece_name = group.piece_name
-        group.files.extend(result.parts)
-        group.assign_instruments(result.voices)
-        self._detect_on_entry(group)
+        _enter_split_parts(group, result.parts, result.voices)
+        if not group.piece_name.strip():
+            group.piece_name = detect_piece_name([f.display_name for f in group.files])
         self._changed()
         voices_changed = (instruments, present, vacant) != (group.instruments, group.present, group.vacant)
         return SplitPlacement(
@@ -1304,7 +1305,7 @@ class Project:
     def revert_split(self, record: SplitRecord) -> None:
         """退回一次分割（套用復原分割的結果）
 
-        移除新分譜的引用；分割時另建的群組移除（之後才放進去的檔案移回未分組），
+        移除新分譜的引用（接手群組的分譜清單直接拿掉、不重算沒有分譜的標記）；分割時另建的群組移除（之後才放進去的檔案移回未分組），
         接手的既有群組被分割改掉的樂器表（連同本專案有、人數與沒有分譜）與曲名改回；合併譜已不在專案裡時放回原本的位置
         （同一個群組、同樣是分譜或總譜，分譜放回原本的順序；原本的群組已刪除就放回未分組）。
         被取代的檔案不找回。舊版紀錄沒有安置資訊，只移除新分譜的引用。
@@ -1312,10 +1313,14 @@ class Project:
         Args:
             record: 搬移歷程復原的分割紀錄
         """
-        self._detach_paths(record.created_files)
         placement = record.placement
+        group = self._group_by_id(placement.group_id) if placement is not None else None
+        if group is not None:
+            # 新分譜直接從分譜清單拿掉、不重算沒有分譜的標記：合併譜放回原位後，配對才跟分割前一樣
+            created = {path_key(path) for path in record.created_files}
+            group.files = [f for f in group.files if path_key(f.original_path) not in created]
+        self._detach_paths(record.created_files)
         if placement is not None:
-            group = self._group_by_id(placement.group_id)
             if group is not None and placement.created_group:
                 self._remove_group(group)
             elif group is not None:
@@ -2290,6 +2295,32 @@ def _add_parts(group: Group, files: Iterable[FileInfo]) -> None:
             extras.append(file)
         else:
             rows[index] = rows[index]._replace(part=file)
+    _place_rows(group, rows, extras)
+
+
+def _enter_split_parts(group: Group, parts: List[FileInfo], voices: List[str]) -> None:
+    """分割的新分譜進群組：各自配給它的聲部名稱那一列，群組原有的配對不動（不發通知）
+
+    群組沒有總譜時先從新分譜猜總譜，猜到的那份成為總譜、不佔聲部。其餘每份以聲部名稱、依同一聲部的規則
+    對到樂器表的列：那一列還沒有分譜就配給它（本專案沒有的改成有），已有分譜就成為多出的分譜；
+    樂器表沒有這個聲部時加在最後。
+    """
+    entering = list(zip(parts, voices))
+    if group.score_file is None:
+        index = detect_score_index([f.display_name for f in parts])
+        if index is not None:
+            group.score_file = parts[index]
+            entering.pop(index)
+    rows = _voice_rows(group)
+    extras = group.extra_files()
+    for file, voice in entering:
+        index = voice_index([row.name for row in rows], voice)
+        if index is None:
+            rows.append(_VoiceRow(voice, True, Headcount(), file))
+        elif rows[index].part is None:
+            rows[index] = rows[index]._replace(present=True, part=file)
+        else:
+            extras.append(file)
     _place_rows(group, rows, extras)
 
 

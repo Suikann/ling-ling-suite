@@ -957,7 +957,7 @@ class TestHeadcountsFollowTheirVoices(unittest.TestCase):
             source_path=self.group.files[0].original_path, parts=_infos("vn.pdf"), voices=["Violin"], replaced=[],
         )
         placement = self.project.apply_split(result, score_label="總譜")
-        self.assertEqual(self.counts(), [("Violin", "")])
+        self.assertEqual(self.counts(), [("Flute", "1"), ("Oboe", "2"), ("Horn", "4-6"), ("Violin", "")])
         self.project.revert_split(result.record(SplitPlacement.from_data(placement.to_data())))
         self.assertEqual(self.counts(), [("Flute", "1"), ("Oboe", "2"), ("Horn", "4-6")])
 
@@ -988,7 +988,7 @@ class TestApplySplit(unittest.TestCase):
         project = Project(groups=[group])
         self.assertIs(self.split(project, "Flute", "Oboe"), group)
         self.assertEqual(self.layout(project), (
-            [("g", None, [_path("Loose.pdf"), _path("ws", "Flute.pdf"), _path("ws", "Oboe.pdf")])], [],
+            [("g", None, [_path("ws", "Flute.pdf"), _path("ws", "Oboe.pdf"), _path("Loose.pdf")])], [],
         ))
         self.assertEqual(group.instruments, ["Flute", "Oboe"])
 
@@ -1036,6 +1036,48 @@ class TestApplySplit(unittest.TestCase):
         self.assertEqual(self.layout(project), (
             [("合併譜", None, [_path("ws", "Flute.pdf"), _path("ws", "Horn.pdf")])], [self.SOURCE],
         ))
+
+    @staticmethod
+    def pairs(group):
+        """（聲部、配到的分譜檔名；沒有分譜時為 None），依本專案有的聲部的順序"""
+        return [(p.voice, p.file.display_name if p.file else None) for p in group.pairing()]
+
+    def test_a_score_segment_becomes_the_score_without_shifting_any_part(self):
+        project = Project(ungrouped_files=[_info(self.SOURCE)])
+        group = self.split(project, "總譜", "二胡", "琵琶")
+        self.assertEqual(group.score_file.display_name, "總譜.pdf")
+        self.assertEqual(group.instruments, ["二胡", "琵琶"])
+        self.assertEqual(self.pairs(group), [("二胡", "二胡.pdf"), ("琵琶", "琵琶.pdf")])
+
+    def test_new_parts_pair_with_their_own_voices_and_a_part_already_there_is_left_alone(self):
+        group = Group(name="g", files=[_info(_path("笛.pdf")), _info(self.SOURCE)], score_label="總譜")
+        project = Project(groups=[group])
+        self.split(project, "二胡", "琵琶")
+        self.assertEqual(self.pairs(group), [("二胡", "二胡.pdf"), ("琵琶", "琵琶.pdf")])
+        self.assertEqual([f.display_name for f in group.extra_files()], ["笛.pdf"])
+
+    def test_existing_voices_keep_their_parts_and_new_parts_go_to_their_voices(self):
+        group = Group(
+            name="g", instruments=["笛", "二胡 I", "笙"], files=[_info(_path("笛.pdf")), _info(self.SOURCE)],
+            score_label="總譜",
+        )
+        project = Project(groups=[group])
+        project.set_present(group, 2, False)
+        self.split(project, "二胡1", "琵琶", "笙")
+        self.assertEqual(group.instruments, ["笛", "二胡 I", "笙", "琵琶"])
+        self.assertEqual(group.present, [True, True, True, True])
+        self.assertEqual(
+            self.pairs(group), [("笛", "笛.pdf"), ("二胡 I", "二胡1.pdf"), ("笙", "笙.pdf"), ("琵琶", "琵琶.pdf")],
+        )
+
+    def test_a_new_part_for_a_voice_that_already_has_one_goes_beyond_the_voices(self):
+        group = Group(
+            name="g", instruments=["笛"], files=[_info(_path("笛.pdf")), _info(self.SOURCE)], score_label="總譜",
+        )
+        project = Project(groups=[group])
+        self.split(project, "笛", "琵琶")
+        self.assertEqual(self.pairs(group), [("笛", "笛.pdf"), ("琵琶", "琵琶.pdf")])
+        self.assertEqual([f.original_path for f in group.extra_files()], [_path("ws", "笛.pdf")])
 
     def test_replaced_refs_are_removed_wherever_they_are(self):
         old = _path("ws", "Flute.pdf")
@@ -1100,6 +1142,34 @@ class TestRevertSplit(unittest.TestCase):
         project.set_instruments(group, ["Flute 1", "Oboe"])
         project.revert_split(record)
         self.assertEqual((group.piece_name, group.instruments), ("命運交響曲", ["Flute 1", "Oboe"]))
+
+    def undo_restores(self, group, *names):
+        """把群組裡的合併譜分割成 names，經紀錄檔的內容復原後，專案與分割前完全相同"""
+        project = Project(groups=[group])
+        before = project.to_data()
+        parts = [_info(_path("ws", name + ".pdf")) for name in names]
+        result = SplitResult(self.SOURCE, parts, list(names), replaced=[])
+        placement = project.apply_split(result, score_label="總譜")
+        project.revert_split(result.record(SplitPlacement.from_data(placement.to_data())))
+        self.assertEqual(project.to_data(), before)
+
+    def test_undoing_a_split_whose_parts_went_to_existing_voices_restores_the_project(self):
+        self.undo_restores(Group(
+            name="g", instruments=["笛", "二胡", "琵琶"], selected_instruments=[0, 1, 2], score_label="總譜",
+            files=[_info(_path("笛.pdf")), _info(self.SOURCE), _info(_path("琵琶.pdf")), _info(_path("Loose.pdf"))],
+        ), "二胡", "笙")
+
+    def test_undoing_a_split_that_refilled_the_merged_score_s_voice_restores_the_project(self):
+        self.undo_restores(Group(
+            name="g", instruments=["笛", "二胡", "琵琶"], selected_instruments=[0, 1, 2], score_label="總譜",
+            files=[_info(_path("笛.pdf")), _info(self.SOURCE), _info(_path("琵琶.pdf"))],
+        ), "二胡")
+
+    def test_undoing_a_split_with_a_score_segment_restores_the_project(self):
+        self.undo_restores(Group(
+            name="g", instruments=["笛"], selected_instruments=[0], score_label="總譜",
+            files=[_info(_path("笛.pdf")), _info(self.SOURCE)],
+        ), "總譜", "二胡")
 
     def test_voices_not_in_this_project_are_unchecked_again_after_undoing(self):
         group = Group(name="g", files=[_info(self.SOURCE)], instruments=["Flute", "Oboe", "Horn"], score_label="總譜")
