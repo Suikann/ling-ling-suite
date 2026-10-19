@@ -3,13 +3,13 @@
 撤銷存入
 
 從存入紀錄挑一次存入、再挑其中的群組，撤掉那次的結果（每份檔的下場怎麼決定在 core/deposit_revert.py）：
-preview 讀譜庫現況與本機檔案的 MD5，交回每個群組每份檔的下場與不撤銷的群組（撤銷會毀掉唯一的一份）；
+preview 讀譜庫現況與本機有哪些檔，交回每個群組每份檔的下場與不撤銷的群組（撤銷會毀掉唯一的一份）；
 revert 照選的群組逐一去做，碰譜庫一律經譜庫服務（CatalogService）：
 
 0. 預覽時就不撤銷的群組（RevertBlock）不做，交回原因
 1. 群組裡要撤銷、本機已清除的檔，先以「從譜庫下載」的同一套做法（DownloadService.put_back）下載回原位並核對 MD5；
    有任何一份沒放回去（下載失敗、MD5 不符、原位有別的檔），這個群組就不撤銷，交回原因，其他群組照常。
-   本機留著的檔再算一次 MD5，預覽之後本機改過或不見的，這個群組也不撤銷
+   本機留著的檔再看一次還在不在，預覽之後不見的，這個群組也不撤銷（存入之後改過內容的照常撤銷）
 2. 逐份動 Drive：動之前重讀那份檔，版本或垃圾桶狀態跟預覽時不同（預覽之後在 Drive 上改過）的不動、交回；
    那次新上傳的丟進垃圾桶（不永久刪除），那次更新內容的還原成存入前的版本，只登記的不動 Drive
 3. 做完（或取消、中途失敗）後以一次試算表寫入移除登記，並每份撤掉的檔寫一列存入紀錄
@@ -93,7 +93,7 @@ class DepositRevertService:
     def __init__(self, file_service: FileService, downloads: DownloadService, log: Optional[ActivityLog] = None):
         """
         Args:
-            file_service: 讀本機檔案的 MD5（核對本機留著那次存入的內容）
+            file_service: 查本機留著的檔還在不在
             downloads: 下載服務（本機已清除的檔先下載回原位）
             log: 紀錄檔，撤掉的每份檔寫一筆；省略時不寫
         """
@@ -104,7 +104,7 @@ class DepositRevertService:
     def preview(
         self, deposit_id: str, catalog: CatalogService, orchestra_type: OrchestraType, local: LocalProject,
     ) -> RevertPreview:
-        """讀譜庫現況與本機檔案的 MD5，算出撤銷那次存入時每個群組每份檔的下場、撤得掉的編制與不撤銷的群組
+        """讀譜庫現況與本機有哪些檔，算出撤銷那次存入時每個群組每份檔的下場、撤得掉的編制與不撤銷的群組
 
         Args:
             deposit_id: 要撤銷的存入編號
@@ -120,12 +120,8 @@ class DepositRevertService:
         """
         reading = catalog.revert_reading(deposit_id, orchestra_type)
         paths = {entry.local_path for entry in reading.entries if entry.deposit_id == deposit_id}
-        md5s = {}
-        for path in paths:
-            md5 = self._local_md5(path)
-            if md5:
-                md5s[path_key(path)] = md5
-        return revert_preview(reading, deposit_id, local, md5s)
+        present = {path_key(path) for path in paths if self._files.file_exists(path)}
+        return revert_preview(reading, deposit_id, local, present)
 
     def revert(
         self, preview: RevertPreview, choices: Sequence[RevertChoice], catalog: CatalogService, operator: str,
@@ -168,7 +164,7 @@ class DepositRevertService:
                     if restored.error is not None or restored.not_done:
                         skipped.append((group, restored))
                         continue
-                if any(self._local_md5(f.entry.local_path) != f.file.md5 for f in group.kept_locally()):
+                if not all(self._files.file_exists(f.entry.local_path) for f in group.kept_locally()):
                     refused.append((group, RevertBlock.NO_LOCAL_COPY))
                     continue
                 for file in group.reverting():
@@ -208,13 +204,6 @@ class DepositRevertService:
             [file for file, _ in done], skipped, refused, changed, fingerprints,
             reverted_groups if error is None else [], total, error, cancelled,
         )
-
-    def _local_md5(self, path: str) -> str:
-        """本機檔案的 MD5；讀不到（不在了）時為空字串"""
-        try:
-            return self._files.md5(path)
-        except OSError:
-            return ""
 
     @staticmethod
     def _unchanged(catalog: CatalogService, file: RevertFile) -> bool:

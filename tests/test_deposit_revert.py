@@ -98,6 +98,11 @@ class RevertTestCase(DepositFixture, unittest.TestCase):
         with open(file.original_path, "wb") as f:
             f.write(content)
 
+    def read_local(self, file) -> bytes:
+        """本機的檔的內容"""
+        with open(file.original_path, "rb") as f:
+            return f.read()
+
 
 class TestNewUploads(RevertTestCase):
     """那次新上傳的：檔丟進 Drive 垃圾桶，分譜列的登記移除"""
@@ -230,7 +235,7 @@ class TestChangedAfterwards(RevertTestCase):
 
 
 class TestOnlyCopy(RevertTestCase):
-    """撤銷不毀掉唯一的一份：要丟進垃圾桶或還原的檔，存入時的專案要開著、本機有內容相同的一份（或已清除、先下載回來）"""
+    """撤銷不毀掉唯一的一份：要丟進垃圾桶或還原的檔，存入時的專案要開著、本機有那份（或已清除、先下載回來）"""
 
     def test_a_group_whose_project_is_not_open_is_refused_and_drive_is_untouched(self):
         deposit_id = self.archive()
@@ -242,9 +247,18 @@ class TestOnlyCopy(RevertTestCase):
         self.assertFalse(any(self.google.drive.is_trashed(file_id) for file_id in ids.values()))
         self.assertEqual(self.registered_ids(), ids)
 
-    def test_a_group_whose_local_file_changed_is_refused(self):
+    def test_a_local_file_edited_after_the_deposit_does_not_stop_the_group(self):
         deposit_id = self.archive()
         self.write_local(self.parts[1], b"edited locally")
+        preview, outcome = self.revert(deposit_id)
+        self.assertIsNone(preview.groups[0].block)
+        self.assertEqual(outcome.refused, [])
+        self.assertEqual(outcome.completed, 3)
+        self.assertEqual(self.read_local(self.parts[1]), b"edited locally")
+
+    def test_a_missing_local_file_that_is_not_only_in_the_catalog_is_refused(self):
+        deposit_id = self.archive()
+        os.remove(self.parts[1].original_path)
         preview, outcome = self.revert(deposit_id)
         group = preview.groups[0]
         self.assertEqual(group.block, RevertBlock.NO_LOCAL_COPY)
@@ -252,18 +266,19 @@ class TestOnlyCopy(RevertTestCase):
         self.assertEqual(outcome.completed, 0)
         self.assertFalse(self.google.drive.is_trashed(self.registered_ids()["琵琶"]))
 
-    def test_a_missing_local_file_that_is_not_only_in_the_catalog_is_refused(self):
+    def test_a_local_file_edited_after_the_preview_does_not_stop_the_group(self):
         deposit_id = self.archive()
-        os.remove(self.parts[1].original_path)
-        preview, outcome = self.revert(deposit_id)
-        self.assertEqual(preview.groups[0].block, RevertBlock.NO_LOCAL_COPY)
-        self.assertEqual(outcome.completed, 0)
+        preview = self.preview(deposit_id)
+        self.write_local(self.parts[1], b"edited after the preview")
+        _, outcome = self.revert_preview(preview)
+        self.assertEqual(outcome.refused, [])
+        self.assertEqual(outcome.completed, 3)
 
-    def test_a_local_file_changed_after_the_preview_stops_the_group(self):
+    def test_a_local_file_deleted_after_the_preview_stops_the_group(self):
         deposit_id = self.archive()
         preview = self.preview(deposit_id)
         self.assertIsNone(preview.groups[0].block)
-        self.write_local(self.parts[1], b"edited after the preview")
+        os.remove(self.parts[1].original_path)
         _, outcome = self.revert_preview(preview)
         self.assertEqual([block for _, block in outcome.refused], [RevertBlock.NO_LOCAL_COPY])
         self.assertEqual(outcome.completed, 0)

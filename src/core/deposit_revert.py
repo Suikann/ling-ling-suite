@@ -20,8 +20,9 @@
 本機已清除（只在譜庫）的檔要撤銷時，先下載回原位並核對，才動 Drive 上的那份。
 
 撤銷不毀掉唯一的一份（RevertBlock）：要丟進垃圾桶或還原的檔，Drive 上那份可能是那次存入內容唯一的一份，所以
-群組要在開著的專案裡（存入紀錄的群組 ID；舊的列沒有時以群組名稱認），而且每份這樣的檔本機都有內容相同的一份
-（MD5 相同），或本機已清除、會先下載回原位；不然整個群組不撤銷。只移除登記的檔不動 Drive，不必有本機那份。
+群組要在開著的專案裡（存入紀錄的群組 ID；舊的列沒有時以群組名稱認），而且每份這樣的檔本機都有（內容不論，
+存入之後改過的也算），或本機已清除、會先下載回原位並核對 MD5；本機不見、又不是已清除的，整個群組不撤銷。
+只移除登記的檔不動 Drive，不必有本機那份。
 
 「一起撤掉編制」沿用改連的判斷（core/catalog_revert.py 的 revert_rows），只看那次存入之前這個群組寫進那處的編制；
 這次會移除登記的聲部不算已登記 Drive 檔案，所以那次新增、連同分譜一起存入的聲部也撤得掉。
@@ -30,11 +31,11 @@
     from core.deposit_revert import deposits, revert_preview
     history = deposits(catalog.deposit_log(), edition_id)
     local = LocalProject.of(project, catalog_only_paths)
-    preview = revert_preview(catalog.revert_reading(deposit_id, orchestra_type), deposit_id, local, local_md5s)
+    preview = revert_preview(catalog.revert_reading(deposit_id, orchestra_type), deposit_id, local, local_files)
 """
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Collection, Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import AbstractSet, Collection, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
 from core.catalog_models import CatalogPlace, DepositLogEntry, DriveFile, DriveRevision, InstrumentationLogEntry
 from core.catalog_revert import RevertRow, revert_rows
@@ -61,7 +62,7 @@ UNREGISTERING = frozenset({RevertAction.TRASH, RevertAction.UNREGISTER})
 class RevertBlock(Enum):
     """整個群組不撤銷的原因：撤銷會毀掉那次存入內容唯一的一份"""
     NOT_OPEN = "not_open"            # 存入時的專案沒開著，核對不到本機那份
-    NO_LOCAL_COPY = "no_local_copy"  # 本機沒有內容相同的一份（找不到、或之後改過）
+    NO_LOCAL_COPY = "no_local_copy"  # 本機找不到那份，也不是已清除（只在譜庫）、可以先下載回來的
 
 
 class KeptBecause(Enum):
@@ -192,7 +193,7 @@ class RevertFile:
 
     @property
     def destroys(self) -> bool:
-        """撤銷時會動到 Drive 上的內容（丟進垃圾桶或還原舊版本），本機要有那次存入的內容"""
+        """撤銷時會動到 Drive 上的內容（丟進垃圾桶或還原舊版本），本機要有那份"""
         return (
             self.action is RevertAction.RESTORE
             or (self.action is RevertAction.TRASH and self.file is not None and not self.file.trashed)
@@ -212,7 +213,7 @@ class RevertGroup:
         files: 每份檔的下場，依紀錄的順序
         instrumentation: 一起撤掉編制時，這個群組在那次存入之前寫進那處的聲部（core/catalog_revert.py 的四欄表）
         block: 整個群組不撤銷的原因；可以撤銷時為 None
-        uncovered: 本機沒有內容相同的一份、又不能先下載回來的檔（RevertBlock.NO_LOCAL_COPY）
+        uncovered: 本機找不到、又不能先下載回來的檔（RevertBlock.NO_LOCAL_COPY）
     """
     group_id: str
     name: str
@@ -240,7 +241,7 @@ class RevertGroup:
         return [file for file in self.reverting() if file.download]
 
     def kept_locally(self) -> List[RevertFile]:
-        """要動 Drive 上的內容、本機留著那次存入內容的檔（撤銷前一刻再核對一次 MD5）"""
+        """要動 Drive 上的內容、本機留著那份的檔（撤銷前一刻再看一次還在不在）"""
         return [file for file in self.reverting() if file.destroys and not file.download]
 
 
@@ -319,7 +320,7 @@ def needs_revisions(entry: DepositLogEntry, file: Optional[DriveFile]) -> bool:
 
 
 def revert_preview(
-    reading: RevertReading, deposit_id: str, local: LocalProject, local_md5s: Mapping[str, str],
+    reading: RevertReading, deposit_id: str, local: LocalProject, local_files: AbstractSet[str],
 ) -> RevertPreview:
     """依讀到的譜庫現況，決定撤銷那次存入時每個群組每份檔的下場與不撤銷的群組（規則見模組說明）
 
@@ -327,7 +328,7 @@ def revert_preview(
         reading: 讀到的譜庫現況
         deposit_id: 要撤銷的存入編號
         local: 開著的專案
-        local_md5s: 那次存入的檔裡本機有的：路徑比對鍵（core.paths.path_key）→ 本機檔案的 MD5
+        local_files: 那次存入的檔裡本機有的路徑比對鍵（core.paths.path_key）
 
     Returns:
         那次存入與它的每個群組；存入紀錄裡沒有這個存入編號時沒有群組
@@ -356,14 +357,14 @@ def revert_preview(
             outcome = replace(outcome, download=True)
         files.setdefault((entry.group_key, entry.edition_id, entry.movement_id), []).append(outcome)
     groups = [
-        _guard(_group(group_files[0].entry, group_files, reading, deposit.time), local, local_md5s)
+        _guard(_group(group_files[0].entry, group_files, reading, deposit.time), local, local_files)
         for group_files in files.values()
     ]
     return RevertPreview(deposit, groups)
 
 
-def _guard(group: RevertGroup, local: LocalProject, local_md5s: Mapping[str, str]) -> RevertGroup:
-    """撤銷會毀掉唯一的一份時整個群組不撤銷：群組不在開著的專案裡，或要動 Drive 內容的檔本機沒有內容相同的一份"""
+def _guard(group: RevertGroup, local: LocalProject, local_files: AbstractSet[str]) -> RevertGroup:
+    """撤銷會毀掉唯一的一份時整個群組不撤銷：群組不在開著的專案裡，或要動 Drive 內容的檔本機找不到、又不是已清除的"""
     destroying = [file for file in group.reverting() if file.destroys]
     if not destroying:
         return group
@@ -371,7 +372,7 @@ def _guard(group: RevertGroup, local: LocalProject, local_md5s: Mapping[str, str
         return replace(group, block=RevertBlock.NOT_OPEN)
     uncovered = [
         file for file in destroying
-        if not file.download and local_md5s.get(path_key(file.entry.local_path)) != file.file.md5
+        if not file.download and path_key(file.entry.local_path) not in local_files
     ]
     return replace(group, block=RevertBlock.NO_LOCAL_COPY, uncovered=uncovered) if uncovered else group
 
