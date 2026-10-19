@@ -43,7 +43,7 @@ from core.catalog_constants import (
     DRIVE_PDF_MIME,
     DRIVE_SPREADSHEET_MIME, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, SHEET_COMPOSERS, SHEET_DURATIONS,
     SHEET_DEPOSIT_LOG, SHEET_EDITIONS, SHEET_HEADERS, SHEET_INSTRUMENTATION_LOG, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES,
-    SHEET_PIECES, SHEET_SECTIONS, PublishingPlatform,
+    SHEET_PIECES, SHEET_PUBLISH_LOG, SHEET_SECTIONS, PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, OrchestraType
@@ -62,6 +62,7 @@ from core.deposit import SCORE_VOICE, DepositRecord, PlaceFiles, folder_key
 from core.deposit_revert import UNREGISTERING, RevertFile, RevertPlace, RevertReading, needs_revisions
 from core.log_entry import now_text
 from core.models import Headcount
+from core.publish_log import PublishRecord
 from core.sections import stored_section
 from core.voice_names import instrument_key, instrument_name, voice_key
 from services.catalog_ports import CellWrite, DrivePort, SheetsPort, sheet_range
@@ -1308,6 +1309,64 @@ class CatalogService:
         if SHEET_DEPOSIT_LOG not in self._call(self._sheets.sheet_titles):
             return []
         return _models(self._read_sheets(SHEET_DEPOSIT_LOG)[0], SHEET_DEPOSIT_LOG, DepositLogEntry)
+
+    def begin_publish(self, records: Sequence[PublishRecord], operator: str) -> str:
+        """發譜動 HuaXia 之前先寫發譜紀錄：每個群組一列「開始發譜」，一個請求寫入，回傳這次的發譜編號
+
+        寫不進去就不發譜（不會有沒留紀錄的發譜）。請求數固定：列出工作表名稱、讀取、寫入各一次，
+        發譜紀錄還沒建立時另建一次。
+
+        Args:
+            records: 各群組要做的（PublishAction.START）
+            operator: 操作者（登入 HuaXia 的 Discord 名稱）
+
+        Returns:
+            新抽的發譜編號；結束後以它呼叫 record_publish
+
+        Raises:
+            CatalogError: 讀不到或寫不進去（沒有任何一列被寫入）
+        """
+        titles, tables, log = self._read_with_log(lambda _: [], SHEET_PUBLISH_LOG, "A:B")
+        publish_id = self._draw_ids({row[1] for row in log if len(row) > 1}, 1)[0]
+        self._append_publish(titles, tables, publish_id, records, operator)
+        return publish_id
+
+    def record_publish(self, publish_id: str, records: Sequence[PublishRecord], operator: str) -> None:
+        """發譜結束後補上結果：每個群組一列「發譜結果」，發譜編號是 begin_publish 抽的；請求數固定（同 begin_publish）
+
+        Raises:
+            CatalogError: 讀不到或寫不進去（沒有任何一列被寫入）
+        """
+        titles, tables, _ = self._read_with_log(lambda _: [], SHEET_PUBLISH_LOG, "A:A")
+        self._append_publish(titles, tables, publish_id, records, operator)
+
+    def publish_log(self) -> List[PublishRecord]:
+        """讀發譜紀錄的全部列，依紀錄的順序（列出工作表名稱、讀取各一次請求）；動作不認得的列略過
+
+        Returns:
+            每一列（帶發譜編號、時間與操作者）；還沒有發譜紀錄時為空清單
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        if SHEET_PUBLISH_LOG not in self._call(self._sheets.sheet_titles):
+            return []
+        rows = self._read_sheets(SHEET_PUBLISH_LOG)[0]
+        records = (PublishRecord.from_cells(cells) for cells in _records(rows, SHEET_PUBLISH_LOG))
+        return [record for record in records if record is not None]
+
+    def _append_publish(
+        self, titles: Set[str], tables: Dict[str, List[List[str]]], publish_id: str, records: Sequence[PublishRecord],
+        operator: str,
+    ) -> None:
+        """在發譜紀錄最後新增各群組的一列，以一個請求送出"""
+        batch = _Batch(tables, self._draw_ids)
+        stamp = now_text()
+        for record in records:
+            batch.add(SHEET_PUBLISH_LOG, {
+                **record.cells(), "publish_id": publish_id, "time": stamp, "operator": operator,
+            })
+        self._send(batch, titles)
 
     def revert_reading(self, deposit_id: str, orchestra_type: OrchestraType) -> RevertReading:
         """讀撤銷一次存入要的譜庫現況：存入紀錄、那次各處的編制與登記、編制寫入紀錄，以及那次每份檔在 Drive 上的樣子

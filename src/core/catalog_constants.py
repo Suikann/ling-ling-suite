@@ -41,6 +41,9 @@ SHEET_INSTRUMENTATION_LOG = "編制寫入紀錄"
 # 撤銷存入也是一個新的存入編號、每份撤掉的檔一列：動作寫 RevertAction 的值，reverts 是被撤銷的那次存入編號。
 # 存入時先寫「要做」的列（狀態欄見 DEPOSIT_PENDING），做完再寫做了的列
 SHEET_DEPOSIT_LOG = "存入紀錄"
+# 發譜紀錄：每次發譜一個發譜編號、每個群組一列，只新增、不修改；先寫「開始發譜」，結束後補「發譜結果」。
+# 動作寫 core/publish_log.py 的 PublishAction 的值，清單與物件的欄寫 JSON（PublishRecord.cells）
+SHEET_PUBLISH_LOG = "發譜紀錄"
 
 SHEET_HEADERS = {
     SHEET_COMPOSERS: [
@@ -89,6 +92,12 @@ SHEET_HEADERS = {
         "group_id",
         # 存入前先寫的「要做」列是 DEPOSIT_PENDING；做完寫的列（與舊的列）空白
         "state",
+    ],
+    # 新增的欄只加在後面
+    SHEET_PUBLISH_LOG: [
+        "id", "publish_id", "time", "operator", "action", "group_id", "group", "piece_id", "piece_title",
+        "new_piece", "parts_created", "parts_updated", "files_uploaded", "scores_added", "scores_removed",
+        "files_deleted", "events", "failure",
     ],
 }
 
