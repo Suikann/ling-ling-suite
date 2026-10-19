@@ -220,7 +220,8 @@ def published_pieces(records: Sequence[PublishRecord]) -> List[PublishedPiece]:
     """發譜紀錄裡發過的曲目，新發的在前
 
     發過是指有一列發成了的發譜結果，或有一次發譜只有開始發譜、沒有任何結果（中途停下，HuaXia 上可能已經有那次的譜）。
-    沒發成的群組不算。收回與不收回只看那首最後一次發譜之後的列；中途停下的收回不算收回過。
+    沒發成的群組不算；一次發譜裡對到那首、發成了的群組都撤回了（撤回做完），那次也不算：HuaXia 上已經沒有那次的譜。
+    收回與不收回只看那首最後一次發譜之後的列；中途停下的收回不算收回過。
 
     Args:
         records: 發譜紀錄的全部列，依紀錄的順序（CatalogService.publish_log）
@@ -229,11 +230,21 @@ def published_pieces(records: Sequence[PublishRecord]) -> List[PublishedPiece]:
         每首一個，依最後一次發譜由新到舊
     """
     finished = {record.publish_id for record in records if record.action is PublishAction.RESULT}
+    retracted = {
+        (record.publish_id, record.group_id) for record in records
+        if record.action is PublishAction.RETRACT and record.failure is None
+    }
+    remaining: Dict[Tuple[str, str], bool] = {}
+    for record in records:
+        if record.action is PublishAction.RESULT and record.failure is None:
+            key = (record.publish_id, record.piece_id)
+            remaining[key] = remaining.get(key, False) or (record.publish_id, record.group_id) not in retracted
     last: Dict[str, int] = {}
     titles: Dict[str, str] = {}
     for index, record in enumerate(records):
         published = (
             record.action is PublishAction.RESULT and record.failure is None
+            and remaining[(record.publish_id, record.piece_id)]
             or record.action is PublishAction.START and record.publish_id not in finished
         )
         if published and record.piece_id:

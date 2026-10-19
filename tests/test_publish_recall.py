@@ -168,6 +168,10 @@ class TestPreview(RecallTestCase):
         self.huaxia.attach_piece(rehearsal, self.fenghuo)
         self.assertTrue(self.piece().suggested)
 
+    def test_a_piece_whose_publish_was_retracted_is_not_listed(self):
+        self.retracter.retract(self.entry(), [self.group.id], self.catalog)
+        self.assertNotIn(self.fenghuo, self.listed())
+
     def test_a_recalled_piece_is_not_listed_until_it_is_published_again(self):
         self.recaller.recall([self.piece()], self.catalog)
         self.assertNotIn(self.fenghuo, self.listed())

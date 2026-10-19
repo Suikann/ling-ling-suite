@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.catalog_constants import SHEET_HEADERS, SHEET_PUBLISH_LOG
 from core.catalog_errors import CatalogError, CatalogErrorKind
-from core.publish_log import PublishAction, PublishRecord, publish_entries
+from core.publish_log import PublishAction, PublishRecord, publish_entries, published_pieces
 from fake_google_catalog import FakeGoogle
 from services.catalog_service import CatalogService
 from test_catalog_service import empty_catalog
@@ -171,6 +171,56 @@ class TestEntries(unittest.TestCase):
         self.assertEqual((row.action, row.publish_id, row.parts_deleted), (
             PublishAction.RETRACT, publish_id, [{"id": "p-9", "name": "排鼓"}],
         ))
+
+
+
+class TestPublishedPieces(unittest.TestCase):
+    """發過哪些曲目：整次發譜的群組都撤回了的那首，HuaXia 上已經沒有泠靈的譜，不算發過"""
+
+    @staticmethod
+    def row(action: PublishAction, publish_id: str, group: str, piece: str = "hx-1", events=(), failure=None):
+        """讀回來的一列（曲目 piece，events 是掛的公演的結束時間）"""
+        return PublishRecord(
+            action, group_id=f"g-{group}", group=group, piece_id=piece, piece_title=f"曲目{piece}",
+            events=[{"id": f"e-{end}", "title": "公演", "ends_at": end} for end in events],
+            publish_id=publish_id, failure=failure,
+        )
+
+    def published(self, rows):
+        """發過的曲目編號"""
+        return [piece.piece_id for piece in published_pieces(rows)]
+
+    def test_a_piece_whose_every_group_was_retracted_is_not_published(self):
+        rows = [
+            self.row(PublishAction.START, "P1", "烽火操"),
+            self.row(PublishAction.START, "P1", "烽火操二"),
+            self.row(PublishAction.RESULT, "P1", "烽火操"),
+            self.row(PublishAction.RESULT, "P1", "烽火操二"),
+            self.row(PublishAction.RETRACT, "P1", "烽火操"),
+        ]
+        self.assertEqual(self.published(rows), ["hx-1"])
+        rows.append(self.row(PublishAction.RETRACT, "P1", "烽火操二"))
+        self.assertEqual(self.published(rows), [])
+
+    def test_a_retract_that_stopped_partway_leaves_the_piece_published(self):
+        rows = [
+            self.row(PublishAction.START, "P1", "烽火操"),
+            self.row(PublishAction.RESULT, "P1", "烽火操"),
+            self.row(PublishAction.RETRACT, "P1", "烽火操", failure={"code": "network"}),
+        ]
+        self.assertEqual(self.published(rows), ["hx-1"])
+
+    def test_an_earlier_publish_still_counts_after_the_last_one_is_retracted(self):
+        rows = [
+            self.row(PublishAction.START, "P1", "烽火操"),
+            self.row(PublishAction.RESULT, "P1", "烽火操"),
+            self.row(PublishAction.KEEP, "K1", "", events=["2026-12-20T21:00:00+08:00"]),
+            self.row(PublishAction.START, "P2", "烽火操"),
+            self.row(PublishAction.RESULT, "P2", "烽火操"),
+            self.row(PublishAction.RETRACT, "P2", "烽火操"),
+        ]
+        [piece] = published_pieces(rows)
+        self.assertTrue(piece.kept)
 
 
 if __name__ == '__main__':
