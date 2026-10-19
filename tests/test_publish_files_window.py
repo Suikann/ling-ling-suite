@@ -24,6 +24,7 @@ from core.models import CatalogLink
 from services.compression_service import CompressionService
 from services.file_service import FileService
 from services.huaxia_client import lingling_storage_path
+from services.publish_service import storage_slot
 from tests.synthetic_pdfs import scanned_pdf
 from tests.test_main_window import GatedCompressor, button_in, comparing, wait_until
 from tests.test_publish_window import PublishWindowTestCase, button, choose
@@ -80,7 +81,7 @@ class TestFilesStep(FilesWindowTestCase):
 
     def test_each_voice_shows_what_it_replaces_and_what_others_put(self):
         self.huaxia.add_score(
-            self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, "1" * 64), title="二胡一（舊）",
+            self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, "1" * 64, storage_slot("二胡 I")), title="二胡一（舊）",
         )
         self.huaxia.add_score(self.fenghuo, self.pipa, f"{self.fenghuo}/{self.pipa}/1_bow.pdf", title="弓法版")
 
@@ -96,7 +97,7 @@ class TestFilesStep(FilesWindowTestCase):
 
     def test_an_unchanged_file_is_marked_and_not_uploaded_again(self):
         with open(os.path.join(self.out, "01-二胡 I.pdf"), "rb") as f:
-            same = lingling_storage_path(self.fenghuo, hashlib.sha256(f.read()).hexdigest())
+            same = lingling_storage_path(self.fenghuo, hashlib.sha256(f.read()).hexdigest(), storage_slot("二胡 I"))
         self.huaxia.add_score(self.fenghuo, self.erhu, same, title="二胡一")
 
         def operate(dialog):
@@ -250,7 +251,10 @@ class TestCompression(CompressingTestCase):
         [erhu] = [row for row in self.huaxia.tables["scores"] if row["part_id"] == self.erhu]
         sent = self.huaxia.objects[erhu["file_path"]]
         self.assertEqual(len(sent), result.compressed_size)
-        self.assertEqual(erhu["file_path"], lingling_storage_path(self.fenghuo, hashlib.sha256(sent).hexdigest()))
+        self.assertEqual(
+            erhu["file_path"],
+            lingling_storage_path(self.fenghuo, hashlib.sha256(sent).hexdigest(), storage_slot("二胡 I")),
+        )
 
     def test_closing_the_preview_discards_the_compressed_files(self):
         def operate(dialog):
@@ -271,7 +275,7 @@ class TestEventsAndConfirm(FilesWindowTestCase):
         for title, days in (("期末公演", 60), ("校慶音樂會", 30)):
             starts = now + datetime.timedelta(days=days)
             self.huaxia.add_event(semester, title, starts, starts + datetime.timedelta(hours=2), location="中正堂")
-        self.huaxia.add_score(self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, "1" * 64))
+        self.huaxia.add_score(self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, "1" * 64, storage_slot("二胡 I")))
 
     def test_concerts_are_offered_with_the_note_and_chosen_ones_are_confirmed(self):
         def operate(dialog):

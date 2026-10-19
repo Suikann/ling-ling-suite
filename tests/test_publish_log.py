@@ -29,9 +29,9 @@ def start(group: str, piece: str = "hx-1") -> PublishRecord:
         PublishAction.START, group_id=f"g-{group}", group=group, piece_id=piece, piece_title="長城隨想－烽火操",
         parts_created=[{"name": "琵琶", "needed": "2", "needed_min": 2, "section": "彈撥", "sort": 3}],
         parts_updated=[{"id": "p-1", "name": "二胡1", "needed": ["6", "6-8"], "needed_min": [6, 6]}],
-        files_uploaded=[f"lingling/{piece}/{'a' * 64}.pdf"],
-        scores_removed=[{"id": "s-1", "part_id": "p-1", "file_path": f"lingling/{piece}/{'b' * 64}.pdf"}],
-        files_deleted=[f"lingling/{piece}/{'b' * 64}.pdf"],
+        files_uploaded=[f"lingling/{piece}/{'a' * 64}-score.pdf"],
+        scores_removed=[{"id": "s-1", "part_id": "p-1", "file_path": f"lingling/{piece}/{'b' * 64}-score.pdf"}],
+        files_deleted=[f"lingling/{piece}/{'b' * 64}-score.pdf"],
         events=[{"id": "e-1", "title": "期末音樂會", "ends_at": "2026-12-20T21:00:00+08:00"}],
     )
 

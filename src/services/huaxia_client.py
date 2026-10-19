@@ -14,9 +14,11 @@ HuaXia 用戶端
 - 發譜函式 PUBLISH_FUNCTION（publish）一次切換一首曲目，全成或全不成；它的介面版本由 PUBLISH_VERSION_FUNCTION
   回報（publish_interface_version），泠靈要的是 PUBLISH_INTERFACE_VERSION。輸入、輸出與錯誤代碼照文件。
 - 泠靈的 Storage 路徑格式（lingling_storage_path、is_lingling_path）：「固定前綴 LINGLING_STORAGE_PREFIX／曲目編號／
-  內容的 SHA-256.pdf」。HuaXia 網頁上傳的路徑是「曲目編號／聲部編號或 full／時間戳_檔名」，不會以這個前綴開頭，
-  所以只看路徑就分得出哪份是泠靈發的。發譜的第 1 段以 upload 傳檔（不覆寫，路徑已有檔就是同一份內容）、
-  第 3 段以 delete_files 刪掉被取代的檔。
+  內容的 SHA-256-登記位置.pdf」。登記位置是 1 到 32 個小寫英數字，由發譜決定（publish_service.storage_slot），
+  讓每筆樂譜登記各有自己的 Storage 檔：HuaXia 網頁刪樂譜時會連檔一起刪，共用的檔會弄壞另一筆登記。
+  HuaXia 網頁上傳的路徑是「曲目編號／聲部編號或 full／時間戳_檔名」，不會以這個前綴開頭，所以只看路徑就分得出
+  哪份是泠靈發的。發譜的第 1 段以 upload 傳檔（不覆寫，路徑已有檔就是同一份內容）、第 3 段以 delete_files 刪掉
+  被取代的檔。
 - 撤回與收回不經發譜函式，以使用者身分經 REST 刪除（delete_scores、delete_parts，HuaXia 的 RLS 照常生效）；
   刪聲部會連帶刪掉它的排人與樂譜，所以先以 assigned_parts 確認沒排人。收回刪檔前以 registered_paths 確認
   沒有任何樂譜登記還指著，曲目掛的公演以 piece_events、events_by_id 讀。
@@ -49,7 +51,7 @@ PUBLISH_VERSION_FUNCTION = "lingling_publish_version"
 PUBLISH_INTERFACE_VERSION = 1
 # 泠靈發的檔在 Storage bucket scores 裡的路徑前綴（docs/huaxia/LINGLING.md）
 LINGLING_STORAGE_PREFIX = "lingling/"
-_LINGLING_PATH = re.compile(re.escape(LINGLING_STORAGE_PREFIX) + r"[^/]+/[0-9a-f]{64}\.pdf")
+_LINGLING_PATH = re.compile(re.escape(LINGLING_STORAGE_PREFIX) + r"[^/]+/[0-9a-f]{64}-[0-9a-z]{1,32}\.pdf")
 # Storage 列出檔案時一次要幾筆（Supabase 的預設）
 _STORAGE_PAGE_SIZE = 100
 # 樂譜所在的 Storage bucket；上傳的檔案類型
@@ -193,9 +195,18 @@ class HuaXiaEvent(NamedTuple):
     location: str
 
 
-def lingling_storage_path(piece_id: str, sha256: str) -> str:
-    """泠靈發的一份檔在 Storage bucket scores 裡的路徑：固定前綴、曲目編號與內容的 SHA-256（十六進位小寫）"""
-    return f"{lingling_storage_folder(piece_id)}/{sha256}.pdf"
+def lingling_storage_path(piece_id: str, sha256: str, slot: str) -> str:
+    """泠靈發的一份檔在 Storage bucket scores 裡的路徑
+
+    Args:
+        piece_id: 曲目編號
+        sha256: 內容的 SHA-256（十六進位小寫）
+        slot: 登記位置（1 到 32 個小寫英數字）：同一份內容登記在不同位置時各是一個檔
+
+    Returns:
+        「固定前綴／曲目編號／SHA-256-登記位置.pdf」
+    """
+    return f"{lingling_storage_folder(piece_id)}/{sha256}-{slot}.pdf"
 
 
 def lingling_storage_folder(piece_id: str) -> str:

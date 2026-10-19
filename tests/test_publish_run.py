@@ -31,7 +31,7 @@ from services.file_service import FileService
 from services.huaxia_client import PUBLISH_INTERFACE_VERSION, lingling_storage_path
 from services.publish_runner import GroupFailure, PublishEvent, PublishRunner
 from services.orphan_cleanup import clear_orphans
-from services.publish_service import FunctionProblem, PublishPreview, check_groups
+from services.publish_service import FunctionProblem, PublishPreview, check_groups, storage_slot
 from ui.publish_run import progress_line
 from test_catalog_service import empty_catalog
 from test_publish_preflight import PrepareTestCase
@@ -61,7 +61,7 @@ class RunTestCase(PrepareTestCase):
         self.project.set_huaxia_link(self.group, HuaXiaLink(piece_id=self.fenghuo, piece_title="長城隨想－烽火操"))
         self.erhu = self.huaxia.add_part(self.fenghuo, "二胡1", needed="6", needed_min=6, sort=1)
         self.pipa = self.huaxia.add_part(self.fenghuo, "琵琶", needed="2", needed_min=2, sort=2)
-        self.old = lingling_storage_path(self.fenghuo, sha(b"old erhu"))
+        self.old = lingling_storage_path(self.fenghuo, sha(b"old erhu"), storage_slot("二胡 I"))
         self.huaxia.put_object(self.old, b"old erhu")
         self.old_score = self.huaxia.add_score(self.fenghuo, self.erhu, self.old, title="二胡 I")
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -100,7 +100,7 @@ class RunTestCase(PrepareTestCase):
     def stored(self, group, voice: str, piece_id: str = "") -> str:
         """這份本機檔照現在的內容發出去時的 Storage 路徑"""
         with open(self.path(group, voice), "rb") as f:
-            return lingling_storage_path(piece_id or group.huaxia_link.piece_id, sha(f.read()))
+            return lingling_storage_path(piece_id or group.huaxia_link.piece_id, sha(f.read()), storage_slot(voice))
 
     def press_publish(self, events=(), group_ids=None):
         """重新按下發譜（group_ids 時只發這幾個群組）、走完預覽（勾 events 這幾場公演）後按「發譜」：交回這次的快照"""
@@ -216,6 +216,29 @@ class TestPublishing(RunTestCase):
         self.assertEqual([e["id"] for e in result.events], [self.concert])
         self.assertTrue(result.events[0]["ends_at"])
 
+
+    def test_two_voices_with_the_same_pdf_each_have_their_own_storage_file(self):
+        for voice in ("二胡 I", "琵琶"):
+            with open(self.path(self.group, voice), "wb") as f:
+                f.write(b"same pdf")
+        outcome = self.run_publish(self.press_publish())
+        self.assertEqual(outcome.failed, [])
+        erhu, pipa = self.stored(self.group, "二胡 I"), self.stored(self.group, "琵琶")
+        self.assertNotEqual(erhu, pipa)
+        self.assertEqual((self.huaxia.objects[erhu], self.huaxia.objects[pipa]), (b"same pdf", b"same pdf"))
+        # 幹部在網頁上刪掉二胡的樂譜，網頁連檔一起刪：琵琶的檔還在
+        [row] = [r for r in self.huaxia.tables["scores"] if r["file_path"] == erhu]
+        self.huaxia.tables["scores"].remove(row)
+        del self.huaxia.objects[erhu]
+        self.assertIn((self.pipa, pipa), self.scores(self.fenghuo))
+        self.assertIn(pipa, self.huaxia.objects)
+
+    def test_publishing_unchanged_files_again_uploads_nothing(self):
+        self.run_publish(self.press_publish())
+        sent = len(self.uploads())
+        outcome = self.run_publish(self.press_publish())
+        self.assertEqual(outcome.failed, [])
+        self.assertEqual(len(self.uploads()), sent)
 
 
 class TestNewPiece(RunTestCase):
@@ -426,7 +449,7 @@ class TestOrphans(RunTestCase):
         # 網頁正在上傳、還沒登記的檔（路徑是時間戳），泠靈資料夾裡不是泠靈格式的檔，這次沒發的聲部登記著的泠靈檔
         uploading = f"{self.fenghuo}/{self.pipa}/1760000000000_bowing.pdf"
         stray = f"lingling/{self.fenghuo}/notes.pdf"
-        registered = lingling_storage_path(self.fenghuo, sha(b"registered by the web"))
+        registered = lingling_storage_path(self.fenghuo, sha(b"registered by the web"), storage_slot("中阮"))
         for path in (uploading, stray, registered):
             self.huaxia.put_object(path)
         zhongruan = self.huaxia.add_part(self.fenghuo, "中阮", sort=3)
@@ -439,7 +462,7 @@ class TestOrphans(RunTestCase):
         self.assertEqual(self.log(PublishAction.CLEAR_ORPHANS), [])
 
     def test_only_the_pieces_in_this_publish_are_cleared(self):
-        elsewhere = lingling_storage_path(self.moli, sha(b"left on another piece"))
+        elsewhere = lingling_storage_path(self.moli, sha(b"left on another piece"), storage_slot("笛子"))
         self.huaxia.put_object(elsewhere)
         self.run_publish(self.press_publish())
         self.assertIn(elsewhere, self.huaxia.objects)
@@ -472,8 +495,8 @@ class TestClearingOrphansDirectly(RunTestCase):
     """清孤兒檔可以單獨呼叫（收回前也清一次），清掉的檔寫進紀錄檔"""
 
     def test_clearing_one_piece_keeps_what_the_caller_still_uses_and_logs_what_it_deleted(self):
-        orphan = lingling_storage_path(self.fenghuo, sha(b"orphan"))
-        kept = lingling_storage_path(self.fenghuo, sha(b"about to be registered"))
+        orphan = lingling_storage_path(self.fenghuo, sha(b"orphan"), storage_slot("琵琶"))
+        kept = lingling_storage_path(self.fenghuo, sha(b"about to be registered"), storage_slot("琵琶"))
         for path in (orphan, kept):
             self.huaxia.put_object(path)
         folder = os.path.join(self.temp_dir, "logs")
@@ -548,7 +571,8 @@ class TestSnapshot(RunTestCase):
         checked, snapshot = self.runner.start(self.compressed_preview().publish_plan())
         outcome = self.run_publish(snapshot)
         self.assertEqual(outcome.failed, [])
-        self.assertEqual(self.huaxia.objects[lingling_storage_path(self.fenghuo, sha(b"small pipa"))], b"small pipa")
+        pipa = lingling_storage_path(self.fenghuo, sha(b"small pipa"), storage_slot("琵琶"))
+        self.assertEqual(self.huaxia.objects[pipa], b"small pipa")
         self.assertEqual(self.leftovers(), [])
 
 

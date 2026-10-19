@@ -100,7 +100,7 @@ class TestOrphans(RecallTestCase):
     """收回前以孤兒檔清理清一次那首的：只清沒有登記的泠靈檔，與「收回」一起寫進發譜紀錄"""
 
     def test_the_pieces_orphans_are_cleared_before_recalling(self):
-        orphan = lingling_storage_path(self.fenghuo, sha(b"orphan"))
+        orphan = lingling_storage_path(self.fenghuo, sha(b"orphan"), "score")
         self.huaxia.put_object(orphan, b"orphan")
         self.recaller.recall([self.piece()], self.catalog)
         self.assertEqual(sorted(self.huaxia.objects), [])

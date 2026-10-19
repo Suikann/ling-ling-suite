@@ -23,9 +23,9 @@ from test_publish_preflight import PrepareTestCase
 NEW_PIECE = "22222222-2222-2222-2222-222222222223"
 
 
-def stored(piece_id: str, n: int) -> str:
-    """曲目上第 n 份內容的泠靈 Storage 路徑（SHA-256 是假的）"""
-    return lingling_storage_path(piece_id, f"{n:064x}")
+def stored(piece_id: str, n: int, slot: str = "score") -> str:
+    """曲目上第 n 份內容登記在 slot 的泠靈 Storage 路徑（SHA-256 是假的）"""
+    return lingling_storage_path(piece_id, f"{n:064x}", slot)
 
 
 class PublishTestCase(PrepareTestCase):
@@ -164,6 +164,12 @@ class TestAllOrNothing(RejectionTestCase):
     def test_a_path_that_is_not_linglings(self):
         self.assert_rejected("22023", 400, add_scores=[{"file_path": f"{NEW_PIECE}/full/123_x.pdf"}])
         self.assert_rejected("22023", 400, add_scores=[{"file_path": stored(self.moli, 1)}])
+        self.assert_rejected("22023", 400, add_scores=[{"file_path": f"lingling/{NEW_PIECE}/{1:064x}.pdf"}])
+
+    def test_a_file_another_score_already_registers(self):
+        self.assert_rejected("23505", 409, add_scores=[
+            *self.base["add_scores"], {"file_path": stored(NEW_PIECE, 1)},
+        ])
 
     def test_a_part_of_another_piece(self):
         self.assert_rejected("PT404", 404, update_parts=[{"id": self.moli_part, "needed": "9"}])

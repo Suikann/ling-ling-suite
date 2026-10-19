@@ -47,7 +47,7 @@ from services.compression_service import CompressionService
 from services.file_service import FileService
 from services.huaxia_auth_service import HuaXiaAuthService
 from services.huaxia_client import (
-    PUBLISH_INTERFACE_VERSION, HuaXiaError, HuaXiaEvent, HuaXiaScore, lingling_storage_folder, lingling_storage_path,
+    PUBLISH_INTERFACE_VERSION, HuaXiaError, HuaXiaEvent, HuaXiaScore, lingling_storage_folder,
 )
 from services.orphan_cleanup import OrphanCleanup, clear_orphans
 from services.publish_service import GroupPublish, PartCreate, PublishReadiness, recheck
@@ -448,7 +448,7 @@ class PublishRunner:
                     new_part = file.voice if file.voice and file.part is None else None
                     files.append(SnapshotFile(
                         os.path.basename(file.path), file.voice or SCORE_TITLE, file.part.id if file.part else None,
-                        new_part, copy, lingling_storage_path(piece_id, self._files.sha256(copy)),
+                        new_part, copy, file.path_for(self._files.sha256(copy)),
                     ))
                 groups.append(GroupSnapshot(
                     plan.group.id, plan.group.name, piece_id, plan.link.piece_title, _new_piece(plan),
@@ -594,7 +594,7 @@ class PublishRunner:
 
 
 def _unique_files(groups: List[GroupSnapshot]) -> List[Tuple[GroupSnapshot, SnapshotFile]]:
-    """要傳的檔，同一個 Storage 路徑只傳一次（內容相同的檔共用），依群組與檔案的順序"""
+    """要傳的檔，同一個 Storage 路徑只傳一次（每筆登記各有自己的路徑，照理不重複），依群組與檔案的順序"""
     seen: Set[str] = set()
     unique = []
     for group in groups:

@@ -20,7 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.models import CatalogLink, FileInfo, Headcount, HuaXiaLink, Project
 from services.file_service import FileService
 from services.huaxia_client import lingling_storage_path
-from services.publish_service import Fingerprints, group_publish, plan_deletions, plan_files, plan_voices
+from services.publish_service import (
+    Fingerprints, group_publish, plan_deletions, plan_files, plan_voices, storage_slot,
+)
 from test_publish_preflight import PrepareTestCase
 
 
@@ -73,7 +75,15 @@ class FilesTestCase(PrepareTestCase):
     def stored(self, index: int) -> str:
         """這個群組第 index 份本機檔（0 總譜、1 二胡 I、2 琵琶）照現在的內容發出去時的 Storage 路徑"""
         with open(self.paths[index], "rb") as f:
-            return lingling_storage_path(self.fenghuo, hashlib.sha256(f.read()).hexdigest())
+            content = f.read()
+        return lingling_storage_path(
+            self.fenghuo, hashlib.sha256(content).hexdigest(), storage_slot(("", "二胡 I", "琵琶")[index]),
+        )
+
+    def write(self, index: int, content: bytes) -> None:
+        """改寫這個群組第 index 份本機檔的內容"""
+        with open(self.paths[index], "wb") as f:
+            f.write(content)
 
     def file(self, plan, path):
         """檔案計畫裡這份本機檔"""
@@ -84,15 +94,15 @@ class TestReplacing(FilesTestCase):
     """每個聲部只取代同一個聲部底下、泠靈發的那份"""
 
     def test_only_the_lingling_file_under_the_same_part_is_replaced(self):
-        mine = self.huaxia.add_score(self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, fingerprint(1)))
-        pipa = self.huaxia.add_score(self.fenghuo, self.pipa, lingling_storage_path(self.fenghuo, fingerprint(2)))
+        mine = self.huaxia.add_score(self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, fingerprint(1), "x"))
+        pipa = self.huaxia.add_score(self.fenghuo, self.pipa, lingling_storage_path(self.fenghuo, fingerprint(2), "x"))
         erhu = self.file(self.plan(), self.paths[1])
         self.assertEqual([score.id for score in erhu.replaces], [mine])
         self.assertEqual([score.id for score in self.file(self.plan(), self.paths[2]).replaces], [pipa])
 
     def test_a_score_renamed_on_the_website_is_still_found(self):
         mine = self.huaxia.add_score(
-            self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, fingerprint(1)), title="01-二胡 I",
+            self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, fingerprint(1), "x"), title="01-二胡 I",
         )
         self.huaxia.rename_score(mine, "二胡一（弓法版）")
         self.assertEqual([score.id for score in self.file(self.plan(), self.paths[1]).replaces], [mine])
@@ -104,10 +114,10 @@ class TestReplacing(FilesTestCase):
         self.assertEqual([score.id for score in erhu.others], [web])
 
     def test_the_full_score_replaces_the_lingling_score_without_a_voice(self):
-        mine = self.huaxia.add_score(self.fenghuo, None, lingling_storage_path(self.fenghuo, fingerprint(3)))
+        mine = self.huaxia.add_score(self.fenghuo, None, lingling_storage_path(self.fenghuo, fingerprint(3), "x"))
         web = self.huaxia.add_score(self.fenghuo, None, f"{self.fenghuo}/full/1760000000000_score.pdf")
-        self.huaxia.add_score(self.fenghuo, None, lingling_storage_path(self.fenghuo, fingerprint(4)), section="拉弦")
-        self.huaxia.add_score(self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, fingerprint(5)))
+        self.huaxia.add_score(self.fenghuo, None, lingling_storage_path(self.fenghuo, fingerprint(4), "x"), section="拉弦")
+        self.huaxia.add_score(self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, fingerprint(5), "x"))
         score = self.file(self.plan(), self.paths[0])
         self.assertTrue(score.score)
         self.assertEqual([s.id for s in score.replaces], [mine])
@@ -115,7 +125,7 @@ class TestReplacing(FilesTestCase):
 
     def test_a_voice_created_on_huaxia_replaces_nothing(self):
         self.huaxia.remove_part(self.pipa)
-        self.huaxia.add_score(self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, fingerprint(1)))
+        self.huaxia.add_score(self.fenghuo, self.erhu, lingling_storage_path(self.fenghuo, fingerprint(1), "x"))
         pipa = self.file(self.plan(), self.paths[2])
         self.assertIsNone(pipa.part)
         self.assertEqual((pipa.replaces, pipa.others), ([], []))
@@ -136,7 +146,7 @@ class TestNeverDeletingFilesInUse(FilesTestCase):
         self.assertEqual(plan.deletes, [])
 
     def test_a_replaced_file_is_deleted_once_nothing_points_to_it(self):
-        old = lingling_storage_path(self.fenghuo, fingerprint(1))
+        old = lingling_storage_path(self.fenghuo, fingerprint(1), "x")
         self.huaxia.add_score(self.fenghuo, self.erhu, old)
         self.huaxia.add_score(self.fenghuo, self.erhu, old)
         self.assertEqual(self.publish().deletes, [old])
@@ -150,13 +160,35 @@ class TestNeverDeletingFilesInUse(FilesTestCase):
         self.assertTrue(self.file(self.plan(), self.paths[2]).unchanged)
         self.assertEqual(plan.deletes, [])
 
-    def test_a_file_this_publish_uses_again_is_not_deleted(self):
-        moved = self.stored(2)
-        erhu = self.huaxia.add_score(self.fenghuo, self.erhu, moved)
-        plan = self.publish()
-        self.assertEqual([score.id for score in plan.replaces], [erhu])
-        self.assertIn(self.paths[2], [upload.file.path for upload in plan.uploads])
-        self.assertEqual(plan.deletes, [])
+
+class TestOneStorageFilePerScore(FilesTestCase):
+    """每筆樂譜登記各有自己的 Storage 檔：內容相同的兩份檔路徑不同，同一個位置重發同樣的內容路徑不變"""
+
+    def test_two_voices_with_the_same_content_get_their_own_paths(self):
+        self.write(1, b"same pdf")
+        self.write(2, b"same pdf")
+        self.write(0, b"same pdf")
+        paths = [file.storage_path for file in self.plan().files]
+        self.assertEqual(len(set(paths)), 3)
+
+    def test_publishing_the_same_content_to_the_same_voice_again_keeps_its_path(self):
+        first = self.file(self.plan(), self.paths[1]).storage_path
+        self.huaxia.add_score(self.fenghuo, self.erhu, first)
+        erhu = self.file(self.plan(), self.paths[1])
+        self.assertEqual(erhu.storage_path, first)
+        self.assertTrue(erhu.unchanged)
+
+    def test_a_path_registered_under_another_part_is_not_reused(self):
+        # 二胡 I 上次登記在網頁建的「二胡」，這次改對到「二胡1」：那筆登記還在，這次要另傳一份
+        earlier = self.huaxia.add_part(self.fenghuo, "二胡", sort=3)
+        before = self.stored(1)
+        self.huaxia.add_score(self.fenghuo, earlier, before)
+        erhu = self.file(self.plan(), self.paths[1])
+        self.assertNotEqual(erhu.storage_path, before)
+        self.assertFalse(erhu.unchanged)
+        self.huaxia.add_score(self.fenghuo, self.erhu, erhu.storage_path)
+        again = self.file(self.plan(), self.paths[1])
+        self.assertEqual((again.storage_path, again.unchanged), (erhu.storage_path, True))
 
 
 class TestSkipping(FilesTestCase):
@@ -234,13 +266,13 @@ class TestStorageListing(PrepareTestCase):
 
     def test_lists_the_files_under_a_piece_with_their_sizes(self):
         for n in range(3):
-            self.huaxia.put_object(lingling_storage_path(self.fenghuo, fingerprint(n)), b"x" * (n + 1))
-        self.huaxia.put_object(lingling_storage_path(self.moli, fingerprint(9)))
+            self.huaxia.put_object(lingling_storage_path(self.fenghuo, fingerprint(n), "x"), b"x" * (n + 1))
+        self.huaxia.put_object(lingling_storage_path(self.moli, fingerprint(9), "x"))
         self.huaxia.put_object(f"{self.fenghuo}/full/1760000000000_score.pdf")
         client = self.auth.client
-        folder = lingling_storage_path(self.fenghuo, fingerprint(0)).rsplit("/", 1)[0]
+        folder = lingling_storage_path(self.fenghuo, fingerprint(0), "x").rsplit("/", 1)[0]
         listed = client.stored_files(self.auth.access_token(), folder, page_size=2)
-        self.assertEqual(listed, {f"{folder}/{fingerprint(n)}.pdf": n + 1 for n in range(3)})
+        self.assertEqual(listed, {f"{folder}/{fingerprint(n)}-x.pdf": n + 1 for n in range(3)})
 
 
 if __name__ == "__main__":

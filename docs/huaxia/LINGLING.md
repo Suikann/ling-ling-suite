@@ -1,4 +1,4 @@
-> 複本。正本是 HuaXia 的 `docs/LINGLING.md`，取自 [Suikann/HuaXia 分支 lingling-publish 的 6d04ed4](https://github.com/Suikann/HuaXia/blob/6d04ed463ba8660e5410cdfbd022cccac130632c/docs/LINGLING.md)（合併請求 [oshigirimoquan-coder/HuaXia#1](https://github.com/oshigirimoquan-coder/HuaXia/pull/1)；合併後以 HuaXia `main` 為準）。泠靈的 `services/huaxia_client.py` 頂端的常數與 `tests/fake_huaxia.py` 的發譜函式照這份實作，正本改了就同步這份、假 HuaXia 與 `tests/test_huaxia_publish.py`。
+> 複本。正本是 HuaXia 的 `docs/LINGLING.md`，取自 [Suikann/HuaXia 分支 lingling-publish 的 dbc5c03](https://github.com/Suikann/HuaXia/blob/dbc5c037f2442c2ac934721e5fc45079ea811da1/docs/LINGLING.md)（合併請求 [oshigirimoquan-coder/HuaXia#1](https://github.com/oshigirimoquan-coder/HuaXia/pull/1)；合併後以 HuaXia `main` 為準）。泠靈的 `services/huaxia_client.py` 頂端的常數與 `tests/fake_huaxia.py` 的發譜函式照這份實作，正本改了就同步這份、假 HuaXia 與 `tests/test_huaxia_publish.py`。
 
 # 泠靈依賴說明
 
@@ -34,7 +34,8 @@
 
 ## Storage（bucket `scores`）
 
-- **路徑格式**：`lingling/<曲目編號>/<檔案內容的 SHA-256，64 位小寫十六進位>.pdf`。固定前綴 `lingling/` 表示是泠靈發的；網頁上傳的路徑是 `<曲目編號>/<聲部編號或 full>/<時間戳>_<檔名>`，不會以 `lingling/` 開頭。路徑只由曲目與內容決定，內容相同的檔共用一個路徑。
+- **路徑格式**：`lingling/<曲目編號>/<檔案內容的 SHA-256，64 位小寫十六進位>-<登記位置>.pdf`。固定前綴 `lingling/` 表示是泠靈發的；網頁上傳的路徑是 `<曲目編號>/<聲部編號或 full>/<時間戳>_<檔名>`，不會以 `lingling/` 開頭。登記位置是 1 到 32 個小寫英數字，由泠靈決定、HuaXia 不解讀：總譜是 `score`，分譜依泠靈的聲部算出；同一個位置重發同樣的內容得到同一個路徑。
+- **一份 Storage 檔只給一筆樂譜登記**：泠靈從不讓兩筆 `scores` 指著同一個檔，兩個聲部的 PDF 內容相同時也各傳一份。網頁刪樂譜時會連 Storage 的檔一起刪（`js/views/pieces.js` 的 `editScore`），共用的話會弄壞另一筆登記。發譜函式擋下登記已有登記指著的檔（錯誤 `23505`）。
 - 泠靈上傳（`POST /storage/v1/object/scores/<路徑>`，不覆寫）、列出 `lingling/<曲目編號>/`（`POST /storage/v1/object/list/scores`）、刪除（`DELETE /storage/v1/object/scores`）。只刪 `lingling/` 底下的檔，收回例外。用到的權限是現有的 `scores_write`、`scores_delete`（幹部）與 `scores_read`（幹部與老師）。
 - **單檔上限 20MB 由泠靈自己擋**（同網頁 `js/views/pieces.js` 的 `MAX`），超過的先壓縮。bucket 不設 `file_size_limit`；HuaXia 改上限時告訴泠靈。
 
@@ -66,7 +67,7 @@
     {"id": "聲部編號", "needed": "4", "needed_min": 4, "section": "拉弦"}
   ],
   "add_scores": [
-    {"part_id": "現有聲部編號", "title": "二胡 I", "file_path": "lingling/<曲目編號>/<sha256>.pdf"},
+    {"part_id": "現有聲部編號", "title": "二胡 I", "file_path": "lingling/<曲目編號>/<sha256>-<登記位置>.pdf"},
     {"new_part": "二胡 I", "title": "二胡 I", "file_path": "..."},
     {"title": "總譜", "file_path": "..."}
   ],
@@ -81,7 +82,7 @@
 | `new_piece` | `null`：`piece_id` 是現有曲目。物件 `{"title", "composer", "duration_min", "ensemble"}`（`title` 必填；`composer` 省略為空白、`duration_min` 可為 `null`、`ensemble` 省略為 `tutti`）：以 `piece_id` 新建；這個編號已經存在就沿用、不改它的欄位（重跑不會多建一首） |
 | `create_parts` | 同一次不能有兩個同名的；`section` 空白時由觸發器依名稱判斷 |
 | `update_parts` | 聲部必須屬於這首曲目；`needed`、`needed_min`、`section` 省略或 `null` 就不改，`section` 給空字串等於交給觸發器重新判斷 |
-| `add_scores` | `part_id`（現有聲部）與 `new_part`（這次 `create_parts` 裡的名稱）最多給一個，都不給是總譜；`file_path` 必須是這首曲目的泠靈路徑，而且檔案已經在 Storage |
+| `add_scores` | `part_id`（現有聲部）與 `new_part`（這次 `create_parts` 裡的名稱）最多給一個，都不給是總譜；`file_path` 必須是這首曲目的泠靈路徑、檔案已經在 Storage，而且（撤掉這次的 `remove_scores` 之後）沒有任何樂譜登記指著它 |
 | `remove_scores` | 只撤這首曲目的；已經不在的略過 |
 | `attach_events` | 已經掛著的略過 |
 
@@ -112,6 +113,7 @@
 | `PT404` | 404 | 找不到曲目、聲部不屬於這首曲目（或已被刪、或沒有權限改）、檔案還沒傳到 Storage |
 | `42501` | 401／403 | 不是幹部：RLS 擋下寫入（`new row violates row-level security policy`）；或沒登入，不能呼叫 |
 | `23503` | 409 | 場次不存在 |
+| `23505` | 409 | 已有樂譜登記指著這個檔 |
 
 ## 撤回與收回（不經函式，以幹部身分經 REST）
 

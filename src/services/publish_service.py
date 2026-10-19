@@ -25,21 +25,27 @@
             checks = check_groups(project)
 """
 import datetime
+import hashlib
+import itertools
 import uuid
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Collection, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Collection, Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple
 
 from core.constants import CONCERT_KIND, OTHER_SECTION, CompressionStatus, OrchestraType
 from core.models import CatalogChange, Group, Headcount, HuaXiaLink, Project
 from core.naming import is_renamed
-from core.voice_names import duplicate_rows, same_voice
+from core.voice_names import duplicate_rows, same_voice, voice_key
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
 from services.compression_service import CompressionResult, CompressionService
 from services.file_service import FileService
 from services.huaxia_client import (
     PUBLISH_INTERFACE_VERSION, HuaXiaEvent, HuaXiaPart, HuaXiaPiece, HuaXiaScore, lingling_storage_path,
 )
+
+# 總譜在泠靈 Storage 路徑裡的登記位置；分譜的是聲部比對鍵的 SHA-256 前 _VOICE_SLOT_LENGTH 碼（storage_slot）
+SCORE_STORAGE_SLOT = "score"
+_VOICE_SLOT_LENGTH = 12
 
 
 class ProjectBlock(Enum):
@@ -357,6 +363,16 @@ def plan_voices(
     return VoicePlan(voice_rows, unpaired, conflicts, undecided, unfilled, creates, updates)
 
 
+def storage_slot(voice: str) -> str:
+    """一份檔在泠靈 Storage 路徑裡的登記位置：總譜（voice 為空字串）是 SCORE_STORAGE_SLOT，分譜是聲部比對鍵
+    （core.voice_names.voice_key）的 SHA-256 前 12 碼，同一聲部的各種寫法都得到同一個"""
+    if not voice:
+        return SCORE_STORAGE_SLOT
+    base, number = voice_key(voice)
+    key = f"{base}\x00{'' if number is None else number}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:_VOICE_SLOT_LENGTH]
+
+
 class Fingerprints:
     """本機檔內容的 SHA-256；記著算過的，檔案的大小與修改時間沒變就不重算（預覽每次重排都要用）"""
 
@@ -386,8 +402,9 @@ class Fingerprints:
 class PublishFile:
     """群組要發的一份本機檔（總譜或一個聲部的分譜）與它在 HuaXia 上要取代的
 
-    泠靈的 Storage 路徑只由曲目編號與內容決定（lingling_storage_path），所以同一個聲部底下泠靈發的樂譜裡，
-    路徑就是這次內容的那份（current）就是這份檔本身：內容沒變（unchanged），不重傳也不取代它；其餘的都取代。
+    泠靈的 Storage 路徑由曲目編號、內容與登記位置決定（path_for），每筆樂譜登記各有自己的 Storage 檔：
+    內容相同的兩份檔（例如兩個聲部的 PDF 相同）也各傳一份。同一個聲部底下泠靈發的樂譜裡，路徑就是這次這份的
+    那份就是這份檔本身：內容沒變（unchanged），不重傳也不取代它；其餘的都取代。
 
     Attributes:
         voice: 泠靈的聲部名稱；總譜為空字串
@@ -399,6 +416,7 @@ class PublishFile:
         lingling: 同一個聲部（總譜是聲部空白）底下、泠靈發的樂譜
         others: 同一個聲部底下其他人放的樂譜（一律不動，只標出）
         catalog_only: 本機找不到、譜庫裡有一份（只在譜庫），這次跳過
+        elsewhere: 曲目上其他樂譜登記（不是這個聲部底下泠靈發的）指著的 Storage 路徑，這份檔不能用
     """
 
     voice: str
@@ -410,13 +428,30 @@ class PublishFile:
     lingling: List[HuaXiaScore] = field(default_factory=list)
     others: List[HuaXiaScore] = field(default_factory=list)
     catalog_only: bool = False
+    elsewhere: FrozenSet[str] = frozenset()
 
     @property
     def storage_path(self) -> Optional[str]:
-        """這次的內容在 Storage 的路徑；曲目還沒有編號或本機找不到時為 None"""
+        """這次的內容在 Storage 的路徑（path_for）；曲目還沒有編號或本機找不到時為 None"""
         if not self.piece_id or self.sha256 is None:
             return None
-        return lingling_storage_path(self.piece_id, self.sha256)
+        return self.path_for(self.sha256)
+
+    def path_for(self, sha256: str) -> str:
+        """這個內容發到這個聲部（總譜是聲部空白）時的 Storage 路徑
+
+        登記位置是 storage_slot：同一個聲部重發同樣的內容得到同一個路徑。這個路徑已有別的登記指著時（例如聲部改對到
+        別的 HuaXia 聲部，舊的登記還在），在登記位置後面加上 2、3…，直到沒有別的登記指著，不讓兩筆登記共用一個檔。
+
+        Args:
+            sha256: 內容的 SHA-256（十六進位小寫）
+        """
+        base = storage_slot(self.voice)
+        for n in itertools.count(1):
+            path = lingling_storage_path(self.piece_id, sha256, base if n == 1 else f"{base}{n}")
+            if path not in self.elsewhere:
+                return path
+        raise AssertionError("unreachable")
 
     @property
     def unchanged(self) -> bool:
@@ -466,7 +501,8 @@ def plan_files(
 
     分譜依本專案有的聲部配到的分譜（Group.pairing），對到 voices 裡那一列的 HuaXia 聲部；要取代的是那個聲部底下、
     泠靈發的樂譜（以泠靈的 Storage 路徑格式辨認，不看樂譜名稱），總譜是聲部空白（不含舊的分組樂譜）、泠靈發的；
-    其中內容與本機這份相同的那份不取代，這份檔也不重傳（PublishFile.unchanged）。
+    其中內容與本機這份相同的那份不取代，這份檔也不重傳（PublishFile.unchanged）。曲目上其他登記指著的路徑記在
+    PublishFile.elsewhere，這份檔不用它們（每筆登記各有自己的 Storage 檔）。
     要在 HuaXia 新建的聲部沒有要取代的。本機找不到的檔跳過，群組記著譜庫裡有一份的標成只在譜庫。
 
     Args:
@@ -485,6 +521,7 @@ def plan_files(
     entries = [(voice.voice, parts.get(voice.index), voice.file) for voice in group.pairing() if voice.file]
     if group.score_file is not None:
         entries.append(("", None, group.score_file))
+    registered = {score.file_path for score in scores if score.file_path}
     files = []
     for voice, part, file in entries:
         if voice and part is None:
@@ -493,13 +530,14 @@ def plan_files(
             under = [score for score in scores if score.part_id == part.id]
         else:
             under = [score for score in scores if score.part_id is None and not score.section]
+        mine = [score for score in under if score.lingling]
         path = file.original_path
         found = file_service.file_exists(path)
         files.append(PublishFile(
             voice, part, path, file_service.file_size(path) if found else None, piece_id,
-            fingerprints.sha256(path) if found else None,
-            [score for score in under if score.lingling], [score for score in under if not score.lingling],
+            fingerprints.sha256(path) if found else None, mine, [score for score in under if not score.lingling],
             catalog_only=not found and group.has_catalog_copy(file),
+            elsewhere=frozenset(registered - {score.file_path for score in mine}),
         ))
     return FilePlan(files)
 
@@ -611,10 +649,9 @@ def group_publish(
 def plan_deletions(plans: List[GroupPublish], scores: Dict[str, List[HuaXiaScore]]) -> List[GroupPublish]:
     """算出各群組清舊檔（第 3 段）要刪的 Storage 檔，回傳填好 deletes 的各群組（順序不變）
 
-    泠靈的 Storage 路徑只由曲目與內容決定，同一份內容（例如兩個聲部的 PDF 相同）共用一個檔。被取代的樂譜的檔
-    只在切換後沒有任何樂譜登記還指著它（讀到的所有樂譜扣掉這次撤掉登記的）、這次發譜也沒有再用到它（要傳的與
-    不必重傳的）時才刪；同一個檔只算在第一個取代它的群組。發譜的第 3 段只能刪這裡算出的檔，而且要在撤掉指著它的
-    登記的那些群組都切換成功之後。
+    每筆樂譜登記各有自己的 Storage 檔，被取代的樂譜的檔照理只有它指著；仍保留檢查：只在切換後沒有任何樂譜登記
+    還指著它（讀到的所有樂譜扣掉這次撤掉登記的）、這次發譜也沒有再用到它（要傳的與不必重傳的）時才刪，同一個檔
+    只算在第一個取代它的群組。發譜的第 3 段只能刪這裡算出的檔，而且要在撤掉指著它的登記的那些群組都切換成功之後。
 
     Args:
         plans: 這次發譜的各群組（group_publish）

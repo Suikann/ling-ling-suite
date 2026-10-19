@@ -618,10 +618,12 @@ class FakeHuaXia:
             if part_id is not None and self._piece_part(piece_id, part_id) is None:
                 raise _FunctionError(404, "PT404", f"找不到這首曲目的聲部 {part_id}")
             path = score.get("file_path") or ""
-            if not re.fullmatch(f"lingling/{re.escape(piece_id)}/[0-9a-f]{{64}}\\.pdf", path):
+            if not re.fullmatch(f"lingling/{re.escape(piece_id)}/[0-9a-f]{{64}}-[0-9a-z]{{1,32}}\\.pdf", path):
                 raise _FunctionError(400, "22023", f"不是泠靈的樂譜路徑：{path}")
             if path not in self.objects:
                 raise _FunctionError(404, "PT404", f"檔案還沒傳到 Storage：{path}")
+            if any(row["file_path"] == path for row in self.tables["scores"]):
+                raise _FunctionError(409, "23505", f"已有樂譜登記這個檔：{path}")
             _check_insert(officer, "scores")
             score_id = self.add_score(piece_id, part_id, score["file_path"], score.get("title") or "", created_by=user_id)
             added.append({"id": score_id, "part_id": part_id, "file_path": score["file_path"]})
