@@ -14,6 +14,7 @@
   （連同清孤兒檔的列）以新抽的發譜編號寫進發譜紀錄，也寫紀錄檔。中途停下時已撤的不會回來，沒刪成的檔記在那列，
   再收回一次時補刪（PublishedPiece.leftovers）。
 - 不收回（keep）：一首曲目一列「不收回」寫進發譜紀錄，之後不再建議收回；不動 HuaXia。
+帶著收回提醒的摘要（services/recall_reminder.py）時，預覽讀到的發譜紀錄與收回、不收回寫完後重讀的都記下。
 網路請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
 使用範例：
@@ -30,12 +31,13 @@ from core.catalog_errors import CatalogError
 from core.constants import CONCERT_KIND
 from core.locale import t
 from core.log_entry import LogEntry
-from core.publish_log import PublishAction, PublishRecord, published_pieces
+from core.publish_log import PublishAction, PublishRecord, PublishedPiece, published_pieces
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
 from services.huaxia_client import HuaXiaError, HuaXiaEvent, HuaXiaScore
 from services.orphan_cleanup import OrphanCleanup, clear_orphans
+from services.recall_reminder import RecallReminder
 
 
 @dataclass(frozen=True)
@@ -160,18 +162,20 @@ class RecallService:
 
     def __init__(
         self, auth: HuaXiaAuthService, log: Optional[ActivityLog] = None,
-        now: Callable[[], datetime.datetime] = _now,
+        now: Callable[[], datetime.datetime] = _now, reminder: Optional[RecallReminder] = None,
     ):
         """
         Args:
             auth: HuaXia 登入服務（全程式一份）；請求經它的用戶端送出
             log: 紀錄檔；省略時不寫
             now: 現在的時間（帶時區），判斷公演結束與否；測試傳入固定的時間
+            reminder: 收回提醒的摘要，讀到發譜紀錄與寫完之後記下；省略時不記
         """
         self._auth = auth
         self._client = auth.client
         self._log = log
         self._now = now
+        self._reminder = reminder
 
     def preview(self, catalog: CatalogService) -> RecallPreview:
         """讀發譜紀錄裡發過、還沒收回的曲目，再向 HuaXia 查它們現在的樂譜與掛的公演
@@ -187,7 +191,7 @@ class RecallService:
             HuaXiaError: 沒有登入、登入已失效或連不上 HuaXia
         """
         now = self._now()
-        published = [piece for piece in published_pieces(catalog.publish_log()) if not piece.recalled]
+        published = [piece for piece in self._published(catalog) if not piece.recalled]
         if not published:
             return RecallPreview([], now)
         token = self._auth.access_token()
@@ -249,6 +253,7 @@ class RecallService:
                 catalog.begin_publish(records, self._auth.status().discord_name)
             except CatalogError as e:
                 log_error = e
+            self._refresh(catalog)
         return RecallResult(pieces, records, cleanups, error, log_error)
 
     def keep(self, pieces: Sequence[RecallPiece], catalog: CatalogService) -> str:
@@ -272,7 +277,19 @@ class RecallService:
         ]
         if not records:
             return ""
-        return catalog.begin_publish(records, self._auth.status().discord_name)
+        publish_id = catalog.begin_publish(records, self._auth.status().discord_name)
+        self._refresh(catalog)
+        return publish_id
+
+    def _published(self, catalog: CatalogService) -> List[PublishedPiece]:
+        """讀發譜紀錄（有收回提醒的摘要時一併記下），整理出發過的曲目"""
+        records = self._reminder.read(catalog) if self._reminder is not None else catalog.publish_log()
+        return published_pieces(records)
+
+    def _refresh(self, catalog: CatalogService) -> None:
+        """寫完發譜紀錄後更新收回提醒的摘要（沒有摘要時不做）"""
+        if self._reminder is not None:
+            self._reminder.refresh(catalog)
 
     def _recall_piece(self, piece: RecallPiece, removed: List[HuaXiaScore]) -> Tuple[List[HuaXiaScore], List[str]]:
         """收回一首：重讀登記、撤掉全部，再刪沒有登記還指著的檔（含上次沒刪成的）

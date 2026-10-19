@@ -20,7 +20,7 @@
   結束後補一列列「發譜結果」（連同清孤兒檔的列），快照與壓縮檔不論成功、失敗或取消都刪掉（沒刪到的下次啟動清掉）。
 
 中斷等同斷線：已傳的檔下次列出時跳過，新建曲目的編號沿用，發譜函式重跑不重複建，所以重發會從中斷處接著做。
-每個群組的結果寫進紀錄檔（不記 HuaXia 傳回的團員資料）。網路請求與讀檔會卡住呼叫的執行緒，要在背景執行緒呼叫。
+每個群組的結果寫進紀錄檔（不記 HuaXia 傳回的團員資料）。寫完發譜結果後更新收回提醒的摘要（有傳入時）。網路請求與讀檔會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
 使用範例：
     from services.publish_runner import PublishRunner
@@ -51,6 +51,7 @@ from services.huaxia_client import (
 )
 from services.orphan_cleanup import OrphanCleanup, clear_orphans
 from services.publish_service import GroupPublish, PartCreate, PublishReadiness, recheck
+from services.recall_reminder import RecallReminder
 
 # 第 1 段同時傳幾份
 UPLOAD_WORKERS = 3
@@ -306,6 +307,7 @@ class PublishRunner:
     def __init__(
         self, auth: HuaXiaAuthService, file_service: FileService, compressor: CompressionService,
         log: Optional[ActivityLog] = None, temp_dir: str = TEMP_DIR, workers: int = UPLOAD_WORKERS,
+        reminder: Optional[RecallReminder] = None,
     ):
         """
         Args:
@@ -315,6 +317,7 @@ class PublishRunner:
             log: 紀錄檔；省略時不寫
             temp_dir: 暫存資料夾，快照寫在它底下這次的子資料夾（下次啟動時清掉殘檔）
             workers: 第 1 段同時傳幾份
+            reminder: 收回提醒的摘要，寫完發譜紀錄後重讀一次記下；省略時不記
         """
         self._auth = auth
         self._client = auth.client
@@ -323,6 +326,7 @@ class PublishRunner:
         self._log = log
         self._temp_dir = temp_dir
         self._workers = workers
+        self._reminder = reminder
 
     def start(self, plans: List[GroupPublish]) -> Tuple[PublishReadiness, Optional[PublishSnapshot]]:
         """按下「發譜」時：重查幹部身分與發譜函式的版本（預覽可能開了很久），都過了才做快照
@@ -421,6 +425,8 @@ class PublishRunner:
             catalog.record_publish(publish_id, records + [group.record() for group in outcomes], snapshot.operator)
         except CatalogError as e:
             outcome = replace(outcome, log_error=e)
+        if self._reminder is not None:
+            self._reminder.refresh(catalog)
         self._record_in_log(outcome)
         return outcome
 

@@ -14,7 +14,7 @@
   刪 Storage 的檔（只刪撤回後沒有任何登記還指著的），最後寫一列列「撤回」到發譜紀錄（沿用那次的發譜編號）、
   各群組寫一筆紀錄檔。中途中斷時剩下的檔成為孤兒，重做一次撤回會收斂（已撤掉的略過，沒刪的檔再刪一次）。
 連錯的那次新建了曲目時，撤回後留下一首空曲目，由幹部在網頁刪除（RetractGroup.new_piece）。
-網路請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
+寫完「撤回」後更新收回提醒的摘要（有傳入時）。網路請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
 使用範例：
     from services.retract_service import RetractService
@@ -36,6 +36,7 @@ from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
 from services.huaxia_client import (
     HuaXiaError, HuaXiaPart, HuaXiaScore, is_lingling_path, lingling_storage_folder,
 )
+from services.recall_reminder import RecallReminder
 
 # 覆寫聲部時可能改的欄位（發譜紀錄 parts_updated 裡的［原值，新值］），撤回不改回
 _KEPT_FIELDS = ("needed", "needed_min", "section")
@@ -202,15 +203,19 @@ class _HuaXiaState(NamedTuple):
 class RetractService:
     """撤回某次發譜選定的群組：預覽（preview）與撤回（retract）"""
 
-    def __init__(self, auth: HuaXiaAuthService, log: Optional[ActivityLog] = None):
+    def __init__(
+        self, auth: HuaXiaAuthService, log: Optional[ActivityLog] = None, reminder: Optional[RecallReminder] = None,
+    ):
         """
         Args:
             auth: HuaXia 登入服務（全程式一份）；請求經它的用戶端送出
             log: 紀錄檔；省略時不寫
+            reminder: 收回提醒的摘要，寫完發譜紀錄後重讀一次記下；省略時不記
         """
         self._auth = auth
         self._client = auth.client
         self._log = log
+        self._reminder = reminder
 
     def preview(self, entry: PublishLogEntry) -> RetractPreview:
         """向 HuaXia 讀現況，算出每個群組撤回後的樣子
@@ -272,6 +277,8 @@ class RetractService:
                 catalog.record_publish(entry.publish_id, records, self._auth.status().discord_name)
             except CatalogError as e:
                 log_error = e
+            if self._reminder is not None:
+                self._reminder.refresh(catalog)
         self._record_in_log(groups, error)
         return RetractResult(groups, records, error, log_error)
 
