@@ -268,10 +268,29 @@ def save_downsampled(
                 done.add(xref)
                 jpeg = _downsampled_jpeg(doc, xref, placements[xref], dpi, jpeg_quality)
                 if jpeg is not None:
-                    page.replace_image(xref, stream=jpeg)
+                    _replace_image(page, xref, jpeg)
             if on_page:
                 on_page(index + 1)
         doc.save(output_path, garbage=4, deflate=True, use_objstms=1)
+
+
+def _replace_image(page, xref: int, jpeg: bytes) -> None:
+    """把 xref 的影像換成 jpeg，頁面上不留第二個名稱
+
+    Page.replace_image 先把新影像以另一個名稱插進頁面，再複製到 xref，那個名稱留在頁面資源裡。
+    存檔時能否靠 garbage=4 把它併回 xref 要看 MuPDF 的版本（PyMuPDF 2.0 不會，輸出檔就多存一份影像），
+    所以換完就把它從頁面資源拿掉，讓存檔時當成沒用到的物件清掉。
+
+    Args:
+        page: xref 第一次出現的頁面
+        xref: 要換掉的影像
+        jpeg: 新影像的 JPEG 位元組
+    """
+    before = set(_page_image_xrefs(page))
+    page.replace_image(xref, stream=jpeg)
+    for img in page.get_images(full=True):
+        if img[0] not in before:
+            page.parent.xref_set_key(page.xref, f"Resources/XObject/{img[7]}", "null")
 
 
 def _page_image_xrefs(page) -> List[int]:

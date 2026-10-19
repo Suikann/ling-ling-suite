@@ -103,17 +103,14 @@ def mislabeled_jpeg_pdf(path: str, correct_path: str = "") -> str:
 
 
 def image_pixels(path: str) -> List[tuple]:
-    """各頁影像的（寬像素、高像素、每色版位元數），依頁序
+    """各頁影像資源的（寬像素、高像素、每色版位元數），依頁序
 
-    同一頁的資源以不同名稱指向同一張影像時只算一次（Page.replace_image 會留下這樣的別名）。
+    頁面資源裡的每個影像名稱各算一次：同一張影像以兩個名稱留在頁面上（例如換掉影像時留下的別名）會算兩次，
+    PyMuPDF 存檔時把別名併回原影像或另存一份都看得出來。
     """
     doc = pymupdf.open(path)
     try:
-        pixels = []
-        for page in doc:
-            images = {img[0]: tuple(img[2:5]) for img in page.get_images(full=True)}
-            pixels.extend(images.values())
-        return pixels
+        return [tuple(img[2:5]) for page in doc for img in page.get_images(full=True)]
     finally:
         doc.close()
 
