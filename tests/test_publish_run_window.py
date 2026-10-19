@@ -3,8 +3,8 @@
 三段式發譜的接線測試（offscreen）
 
 在發譜預覽按下「發譜」：先把新建曲目的編號與預覽的選擇存進專案檔，再在背景發譜，不擋主視窗、不鎖操作；
-狀態列有停止鈕，主視窗下方是逐行紀錄，完成時列出沒發成的群組與原因；發譜進行中關閉時問要不要中斷；
-「開始發譜」寫不進譜庫時不發並顯示提示列。主視窗接假 Google 與假 HuaXia，不測畫面。
+狀態列有停止鈕，主視窗下方是逐行紀錄，完成時列出沒發成的群組與原因，「重新發譜沒發成的群組」只對它們開預覽；
+發譜進行中關閉時問要不要中斷；「開始發譜」寫不進譜庫時不發並顯示提示列。主視窗接假 Google 與假 HuaXia，不測畫面。
 """
 import os
 import sys
@@ -15,14 +15,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PySide6.QtWidgets import QLabel, QMessageBox, QPlainTextEdit, QPushButton
+from PySide6.QtWidgets import QLabel, QMessageBox, QPlainTextEdit, QPushButton, QTableWidget
 
 from core.catalog_errors import CatalogErrorKind
 from core.locale import t
 from services.project_service import ProjectService
 from tests.test_main_window import answering_prompts, wait_until
 from tests.test_publish_files_window import FilesWindowTestCase, go_to
-from tests.test_publish_window import button, choose
+from tests.test_publish_window import button, choose, previewing
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.instrumentation_table import InstrumentationTable
 
@@ -97,7 +97,7 @@ class TestPublishingInBackground(PublishRunWindowTestCase):
 
 
 class TestFinishing(PublishRunWindowTestCase):
-    """完成時列出沒發成的群組與原因；「開始發譜」寫不進譜庫時不發並顯示提示列"""
+    """完成時列出沒發成的群組與原因，附「重新發譜沒發成的群組」（只對它們開預覽）；「開始發譜」寫不進譜庫時不發並顯示提示列"""
 
     def test_a_group_that_did_not_publish_is_listed_with_its_reason(self):
         self.huaxia.fail_switch(self.fenghuo)
@@ -107,6 +107,45 @@ class TestFinishing(PublishRunWindowTestCase):
         self.assertFalse(failed.isHidden())
         self.assertIn("烽火操", failed.text())
         self.assertIn(t("publish.run.failure.switch"), failed.text())
+        self.assertFalse(self.window.findChild(QPushButton, "publish_failed_again").isHidden())
+
+    def test_publishing_the_failed_groups_again_previews_only_them(self):
+        self.huaxia.fail_switch(self.fenghuo)
+        self.press_publish()
+        self.finish()
+        self.assertEqual(self.preview_groups(), ["烽火操", "春江花月夜"])
+        with answering_prompts(), previewing() as opened:
+            self.window.findChild(QPushButton, "publish_failed_again").click()
+        [dialog] = opened
+        self.assertEqual(self.piece_rows(dialog), ["烽火操"])
+
+    def test_publishing_again_after_the_failed_groups_were_deleted_says_so(self):
+        self.huaxia.fail_switch(self.fenghuo)
+        self.press_publish()
+        self.finish()
+        self.window.project.delete_group(self.window.project.groups[0])
+        with answering_prompts() as shown, previewing() as opened:
+            self.window.findChild(QPushButton, "publish_failed_again").click()
+        self.assertEqual(opened, [])
+        self.assertEqual([text for _, text in shown], [t("publish.run.failed_groups_gone")])
+
+    def test_no_button_to_publish_again_when_every_group_published(self):
+        self.press_publish()
+        self.finish()
+        self.assertTrue(self.window.findChild(QLabel, "publish_failed").isHidden())
+        self.assertTrue(self.window.findChild(QPushButton, "publish_failed_again").isHidden())
+
+    def preview_groups(self) -> list:
+        """按主視窗的「發譜」時預覽列出的群組（開了就取消）"""
+        with answering_prompts(), previewing() as opened:
+            self.publish_button().click()
+        return self.piece_rows(opened[0])
+
+    @staticmethod
+    def piece_rows(dialog) -> list:
+        """預覽「曲目」步列出的群組"""
+        table = dialog.findChild(QTableWidget, "piece_step")
+        return [table.item(row, 0).text() for row in range(table.rowCount())]
 
     def test_when_the_start_cannot_be_logged_nothing_is_published(self):
         self.press_publish(before=lambda: self.google.fail_next(CatalogErrorKind.OFFLINE, times=3))

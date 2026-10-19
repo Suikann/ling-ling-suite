@@ -102,10 +102,11 @@ class RunTestCase(PrepareTestCase):
         with open(self.path(group, voice), "rb") as f:
             return lingling_storage_path(piece_id or group.huaxia_link.piece_id, sha(f.read()))
 
-    def press_publish(self, events=()):
-        """重新按下發譜、走完預覽（勾 events 這幾場公演）後按「發譜」：交回這次的快照"""
+    def press_publish(self, events=(), group_ids=None):
+        """重新按下發譜（group_ids 時只發這幾個群組）、走完預覽（勾 events 這幾場公演）後按「發譜」：交回這次的快照"""
         readiness = self.service.prepare()
-        preview = PublishPreview(self.project, check_groups(self.project), readiness, FileService(), 10 ** 9)
+        checks = check_groups(self.project, group_ids)
+        preview = PublishPreview(self.project, checks, readiness, FileService(), 10 ** 9)
         for event in events:
             preview.choose_event(event, True)
         preview.assign_piece_ids()
@@ -346,6 +347,30 @@ class TestOneGroupFails(TwoPiecesTestCase):
         self.assertIn(self.old, self.huaxia.objects)
         self.assertEqual(outcome.orphans, [self.old])
         self.assertEqual(self.leftovers(), [])
+
+
+class TestPublishingFailedGroupsAgain(TwoPiecesTestCase):
+    """「重新發譜沒發成的群組」以同一套三段式只發那幾個群組，已發成的不重做"""
+
+    def switched_pieces(self):
+        """各次切換（發譜函式）的曲目編號，依呼叫的順序"""
+        return [
+            r["json"]["payload"]["piece_id"] for r in self.huaxia.requests
+            if r["path"] == "/rest/v1/rpc/lingling_publish"
+        ]
+
+    def test_only_the_groups_that_failed_are_published_again(self):
+        self.huaxia.drop_requests("POST", "/rest/v1/rpc/lingling_publish", skip=1)
+        first = self.run_publish(self.press_publish())
+        self.assertEqual([g.group.group for g in first.failed], ["茉莉花"])
+        published = self.scores(self.fenghuo)
+        switched = len(self.switched_pieces())
+        outcome = self.run_publish(self.press_publish(group_ids=[g.group.group_id for g in first.failed]))
+        self.assertEqual([(g.group.group, g.failure) for g in outcome.groups], [("茉莉花", None)])
+        self.assertEqual(self.switched_pieces()[switched:], [self.moli])
+        self.assertEqual(self.scores(self.fenghuo), published)
+        self.assertEqual(len(self.scores(self.moli)), 2)
+        self.assertEqual([r.group for r in self.log(PublishAction.START) if r.publish_id == outcome.publish_id], ["茉莉花"])
 
 
 class TestCleaningUp(RunTestCase):

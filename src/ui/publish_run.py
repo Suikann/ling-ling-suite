@@ -2,17 +2,20 @@
 """
 發譜進行中與結果的呈現
 
-照原型 #63 的變體 C：主視窗下方是這次發譜的逐行紀錄（PublishRunPanel），完成時在紀錄下方列出沒發成的群組與原因；
+照原型 #63 的變體 C：主視窗下方是這次發譜的逐行紀錄（PublishRunPanel），完成時在紀錄下方列出沒發成的群組與原因，
+附「重新發譜沒發成的群組」（按下時發出 publish_failed_again，由主視窗只對那幾個群組開發譜預覽）；
 狀態列的總進度與「停止發譜」由主視窗的發譜工作（TaskSlot）負責。這裡只把發譜服務回報的進度與結果寫成文字，
 發譜的規則在 services/publish_runner.py。
 
 使用範例：
     panel = PublishRunPanel()
+    panel.publish_failed_again.connect(publish_those_groups_again)
     panel.show_record(lines, failures)
     lines.append(progress_line(progress))
 """
 from typing import List
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
 
 from core.locale import t
@@ -56,6 +59,9 @@ def summary_lines(outcome: PublishOutcome) -> List[str]:
 class PublishRunPanel(QWidget):
     """主視窗下方這次發譜的逐行紀錄與沒發成的群組；還沒發譜過或按了「關閉紀錄」時隱藏"""
 
+    # 按了「重新發譜沒發成的群組」
+    publish_failed_again = Signal()
+
     def __init__(self, parent=None):
         """建立隱藏的紀錄區"""
         super().__init__(parent)
@@ -77,16 +83,23 @@ class PublishRunPanel(QWidget):
         self._failed.setObjectName("publish_failed")
         self._failed.setWordWrap(True)
         self._failed.setStyleSheet(f"color: {_FAILED_COLOR};")
-        layout.addWidget(self._failed)
+        failed_row = QHBoxLayout()
+        failed_row.addWidget(self._failed, 1)
+        self._again = QPushButton(t("publish.run.publish_failed_again"))
+        self._again.setObjectName("publish_failed_again")
+        self._again.clicked.connect(self.publish_failed_again)
+        failed_row.addWidget(self._again)
+        layout.addLayout(failed_row)
         self.show_record([], [])
         self.hide()
 
     def show_record(self, lines: List[str], failures: List[str]) -> None:
-        """顯示這次發譜的逐行紀錄與沒發成的群組（沒有時不顯示那一塊）"""
+        """顯示這次發譜的逐行紀錄與沒發成的群組（沒有時不顯示那一塊與「重新發譜沒發成的群組」）"""
         self._log.setPlainText("\n".join(lines))
         self._log.verticalScrollBar().setValue(self._log.verticalScrollBar().maximum())
         self._failed.setText("\n".join([t("publish.run.failed_heading")] + failures) if failures else "")
         self._failed.setVisible(bool(failures))
+        self._again.setVisible(bool(failures))
 
     def add_line(self, line: str) -> None:
         """接上一行逐行紀錄"""

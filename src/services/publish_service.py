@@ -28,7 +28,7 @@ import datetime
 import uuid
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Collection, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from core.constants import OTHER_SECTION, CompressionStatus, OrchestraType
 from core.models import CatalogChange, Group, Headcount, HuaXiaLink, Project
@@ -125,8 +125,16 @@ def project_blocks(project: Project) -> List[ProjectBlock]:
     return blocks
 
 
-def check_groups(project: Project) -> List[GroupCheck]:
-    """專案每個群組（依專案中的順序）發譜前的檢查結果；不改專案"""
+def check_groups(project: Project, group_ids: Optional[Collection[str]] = None) -> List[GroupCheck]:
+    """專案每個群組（依專案中的順序）發譜前的檢查結果；不改專案
+
+    Args:
+        project: 專案
+        group_ids: 只發這幾個群組（「重新發譜沒發成的群組」）；省略時為全部群組。已不在專案裡的略過
+
+    Returns:
+        各群組的檢查結果
+    """
     return [
         GroupCheck(
             group=group,
@@ -138,7 +146,7 @@ def check_groups(project: Project) -> List[GroupCheck]:
             duplicate_rows=duplicate_rows(group.instruments),
             unsynced=project.unsynced_changes(group),
         )
-        for group in project.groups
+        for group in project.groups if group_ids is None or group.id in group_ids
     ]
 
 

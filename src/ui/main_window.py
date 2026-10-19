@@ -214,6 +214,8 @@ class MainWindow(QMainWindow):
         # 這次發譜的逐行紀錄與沒發成的群組（切換介面語言重建畫面時照樣顯示）
         self._publish_lines: List[str] = []
         self._publish_failures: List[str] = []
+        # 上次發譜沒發成的群組 ID（「重新發譜沒發成的群組」只發這些）
+        self._failed_group_ids: List[str] = []
         # 聲部名稱自動完成的候選全程式一份：譜庫視窗讀到的聲部名稱，編制表與分割視窗都用
         self._voice_candidates = VoiceCandidates()
         # 「關於」顯示的版號：打包版讀資源目錄的版號檔，開發版為 None
@@ -368,6 +370,7 @@ class MainWindow(QMainWindow):
         bl.addLayout(template_row)
         from ui.publish_run import PublishRunPanel
         self._publish_panel = PublishRunPanel()
+        self._publish_panel.publish_failed_again.connect(self._publish_failed_again)
         self._publish_panel.show_record(self._publish_lines, self._publish_failures)
         self._publish_panel.setVisible(bool(self._publish_lines))
         bl.addWidget(self._publish_panel)
@@ -1636,7 +1639,19 @@ class MainWindow(QMainWindow):
         self._publish_btn.setVisible(self._club_settings.remembered() is PublishingPlatform.HUAXIA)
 
     def _publish(self):
-        """按了「發譜」：檢查能不能發，不能就寫出原因；能就開啟發譜預覽，在預覽按下「發譜」後開始發譜
+        """按了「發譜」：檢查能不能發，不能就寫出原因；能就對全部群組開啟發譜預覽，在預覽按下「發譜」後開始發譜"""
+        self._open_publish_preview(None)
+
+    def _publish_failed_again(self):
+        """按了「重新發譜沒發成的群組」：只對上次沒發成、還在專案裡的群組走同一套發譜"""
+        ids = [group.id for group in self.project.groups if group.id in self._failed_group_ids]
+        if not ids:
+            QMessageBox.information(self, t("publish.title"), t("publish.run.failed_groups_gone"))
+            return
+        self._open_publish_preview(ids)
+
+    def _open_publish_preview(self, group_ids: Optional[List[str]]):
+        """檢查能不能發，不能就寫出原因；能就開啟發譜預覽（group_ids 時只列這幾個群組），在預覽按下「發譜」後開始發譜
 
         依序：專案層級的檢查（未存檔、不是國樂團，不連網）、重讀社團設定（已拿掉 HuaXia 就說明並隱藏按鈕；
         讀不到時頂端顯示提示列）、沒登入 HuaXia 時先登入、在背景重查幹部身分與發譜函式並讀曲目。發譜進行中不再開。
@@ -1663,7 +1678,7 @@ class MainWindow(QMainWindow):
             return
         from ui.publish_dialog import PublishPreviewDialog
         dialog = PublishPreviewDialog(
-            self.project, check_groups(self.project), readiness, self, compressor=self._compressor,
+            self.project, check_groups(self.project, group_ids), readiness, self, compressor=self._compressor,
             file_service=self.file_service, opener=self._opener, download_back=self.download_back,
         )
         accepted = dialog.exec() == PublishPreviewDialog.Accepted
@@ -1700,6 +1715,7 @@ class MainWindow(QMainWindow):
             return
         self._catalog_error_bar.clear()
         self._publish_lines, self._publish_failures = [t("publish.run.started", groups=len(snapshot.groups))], []
+        self._failed_group_ids = []
         self._publish_panel.show_record(self._publish_lines, self._publish_failures)
         self._publish_panel.show()
 
@@ -1718,11 +1734,12 @@ class MainWindow(QMainWindow):
         return t("publish.run.progress", done=progress.done, total=progress.total), progress.done, progress.total
 
     def _publish_finished(self, outcome: PublishOutcome, _cancelled: bool):
-        """發譜結束：逐行紀錄接上結果，列出沒發成的群組；發譜紀錄寫不進譜庫時頂端顯示提示列"""
+        """發譜結束：逐行紀錄接上結果，列出沒發成的群組（可以只重發它們）；發譜紀錄寫不進譜庫時頂端顯示提示列"""
         from ui.publish_run import failure_line, summary_lines
         lines = summary_lines(outcome)
         self._publish_lines += lines
         self._publish_failures = [failure_line(group) for group in outcome.failed]
+        self._failed_group_ids = [group.group.group_id for group in outcome.failed]
         self._publish_panel.show_record(self._publish_lines, self._publish_failures)
         self._publish_panel.show()
         self._set_publish_status("")
