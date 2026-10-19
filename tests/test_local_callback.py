@@ -6,7 +6,6 @@
 回傳 query 參數、逾時、取消。開瀏覽器換成真的對回呼送 HTTP 請求的替身，不連外網。
 """
 import os
-import socket
 import sys
 import time
 import unittest
@@ -15,7 +14,7 @@ from urllib.parse import urlencode
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from services.local_callback import BrowserNotOpened, CallbackCancelled, CallbackTimedOut, LocalCallback
-from tests.fake_browser import CallbackBrowser
+from tests.fake_browser import CallbackBrowser, server_is_closed
 
 
 def provider_url(redirect_uri: str) -> str:
@@ -45,15 +44,6 @@ class TestReceive(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 5)
         self.assertEqual(params, {"error": "access_denied", "state": "s1"})
         self.assertIn("登入沒有完成", self.browser.pages[0])
-
-
-def server_is_closed(port: int) -> bool:
-    """127.0.0.1 的這個埠是否已經連不上"""
-    try:
-        socket.create_connection(("127.0.0.1", port), timeout=1).close()
-    except ConnectionRefusedError:
-        return True
-    return False
 
 
 class TestEnding(unittest.TestCase):

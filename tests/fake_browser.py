@@ -16,7 +16,9 @@
     params = callback.receive(build_url)
     browser.finish()
     browser.pages                  # 回呼頁面的內容
+    server_is_closed(browser.callback_port())  # 登入結束後本機伺服器已關掉
 """
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -30,6 +32,18 @@ _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 def _redirect_of(query: Dict[str, List[str]]) -> str:
     """授權網址的回呼網址：Google 用 redirect_uri，Supabase 用 redirect_to"""
     return (query.get("redirect_uri") or query["redirect_to"])[0]
+
+# 確認埠已關掉時連線的上限（秒）：Windows 連到 127.0.0.1 沒在聽的埠，會重送幾次 SYN、約 2 秒後才拒絕
+_CLOSED_PROBE_SECONDS = 10
+
+
+def server_is_closed(port: int) -> bool:
+    """127.0.0.1 的這個埠是否已經連不上（連線被拒絕才算；連得上、或等到上限都沒有回應都不算）"""
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=_CLOSED_PROBE_SECONDS).close()
+    except ConnectionRefusedError:
+        return True
+    return False
 
 
 class CallbackBrowser:

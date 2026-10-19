@@ -10,7 +10,6 @@ Google 登入服務測試
 import json
 import os
 import shutil
-import socket
 import sys
 import tempfile
 import time
@@ -23,7 +22,7 @@ from services.google_auth_service import GoogleAuthService, LoginFailed, LoginFa
 from services.file_service import FileService
 from services.preferences_service import PreferencesService
 from services.secure_storage import SecureStorage
-from tests.fake_browser import CallbackBrowser
+from tests.fake_browser import CallbackBrowser, server_is_closed
 from tests.fake_google import CLIENT_ID, CLIENT_SECRET, FakeTokenEndpoint, write_client_secrets
 from tests.memory_keyring import MemoryKeyring
 
@@ -105,15 +104,6 @@ class TestAccountEmail(GoogleAuthTestCase):
         self.assertNotIn("login_hint", self.browser.authorization_query())
         self.service().authenticate()
         self.assertEqual(self.browser.authorization_query()["login_hint"], "library@example.com")
-
-
-def server_is_closed(port: int) -> bool:
-    """127.0.0.1 的這個埠是否已經連不上"""
-    try:
-        socket.create_connection(("127.0.0.1", port), timeout=1).close()
-    except ConnectionRefusedError:
-        return True
-    return False
 
 
 class TestLoginNotCompleted(GoogleAuthTestCase):

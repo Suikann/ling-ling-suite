@@ -21,10 +21,9 @@ from services.huaxia_auth_service import (
 )
 from services.huaxia_client import HuaXiaClient, HuaXiaError, HuaXiaErrorKind
 from services.secure_storage import SecureStorage
-from tests.fake_browser import CallbackBrowser
+from tests.fake_browser import CallbackBrowser, server_is_closed
 from tests.fake_huaxia import FakeHuaXia
 from tests.memory_keyring import MemoryKeyring
-from tests.test_google_auth_service import server_is_closed
 
 
 class HuaXiaAuthTestCase(unittest.TestCase):
