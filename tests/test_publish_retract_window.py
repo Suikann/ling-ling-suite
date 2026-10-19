@@ -114,6 +114,31 @@ class TestGroupsNotPublished(TwoPiecesTestCase):
         self.assertEqual(dialog.chosen(), [self.group.id])
 
 
+class TestPublishWithoutResult(TwoPiecesTestCase):
+    """沒有發譜結果的那次也能撤回：列表的「撤回…」按得下去，頁面寫出聲部一律留著"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_it_can_be_checked_and_says_parts_are_kept(self):
+        from core.catalog_errors import CatalogErrorKind
+        from core.publish_log import publish_entries
+        from services.retract_service import RetractService
+        snapshot = self.press_publish()
+        self.google.fail_at(self.google.requests + 6, CatalogErrorKind.OFFLINE)
+        outcome = self.run_publish(snapshot)
+        entry = next(e for e in publish_entries(self.catalog.publish_log()) if e.publish_id == outcome.publish_id)
+        panel = PublishLogPanel([entry])
+        self.addCleanup(panel.deleteLater)
+        panel.table.selectRow(0)
+        self.assertTrue(panel.retract_button.isEnabled())
+        dialog = RetractDialog(RetractService(self.auth).preview(entry))
+        self.addCleanup(dialog.deleteLater)
+        self.assertTrue(dialog.groups.item(0).flags() & Qt.ItemIsUserCheckable)
+        self.assertEqual(dialog.pages[0].notice.text(), t("retract.unfinished"))
+
+
 class TestComposedTexts(unittest.TestCase):
     """每種結果與原因都有中英文的說明（鍵以值組出，tests/test_locale.py 掃不到）"""
 

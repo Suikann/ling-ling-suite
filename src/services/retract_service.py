@@ -4,7 +4,9 @@
 
 從譜庫的發譜紀錄撤回某次發譜選定的群組（spec #82）：撤掉那次登記的分譜與總譜，連同那次新建、現在還沒排人的聲部。
 被那次取代的舊檔不會回來，人數與聲部組不改回，場次不動。只動那次發譜結果記下的 HuaXia 編號
-（core/publish_log.py 的 PublishRecord：scores_added、parts_created）與那次登記過的 Storage 檔。
+（core/publish_log.py 的 PublishRecord：scores_added、parts_created）與那次登記過的 Storage 檔。那次沒有發譜結果
+（中途停下或結果寫不進譜庫）時，依開始發譜記下要登記的 Storage 路徑撤掉那首曲目現在登記著的泠靈樂譜；不知道那次
+新建了哪些聲部，聲部一律留著。
 
 - 預覽（preview）：向 HuaXia 查那次放的檔還在不在、那次新建的聲部有沒有排人或有人在網頁上設定過（小老師、備註、
   練習回報、改名）、這首曲目所有的檔，把每個聲部歸類
@@ -54,6 +56,13 @@ class RetractEffect(Enum):
     UNTOUCHED = "untouched"      # 不動
 
 
+class RetractBlock(Enum):
+    """群組不能撤回（不能勾）的原因"""
+
+    FAILED = "failed"     # 那次沒發成，沒有可撤的登記
+    NOTHING = "nothing"   # 沒有東西可撤（例如已經撤回過）
+
+
 class RetractReason(Enum):
     """歸到這一類的原因"""
 
@@ -93,7 +102,7 @@ class RetractGroup:
     """一次發譜裡一個群組的撤回：逐聲部的結果與要撤掉的東西
 
     Attributes:
-        record: 那次的發譜結果（沒發成的 failure 不為空）；那次沒有結果時是開始發譜
+        record: 那次的發譜結果（沒發成的 failure 不為空）；那次沒有結果時是開始發譜（unfinished）
         rows: 逐聲部（依 HuaXia 的排序）加總譜；沒發成時為空
         scores: 要撤掉登記的樂譜（這次登記、現在還在的）
         parts: 要刪的聲部（這次新建、還沒排人、沒有別人的樂譜、沒人在網頁上設定過）
@@ -127,8 +136,18 @@ class RetractGroup:
 
     @property
     def unfinished(self) -> bool:
-        """那次沒有發譜結果（中途停下或結果寫不進譜庫）：不知道 HuaXia 的編號，沒有可撤的"""
+        """那次沒有發譜結果（中途停下或結果寫不進譜庫）：不知道 HuaXia 的編號，依那次要登記的 Storage 路徑撤掉現在
+        還登記著的樂譜；不知道那次新建了哪些聲部，聲部一律留著"""
         return self.record.action is not PublishAction.RESULT
+
+    @property
+    def block(self) -> Optional[RetractBlock]:
+        """不能撤回的原因；可以撤回時為 None"""
+        if self.failed:
+            return RetractBlock.FAILED
+        if not self.actionable:
+            return RetractBlock.NOTHING
+        return None
 
     @property
     def new_piece(self) -> bool:
@@ -301,7 +320,8 @@ class RetractService:
         scores = self._client.scores(token, pieces)
         existing = {part.id for part in parts}
         created = [
-            p["id"] for record in records if _retractable(record) for p in record.parts_created if p.get("id") in existing
+            p["id"] for record in records if _retractable(record) and record.action is PublishAction.RESULT
+            for p in record.parts_created if p.get("id") in existing
         ]
         assigned = self._client.assigned_parts(token, created) if created else set()
         configured = self._client.configured_parts(token, created) if created else set()
@@ -325,9 +345,14 @@ class RetractService:
             self._log.record(entry)
 
 
+def retractable(entry: PublishLogEntry) -> bool:
+    """發譜紀錄列表的這一項可以按「撤回…」：是一次發譜，而且有群組發成了，或那次沒有發譜結果（中途停下）"""
+    return entry.action is PublishAction.START and any(_retractable(record) for record in entry.groups)
+
+
 def _retractable(record: PublishRecord) -> bool:
-    """這列記著可撤的 HuaXia 編號：發成了的發譜結果"""
-    return record.action is PublishAction.RESULT and record.failure is None
+    """這列記著可撤的東西：發成了的發譜結果（HuaXia 的編號），或沒有結果那次的開始發譜（要登記的 Storage 路徑）"""
+    return record.action is PublishAction.START or (record.action is PublishAction.RESULT and record.failure is None)
 
 
 def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
@@ -339,12 +364,20 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
     """
     if not _retractable(record):
         return RetractGroup(record)
-    ours = {score["id"] for score in record.scores_added}
-    created = {part["id"]: part.get("name") for part in record.parts_created}
+    scores = [score for score in state.scores if score.piece_id == record.piece_id]
+    if record.action is PublishAction.START:
+        # 沒有結果：不知道 HuaXia 的編號，依那次要登記的路徑認（只認泠靈的路徑）；那次新建了哪些聲部也不知道，不刪
+        planned = {score.get("file_path") for score in record.scores_added}
+        ours = {score.id for score in scores if score.lingling and score.file_path in planned}
+        created: Dict[str, Optional[str]] = {}
+    else:
+        ours = {score["id"] for score in record.scores_added}
+        created = {part["id"]: part.get("name") for part in record.parts_created}
     replaced = {score.get("part_id") for score in record.scores_removed}
     updated = {update["id"]: update for update in record.parts_updated}
-    touched = {score.get("part_id") for score in record.scores_added}
-    scores = [score for score in state.scores if score.piece_id == record.piece_id]
+    touched = {score.get("part_id") for score in record.scores_added} | {
+        score.part_id for score in scores if score.id in ours
+    }
     rows: List[RetractRow] = []
     removing: List[HuaXiaScore] = []
     deleting: List[HuaXiaPart] = []

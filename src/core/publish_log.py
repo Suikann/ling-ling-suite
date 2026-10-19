@@ -226,7 +226,8 @@ def published_pieces(records: Sequence[PublishRecord]) -> List[PublishedPiece]:
     """發譜紀錄裡發過的曲目，新發的在前
 
     發過是指有一列發成了的發譜結果，或有一次發譜只有開始發譜、沒有任何結果（中途停下，HuaXia 上可能已經有那次的譜）。
-    沒發成的群組不算；一次發譜裡對到那首、發成了的群組都撤回了（撤回做完），那次也不算：HuaXia 上已經沒有那次的譜。
+    沒發成的群組不算；一次發譜裡對到那首、發成了的群組（沒有結果的那次是開始發譜的群組）都撤回了（撤回做完），
+    那次也不算：HuaXia 上已經沒有那次的譜。
     收回與不收回只看那首最後一次發譜之後的列；中途停下的收回不算收回過。
 
     Args:
@@ -254,7 +255,10 @@ def published_pieces(records: Sequence[PublishRecord]) -> List[PublishedPiece]:
     concerts: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for index, record in enumerate(records):
         succeeded = record.action is PublishAction.RESULT and record.failure is None
-        unfinished = record.action is PublishAction.START and record.publish_id not in finished
+        unfinished = (
+            record.action is PublishAction.START and record.publish_id not in finished
+            and (record.publish_id, record.group_id) not in retracted
+        )
         if succeeded and remaining[(record.publish_id, record.piece_id)] or unfinished:
             if record.piece_id:
                 last[record.piece_id] = index

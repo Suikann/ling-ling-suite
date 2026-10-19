@@ -14,6 +14,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from core.catalog_errors import CatalogErrorKind
 from core.models import FileInfo, Headcount
 from core.publish_log import PublishAction, publish_entries
 from services.retract_service import RetractEffect, RetractReason, RetractService
@@ -272,7 +273,7 @@ class TestOtherGroups(TwoPiecesTestCase):
         self.assertEqual(self.scores(self.moli), moli)
         self.assertTrue(all(path in self.huaxia.objects for _, path in moli))
 
-    def test_a_publish_without_a_result_has_nothing_to_retract(self):
+    def test_a_publish_that_never_ran_has_nothing_to_retract(self):
         publish_id = self.catalog.begin_publish([
             group.start_record() for group in self.press_publish().groups
         ], "officer_amy")
@@ -284,6 +285,43 @@ class TestOtherGroups(TwoPiecesTestCase):
         before = self.tables()
         self.retracter.retract(entry, [group.group_id], self.catalog)
         self.assertEqual(self.tables(), before)
+
+    def unlogged_publish(self):
+        """發一次譜、但「發譜結果」寫不進譜庫：HuaXia 上已經切換，發譜紀錄只有「開始發譜」；回傳那一項"""
+        snapshot = self.press_publish()
+        self.google.fail_at(self.google.requests + 6, CatalogErrorKind.OFFLINE)
+        outcome = self.run_publish(snapshot)
+        self.assertIsNotNone(outcome.log_error)
+        entry = self.entry(outcome.publish_id)
+        self.assertFalse(entry.finished)
+        return outcome, entry
+
+    def test_a_publish_without_a_result_retracts_the_scores_at_its_planned_paths(self):
+        outcome, entry = self.unlogged_publish()
+        groups = {group.name: group for group in self.retracter.preview(entry).groups}
+        moli = groups["茉莉花"]
+        self.assertTrue(moli.unfinished and moli.actionable)
+        self.assertEqual(moli.parts, [])
+        created = [row["id"] for row in self.huaxia.tables["piece_parts"] if row["piece_id"] == self.moli]
+        self.assertTrue(created)
+        result = self.retracter.retract(entry, [self.molihua.id], self.catalog)
+        self.assertIsNone(result.error)
+        self.assertEqual(self.scores(self.moli), [])
+        self.assertTrue(all(not p.startswith(f"lingling/{self.moli}/") for p in self.huaxia.objects))
+        # 不知道那次新建了哪些聲部：聲部都留著
+        self.assertEqual([row["id"] for row in self.huaxia.tables["piece_parts"] if row["piece_id"] == self.moli], created)
+        self.assertNotEqual(self.scores(self.fenghuo), [])
+        [row] = self.log(PublishAction.RETRACT)
+        self.assertEqual((row.publish_id, row.group_id, row.parts_deleted), (outcome.publish_id, self.molihua.id, []))
+        self.assertEqual(len(row.scores_removed), 2)
+
+    def test_scores_someone_else_put_are_not_taken_by_an_unfinished_retract(self):
+        _, entry = self.unlogged_publish()
+        web = f"{self.moli}/full/1700000000_web.pdf"
+        self.huaxia.put_object(web)
+        self.huaxia.add_score(self.moli, None, web)
+        self.retracter.retract(entry, [self.molihua.id], self.catalog)
+        self.assertEqual(self.scores(self.moli), [("", web)])
 
 
 class TestNewPiece(RunTestCase):

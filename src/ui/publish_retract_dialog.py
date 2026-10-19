@@ -4,7 +4,7 @@
 
 PublishLogPanel 是譜庫視窗右側的發譜紀錄列表：每次發譜、撤回、收回與不收回一列（新的在前），選一次發譜按「撤回…」；
 「收回…」不必選，挑曲目在收回對話框裡（ui/publish_recall_dialog.py）。
-RetractDialog 是撤回的預覽：左邊勾要撤回的群組（只選到群組；沒發成、沒有結果或沒有東西可撤的不能勾），
+RetractDialog 是撤回的預覽：左邊勾要撤回的群組（只選到群組；沒發成或沒有東西可撤的不能勾；那次沒有結果的寫出聲部一律留著），
 右邊是所選群組逐聲部的「現在 HuaXia 上 → 撤回後 → 原因」對照表（依結果分類上色、上方列出各類數量，最後一列是場次），
 那次新建了曲目時一列提示撤回後留下空曲目；底部提示勾選的群組撤回後有幾個聲部沒有譜、要重新發譜。
 只顯示預覽（services/retract_service.py 的 RetractPreview），按「撤回」關閉對話框，撤回由譜庫視窗執行。
@@ -31,7 +31,9 @@ from core.constants import ALERT_BANNER_STYLE, INFO_BANNER_STYLE
 from core.locale import t
 from core.publish_log import PublishAction, PublishLogEntry
 from services.huaxia_client import HuaXiaScore
-from services.retract_service import RetractEffect, RetractGroup, RetractPreview, RetractReason, RetractResult, RetractRow
+from services.retract_service import (
+    RetractEffect, RetractGroup, RetractPreview, RetractReason, RetractResult, RetractRow, retractable,
+)
 
 # 各類的（字色，底色），同原型：沒有譜與刪掉聲部紅、聲部留著但沒有譜黃、只撤這次的藍、不動灰
 _EFFECT_COLORS = {
@@ -48,13 +50,6 @@ _LOG_COLUMNS = ("time", "operator", "action", "groups", "note")
 _ROW_COLUMNS = ("voice", "now", "after", "reason")
 # 撤回不改回的欄位：（發譜紀錄 parts_updated 的欄位名稱，介面字串鍵的結尾）；needed_min 跟著人數，不另列
 _KEPT_TEXTS = (("needed", "needed"), ("section", "section"))
-
-
-def retractable(entry: PublishLogEntry) -> bool:
-    """這一項是有結果、有群組發成了的發譜（可以按「撤回…」）"""
-    return entry.action is PublishAction.START and entry.finished and any(
-        record.failure is None for record in entry.groups
-    )
 
 
 def entry_cells(entry: PublishLogEntry, times: Dict[str, str]) -> Tuple[str, str, str, str, str]:
@@ -190,14 +185,8 @@ def events_cells(group: RetractGroup) -> Tuple[str, str, str, str]:
 
 
 def block_text(group: RetractGroup) -> str:
-    """群組不能勾的原因；可以勾時為空字串"""
-    if group.unfinished:
-        return t("retract.block.unfinished")
-    if group.failed:
-        return t("retract.block.failed")
-    if not group.actionable:
-        return t("retract.block.nothing")
-    return ""
+    """群組不能勾的原因（RetractGroup.block）；可以勾時為空字串"""
+    return t(f"retract.block.{group.block.value}") if group.block is not None else ""
 
 
 class RetractGroupPage(QWidget):
@@ -216,10 +205,10 @@ class RetractGroupPage(QWidget):
         heading.setStyleSheet("font-weight: bold;")
         layout.addWidget(heading)
         self.notice: Optional[QLabel] = None
-        if block_text(group):
-            self.notice = QLabel(block_text(group))
+        if block_text(group) or group.unfinished:
+            self.notice = QLabel(block_text(group) or t("retract.unfinished"))
             self.notice.setWordWrap(True)
-            self.notice.setStyleSheet(ALERT_BANNER_STYLE)
+            self.notice.setStyleSheet(ALERT_BANNER_STYLE if block_text(group) else INFO_BANNER_STYLE)
             layout.addWidget(self.notice)
         strip = QHBoxLayout()
         self.counts: List[QLabel] = []
@@ -245,7 +234,7 @@ class RetractGroupPage(QWidget):
     def _row_table(group: RetractGroup) -> QTableWidget:
         """每個聲部一列（第一欄的 UserRole 是結果分類），最後一列是場次；依結果上色，不能勾也不能改"""
         rows = [(row.effect, row_cells(row)) for row in group.rows] if group.rows else []
-        if not group.failed and not group.unfinished:
+        if not group.failed:
             rows.append((None, events_cells(group)))
         table = QTableWidget(len(rows), len(_ROW_COLUMNS))
         table.setHorizontalHeaderLabels([t(f"retract.column.{name}") for name in _ROW_COLUMNS])

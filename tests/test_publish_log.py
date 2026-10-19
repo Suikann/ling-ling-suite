@@ -220,6 +220,12 @@ class TestPublishedPieces(unittest.TestCase):
         rows.append(self.row(PublishAction.RETRACT, "P1", "烽火操二"))
         self.assertEqual(self.published(rows), [])
 
+    def test_a_publish_without_a_result_retracted_is_not_published(self):
+        rows = [self.row(PublishAction.START, "P1", "烽火操")]
+        self.assertEqual(self.published(rows), ["hx-1"])
+        rows.append(self.row(PublishAction.RETRACT, "P1", "烽火操"))
+        self.assertEqual(self.published(rows), [])
+
     def test_a_retract_that_stopped_partway_leaves_the_piece_published(self):
         rows = [
             self.row(PublishAction.START, "P1", "烽火操"),
