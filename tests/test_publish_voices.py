@@ -333,5 +333,32 @@ class TestAbsentVoices(PlanTestCase):
         self.assertEqual(plan.huaxia_only, [])
 
 
+class TestAbsentVoicesDoNotTakeParts(PlanTestCase):
+    """這次不發的聲部（本專案沒有、也不在 HuaXia 建）不占 HuaXia 的聲部：網頁上建的「二胡」可以給泠靈的「二胡 I」挑"""
+
+    def setUp(self):
+        super().setUp()
+        self.voices(("二胡", Headcount(), False), ("二胡 I", Headcount(6, 8)))
+        self.erhu = part("p1", "二胡", "6", 6)
+
+    def test_the_part_is_offered_to_the_voice_that_is_published(self):
+        plan = self.plan([self.erhu])
+        self.assertIn(self.erhu, self.row(plan, "二胡 I").options)
+        self.assertEqual(self.row(plan, "二胡").part, self.erhu)
+
+    def test_choosing_it_goes_through_and_the_unchecked_voice_lets_go(self):
+        self.project.choose_huaxia_part(self.group, "二胡 I", "p1")
+        plan = self.plan([self.erhu])
+        self.assertEqual(self.row(plan, "二胡 I").part, self.erhu)
+        self.assertIsNone(self.row(plan, "二胡").part)
+        self.assertEqual(plan.conflicts, [])
+        self.assertFalse(plan.blocked)
+
+    def test_an_unchecked_voice_put_on_huaxia_takes_its_part_again(self):
+        plan = self.plan([self.erhu], VoiceDecisions(create_absent={0}))
+        self.assertEqual(self.row(plan, "二胡").part, self.erhu)
+        self.assertNotIn(self.erhu, self.row(plan, "二胡 I").options)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -593,7 +593,8 @@ class HuaXiaClient:
             try:
                 rows = self._call(
                     "DELETE", f"/rest/v1/{table}", access_token,
-                    params={"id": f"in.({','.join(chunk)})", "select": "id"}, headers={"Prefer": "return=representation"},
+                    params={"id": f"in.({','.join(chunk)})", "select": "id"},
+                    headers={"Prefer": "return=representation"},
                 )
                 try:
                     deleted.extend(row["id"] for row in rows or [])

@@ -282,6 +282,8 @@ def plan_voices(
 
     配對順序：記住的手動配對（那個 HuaXia 聲部已刪除就跳過）→ 泠靈的「同一聲部」規則（被記住的配對佔走的不算；
     對到多個時不自動選）→ 都沒有就是沒對上，本專案有的預設新建，本專案沒有的照 decisions 才建。
+    這次要發的聲部（本專案有，或要在 HuaXia 建的）先配，這次不發的只在剩下的 HuaXia 聲部裡配、只供顯示：
+    不占要發的聲部可以挑的，也不算衝突。
 
     Args:
         project: 專案（聲部組以它的對照為準）
@@ -296,31 +298,39 @@ def plan_voices(
     link = group.huaxia_link
     by_id = {part.id: part for part in parts}
     rows = list(zip(group.instruments, group.present, group.headcounts))
-    chosen: Dict[int, HuaXiaPart] = {}
-    for index, (voice, _present, _headcount) in enumerate(rows):
-        part_id = link.part_for(voice) if link else None
-        if index not in decisions.new and part_id in by_id:
-            chosen[index] = by_id[part_id]
-    candidates = {
-        index: [
-            part for part in parts
-            if same_voice(part.name, voice) and all(i == index or mine.id != part.id for i, mine in chosen.items())
-        ]
-        for index, (voice, _present, _headcount) in enumerate(rows)
-    }
+    # 這次要發的聲部（本專案有，或本專案沒有、要在 HuaXia 建的）先配；這次不發的只在剩下的聲部裡配（顯示用），
+    # 不占要發的聲部可以挑的 HuaXia 聲部
+    active = [
+        index for index, (_voice, present, _headcount) in enumerate(rows) if present or index in decisions.create_absent
+    ]
+    inactive = [index for index in range(len(rows)) if index not in active]
+    candidates: Dict[int, List[HuaXiaPart]] = {}
     matches: Dict[int, Tuple[PartMatch, Optional[HuaXiaPart]]] = {}
-    for index in range(len(rows)):
-        if index in chosen:
-            matches[index] = (PartMatch.CHOSEN, chosen[index])
-        elif index in decisions.new or not candidates[index]:
-            matches[index] = (PartMatch.NONE, None)
-        elif len(candidates[index]) == 1:
-            matches[index] = (PartMatch.NAME, candidates[index][0])
-        else:
-            matches[index] = (PartMatch.AMBIGUOUS, None)
-    assigned = [part.id for _match, part in matches.values() if part is not None]
-    unpaired = [part for part in parts if part.id not in assigned]
-    paired = {index: part.id for index, (_match, part) in matches.items() if part is not None}
+    taken: Set[str] = set()
+    for phase in (active, inactive):
+        chosen: Dict[int, HuaXiaPart] = {}
+        for index in phase:
+            part_id = link.part_for(rows[index][0]) if link else None
+            if index not in decisions.new and part_id in by_id and part_id not in taken:
+                chosen[index] = by_id[part_id]
+        for index in phase:
+            candidates[index] = [
+                part for part in parts
+                if same_voice(part.name, rows[index][0]) and part.id not in taken
+                and all(i == index or mine.id != part.id for i, mine in chosen.items())
+            ]
+            if index in chosen:
+                matches[index] = (PartMatch.CHOSEN, chosen[index])
+            elif index in decisions.new or not candidates[index]:
+                matches[index] = (PartMatch.NONE, None)
+            elif len(candidates[index]) == 1:
+                matches[index] = (PartMatch.NAME, candidates[index][0])
+            else:
+                matches[index] = (PartMatch.AMBIGUOUS, None)
+        taken |= {matches[index][1].id for index in phase if matches[index][1] is not None}
+    unpaired = [part for part in parts if part.id not in taken]
+    paired = {index: matches[index][1].id for index in active if matches[index][1] is not None}
+    assigned = list(paired.values())
     next_sort = max((part.sort for part in parts), default=0)
     voice_rows, creates, updates, undecided, unfilled = [], [], [], [], []
     for index, (voice, present, headcount) in enumerate(rows):
