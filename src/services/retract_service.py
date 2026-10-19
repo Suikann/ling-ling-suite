@@ -30,6 +30,7 @@ from enum import Enum
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set
 
 from core.catalog_errors import CatalogError
+from core.constants import HUAXIA_PART_FIELDS
 from core.locale import t
 from core.log_entry import LogEntry
 from core.publish_log import PublishAction, PublishLogEntry, PublishRecord
@@ -42,8 +43,6 @@ from services.huaxia_client import (
 from services.orphan_cleanup import delete_unregistered
 from services.recall_reminder import RecallReminder
 
-# 覆寫聲部時可能改的欄位（發譜紀錄 parts_updated 裡的［原值，新值］），撤回不改回
-_KEPT_FIELDS = ("needed", "needed_min", "section")
 
 
 class RetractEffect(Enum):
@@ -391,7 +390,7 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
             continue
         kept = {
             column: values for column, values in updated.get(part_id, {}).items()
-            if column in _KEPT_FIELDS and isinstance(values, list)
+            if column in HUAXIA_PART_FIELDS and isinstance(values, list)
         }
         new = part is not None and part.id in created
         # 有人在網頁上設定過的不刪：刪聲部會丟掉小老師、備註，練習回報也對不回聲部

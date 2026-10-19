@@ -27,7 +27,9 @@ from PySide6.QtWidgets import (
     QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from core.constants import ALERT_BANNER_STYLE, INFO_BANNER_STYLE
+from core.constants import (
+    ALERT_BANNER_STYLE, ALERT_COLORS, INFO_BANNER_STYLE, INFO_COLORS, MUTED_COLORS, WARNING_COLORS,
+)
 from core.locale import t
 from core.publish_log import PublishAction, PublishLogEntry
 from services.huaxia_client import HuaXiaScore
@@ -37,13 +39,13 @@ from services.retract_service import (
 
 # 各類的（字色，底色），同原型：沒有譜與刪掉聲部紅、聲部留著但沒有譜黃、只撤這次的藍、不動灰
 _EFFECT_COLORS = {
-    RetractEffect.NO_SCORE: ("#ff8a8a", "#5a2129"),
-    RetractEffect.DELETE_PART: ("#ff8a8a", "#5a2129"),
-    RetractEffect.KEEP_PART: ("#f2c14e", "#5b4613"),
-    RetractEffect.PARTIAL: ("#8fb8ff", "#253c63"),
-    RetractEffect.UNTOUCHED: ("#7a7f93", "#24262f"),
+    RetractEffect.NO_SCORE: ALERT_COLORS,
+    RetractEffect.DELETE_PART: ALERT_COLORS,
+    RetractEffect.KEEP_PART: WARNING_COLORS,
+    RetractEffect.PARTIAL: INFO_COLORS,
+    RetractEffect.UNTOUCHED: MUTED_COLORS,
 }
-_GRAY = "#7a7f93"
+_GRAY = MUTED_COLORS[0]
 # 發譜紀錄列表的欄位（介面字串鍵的結尾）
 _LOG_COLUMNS = ("time", "operator", "action", "groups", "note")
 # 撤回預覽對照表的欄位（介面字串鍵的結尾）

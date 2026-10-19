@@ -24,11 +24,11 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget
 
 from core.catalog_errors import CATALOG_ERROR_RULES, CATALOG_REMEDY_KEYS, CatalogFailure, CatalogRemedy
+from core.constants import ALERT_COLORS
 from core.locale import t
 from services.activity_log import ActivityLog
 
-_BACKGROUND = "#5a2129"
-_FOREGROUND = "#ff8a8a"
+_FOREGROUND, _BACKGROUND = ALERT_COLORS
 _DETAILS_HEIGHT = 80
 
 

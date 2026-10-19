@@ -23,15 +23,15 @@ from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from core.constants import ALERT_BANNER_STYLE
+from core.constants import ALERT_BANNER_STYLE, MUTED_COLORS, WARNING_COLORS
 from core.locale import t
 from core.publish_log import PublishAction
 from services.huaxia_client import HuaXiaEvent, HuaXiaScore
 from services.recall_service import RecallPiece, RecallPreview, RecallResult
 
 # 別人放的檔、還要演的曲目與底部份數的字色（同原型的琥珀色）；說明的灰字
-_OTHERS_COLOR = "#f2c14e"
-_NOTE_COLOR = "#7a7f93"
+_OTHERS_COLOR = WARNING_COLORS[0]
+_NOTE_COLOR = MUTED_COLORS[0]
 # 樹的欄位（介面字串鍵的結尾）
 _TREE_COLUMNS = ("item", "voice", "note")
 

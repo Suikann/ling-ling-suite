@@ -31,7 +31,9 @@ from PySide6.QtWidgets import (
 
 from core.catalog_errors import CATALOG_ERROR_RULES
 from core.catalog_revert import revert_count
-from core.constants import ALERT_BANNER_STYLE, INFO_BANNER_STYLE
+from core.constants import (
+    ALERT_BANNER_STYLE, ALERT_COLORS, INFO_BANNER_STYLE, INFO_COLORS, MUTED_COLORS, WARNING_COLORS,
+)
 from core.deposit_revert import (
     Deposit, RevertAction, RevertBlock, RevertChoice, RevertFile, RevertGroup, RevertPreview,
 )
@@ -43,13 +45,13 @@ from ui.widgets import not_downloaded_text
 
 # 各下場的（字色，底色），同原型：丟進垃圾桶紅、還原與移除登記藍、無法還原黃、不動灰
 _ACTION_COLORS = {
-    RevertAction.TRASH: ("#ff8a8a", "#5a2129"),
-    RevertAction.RESTORE: ("#8fb8ff", "#253c63"),
-    RevertAction.UNREGISTER: ("#8fb8ff", "#253c63"),
-    RevertAction.LOST: ("#f2c14e", "#5b4613"),
-    RevertAction.KEEP: ("#7a7f93", "#24262f"),
+    RevertAction.TRASH: ALERT_COLORS,
+    RevertAction.RESTORE: INFO_COLORS,
+    RevertAction.UNREGISTER: INFO_COLORS,
+    RevertAction.LOST: WARNING_COLORS,
+    RevertAction.KEEP: MUTED_COLORS,
 }
-_GRAY = "#7a7f93"
+_GRAY = MUTED_COLORS[0]
 # 存入紀錄表的欄位（介面字串鍵的結尾）
 _LOG_COLUMNS = ("time", "operator", "kind", "groups", "count")
 # 撤銷預覽對照表的欄位（介面字串鍵的結尾）

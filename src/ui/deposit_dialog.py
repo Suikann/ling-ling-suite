@@ -22,7 +22,9 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from core.constants import ALERT_BANNER_STYLE
+from core.constants import (
+    ALERT_BANNER_STYLE, INFO_COLORS, MUTED_COLORS, POSITIVE_TEXT_COLOR, WARNING_BANNER_STYLE, WARNING_COLORS,
+)
 from core.deposit import DepositAction, DepositItem, DepositPlan, GroupDeposit, PlaceFiles, folder_key
 from core.locale import t
 from ui.compress_pdf import size_text
@@ -30,12 +32,12 @@ from ui.instrumentation_table import link_text
 
 # 動作欄的顏色（同原型：新上傳綠、更新與搬移藍、跳過灰、不存入黃）
 _ACTION_COLORS = {
-    DepositAction.NEW: "#7ddc9a",
-    DepositAction.UPDATE: "#8fb8ff",
-    DepositAction.MOVE: "#8fb8ff",
-    DepositAction.REGISTER: "#8fb8ff",
-    DepositAction.SKIP: "#7a7f93",
-    DepositAction.UNLISTED: "#f2c14e",
+    DepositAction.NEW: POSITIVE_TEXT_COLOR,
+    DepositAction.UPDATE: INFO_COLORS[0],
+    DepositAction.MOVE: INFO_COLORS[0],
+    DepositAction.REGISTER: INFO_COLORS[0],
+    DepositAction.SKIP: MUTED_COLORS[0],
+    DepositAction.UNLISTED: WARNING_COLORS[0],
 }
 # 「只看要上傳或搬移的」勾著時藏起來的動作
 _QUIET = frozenset({DepositAction.SKIP, DepositAction.REGISTER})
@@ -44,7 +46,6 @@ _SUMMARY_ORDER = (
     DepositAction.NEW, DepositAction.UPDATE, DepositAction.MOVE, DepositAction.REGISTER, DepositAction.SKIP,
     DepositAction.UNLISTED,
 )
-_INTERRUPTED_STYLE = "background-color: #5b4613; color: #f2c14e; border-radius: 5px; padding: 6px 10px;"
 
 
 def group_summary(group: GroupDeposit) -> str:
@@ -81,7 +82,7 @@ class DepositDialog(QDialog):
         self.interrupted_notice: Optional[QLabel] = None
         if plan.interrupted is not None:
             notice = self.interrupted_notice = QLabel(t("deposit.interrupted", count=plan.interrupted))
-            notice.setStyleSheet(_INTERRUPTED_STYLE)
+            notice.setStyleSheet(WARNING_BANNER_STYLE)
             layout.addWidget(notice)
         splitter = QSplitter(Qt.Horizontal)
         self._groups = QListWidget()

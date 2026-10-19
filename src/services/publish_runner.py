@@ -37,7 +37,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from core.catalog_errors import CatalogError
-from core.constants import TEMP_DIR
+from core.constants import HUAXIA_PART_FIELDS, TEMP_DIR
 from core.locale import t
 from core.log_entry import LogEntry
 from core.publish_log import PublishAction, PublishRecord
@@ -57,8 +57,6 @@ from services.recall_reminder import RecallReminder
 UPLOAD_WORKERS = 3
 # 泠靈登記的總譜在 HuaXia 上的樂譜名稱（分譜是聲部名稱）
 SCORE_TITLE = "總譜"
-# 覆寫聲部時可能改的欄位（PartUpdate 的同名欄位，None 為不改）
-_PART_FIELDS = ("needed", "needed_min", "section")
 
 
 class GroupFailure(Enum):
@@ -175,7 +173,7 @@ class GroupSnapshot:
             "new_piece": self.new_piece,
             "create_parts": [create._asdict() for create in self.creates],
             "update_parts": [
-                {"id": update["id"], **{name: update[name][1] for name in _PART_FIELDS if name in update}}
+                {"id": update["id"], **{name: update[name][1] for name in HUAXIA_PART_FIELDS if name in update}}
                 for update in self.updates
             ],
             "add_scores": [file.score() for file in self.files],
@@ -636,7 +634,7 @@ def _updates(plan: GroupPublish) -> List[Dict[str, Any]]:
     for update in plan.voices.updates:
         entry: Dict[str, Any] = {"id": update.part_id, "name": update.name}
         before = parts.get(update.part_id)
-        for name in _PART_FIELDS:
+        for name in HUAXIA_PART_FIELDS:
             value = getattr(update, name)
             if value is not None:
                 entry[name] = [getattr(before, name) if before is not None else None, value]

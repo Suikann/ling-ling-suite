@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.clear_local import ClearItem, ClearPlan, ClearStatus, GroupClear
-from core.constants import ALERT_BANNER_STYLE
+from core.constants import ALERT_BANNER_STYLE, ALERT_COLORS, MUTED_COLORS, POSITIVE_TEXT_COLOR, WARNING_COLORS
 from core.locale import t
 from ui.compress_pdf import size_text
 
@@ -30,14 +30,14 @@ from ui.compress_pdf import size_text
 _COUNTED = (ClearStatus.CLEARABLE, ClearStatus.DIFFERENT, ClearStatus.NOT_ARCHIVED, ClearStatus.NOT_IN_CATALOG)
 # 明細狀態欄的顏色（可清除綠、跟譜庫不一樣黃、其餘灰）
 _STATUS_COLORS = {
-    ClearStatus.CLEARABLE: "#7ddc9a",
-    ClearStatus.DIFFERENT: "#f2c14e",
-    ClearStatus.NOT_ARCHIVED: "#7a7f93",
-    ClearStatus.NOT_IN_CATALOG: "#7a7f93",
-    ClearStatus.CATALOG_ONLY: "#7a7f93",
-    ClearStatus.MISSING: "#ff8a8a",
+    ClearStatus.CLEARABLE: POSITIVE_TEXT_COLOR,
+    ClearStatus.DIFFERENT: WARNING_COLORS[0],
+    ClearStatus.NOT_ARCHIVED: MUTED_COLORS[0],
+    ClearStatus.NOT_IN_CATALOG: MUTED_COLORS[0],
+    ClearStatus.CATALOG_ONLY: MUTED_COLORS[0],
+    ClearStatus.MISSING: ALERT_COLORS[0],
 }
-_CLEARED_COLOR = "#7a7f93"
+_CLEARED_COLOR = MUTED_COLORS[0]
 
 
 class ClearDialog(QDialog):

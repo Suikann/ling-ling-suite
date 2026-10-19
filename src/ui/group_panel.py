@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from ui.widgets import DragListWidget
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
-from core.constants import UNSYNCED_COLOR
+from core.constants import MUTED_COLORS, UNSYNCED_COLOR
 from core.locale import t
 from core.models import FileInfo, Group, Project
 from core.paths import path_key
@@ -238,7 +238,7 @@ class GroupTab(QWidget):
         catalog_only_row = QHBoxLayout()
         self._catalog_only_label = QLabel("")
         self._catalog_only_label.setWordWrap(True)
-        self._catalog_only_label.setStyleSheet("color: #7a7f93; font-size: 12px;")
+        self._catalog_only_label.setStyleSheet(f"color: {MUTED_COLORS[0]}; font-size: 12px;")
         self._catalog_only_label.setVisible(False)
         catalog_only_row.addWidget(self._catalog_only_label, stretch=1)
         self._download_back_btn = QPushButton(t("download.back"))
