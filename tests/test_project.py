@@ -5,6 +5,7 @@
 純 Python，不需要 Qt：檔案走訪、依路徑套用結果、編輯操作與未存檔判定。
 只有「欄位清單從存檔結果列舉」的那條測試會寫一次暫存專案檔。
 """
+import contextlib
 import dataclasses
 import json
 import os
@@ -35,6 +36,25 @@ def _path(*parts):
 
 def _info(path):
     return FileInfo(path, os.path.basename(path))
+
+
+@contextlib.contextmanager
+def _coverage_paused():
+    """暫停 coverage 的追蹤：CI 以 pytest-cov 執行，追蹤的成本會蓋過要量的判定本身"""
+    try:
+        from coverage import Coverage
+    except ImportError:
+        yield
+        return
+    cov = Coverage.current()
+    if cov is None:
+        yield
+        return
+    cov.stop()
+    try:
+        yield
+    finally:
+        cov.start()
 
 
 class TestProjectModelIsPurePython(unittest.TestCase):
@@ -206,10 +226,11 @@ class TestUnsavedIsDifferenceFromSavedContent(unittest.TestCase):
         project.groups[-1].files[-1].display_name = "changed.pdf"
         timings = []
         # 取最快的一次：CI 主機的排程雜訊只會讓量測變慢，最快的那次才是判斷本身的成本
-        for _ in range(7):
-            start = time.perf_counter()
-            modified = project.is_modified()
-            timings.append(time.perf_counter() - start)
+        with _coverage_paused():
+            for _ in range(7):
+                start = time.perf_counter()
+                modified = project.is_modified()
+                timings.append(time.perf_counter() - start)
         self.assertTrue(modified)
         self.assertLess(min(timings), 0.010)
 
