@@ -5,6 +5,7 @@
 對假 Google 測：每次發譜先寫「開始發譜」、結束後補「發譜結果」，兩者以同一個發譜編號串起來，每個群組一列；
 只新增、不修改，每次寫入的請求數固定；寫不進去時一列都沒寫，讀回來與寫進去的相同。
 """
+import datetime
 import os
 import sys
 import unittest
@@ -14,7 +15,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.catalog_constants import SHEET_HEADERS, SHEET_PUBLISH_LOG
 from core.catalog_errors import CatalogError, CatalogErrorKind
-from core.publish_log import PublishAction, PublishRecord, publish_entries, published_pieces
+from core.publish_log import (
+    PublishAction, PublishRecord, due_reminders, publish_entries, published_pieces, reminder_summary,
+)
 from fake_google_catalog import FakeGoogle
 from services.catalog_service import CatalogService
 from test_catalog_service import empty_catalog
@@ -221,6 +224,81 @@ class TestPublishedPieces(unittest.TestCase):
         ]
         [piece] = published_pieces(rows)
         self.assertTrue(piece.kept)
+
+
+
+ENDED = "2026-06-20T21:00:00+08:00"
+LATER = "2026-12-20T21:00:00+08:00"
+NOW = datetime.datetime(2026, 10, 19, tzinfo=datetime.timezone.utc)
+
+
+class TestReminder(unittest.TestCase):
+    """收回提醒：依本機摘要，掛的公演都結束、沒收回、沒標不收回的曲目才提醒"""
+
+    row = staticmethod(TestPublishedPieces.row)
+
+    def publish(self, publish_id: str, piece: str = "hx-1", planned=(), attached=(), failure=None):
+        """一次發譜的兩列：開始發譜要掛 planned，發譜結果新掛上 attached"""
+        group = f"群組{piece}"
+        return [
+            self.row(PublishAction.START, publish_id, group, piece, events=planned),
+            self.row(PublishAction.RESULT, publish_id, group, piece, events=attached, failure=failure),
+        ]
+
+    def due(self, rows):
+        """以摘要判斷現在要提醒的曲名"""
+        return due_reminders(reminder_summary(rows), NOW)
+
+    def test_a_piece_whose_concerts_are_all_over_is_reminded(self):
+        self.assertEqual(self.due(self.publish("P1", planned=[ENDED], attached=[ENDED])), ["曲目hx-1"])
+
+    def test_a_piece_still_on_a_concert_to_come_is_not_reminded(self):
+        rows = self.publish("P1", planned=[ENDED], attached=[ENDED]) + self.publish("P2", planned=[LATER])
+        self.assertEqual(self.due(rows), [])
+
+    def test_a_piece_on_no_concert_is_not_reminded(self):
+        self.assertEqual(self.due(self.publish("P1")), [])
+
+    def test_kept_or_recalled_pieces_are_not_reminded(self):
+        rows = self.publish("P1", planned=[ENDED], attached=[ENDED])
+        self.assertEqual(self.due(rows + [self.row(PublishAction.KEEP, "K1", "", events=[ENDED])]), [])
+        self.assertEqual(self.due(rows + [self.row(PublishAction.RECALL, "R1", "", events=[ENDED])]), [])
+
+    def test_a_retracted_piece_is_not_reminded(self):
+        rows = self.publish("P1", planned=[ENDED], attached=[ENDED]) + [
+            self.row(PublishAction.RETRACT, "P1", "群組hx-1"),
+        ]
+        self.assertEqual(self.due(rows), [])
+
+    def test_a_concert_the_piece_was_already_on_counts(self):
+        rows = self.publish("P1", planned=[ENDED], attached=[ENDED]) + self.publish("P2", planned=[LATER], attached=[])
+        self.assertEqual(self.due(rows), [])
+
+    def test_a_failed_groups_concerts_do_not_count(self):
+        rows = self.publish("P1", planned=[ENDED], attached=[ENDED]) + self.publish(
+            "P2", planned=[LATER], failure={"stage": "switch"},
+        )
+        self.assertEqual(self.due(rows), ["曲目hx-1"])
+
+    def test_concerts_seen_when_recalling_or_keeping_count(self):
+        rows = self.publish("P1", planned=[ENDED], attached=[ENDED]) + [
+            self.row(PublishAction.KEEP, "K1", "", events=[ENDED, LATER]),
+        ] + self.publish("P2")
+        self.assertEqual(self.due(rows), [])
+
+    def test_the_summary_holds_only_pieces_still_to_recall(self):
+        rows = self.publish("P1", "hx-1", planned=[ENDED]) + self.publish("P2", "hx-2") + [
+            self.row(PublishAction.KEEP, "K1", "", "hx-2"),
+        ]
+        self.assertEqual(reminder_summary(rows), [{"piece_id": "hx-1", "piece_title": "曲目hx-1", "ends_at": [ENDED]}])
+
+    def test_a_damaged_summary_reminds_nothing(self):
+        summary = [
+            "壞掉", {"piece_title": "沒有時間"}, {"piece_title": "時間壞掉", "ends_at": ["明天"]},
+            {"piece_title": "沒有時區", "ends_at": ["2026-06-20T21:00:00"]}, {"ends_at": [ENDED]},
+        ]
+        self.assertEqual(due_reminders(summary, NOW), [])
+        self.assertEqual(due_reminders("壞掉", NOW), [])
 
 
 if __name__ == '__main__':

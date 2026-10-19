@@ -9,7 +9,8 @@
 每個勾選的群組一列。收回（PublishAction.RECALL）與不收回（PublishAction.KEEP）一首曲目一列，每次各抽一個發譜編號；
 收回前清的孤兒檔同樣寫成「清孤兒檔」，與「收回」一起寫入。列表上的一項（publish_entries）是一次發譜，
 或同一次寫入的撤回、收回、不收回；清孤兒檔不列成一項。發過哪些曲目、最後一次發譜之後收回了沒有或標了不收回，
-由 published_pieces 整理。
+由 published_pieces 整理；收回提醒記在偏好設定的摘要（reminder_summary）與要提醒的曲目（due_reminders）也由它算出，
+收回畫面與收回提醒用同一條規則。
 
 一列記這個群組對到哪首 HuaXia 曲目、新建的曲目與聲部、人數與聲部組的原值與新值、傳了／登記了／撤掉登記的／
 刪了哪些檔（Storage 路徑）、掛了哪些場次與結束時間、沒發成的原因。清單與物件的欄以 JSON 寫進一格（PublishRecord.cells），
@@ -37,7 +38,9 @@
     cells = record.cells()
     entries = publish_entries(catalog.publish_log())   # 發譜紀錄的列表，新的在前
     pieces = published_pieces(catalog.publish_log())   # 發過的曲目，有沒有收回或標不收回
+    titles = due_reminders(reminder_summary(records), now)   # 公演都結束、還沒收回的曲名
 """
+import datetime
 import json
 from dataclasses import dataclass, field
 from enum import Enum
@@ -203,12 +206,15 @@ class PublishedPiece:
         recalled: 最後一次發譜之後收回過，而且做完了
         kept: 最後一次發譜之後標過「不收回」
         leftovers: 上次收回中途停下、登記撤掉了但沒刪成的 Storage 檔（之後做完一次收回就清空；再收回時補刪）
+        concerts: 紀錄裡看得到它掛著的公演（id、title、ends_at），依第一次出現的順序：發成的群組要掛的與新掛上的、
+            中途停下那次要掛的，以及收回與不收回那一刻掛著的；幹部在網頁上另掛的看不到
     """
     piece_id: str
     piece_title: str
     recalled: bool = False
     kept: bool = False
     leftovers: List[str] = field(default_factory=list)
+    concerts: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def outstanding(self) -> bool:
@@ -234,6 +240,10 @@ def published_pieces(records: Sequence[PublishRecord]) -> List[PublishedPiece]:
         (record.publish_id, record.group_id) for record in records
         if record.action is PublishAction.RETRACT and record.failure is None
     }
+    planned = {
+        (record.publish_id, record.group_id): record.events for record in records
+        if record.action is PublishAction.START
+    }
     remaining: Dict[Tuple[str, str], bool] = {}
     for record in records:
         if record.action is PublishAction.RESULT and record.failure is None:
@@ -241,16 +251,23 @@ def published_pieces(records: Sequence[PublishRecord]) -> List[PublishedPiece]:
             remaining[key] = remaining.get(key, False) or (record.publish_id, record.group_id) not in retracted
     last: Dict[str, int] = {}
     titles: Dict[str, str] = {}
+    concerts: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for index, record in enumerate(records):
-        published = (
-            record.action is PublishAction.RESULT and record.failure is None
-            and remaining[(record.publish_id, record.piece_id)]
-            or record.action is PublishAction.START and record.publish_id not in finished
-        )
-        if published and record.piece_id:
-            last[record.piece_id] = index
+        succeeded = record.action is PublishAction.RESULT and record.failure is None
+        unfinished = record.action is PublishAction.START and record.publish_id not in finished
+        if succeeded and remaining[(record.publish_id, record.piece_id)] or unfinished:
+            if record.piece_id:
+                last[record.piece_id] = index
         if record.piece_id and record.piece_title:
             titles[record.piece_id] = record.piece_title
+        seen = []
+        if succeeded:
+            seen = planned.get((record.publish_id, record.group_id), []) + record.events
+        elif unfinished or record.action in (PublishAction.RECALL, PublishAction.KEEP):
+            seen = record.events
+        for event in seen:
+            if record.piece_id and event.get("id"):
+                concerts.setdefault(record.piece_id, {})[event["id"]] = event
     recalled: Dict[str, bool] = {}
     kept: Dict[str, bool] = {}
     pending: Dict[str, Dict[str, None]] = {}
@@ -273,7 +290,56 @@ def published_pieces(records: Sequence[PublishRecord]) -> List[PublishedPiece]:
     return [
         PublishedPiece(
             piece_id, titles.get(piece_id, ""), recalled.get(piece_id, False), kept.get(piece_id, False),
-            list(pending.get(piece_id, {})),
+            list(pending.get(piece_id, {})), list(concerts.get(piece_id, {}).values()),
         )
         for piece_id in order
     ]
+
+
+def reminder_summary(records: Sequence[PublishRecord]) -> List[Dict[str, Any]]:
+    """收回提醒記在偏好設定的摘要：已發譜、還沒收回也沒標不收回的曲目，與它們掛的公演結束時間
+
+    Args:
+        records: 發譜紀錄的全部列，依紀錄的順序
+
+    Returns:
+        每首一個 {piece_id, piece_title, ends_at（ISO 8601 字串的清單）}，依最後一次發譜由新到舊
+    """
+    return [
+        {
+            "piece_id": piece.piece_id, "piece_title": piece.piece_title,
+            "ends_at": [concert["ends_at"] for concert in piece.concerts if concert.get("ends_at")],
+        }
+        for piece in published_pieces(records) if piece.outstanding
+    ]
+
+
+def due_reminders(summary: Any, now: datetime.datetime) -> List[str]:
+    """依摘要，現在要提醒收回的曲名：有掛公演、掛的公演都已結束的那幾首
+
+    摘要不是 reminder_summary 寫的樣子（例如偏好設定被手改壞）時，壞掉的那首不提醒。
+
+    Args:
+        summary: reminder_summary 寫進偏好設定、讀回來的值
+        now: 現在的時間（帶時區）
+
+    Returns:
+        曲名，依摘要的順序
+    """
+    due = []
+    for piece in summary if isinstance(summary, list) else []:
+        if not isinstance(piece, dict) or not piece.get("piece_title") or not isinstance(piece.get("ends_at"), list):
+            continue
+        ends = [_moment(text) for text in piece["ends_at"]]
+        if ends and all(end is not None and end <= now for end in ends):
+            due.append(piece["piece_title"])
+    return due
+
+
+def _moment(text: Any) -> Optional[datetime.datetime]:
+    """ISO 8601 的時間（帶時區）；不是這個樣子時為 None"""
+    try:
+        moment = datetime.datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.tzinfo is not None else None
