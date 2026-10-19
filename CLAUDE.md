@@ -51,7 +51,7 @@ python -m pytest tests/ -v      # 執行測試
 - `models.py`、`project_access.py`、`project_service.py`、`import_service.py`、`preferences_service.py`，或專案編輯、開啟與存檔、匯入：`docs/architecture/project.md`
 - `move_history.py`、`move_service.py`、`preview_dialog.py`、`MainWindow.prompt_pending_recovery`，或預檢、復原／重做、中斷還原：`docs/architecture/move-history.md`
 - `split_service.py`、`workspace_service.py`、`split_dialog.py`、`workspace_dialog.py`，或分割、工作區：`docs/architecture/workspace.md`
-- `publish_service.py`、`publish_runner.py`、`orphan_cleanup.py`、`retract_service.py`、`recall_service.py`、`publish_run.py`、`publish_retract_dialog.py`，或發譜、撤回、收回：`docs/architecture/publish.md`
+- `publish_service.py`、`publish_runner.py`、`orphan_cleanup.py`、`retract_service.py`、`recall_service.py`、`publish_run.py`、`publish_retract_dialog.py`、`publish_recall_dialog.py`，或發譜、撤回、收回：`docs/architecture/publish.md`
 - 讀寫使用者資料目錄（`APPDATA_DIR`）的程式碼：`docs/architecture/data-storage.md`
 
 <!-- lingling:git-workflow trunk=develop guarded=main -->

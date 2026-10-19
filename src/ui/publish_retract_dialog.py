@@ -2,7 +2,8 @@
 """
 發譜紀錄與撤回的對話框（原型 #63 撤回的變體 D）
 
-PublishLogPanel 是譜庫視窗右側的發譜紀錄列表：每次發譜與撤回一列（新的在前），選一次發譜按「撤回…」。
+PublishLogPanel 是譜庫視窗右側的發譜紀錄列表：每次發譜、撤回、收回與不收回一列（新的在前），選一次發譜按「撤回…」；
+「收回…」不必選，挑曲目在收回對話框裡（ui/publish_recall_dialog.py）。
 RetractDialog 是撤回的預覽：左邊勾要撤回的群組（只選到群組；沒發成、沒有結果或沒有東西可撤的不能勾），
 右邊是所選群組逐聲部的「現在 HuaXia 上 → 撤回後 → 原因」對照表（依結果分類上色、上方列出各類數量，最後一列是場次），
 那次新建了曲目時一列提示撤回後留下空曲目；底部提示勾選的群組撤回後有幾個聲部沒有譜、要重新發譜。
@@ -11,6 +12,7 @@ RetractDialog 是撤回的預覽：左邊勾要撤回的群組（只選到群組
 使用範例：
     panel = PublishLogPanel(publish_entries(records))
     panel.retract_requested.connect(start_retract)
+    panel.recall_requested.connect(start_recall)
     dialog = RetractDialog(preview, parent=window)
     if dialog.exec() == QDialog.Accepted:
         group_ids = dialog.chosen()
@@ -56,12 +58,17 @@ def retractable(entry: PublishLogEntry) -> bool:
 
 
 def entry_cells(entry: PublishLogEntry, times: Dict[str, str]) -> Tuple[str, str, str, str, str]:
-    """發譜紀錄列表的一列：時間、操作者、動作、群組 → HuaXia 曲目、備註
+    """發譜紀錄列表的一列：時間、操作者、動作、群組 → HuaXia 曲目（收回與不收回只有曲目）、備註
 
     Args:
         entry: 列表的一項
         times: 發譜編號對應那次發譜的時間（撤回的備註寫出撤回的是哪一次）
     """
+    if entry.action in (PublishAction.RECALL, PublishAction.KEEP):
+        pieces = "、".join(record.piece_title for record in entry.groups)
+        stopped = any(record.failure for record in entry.groups)
+        note = t("publish_log.note.recall_stopped") if stopped else ""
+        return entry.time, entry.operator, t(f"publish_log.action.{entry.action.value}"), pieces, note
     groups = "、".join(f"{record.group} → {record.piece_title}" for record in entry.groups)
     if entry.action is PublishAction.RETRACT:
         stopped = any(record.failure for record in entry.groups)
@@ -80,9 +87,11 @@ def entry_cells(entry: PublishLogEntry, times: Dict[str, str]) -> Tuple[str, str
 
 
 class PublishLogPanel(QWidget):
-    """譜庫視窗的發譜紀錄：每次發譜與撤回一列，選一次發譜按「撤回…」時送出 retract_requested(那一項)"""
+    """譜庫視窗的發譜紀錄：每次發譜、撤回、收回與不收回一列；選一次發譜按「撤回…」時送出 retract_requested(那一項)，
+    按「收回…」時送出 recall_requested（有發譜紀錄才按得下去）"""
 
     retract_requested = Signal(object)
+    recall_requested = Signal()
 
     def __init__(self, entries: Sequence[PublishLogEntry], parent: Optional[QWidget] = None):
         """
@@ -117,6 +126,10 @@ class PublishLogPanel(QWidget):
         layout.addWidget(self.table, stretch=1)
         self.actions = QHBoxLayout()
         self.actions.addStretch()
+        self.recall_button = QPushButton(t("recall.button"))
+        self.recall_button.setEnabled(bool(self._entries))
+        self.recall_button.clicked.connect(self.recall_requested.emit)
+        self.actions.addWidget(self.recall_button)
         self.retract_button = QPushButton(t("retract.button"))
         self.retract_button.setEnabled(False)
         self.retract_button.clicked.connect(lambda: self.retract_requested.emit(self.chosen()))

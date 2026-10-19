@@ -251,12 +251,15 @@ class RecallService:
                 log_error = e
         return RecallResult(pieces, records, cleanups, error, log_error)
 
-    def keep(self, pieces: Sequence[RecallPiece], catalog: CatalogService) -> None:
+    def keep(self, pieces: Sequence[RecallPiece], catalog: CatalogService) -> str:
         """把這幾首標成「不收回」：一首一列寫進發譜紀錄（新抽的發譜編號），之後不再建議收回；不動 HuaXia
 
         Args:
             pieces: 勾選的曲目（預覽裡的）
             catalog: 譜庫服務（寫發譜紀錄）
+
+        Returns:
+            這次的發譜編號；沒有曲目時為空字串（什麼都不寫）
 
         Raises:
             CatalogError: 寫不進譜庫
@@ -267,8 +270,9 @@ class RecallService:
             )
             for piece in pieces
         ]
-        if records:
-            catalog.begin_publish(records, self._auth.status().discord_name)
+        if not records:
+            return ""
+        return catalog.begin_publish(records, self._auth.status().discord_name)
 
     def _recall_piece(self, piece: RecallPiece, removed: List[HuaXiaScore]) -> Tuple[List[HuaXiaScore], List[str]]:
         """收回一首：重讀登記、撤掉全部，再刪沒有登記還指著的檔（含上次沒刪成的）
