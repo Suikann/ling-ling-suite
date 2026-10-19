@@ -14,7 +14,9 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaClient, HuaXiaError, lingling_storage_path
+from services.huaxia_client import (
+    PUBLISH_INTERFACE_VERSION, HuaXiaClient, HuaXiaError, HuaXiaErrorKind, lingling_storage_path,
+)
 from test_publish_preflight import PrepareTestCase
 
 # 泠靈先產生的新曲目編號
@@ -219,6 +221,45 @@ class TestNotAnOfficer(RejectionTestCase):
         with self.assertRaises(HuaXiaError) as caught:
             HuaXiaClient(session=self.huaxia).publish_interface_version("")
         self.assertEqual((caught.exception.code, caught.exception.status), ("42501", 401))
+
+
+class TestStorage(PublishTestCase):
+    """發譜的第 1 段與第 3 段：檔案傳到 Storage（不覆寫）、刪掉 Storage 的檔"""
+
+    def test_an_upload_lands_at_its_path_and_a_second_one_is_already_there(self):
+        token = self.auth.access_token()
+        path = stored(self.moli, 1)
+        self.assertTrue(self.client.upload(token, path, b"%PDF-1"))
+        self.assertEqual(self.huaxia.objects[path], b"%PDF-1")
+        self.assertFalse(self.client.upload(token, path, b"%PDF-1"))
+        self.assertEqual(self.client.stored_files(token, f"lingling/{self.moli}"), {path: 6})
+
+    def test_deleting_removes_only_the_given_files(self):
+        token = self.auth.access_token()
+        kept, gone = stored(self.moli, 1), stored(self.moli, 2)
+        self.huaxia.put_object(kept)
+        self.huaxia.put_object(gone)
+        self.client.delete_files(token, [gone, stored(self.moli, 3)])
+        self.assertEqual(sorted(self.huaxia.objects), [kept])
+
+    def test_a_member_cannot_upload_or_delete(self):
+        token = self.auth.access_token()
+        path = stored(self.moli, 1)
+        self.huaxia.put_object(path)
+        self.huaxia.remove_roles("officer_amy")
+        with self.assertRaises(HuaXiaError):
+            self.client.upload(token, stored(self.moli, 2), b"%PDF")
+        self.client.delete_files(token, [path])
+        self.assertEqual(sorted(self.huaxia.objects), [path])
+
+    def test_a_dropped_request_is_unreachable_and_later_ones_go_through(self):
+        token = self.auth.access_token()
+        self.huaxia.drop_requests("POST", "/storage/v1/object/scores/", skip=1)
+        self.assertTrue(self.client.upload(token, stored(self.moli, 1), b"%PDF"))
+        with self.assertRaises(HuaXiaError) as caught:
+            self.client.upload(token, stored(self.moli, 2), b"%PDF")
+        self.assertEqual(caught.exception.kind, HuaXiaErrorKind.UNREACHABLE)
+        self.assertTrue(self.client.upload(token, stored(self.moli, 2), b"%PDF"))
 
 
 if __name__ == '__main__':

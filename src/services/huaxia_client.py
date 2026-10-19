@@ -15,7 +15,8 @@ HuaXia 用戶端
   回報（publish_interface_version），泠靈要的是 PUBLISH_INTERFACE_VERSION。輸入、輸出與錯誤代碼照文件。
 - 泠靈的 Storage 路徑格式（lingling_storage_path、is_lingling_path）：「固定前綴 LINGLING_STORAGE_PREFIX／曲目編號／
   內容的 SHA-256.pdf」。HuaXia 網頁上傳的路徑是「曲目編號／聲部編號或 full／時間戳_檔名」，不會以這個前綴開頭，
-  所以只看路徑就分得出哪份是泠靈發的。
+  所以只看路徑就分得出哪份是泠靈發的。發譜的第 1 段以 upload 傳檔（不覆寫，路徑已有檔就是同一份內容）、
+  第 3 段以 delete_files 刪掉被取代的檔。
 請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
 使用範例：
@@ -48,6 +49,11 @@ LINGLING_STORAGE_PREFIX = "lingling/"
 _LINGLING_PATH = re.compile(re.escape(LINGLING_STORAGE_PREFIX) + r"[^/]+/[0-9a-f]{64}\.pdf")
 # Storage 列出檔案時一次要幾筆（Supabase 的預設）
 _STORAGE_PAGE_SIZE = 100
+# 樂譜所在的 Storage bucket；上傳的檔案類型
+_STORAGE_BUCKET = "scores"
+_PDF_MIME = "application/pdf"
+# Storage 回報路徑已經有檔（不覆寫的上傳）的錯誤：舊版回 HTTP 400、本體的 statusCode 是 "409"，新版回 409
+_STORAGE_DUPLICATE = "Duplicate"
 # 讀資料表時一次要幾列（Supabase 的 max_rows 預設 1000；HuaXia 設得更小時回得較少，照樣讀到回空為止）
 _TABLE_PAGE_SIZE = 1000
 # 以 in.(…) 篩選時一個請求帶幾個編號（避免網址過長），多的分成幾個請求
@@ -505,7 +511,7 @@ class HuaXiaClient:
         offset = 0
         while True:
             entries = self._call(
-                "POST", "/storage/v1/object/list/scores", access_token,
+                "POST", f"/storage/v1/object/list/{_STORAGE_BUCKET}", access_token,
                 json={"prefix": folder, "limit": page_size, "offset": offset, "sortBy": {"column": "name"}},
             )
             try:
@@ -518,19 +524,59 @@ class HuaXiaClient:
                 return found
             offset += page_size
 
+    def upload(self, access_token: str, path: str, content: bytes) -> bool:
+        """把一份 PDF 傳到 Storage bucket scores 的 path，不覆寫已有的檔
+
+        泠靈的 Storage 路徑由內容決定，path 已經有檔就是同一份內容：不算失敗。
+
+        Args:
+            access_token: 使用者的 access token
+            path: Storage 裡的路徑（lingling_storage_path）
+            content: 檔案內容
+
+        Returns:
+            這次傳上去了為 True；path 已經有檔時為 False
+
+        Raises:
+            HuaXiaError: 連不上或上傳失敗（例如不是幹部）
+        """
+        try:
+            self._call(
+                "POST", f"/storage/v1/object/{_STORAGE_BUCKET}/{path}", access_token, data=content,
+                headers={"Content-Type": _PDF_MIME, "x-upsert": "false"},
+            )
+        except HuaXiaError as e:
+            if e.status == 409 or e.code == _STORAGE_DUPLICATE:
+                return False
+            raise
+        return True
+
+    def delete_files(self, access_token: str, paths: List[str]) -> None:
+        """刪掉 Storage bucket scores 裡的這些檔（一個請求）；已經沒有的略過
+
+        Raises:
+            HuaXiaError: 連不上或刪除失敗
+        """
+        self._call("DELETE", f"/storage/v1/object/{_STORAGE_BUCKET}", access_token, json={"prefixes": list(paths)})
+
     # --- 共用 ---
 
     def _call(
         self, method: str, path: str, access_token: Optional[str] = None,
-        params: Optional[Dict[str, str]] = None, json: Any = None,
+        params: Optional[Dict[str, str]] = None, json: Any = None, data: Optional[bytes] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Any:
-        """送出一個請求，回傳 JSON 內容（沒有內容時為 None）；失敗時丟出帶類別的 HuaXiaError"""
-        headers = {"apikey": self._key}
+        """送出一個請求，回傳 JSON 內容（沒有內容時為 None）；失敗時丟出帶類別的 HuaXiaError
+
+        本體是 JSON 時給 json；上傳檔案時給 data（原始位元組）與它的 Content-Type（headers）。
+        """
+        headers = {**(headers or {}), "apikey": self._key}
         if access_token:
             headers["Authorization"] = f"Bearer {access_token}"
+        body = {"json": json} if data is None else {"data": data}
         try:
             response = self._session.request(
-                method, self._url + path, params=params, json=json, headers=headers, timeout=_REQUEST_TIMEOUT,
+                method, self._url + path, params=params, headers=headers, timeout=_REQUEST_TIMEOUT, **body,
             )
         except requests.RequestException as e:
             raise HuaXiaError(HuaXiaErrorKind.UNREACHABLE, str(e)) from e

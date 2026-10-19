@@ -19,12 +19,14 @@
   （event_pieces）以 attach_piece 加入；樂譜的讀取權限
   簡化成 is_staff（幹部或老師，不實作排到聲部的人），場次照 can_see_event 簡化成幹部全看得到、其他社內成員看得到
   不是只給幹部的場次，event_pieces 照它的場次，學期是 is_active。rename_score 扮演幹部在網頁上改了樂譜名稱。
-- Storage（bucket scores）：put_object 放檔，列出（POST /storage/v1/object/list/scores）回傳某個資料夾底下一層的
-  檔與子資料夾，讀取權限簡化成 is_staff。
+- Storage（bucket scores）：put_object 放檔；列出（POST /storage/v1/object/list/scores）回傳某個資料夾底下一層的
+  檔與子資料夾，讀取權限簡化成 is_staff；上傳（POST /storage/v1/object/scores/<路徑>）不覆寫，已有檔時同舊版 Storage
+  回 400、本體 statusCode 409；刪除（DELETE /storage/v1/object/scores，本體 prefixes）略過沒有的檔。上傳與刪除只有幹部做得到。
 
 擴充（之後的工單）：新資料表加進 tables 與 _READ_POLICIES；寫入在 _rest 裡依方法分派（POST、PATCH、DELETE）；
-新的 rpc 函式加進 functions（名稱對應以（使用者 ID，參數）求值的函式）；Storage 的上傳與刪除在 _storage 依路徑分派。
-每個請求都記在 requests，可以設成連不上（go_offline）或讓續期卡住直到放行（hold_refreshes）。
+新的 rpc 函式加進 functions（名稱對應以（使用者 ID，參數）求值的函式）；Storage 的請求在 _storage 依路徑分派。
+每個請求都記在 requests，可以設成連不上（go_offline）、讓某幾個請求斷線（drop_requests，例如第 1 段的某次上傳）、
+讓某首曲目的切換失敗（fail_switch），或讓續期卡住直到放行（hold_refreshes）。
 
 使用範例：
     from tests.fake_huaxia import FakeHuaXia
@@ -136,6 +138,10 @@ class FakeHuaXia:
         self._refresh_tokens: Dict[str, List[Any]] = {}
         self._access_tokens: Dict[str, Tuple[str, str]] = {}
         self._refresh_gate: Optional[threading.Event] = None
+        # 排定斷線的請求：[方法, 路徑開頭, 還要放過幾個, 還要斷幾個]
+        self._drops: List[List[Any]] = []
+        # 切換會失敗的曲目編號對應（HTTP 狀態碼，錯誤代碼）
+        self._switch_failures: Dict[str, Tuple[int, str]] = {}
 
     # --- 測試設定 ---
 
@@ -300,6 +306,24 @@ class FakeHuaXia:
         """之後的請求都連不上"""
         self.offline = True
 
+    def drop_requests(self, method: str, path_prefix: str, skip: int = 0, times: int = 1) -> None:
+        """排定斷線：方法相同、路徑以 path_prefix 開頭的請求，放過前 skip 個，接著 times 個連不上（丟 ConnectionError，
+        HuaXia 沒收到），之後的照常
+
+        Args:
+            method: HTTP 方法（GET、POST、DELETE…）
+            path_prefix: 路徑開頭，例如 "/storage/v1/object/scores/"（上傳）、"/rest/v1/rpc/lingling_publish"（切換）
+            skip: 先放過幾個
+            times: 斷幾個
+        """
+        with self._lock:
+            self._drops.append([method.upper(), path_prefix, skip, times])
+
+    def fail_switch(self, piece_id: str, status: int = 404, code: str = "PT404") -> None:
+        """之後這首曲目的切換（發譜函式）都失敗，丟出這個錯誤代碼，資料表不變（例如幹部剛在網頁上刪了聲部）"""
+        with self._lock:
+            self._switch_failures[piece_id] = (status, code)
+
     def hold_refreshes(self) -> threading.Event:
         """之後的續期請求收到後先卡住，直到回傳的 Event 被 set 才回應"""
         self._refresh_gate = threading.Event()
@@ -362,10 +386,14 @@ class FakeHuaXia:
         parts = urlsplit(url)
         query = {key: values[0] for key, values in parse_qs(parts.query).items()}
         query.update(params or {})
-        record = {"method": method.upper(), "path": parts.path, "params": query, "json": json, "headers": headers or {}}
+        record = {
+            "method": method.upper(), "path": parts.path, "params": query, "json": json, "headers": headers or {},
+            "data": kwargs.get("data"),
+        }
         with self._lock:
             self.requests.append(record)
-        if self.offline:
+            dropped = self._dropped(record)
+        if self.offline or dropped:
             raise requests.ConnectionError("Failed to establish a new connection")
         if not record["headers"].get("apikey"):
             return _Response(401, {"message": "No API key found in request"})
@@ -373,6 +401,19 @@ class FakeHuaXia:
             self._refresh_gate.wait(10)
         with self._lock:
             return self._route(record)
+
+    def _dropped(self, record: Dict[str, Any]) -> bool:
+        """這個請求是不是排定要斷線的（drop_requests）；是的話用掉一次"""
+        for drop in self._drops:
+            method, prefix, skip, times = drop
+            if record["method"] != method or not record["path"].startswith(prefix) or times <= 0:
+                continue
+            if skip > 0:
+                drop[2] -= 1
+                return False
+            drop[3] -= 1
+            return True
+        return False
 
     def _route(self, record: Dict[str, Any]) -> _Response:
         """依路徑分派到 Auth、rpc 或 PostgREST"""
@@ -519,6 +560,9 @@ class FakeHuaXia:
                 "ensemble": new_piece.get("ensemble") or "tutti", "created_at": _now().isoformat(),
             })
             piece_created = True
+        if piece_id in self._switch_failures:
+            status, code = self._switch_failures[piece_id]
+            raise _FunctionError(status, code, f"排定失敗的切換：{piece_id}")
         if not any(p["id"] == piece_id for p in self.tables["pieces"]):
             raise _FunctionError(404, "PT404", f"找不到曲目 {piece_id}")
         created, new_parts = [], {}
@@ -628,12 +672,39 @@ class FakeHuaXia:
         return _Response(200, rows)
 
     def _storage(self, path: str, record: Dict[str, Any]) -> _Response:
-        """/storage/v1/...：目前只有列出 bucket scores 某個資料夾底下一層（照 Supabase 的回應格式）"""
-        if path != "object/list/scores" or record["method"] != "POST":
-            return _Response(405, {"message": "Storage request not supported by the fake"})
-        if not self._is_staff(self._caller(record)):
+        """/storage/v1/...：bucket scores 的列出某個資料夾底下一層、上傳（不覆寫）與刪除（照 Supabase 的回應格式）"""
+        caller = self._caller(record)
+        method = record["method"]
+        if path == "object/list/scores" and method == "POST":
+            return self._list_objects(caller, record["json"] or {})
+        if path.startswith("object/scores/") and method == "POST":
+            return self._upload_object(caller, path[len("object/scores/"):], record)
+        if path == "object/scores" and method == "DELETE":
+            # scores_delete：只有幹部刪得到；刪不到的不算錯，只是不在回傳的清單裡
+            names = (record["json"] or {}).get("prefixes") or []
+            gone = [name for name in names if name in self.objects] if self._is_officer(caller, {}) else []
+            for name in gone:
+                del self.objects[name]
+            return _Response(200, [{"name": name, "bucket_id": "scores"} for name in gone])
+        return _Response(405, {"message": "Storage request not supported by the fake"})
+
+    def _upload_object(self, caller: Optional[str], name: str, record: Dict[str, Any]) -> _Response:
+        """上傳一個檔，不覆寫（x-upsert: false）：已經有檔時同舊版 Storage 回 400、本體 statusCode 409；
+        只有幹部上傳得到（scores_write）"""
+        if caller is None or not self._is_officer(caller, {}):
+            return _Response(403, {
+                "statusCode": "403", "error": "Unauthorized",
+                "message": "new row violates row-level security policy",
+            })
+        if name in self.objects:
+            return _Response(400, {"statusCode": "409", "error": "Duplicate", "message": "The resource already exists"})
+        self.objects[name] = bytes(record["data"] or b"")
+        return _Response(200, {"Key": f"scores/{name}", "Id": str(uuid.uuid4())})
+
+    def _list_objects(self, caller: Optional[str], body: Dict[str, Any]) -> _Response:
+        """列出 bucket scores 某個資料夾底下一層的檔與子資料夾；讀取權限簡化成 is_staff"""
+        if not self._is_staff(caller):
             return _Response(200, [])
-        body = record["json"] or {}
         prefix = body.get("prefix", "").strip("/")
         folder = f"{prefix}/" if prefix else ""
         files: Dict[str, int] = {}
