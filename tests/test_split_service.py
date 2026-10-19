@@ -454,9 +454,11 @@ class TestUndoSplit(SplitServiceTestCase):
 
     def test_merged_score_among_a_groups_parts_returns_to_the_same_place(self):
         loose, horn = FileInfo(self.path("Loose.pdf"), "Loose.pdf"), FileInfo(self.path("Horn.pdf"), "Horn.pdf")
-        group = Group(name="g", files=[loose, FileInfo(self.source, "合併譜.pdf"), horn], score_label="總譜")
+        group = Group(
+            name="g", files=[loose, FileInfo(self.source, "合併譜.pdf"), horn], instruments=["Piano", "Horn"],
+            selected_instruments=[0, 1], score_label="總譜",
+        )
         project = Project(groups=[group])
-        project.set_instruments(group, ["Piano", "Horn"])
         before = project.to_data()
         new_parts = self.split(project, (0, 1, "Flute"), (2, 3, "Oboe"))
         self.undo(project)

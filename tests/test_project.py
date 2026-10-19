@@ -769,10 +769,44 @@ class TestVoicesCarryTheirParts(unittest.TestCase):
         self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", "ob.pdf"), ("Horn", "hn.pdf")])
         self.assertEqual([f.display_name for f in self.group.extra_files()], ["extra.pdf"])
 
-    def test_replacing_the_whole_list_pairs_by_position_and_has_every_voice(self):
+    def test_replacing_the_whole_list_carries_each_part_with_its_voice_by_name(self):
+        """整份換掉樂器表是清單變動：分譜依同一聲部的規則跟著聲部，不依位置錯配"""
         self.project.set_present(self.group, 1, False)
-        self.project.set_instruments(self.group, ["Violin", "Viola", "Cello"])
-        self.assertEqual(self.pairs(), [("Violin", "fl.pdf"), ("Viola", "hn.pdf"), ("Cello", None)])
+        self.project.set_instruments(self.group, ["Violin", "horn", "Oboe", "Flute"])
+        self.assertEqual(self.group.instruments, ["Violin", "horn", "Oboe", "Flute"])
+        self.assertEqual(self.group.present, [True, True, False, True])
+        self.assertEqual(self.pairs(), [("Violin", None), ("horn", "hn.pdf"), ("Flute", "fl.pdf")])
+        self.assertEqual(self.group.extra_files(), [])
+
+    def test_parts_of_voices_left_out_of_the_new_list_stay_in_the_group_beyond_the_voices(self):
+        self.project.set_instruments(self.group, ["Flute", "Violin"])
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Violin", None)])
+        self.assertEqual([f.display_name for f in self.group.extra_files()], ["ob.pdf", "hn.pdf"])
+        self.assertEqual([f.display_name for f in self.project.ungrouped_files], ["Loose.pdf"])
+
+    def test_a_voice_without_a_part_keeps_none_when_the_whole_list_is_replaced(self):
+        self.project.set_present(self.group, 0, False)
+        self.project.set_present(self.group, 0, True)
+        self.project.set_instruments(self.group, ["Horn", "Flute", "Oboe"])
+        self.assertEqual(self.pairs(), [("Horn", "hn.pdf"), ("Flute", None), ("Oboe", "ob.pdf")])
+
+    def test_voices_taken_from_the_file_names_pair_with_the_files_named_for_them(self):
+        """從檔名擷取聲部：還沒配到聲部的分譜依檔名取出的聲部配給新的聲部，認不出的留在多出的分譜"""
+        group = Group(name="g", files=_infos("江樓 - 琵琶.pdf", "江樓 - 二胡I.pdf", "江樓 - 中阮.pdf"))
+        project = Project(groups=[group])
+        project.set_instruments(group, ["二胡 I", "琵琶", "揚琴"])
+        self.assertEqual(
+            [(p.voice, p.file.display_name if p.file else None) for p in group.pairing()],
+            [("二胡 I", "江樓 - 二胡I.pdf"), ("琵琶", "江樓 - 琵琶.pdf"), ("揚琴", None)],
+        )
+        self.assertEqual([f.display_name for f in group.extra_files()], ["江樓 - 中阮.pdf"])
+
+    def test_a_list_for_a_group_without_parts_has_every_voice(self):
+        group = Group(name="g")
+        project = Project(groups=[group])
+        project.set_instruments(group, ["Flute", "Oboe"])
+        self.assertEqual(group.present, [True, True])
+        self.assertEqual(group.vacant, [False, False])
 
 
 class TestHeadcountRanges(unittest.TestCase):

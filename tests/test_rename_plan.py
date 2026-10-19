@@ -131,13 +131,14 @@ class TestSectionsWrittenOnFirstUse(unittest.TestCase):
 
     def test_numbers_of_one_instrument_are_written_once_under_the_first_spelling(self):
         project = self._project(instrument_sections={"Flute": "木管"})
-        project.set_instruments(project.groups[0], ["Horn 1", "Horn 2"])
+        project.rename_instrument(project.groups[0], 0, "Horn 1")
+        project.rename_instrument(project.groups[0], 1, "Horn 2")
         assign_default_sections(project)
         self.assertEqual(project.instrument_sections, {"Flute": "木管", "Horn 1": "銅管"})
 
     def test_voice_without_a_known_family_goes_to_the_other_section(self):
         project = self._project()
-        project.set_instruments(project.groups[0], ["Flute", "Theremin"])
+        project.rename_instrument(project.groups[0], 1, "Theremin")
         assign_default_sections(project)
         self.assertEqual(project.instrument_sections["Theremin"], "其他")
 

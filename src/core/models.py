@@ -1406,8 +1406,37 @@ class Project:
         self._changed()
 
     def set_instruments(self, group: Group, instruments: Iterable[str]) -> None:
-        """設定群組的樂器表（聲部清單）；舊欄位 selected_instruments 跟著維持全選"""
-        group.assign_instruments(instruments)
+        """整份換掉群組的樂器表（預設樂器表、從檔名擷取）；這是清單變動，分譜依聲部名稱帶著走
+
+        原樂器表有同一聲部的列沿用它的本專案有、人數與分譜；新的聲部本專案有、人數未填、沒有分譜。
+        還沒配到聲部的分譜（原本多出的，與聲部不在新清單的）以檔名取出的聲部名稱配給本專案有、還沒有分譜的聲部，
+        認不出的留在群組最後、成為多出的分譜，不配給別的聲部。不檢查重名（舊專案的重名照留）；
+        舊欄位 selected_instruments 跟著維持全選。
+        """
+        current = _voice_rows(group)
+        old_names = [row.name for row in current]
+        rows: List[_VoiceRow] = []
+        taken: Set[int] = set()
+        for name in instruments:
+            index = voice_index(old_names, name)
+            if index is None or index in taken:
+                rows.append(_VoiceRow(name, True, Headcount(), None))
+            else:
+                taken.add(index)
+                rows.append(current[index]._replace(name=name))
+        kept = {id(row.part) for row in rows if row.part is not None}
+        names = [row.name for row in rows]
+        file_voices = extract_instruments_from_filenames([f.display_name for f in group.files])
+        extras = []
+        for file, file_voice in zip(group.files, file_voices):
+            if id(file) in kept:
+                continue
+            index = voice_index(names, file_voice)
+            if index is not None and rows[index].present and rows[index].part is None:
+                rows[index] = rows[index]._replace(part=file)
+            else:
+                extras.append(file)
+        _place_rows(group, rows, extras)
         self._changed()
 
     def add_instrument(self, group: Group, name: str) -> None:
