@@ -170,6 +170,15 @@ class TestPreview(RetractTestCase):
             (row.effect for row in group.rows), key=list(RetractEffect).index,
         ))
 
+    def test_assignments_are_read_in_pages(self):
+        self.huaxia.assign(self.gaohu, ringer_id="ringer-1")
+        self.huaxia.assign(self.paigu, ringer_id="ringer-2")
+        self.huaxia.max_rows = 1
+        [group] = self.retracter.preview(self.entry()).groups
+        effects = {row.name: row.effect for row in group.rows}
+        self.assertEqual((effects["高胡"], effects["排鼓"]), (RetractEffect.KEEP_PART, RetractEffect.KEEP_PART))
+        self.assertEqual(group.parts, [])
+
     def test_overwritten_headcounts_are_shown_as_not_reverted(self):
         [group] = self.retracter.preview(self.entry()).groups
         erhu = next(row for row in group.rows if row.name == "二胡1")

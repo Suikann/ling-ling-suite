@@ -11,7 +11,8 @@
 - PostgREST：資料表的讀取（select 欄位、eq 與 in 篩選、order、limit 與 offset），各表的讀取權限照 HuaXia 的 RLS
   寫在 _READ_POLICIES。一次最多回傳 max_rows 列（同 Supabase 的 max_rows，預設 1000），多的要分頁讀。
   撤回與收回用的刪除（DELETE，要有篩選）只有幹部刪得到 scores 與 piece_parts，刪聲部連帶刪掉它的排人與樂譜。
-- 排人（part_assignments）：以 assign 加入，讀取權限簡化成 is_insider。
+- 排人（part_assignments，欄位照 HuaXia 的 schema：id、part_id、user_id 或 ringer_id）：以 assign 加入，
+  讀取權限簡化成 is_insider（不實作 in_part）。
 - rpc：is_officer（帳號啟用且有 admin 或 officer）；發譜函式與它的版本查詢預設不存在（同 HuaXia 合併 #117 之前），
   以 install_publish_function 裝上指定的版本。發譜函式照 docs/huaxia/LINGLING.md：以呼叫者身分執行（不是幹部時
   新增被 RLS 擋下、修改與刪除找不到可以動的列），匿名不能呼叫；任何一步不成就丟出文件裡的錯誤代碼，資料表回到呼叫前。
@@ -264,10 +265,15 @@ class FakeHuaXia:
         with self._lock:
             self.tables["event_pieces"].append({"event_id": event_id, "piece_id": piece_id})
 
-    def assign(self, part_id: str, user_id: str) -> None:
-        """把一位團員排進聲部（part_assignments 的一列，幹部在網頁上排的）"""
+    def assign(self, part_id: str, user_id: Optional[str] = None, ringer_id: Optional[str] = None) -> str:
+        """把一位團員（或槍手）排進聲部（part_assignments 的一列，幹部在網頁上排的），回傳排人的編號"""
+        assert user_id or ringer_id, "part_assignments 要有 user_id 或 ringer_id"
         with self._lock:
-            self.tables["part_assignments"].append({"part_id": part_id, "user_id": user_id})
+            assignment_id = str(uuid.uuid4())
+            self.tables["part_assignments"].append({
+                "id": assignment_id, "part_id": part_id, "user_id": user_id, "ringer_id": ringer_id,
+            })
+            return assignment_id
 
     def put_object(self, path: str, content: bytes = b"pdf") -> None:
         """在 Storage 的 bucket scores 放一個檔"""

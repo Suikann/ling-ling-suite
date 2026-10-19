@@ -488,9 +488,7 @@ class HuaXiaClient:
         Raises:
             HuaXiaError: 連不上或讀取失敗
         """
-        rows = self.select_all(
-            "part_assignments", access_token, "part_id", within=("part_id", list(part_ids)), order="part_id.asc",
-        )
+        rows = self.select_all("part_assignments", access_token, "id,part_id", within=("part_id", list(part_ids)))
         try:
             return {row["part_id"] for row in rows}
         except (KeyError, TypeError) as e:
