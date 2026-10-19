@@ -237,17 +237,20 @@ class TestCompression(CompressingTestCase):
             self.assertTrue(button(dialog, "publish.publish").isEnabled())
         self.publish(operate=operate)
 
-    def test_pressing_publish_hands_the_compressed_files_over(self):
+    def test_pressing_publish_sends_the_compressed_file_and_then_discards_it(self):
         def operate(dialog):
             self.dialog = dialog
             go_to(dialog, 4)
             self.finish_compressing()
             button(dialog, "publish.publish").click()
-        _shown, opened = self.publish(operate=operate)
-        compressed = self.gated.results[0].output_path
-        self.assertTrue(os.path.exists(compressed))
-        plan = next(p for p in opened[0].publish_plan() if p.group.name == "烽火操")
-        self.assertIn(compressed, [upload.path for upload in plan.uploads])
+        self.publish(operate=operate)
+        wait_until(lambda: not self.window._publishing.busy)
+        result = self.gated.results[0]
+        self.assertFalse(os.path.exists(result.output_path))
+        [erhu] = [row for row in self.huaxia.tables["scores"] if row["part_id"] == self.erhu]
+        sent = self.huaxia.objects[erhu["file_path"]]
+        self.assertEqual(len(sent), result.compressed_size)
+        self.assertEqual(erhu["file_path"], lingling_storage_path(self.fenghuo, hashlib.sha256(sent).hexdigest()))
 
     def test_closing_the_preview_discards_the_compressed_files(self):
         def operate(dialog):

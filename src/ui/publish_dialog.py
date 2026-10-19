@@ -387,6 +387,10 @@ class PublishPreviewDialog(QDialog):
         """每個沒擋下的群組這次發譜要寫進 HuaXia 的全部內容（PublishPreview.publish_plan），依專案中的順序"""
         return self._preview.publish_plan()
 
+    def assign_piece_ids(self) -> List[Group]:
+        """按下「發譜」後替要新建、還沒有編號的曲目產生編號寫進專案（PublishPreview.assign_piece_ids）"""
+        return self._preview.assign_piece_ids()
+
     def done(self, code: int):
         """關閉預覽：停下還在跑的壓縮（之後它不再碰這個對話框）；按下「發譜」時留下要傳的壓縮檔
         （publish_plan 照樣交出），其餘的與取消時的全部丟掉（PublishPreview.close）"""

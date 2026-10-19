@@ -48,6 +48,7 @@ from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVe
 from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from services.project_access import AccessResult, ProjectAccess
+from services.publish_runner import PublishOutcome, PublishProgress, PublishRunner
 from services.publish_service import (
     FunctionProblem, ProjectBlock, PublishReadiness, PublishService, check_groups, project_blocks,
 )
@@ -63,6 +64,7 @@ from ui.widgets import ask_save_path, not_downloaded_text
 
 if TYPE_CHECKING:
     from services.catalog_service import CatalogService
+    from ui.publish_dialog import PublishPreviewDialog
 
 
 class _WriteBack(Enum):
@@ -78,6 +80,7 @@ _DEPOSIT_TEXTS = TaskTexts.of("deposit")
 _CLEAR_TEXTS = TaskTexts.of("clear")
 _DOWNLOAD_TEXTS = TaskTexts.of("download")
 _REVERT_TEXTS = TaskTexts.of("revert")
+_PUBLISH_TEXTS = TaskTexts.of("publish.run")
 # 清除本機檔案不刪的系統標準使用者資料夾（含在地化的名稱，例如 Linux 的「桌面」）
 _STANDARD_LOCATIONS = (
     QStandardPaths.HomeLocation, QStandardPaths.DesktopLocation, QStandardPaths.DocumentsLocation,
@@ -203,6 +206,14 @@ class MainWindow(QMainWindow):
         # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀
         self._club_settings = ClubSettingsService(preferences, self._log)
         self._publisher = PublishService(self._huaxia_auth)
+        self._publish_runner = PublishRunner(self._huaxia_auth, self.file_service, self._compressor, self._log)
+        # 發譜有自己的背景工作（一次一件）：發出去的是快照，不鎖住其他操作，也不占用上面那一件
+        self._publishing = TaskSlot(
+            self, self._set_publish_status, self._show_publishing_state, self._show_publish_progress,
+        )
+        # 這次發譜的逐行紀錄與沒發成的群組（切換介面語言重建畫面時照樣顯示）
+        self._publish_lines: List[str] = []
+        self._publish_failures: List[str] = []
         # 聲部名稱自動完成的候選全程式一份：譜庫視窗讀到的聲部名稱，編制表與分割視窗都用
         self._voice_candidates = VoiceCandidates()
         # 「關於」顯示的版號：打包版讀資源目錄的版號檔，開發版為 None
@@ -219,6 +230,7 @@ class MainWindow(QMainWindow):
         self._create_menu()
         self._create_ui()
         self._show_background_state()
+        self._show_publishing_state()
         self._update_title()
 
     # --- 選單 ---
@@ -333,7 +345,7 @@ class MainWindow(QMainWindow):
         self._rebuild_tabs()
 
     def _build_bottom_panel(self, parent_layout):
-        """底部：樂團類型、總譜命名格式、狀態列、背景工作的進度與取消鈕、預覽並重新命名"""
+        """底部：樂團類型、總譜命名格式、發譜的逐行紀錄、狀態列、發譜與背景工作的進度與停止鈕、預覽並重新命名"""
         bottom = QWidget()
         bl = QVBoxLayout(bottom)
         bl.setContentsMargins(8, 4, 8, 8)
@@ -354,9 +366,23 @@ class MainWindow(QMainWindow):
         self._vars_btn.clicked.connect(self._show_variable_menu)
         template_row.addWidget(self._vars_btn)
         bl.addLayout(template_row)
+        from ui.publish_run import PublishRunPanel
+        self._publish_panel = PublishRunPanel()
+        self._publish_panel.show_record(self._publish_lines, self._publish_failures)
+        self._publish_panel.setVisible(bool(self._publish_lines))
+        bl.addWidget(self._publish_panel)
         action_row = QHBoxLayout()
         self._status_label = QLabel(t("status.ready"))
         action_row.addWidget(self._status_label, stretch=1)
+        self._publish_status = QLabel()
+        action_row.addWidget(self._publish_status)
+        self._publish_progress = QProgressBar()
+        self._publish_progress.setFixedWidth(120)
+        self._publish_progress.setTextVisible(False)
+        action_row.addWidget(self._publish_progress)
+        self._publish_cancel_btn = QPushButton(t("publish.run.cancel"))
+        self._publish_cancel_btn.clicked.connect(self._publishing.cancel)
+        action_row.addWidget(self._publish_cancel_btn)
         self._task_progress = QProgressBar()
         self._task_progress.setFixedWidth(160)
         self._task_progress.setTextVisible(False)
@@ -1203,6 +1229,7 @@ class MainWindow(QMainWindow):
         唯讀的專案（較新版本建立的專案檔）存不了檔，所以停用存檔、另存，以及所有會改專案或搬動、
         產生它引用的檔案的操作：關閉時才不會有存不了的修改。分頁仍可切換，只停用內容。
         背景工作進行中停用會動到檔案的操作；鎖住專案的背景工作（存入譜庫、清除本機檔案、下載回原位、撤銷存入）進行中，比照唯讀停用專案編輯與存檔。
+        發譜進行中只停用「發譜」（發出去的是快照，其他操作照常）。
         """
         busy = self._task is not None
         editable = not self.project.read_only and not (busy and self._task_locks_project)
@@ -1215,6 +1242,7 @@ class MainWindow(QMainWindow):
         for widget in self._edit_widgets + pages:
             widget.setEnabled(editable)
         self._rename_btn.setEnabled(editable and not busy)
+        self._publish_btn.setEnabled(editable and not self._publishing.busy)
         self._instrumentation_table.set_editable(editable)
 
     def _confirm_cancel_background(self) -> bool:
@@ -1237,6 +1265,7 @@ class MainWindow(QMainWindow):
         self._create_menu()
         self._create_ui()
         self._show_background_state()
+        self._show_publishing_state()
         self._sync_ui_from_project()
         self._update_title()
 
@@ -1607,11 +1636,13 @@ class MainWindow(QMainWindow):
         self._publish_btn.setVisible(self._club_settings.remembered() is PublishingPlatform.HUAXIA)
 
     def _publish(self):
-        """按了「發譜」：檢查能不能發，不能就寫出原因；能就開啟發譜預覽
+        """按了「發譜」：檢查能不能發，不能就寫出原因；能就開啟發譜預覽，在預覽按下「發譜」後開始發譜
 
         依序：專案層級的檢查（未存檔、不是國樂團，不連網）、重讀社團設定（已拿掉 HuaXia 就說明並隱藏按鈕；
-        讀不到時頂端顯示提示列）、沒登入 HuaXia 時先登入、在背景重查幹部身分與發譜函式並讀曲目。
+        讀不到時頂端顯示提示列）、沒登入 HuaXia 時先登入、在背景重查幹部身分與發譜函式並讀曲目。發譜進行中不再開。
         """
+        if self._publishing.busy:
+            return
         blocks = project_blocks(self.project)
         if blocks:
             QMessageBox.warning(self, t("publish.title"), "\n".join(t(_PROJECT_BLOCK_KEYS[b]) for b in blocks))
@@ -1635,9 +1666,91 @@ class MainWindow(QMainWindow):
             self.project, check_groups(self.project), readiness, self, compressor=self._compressor,
             file_service=self.file_service, opener=self._opener, download_back=self.download_back,
         )
-        dialog.exec()
+        accepted = dialog.exec() == PublishPreviewDialog.Accepted
+        if accepted:
+            self._start_publishing(dialog)
         dialog.deleteLater()
         self._instrumentation_table.refresh()
+
+    def _start_publishing(self, dialog: "PublishPreviewDialog"):
+        """在預覽按下了「發譜」：新建曲目產生編號並自動存檔一次，在等待視窗裡重查並做快照，再在背景發譜
+
+        存檔時專案只有預覽寫進去的改動（曲目的對應與手動挑的聲部配對），一起存下；存不成、重查不過或快照失敗時
+        不發（預覽交出的壓縮檔一併丟掉）。發譜不鎖住主視窗的其他操作（發出去的是快照）。
+        """
+        runner = self._publish_runner
+        dialog.assign_piece_ids()
+        if self.project.is_modified() and not (self._project_path and self._write_project_file(self._project_path)):
+            runner.give_up(dialog.publish_plan())
+            return
+        plans = dialog.publish_plan()
+        try:
+            readiness, snapshot = run_while_waiting(
+                self, t("publish.title"), t("publish.run.preparing"), lambda: runner.start(plans), lambda: None,
+            )
+        except HuaXiaError as e:
+            QMessageBox.warning(self, t("publish.title"), _huaxia_error_text(e))
+            return
+        except OSError as e:
+            QMessageBox.warning(self, t("publish.title"), t("publish.run.snapshot_failed", error=e))
+            return
+        if snapshot is None:
+            QMessageBox.warning(self, t("publish.title"), _not_ready_text(readiness))
+            self._show_publish_button()
+            return
+        self._catalog_error_bar.clear()
+        self._publish_lines, self._publish_failures = [t("publish.run.started", groups=len(snapshot.groups))], []
+        self._publish_panel.show_record(self._publish_lines, self._publish_failures)
+        self._publish_panel.show()
+
+        def work(should_cancel, report) -> PublishOutcome:
+            """在背景照快照發譜"""
+            return runner.run(snapshot, self._catalog_factory, should_cancel, report)
+
+        self._publishing.run(work, _PUBLISH_TEXTS, self._publish_finished, self._describe_publish)
+
+    def _describe_publish(self, progress: PublishProgress) -> tuple:
+        """發譜的一次進度：接上一行逐行紀錄，交回（狀態列文字，已完成數，總數）"""
+        from ui.publish_run import progress_line
+        line = progress_line(progress)
+        self._publish_lines.append(line)
+        self._publish_panel.add_line(line)
+        return t("publish.run.progress", done=progress.done, total=progress.total), progress.done, progress.total
+
+    def _publish_finished(self, outcome: PublishOutcome, _cancelled: bool):
+        """發譜結束：逐行紀錄接上結果，列出沒發成的群組；發譜紀錄寫不進譜庫時頂端顯示提示列"""
+        from ui.publish_run import failure_line, summary_lines
+        lines = summary_lines(outcome)
+        self._publish_lines += lines
+        self._publish_failures = [failure_line(group) for group in outcome.failed]
+        self._publish_panel.show_record(self._publish_lines, self._publish_failures)
+        self._publish_panel.show()
+        self._set_publish_status("")
+        self._set_status(lines[0])
+        error = outcome.error or outcome.log_error
+        if error is not None:
+            heading = t("publish.run.not_started") if outcome.error is not None else t("publish.run.result_not_logged")
+            self._catalog_error_bar.show_failure(
+                heading, CatalogFailure.from_error(error, t("publish.title")), self._publish,
+            )
+
+    def _set_publish_status(self, text: str):
+        """狀態列發譜的那一段文字"""
+        self._publish_status.setText(text)
+
+    def _show_publish_progress(self, done: int, total: int):
+        """發譜的總進度"""
+        self._publish_progress.setRange(0, max(total, 1))
+        self._publish_progress.setValue(done)
+
+    def _show_publishing_state(self):
+        """依有沒有發譜在進行，顯示或隱藏發譜的進度與停止鈕，停用或恢復「發譜」"""
+        busy = self._publishing.busy
+        self._publish_status.setVisible(busy)
+        self._publish_progress.setVisible(busy)
+        self._publish_cancel_btn.setVisible(busy)
+        self._publish_cancel_btn.setEnabled(busy and not self._publishing.cancel_requested)
+        self._show_enabled_state()
 
     def _club_settings_enable_huaxia(self) -> bool:
         """在背景重讀譜庫的社團設定；已拿掉 HuaXia 發譜時說明並隱藏「發譜」，讀不到時頂端顯示提示列（重試再按一次）"""
@@ -1818,7 +1931,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_unsynced() or not self._confirm_undeposited():
             event.ignore()
             return
-        if not self._confirm_cancel_background():
+        if not self._confirm_cancel_background() or not self._publishing.confirm_close():
             event.ignore()
             return
         event.accept()
