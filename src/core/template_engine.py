@@ -116,8 +116,8 @@ def convert_template_language(template: str, to_locale: str) -> str:
 def extract_instruments_from_filenames(filenames: List[str]) -> List[str]:
     """從檔名清單中提取樂器名稱
 
-    策略：找出共同前綴與共同後綴（以分隔符為邊界），
-    取出中間不同的部分作為樂器名稱。
+    策略：各檔名先去掉開頭的序號（每份都不同，會讓共同前綴斷在第一個字），
+    再找出共同前綴與共同後綴（以分隔符為邊界，例如曲名），取出中間不同的部分作為樂器名稱。
 
     Args:
         filenames: 檔案名稱清單（不含路徑）
@@ -131,6 +131,7 @@ def extract_instruments_from_filenames(filenames: List[str]) -> List[str]:
     if len(basenames) == 1:
         name = re.sub(r'^\d+[\s.\-_]*', '', basenames[0]).strip()
         return [name] if name else basenames
+    basenames = [re.sub(r'^\d+[\s.\-_]+', '', name) or name for name in basenames]
     prefix = os.path.commonprefix(basenames)
     prefix = re.sub(r'[^\s.\-_,;:]+$', '', prefix)
     reversed_names = [n[::-1] for n in basenames]
