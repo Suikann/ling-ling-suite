@@ -684,6 +684,14 @@ class TestVoicesCarryTheirParts(unittest.TestCase):
         self.project.add_instrument(self.group, "Tuba")
         self.assertEqual(self.pairs()[-1], ("Tuba", "tb.pdf"))
 
+    def test_a_new_voice_taking_a_part_beyond_the_voices_leaves_the_others_once(self):
+        self.project.add_files(_infos("tb.pdf", "hp.pdf"), self.group)
+        self.project.add_instrument(self.group, "Tuba")
+        self.assertEqual(
+            [f.display_name for f in self.group.files], ["fl.pdf", "ob.pdf", "hn.pdf", "tb.pdf", "hp.pdf"],
+        )
+        self.assertEqual([f.display_name for f in self.group.extra_files()], ["hp.pdf"])
+
     def test_a_voice_without_a_part_is_saved_and_opened_again(self):
         self.project.set_present(self.group, 1, False)
         self.project.set_present(self.group, 1, True)

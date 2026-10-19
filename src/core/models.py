@@ -1418,7 +1418,9 @@ class Project:
         """
         _refuse_duplicate_voice(group.instruments, name)
         extras = group.extra_files()
-        _place_rows(group, _voice_rows(group) + [_VoiceRow(name, True, Headcount(), extras[0] if extras else None)])
+        _place_rows(
+            group, _voice_rows(group) + [_VoiceRow(name, True, Headcount(), extras[0] if extras else None)], extras[1:],
+        )
         self._changed()
 
     def rename_instrument(self, group: Group, index: int, name: str) -> None:
