@@ -1,4 +1,4 @@
-> 複本。正本是 HuaXia 的 `docs/LINGLING.md`，取自 [Suikann/HuaXia 分支 lingling-publish 的 dbc5c03](https://github.com/Suikann/HuaXia/blob/dbc5c037f2442c2ac934721e5fc45079ea811da1/docs/LINGLING.md)（合併請求 [oshigirimoquan-coder/HuaXia#1](https://github.com/oshigirimoquan-coder/HuaXia/pull/1)；合併後以 HuaXia `main` 為準）。泠靈的 `services/huaxia_client.py` 頂端的常數與 `tests/fake_huaxia.py` 的發譜函式照這份實作，正本改了就同步這份、假 HuaXia 與 `tests/test_huaxia_publish.py`。
+> 複本。正本是 HuaXia 的 `docs/LINGLING.md`，取自 [Suikann/HuaXia 分支 lingling-publish 的 1c337b9](https://github.com/Suikann/HuaXia/blob/1c337b93ce58dfc319c2c359fdaafb87d08b97e2/docs/LINGLING.md)（合併請求 [oshigirimoquan-coder/HuaXia#1](https://github.com/oshigirimoquan-coder/HuaXia/pull/1)；合併後以 HuaXia `main` 為準）。泠靈的 `services/huaxia_client.py` 頂端的常數與 `tests/fake_huaxia.py` 的發譜函式照這份實作，正本改了就同步這份、假 HuaXia 與 `tests/test_huaxia_publish.py`。
 
 # 泠靈依賴說明
 
@@ -23,8 +23,9 @@
 | `profiles` | `id`、`status`、`created_at` | 讀。登入後不是幹部時，依帳號狀態（待核准、停用）與建立時間判斷是不是這次登入才多建的帳號 |
 | `user_roles` | — | 不直接讀，經 `is_officer()` |
 | `pieces` | `id`、`title`、`composer`、`duration_min`、`ensemble`、`archived` | 讀沒封存的曲目讓譜務挑。新建時寫 `id`（泠靈先產生）、`title`、`composer`、`duration_min`（分鐘，0.5 為一級，同網頁表單）、`ensemble`（`tutti`／`sizhu`）。不改現有曲目、不封存、不刪曲目 |
-| `piece_parts` | `id`、`piece_id`、`name`、`needed`、`needed_min`、`section`、`sort` | 讀這幾首曲目的聲部，以名稱對到泠靈的聲部。新建時寫這些欄位；現有聲部只改 `needed`、`needed_min`、`section`。`needed` 是記法 `6`、`6-8`、`2↑`，`needed_min` 是最少人數；`section` 只寫五組之一，空白交給觸發器 `guess_section`。不改名稱、不碰 `tutor_id`、`note`，發譜**永遠不刪聲部** |
+| `piece_parts` | `id`、`piece_id`、`name`、`needed`、`needed_min`、`section`、`sort`、`tutor_id`、`note` | 讀這幾首曲目的聲部，以名稱對到泠靈的聲部。新建時寫 `name`、`needed`、`needed_min`、`section`、`sort`；現有聲部只改 `needed`、`needed_min`、`section`。`needed` 是記法 `6`、`6-8`、`2↑`，`needed_min` 是最少人數；`section` 只寫五組之一，空白交給觸發器 `guess_section`。不改名稱；`tutor_id`、`note` 只讀不寫：撤回時其中一個有值就算有人在網頁上設定過那個聲部，不刪。撤回時也比對 `name` 與那次新建時的名稱，被改過名的同樣不刪。發譜**永遠不刪聲部** |
 | `part_assignments` | `id`、`part_id` | 讀。撤回時判斷那次新建的聲部有沒有排人（依 `id` 排序分頁）；泠靈不寫 |
+| `practice_reports` | `id`、`part_id` | 只讀不寫。撤回時判斷那次新建的聲部有沒有練習回報指著它（刪聲部會把 `part_id` 設成 null，回報就對不回聲部），有的話不刪；依 `id` 排序分頁，幹部經 `can_see_report` 看得到全部 |
 | `scores` | `id`、`piece_id`、`part_id`、`title`、`file_path`、`section`、`created_at` | 讀這幾首曲目的樂譜，依 `file_path` 分出哪份是泠靈發的。`part_id` 為 null 且 `section` 為 null 是總譜；泠靈登記的 `section` 一律為 null。登記新樂譜、撤掉被取代的登記；網頁上傳的（不是泠靈路徑的）只在收回時刪 |
 | `semesters` | `id`、`is_current` | 讀本學期 |
 | `events` | `id`、`semester_id`、`title`、`starts_at`、`ends_at`、`kinds`、`location` | 讀本學期、還沒結束、類型含 `concert` 的場次讓譜務勾；公演結束時間用來提醒收回。不新增、不改場次 |
@@ -117,7 +118,7 @@
 
 ## 撤回與收回（不經函式，以幹部身分經 REST）
 
-- **撤回**某次發譜的某些曲目：刪掉那次 `added_scores` 的登記（`DELETE /rest/v1/scores?id=in.(...)`），刪掉那次 `created_parts` 裡還沒排人的聲部（先讀 `part_assignments` 確認，再 `DELETE /rest/v1/piece_parts?id=in.(...)`），最後刪 Storage 檔。注意 `piece_parts` 刪除會連帶刪掉它的 `part_assignments` 與 `scores`（`on delete cascade`），所以泠靈一定先確認沒排人。人數、聲部組與場次不改回。
+- **撤回**某次發譜的某些曲目：刪掉那次 `added_scores` 的登記（`DELETE /rest/v1/scores?id=in.(...)`），刪掉那次 `created_parts` 裡還沒排人、也沒人在網頁上設定過的聲部（先讀 `part_assignments`、`piece_parts.tutor_id`、`note`、`name` 與 `practice_reports.part_id` 確認，再 `DELETE /rest/v1/piece_parts?id=in.(...)`），最後刪 Storage 檔。那次發譜沒有寫下結果（泠靈中途停下）時，泠靈不知道 HuaXia 的編號，改依那次要登記的泠靈路徑，撤掉那首曲目現在登記在這些路徑的樂譜，聲部一律不刪。注意 `piece_parts` 刪除會連帶刪掉它的 `part_assignments` 與 `scores`（`on delete cascade`），所以泠靈一定先確認沒排人。人數、聲部組與場次不改回。
 - **收回**公演結束後的曲目：刪掉曲目的所有樂譜登記與檔案，包括網頁上傳的。聲部、曲目、場次與排人都留著，因為出席率由場次掛的曲目加排人算出。
 - 用到的權限是現有的 `score_write`、`part_write`（幹部）與 Storage 的 `scores_delete`。
 
