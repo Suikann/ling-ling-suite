@@ -112,6 +112,7 @@ When the club settings (the "社團設定" sheet in the catalog spreadsheet) ena
 - After you press "Distribute" it runs in the background and the main window stays editable; what goes out is the files and instrumentation at that moment, so later changes need another distribution. The status bar has "Stop Distributing", the bottom of the main window logs each step, and groups that failed are listed with the reason at the end, with "Distribute Failed Groups Again" to redo only those
 - If the connection drops or you stop halfway, members never see half a set of parts; distributing again picks up where it stopped, without uploading files again or creating the new piece twice; unregistered files an interruption leaves on HuaXia are removed the next time that piece is distributed
 - Every distribution is recorded on the catalog's "發譜紀錄" sheet; if that can't be written, nothing is distributed
+- **Retract**: if a group went to the wrong piece, open **Distribution Log** in the catalog window, select that distribution, press **Retract…** and check the groups. It removes the parts and full score that distribution put up, and the parts it created that nobody is assigned to; replaced files do not come back, and headcounts, sections and events are not changed back. Before retracting you see each part's result and which parts will be left without a score; a piece that distribution created is left empty for an officer to delete on the website
 
 ## Known Limitations
 

@@ -7,7 +7,7 @@
 每個群組各一列。發譜開始前清掉的孤兒檔（services/orphan_cleanup.py）是「清孤兒檔」（PublishAction.CLEAR_ORPHANS），
 一首曲目一列，與「發譜結果」一起寫入、同一個發譜編號。撤回（PublishAction.RETRACT）沿用被撤回那次的發譜編號，
 每個勾選的群組一列；收回與不收回之後也寫在這裡（各自的動作值）。列表上的一項（publish_entries）是一次發譜，
-或同一次寫入的撤回。
+或同一次寫入的撤回；清孤兒檔不列成一項。
 
 一列記這個群組對到哪首 HuaXia 曲目、新建的曲目與聲部、人數與聲部組的原值與新值、傳了／登記了／撤掉登記的／
 刪了哪些檔（Storage 路徑）、掛了哪些場次與結束時間、沒發成的原因。清單與物件的欄以 JSON 寫進一格（PublishRecord.cells），
@@ -147,7 +147,8 @@ class PublishLogEntry:
 def publish_entries(records: Sequence[PublishRecord]) -> List[PublishLogEntry]:
     """把發譜紀錄的列整理成列表的項，新的在前
 
-    同一個發譜編號的開始發譜與發譜結果是一次發譜；其他動作以（發譜編號，動作，時間）分成一項，同一次寫入的列在一起。
+    同一個發譜編號的開始發譜與發譜結果是一次發譜；清孤兒檔略過（隨發譜結果寫入的整理，不是群組）；
+    其他動作以（發譜編號，動作，時間）分成一項，同一次寫入的列在一起。
 
     Args:
         records: 發譜紀錄的全部列，依紀錄的順序（CatalogService.publish_log）
@@ -158,6 +159,8 @@ def publish_entries(records: Sequence[PublishRecord]) -> List[PublishLogEntry]:
     order: List[Tuple[str, ...]] = []
     rows: Dict[Tuple[str, ...], List[PublishRecord]] = {}
     for record in records:
+        if record.action is PublishAction.CLEAR_ORPHANS:
+            continue
         if record.action in (PublishAction.START, PublishAction.RESULT):
             key: Tuple[str, ...] = (record.publish_id, PublishAction.START.value)
         else:

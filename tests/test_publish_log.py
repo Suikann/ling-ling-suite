@@ -140,6 +140,15 @@ class TestEntries(unittest.TestCase):
         self.assertEqual([r.action for r in entries[2].groups], [PublishAction.RESULT, PublishAction.RESULT])
         self.assertEqual([r.action for r in entries[1].groups], [PublishAction.START])
 
+    def test_orphan_cleanups_are_not_listed_as_entries(self):
+        rows = [
+            self.row(PublishAction.START, "P1", "10/05 22:10", "烽火操"),
+            self.row(PublishAction.CLEAR_ORPHANS, "P1", "10/05 22:12", "", failure={"code": "x"}),
+            self.row(PublishAction.RESULT, "P1", "10/05 22:12", "烽火操"),
+        ]
+        [entry] = publish_entries(rows)
+        self.assertEqual((entry.action, [r.action for r in entry.groups]), (PublishAction.START, [PublishAction.RESULT]))
+
     def test_retracts_written_at_different_times_are_separate(self):
         rows = [
             self.row(PublishAction.START, "P1", "10/05 22:10", "烽火操"),
