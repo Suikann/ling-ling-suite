@@ -30,14 +30,12 @@ from services.catalog_service import CatalogService, PendingCatalog
 from services.club_settings_service import ClubSettingsService
 from services.google_auth_service import GoogleAuthService, LoginFailed, LoginFailure, LoginReason
 from services.google_catalog import open_google_catalog, open_google_drive
-from services.huaxia_auth_service import (
-    AccountStanding, HuaXiaAuthService, HuaXiaLoginFailed, HuaXiaLoginFailure, HuaXiaReason, NotOfficer,
-)
-from services.huaxia_client import HuaXiaError, HuaXiaErrorKind
+from services.huaxia_auth_service import HuaXiaAuthService, HuaXiaReason
 from services.preferences_service import PreferencesService
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.background_task import BackgroundTask
 from ui.catalog_tasks import CatalogTasks
+from ui.huaxia_prompts import sign_in_huaxia
 from ui.waiting_dialog import run_while_waiting
 
 # 登入狀態旁的原因對應的介面字串
@@ -63,19 +61,7 @@ _HUAXIA_REASON_KEYS = {
     HuaXiaReason.NOT_SAVED: "catalog.auth.reason.not_saved",
     HuaXiaReason.SESSION_GONE: "huaxia.auth.session_gone",
 }
-# HuaXia 登入沒有完成時提示的介面字串；取消不提示，不是幹部與 FAILED 另組訊息
-_HUAXIA_FAILURE_KEYS = {
-    HuaXiaLoginFailure.BROWSER_NOT_OPENED: "catalog.auth.browser_not_opened",
-    HuaXiaLoginFailure.TIMED_OUT: "huaxia.auth.timed_out",
-    HuaXiaLoginFailure.DENIED: "huaxia.auth.denied",
-}
-# 不是幹部時各種帳號狀況的說明
-_NOT_OFFICER_KEYS = {
-    AccountStanding.JUST_CREATED: "huaxia.not_officer.just_created",
-    AccountStanding.AWAITING_APPROVAL: "huaxia.not_officer.awaiting_approval",
-    AccountStanding.DISABLED: "huaxia.not_officer.disabled",
-    AccountStanding.NOT_OFFICER: "huaxia.not_officer.not_officer",
-}
+
 
 
 def _extract_folder_id(text: str) -> str:
@@ -108,59 +94,6 @@ def sign_in_google(parent: QWidget, auth: GoogleAuthService) -> bool:
             key = _LOGIN_FAILURE_KEYS.get(e.failure)
             message = t(key) if key else t("catalog.auth.failed", error=str(e))
             QMessageBox.warning(parent, t("catalog.auth.title"), message)
-        return False
-    return True
-
-
-def not_officer_text(not_officer: NotOfficer) -> str:
-    """不是幹部時的說明：帳號的狀況，查得到時前面寫出目前登入的 Discord 帳號名稱（登入與發譜前重查共用）"""
-    reason = t(_NOT_OFFICER_KEYS[not_officer.standing])
-    if not not_officer.discord_name:
-        return reason
-    return t("huaxia.not_officer.with_account", name=not_officer.discord_name, reason=reason)
-
-
-def huaxia_error_text(error: HuaXiaError, unreachable_key: str, failed_key: str) -> str:
-    """連 HuaXia 失敗的說明（發譜與撤回共用）：登入已失效、連不上、沒有登入，其他寫出錯誤
-
-    Args:
-        error: HuaXia 請求的錯誤
-        unreachable_key: 連不上時的介面字串鍵
-        failed_key: 其他錯誤的介面字串鍵（以 error 代入錯誤訊息）
-    """
-    if error.kind is HuaXiaErrorKind.SESSION_GONE:
-        return t("huaxia.auth.session_gone")
-    if error.kind is HuaXiaErrorKind.UNREACHABLE:
-        return t(unreachable_key)
-    if error.kind is HuaXiaErrorKind.SIGNED_OUT:
-        return t("huaxia.auth.not_connected")
-    return t(failed_key, error=str(error))
-
-
-def sign_in_huaxia(parent: QWidget, auth: HuaXiaAuthService) -> bool:
-    """以 Discord 登入 HuaXia，期間顯示可取消的等待視窗；沒有完成時提示原因（取消不提示）
-
-    Args:
-        parent: 等待視窗與提示的父元件
-        auth: HuaXia 登入服務
-
-    Returns:
-        是否登入成功（是幹部）
-    """
-    try:
-        run_while_waiting(
-            parent, t("huaxia.auth.title"), t("huaxia.auth.waiting"), auth.authenticate, auth.cancel_login,
-        )
-    except HuaXiaLoginFailed as e:
-        if e.failure is HuaXiaLoginFailure.NOT_OFFICER:
-            message = not_officer_text(e.not_officer)
-        elif e.failure in _HUAXIA_FAILURE_KEYS:
-            message = t(_HUAXIA_FAILURE_KEYS[e.failure])
-        elif e.failure is HuaXiaLoginFailure.CANCELLED:
-            return False
-        else:
-            message = t("huaxia.auth.failed", error=str(e))
-        QMessageBox.warning(parent, t("huaxia.auth.title"), message)
         return False
     return True
 

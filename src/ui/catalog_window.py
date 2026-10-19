@@ -55,7 +55,6 @@ from services.deposit_revert_service import RevertOutcome
 from services.download_service import DownloadOutcome, DownloadService
 from services.google_auth_service import GoogleAuthService
 from services.huaxia_auth_service import HuaXiaAuthService
-from services.huaxia_client import HuaXiaError
 from services.recall_reminder import RecallReminder
 from services.recall_service import RecallResult, RecallService
 from services.retract_service import RetractResult, RetractService
@@ -63,9 +62,9 @@ from services.google_catalog import open_google_catalog
 from services.preferences_service import PreferencesService
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.background_task import BackgroundTask, TaskSlot, TaskTexts
-from ui.catalog_tasks import CatalogTasks, catalog_work
+from ui.catalog_tasks import CatalogTasks, catalog_work, wait_for_catalog
+from ui.huaxia_prompts import ensure_signed_in, not_officer_text
 from ui.section_map_editor import SectionMapEditor
-from ui.waiting_dialog import run_while_waiting
 from ui.widgets import not_downloaded_text
 
 
@@ -1218,8 +1217,10 @@ class CatalogWindow(QMainWindow):
         if not self._signed_in_huaxia("retract"):
             return
         retry = functools.partial(self._retract, entry)
-        preview = self._while_waiting("retract", t("retract.reading"), lambda: self._retracter.preview(entry), retry)
-        if preview is None:
+        done, preview = self._while_waiting(
+            "retract", t("retract.reading"), lambda: self._retracter.preview(entry), retry,
+        )
+        if not done:
             return
         dialog = RetractDialog(preview, self)
         accepted = dialog.exec() == QDialog.Accepted
@@ -1227,53 +1228,44 @@ class CatalogWindow(QMainWindow):
         dialog.deleteLater()
         if not accepted or not chosen:
             return
-        result = self._while_waiting(
+        done, result = self._while_waiting(
             "retract", t("retract.running"), lambda: self._retracter.retract(entry, chosen, self._connected()), retry,
         )
-        if result is not None:
+        if done:
             self._retract_finished(result)
 
     def _signed_in_huaxia(self, action: str) -> bool:
-        """撤回或收回前確認已登入 HuaXia：沒登入時問要不要以 Discord 登入，登入成功才回 True
+        """撤回或收回前確認已登入 HuaXia（huaxia_prompts.ensure_signed_in）
 
         Args:
             action: 介面字串鍵的開頭（"retract" 或 "recall"）
         """
-        from ui.catalog_settings_dialog import sign_in_huaxia
-        if self._huaxia_auth.status().signed_in:
-            return True
-        answer = QMessageBox.question(
-            self, t(f"{action}.title_short"),
-            t(f"{action}.sign_in_first", reminder=t("huaxia.auth.link_discord_first")),
-        )
-        return answer == QMessageBox.Yes and sign_in_huaxia(self, self._huaxia_auth)
+        return ensure_signed_in(self, self._huaxia_auth, t(f"{action}.title_short"), f"{action}.sign_in_first")
 
     def _while_waiting(
         self, action: str, message: str, work: Callable[[], object], retry: Callable[[], None],
         catalog_problem: str = "catalog.error.cannot_write",
-    ):
-        """在等待視窗裡做撤回或收回的一步；連不上 HuaXia 或譜庫時寫出原因、回傳 None
+    ) -> Tuple[bool, object]:
+        """在等待視窗裡做撤回或收回的一步（catalog_tasks.wait_for_catalog）：連不上 HuaXia 時寫出原因，其他失敗
+        顯示提示列
 
         Args:
             action: 介面字串鍵的開頭（"retract" 或 "recall"）：標題與連不上、失敗的說明
             message: 等待視窗的說明
             work: 在背景執行緒執行的那一步
-            retry: 接不上譜庫時，提示列按「重試」重來一次
-            catalog_problem: 接不上譜庫時提示列開頭的介面字串鍵（這一步是讀譜庫時傳讀不到的）
+            retry: 提示列按「重試」重來一次
+            catalog_problem: 提示列開頭的介面字串鍵（這一步是讀譜庫時傳讀不到的）
+
+        Returns:
+            （成功與否，那一步的結果；失敗時為 None）
         """
-        from ui.catalog_settings_dialog import huaxia_error_text
-        title = t(f"{action}.title_short")
-        try:
-            return run_while_waiting(self, title, message, work, lambda: None)
-        except HuaXiaError as e:
-            QMessageBox.warning(self, title, huaxia_error_text(e, f"{action}.unreachable", f"{action}.failed"))
-        except CatalogError as e:
-            self._error_bar.show_failure(t(catalog_problem), CatalogFailure.from_error(e, title), retry)
-        return None
+        return wait_for_catalog(
+            self, self._error_bar, t(f"{action}.title_short"), message, work, t(catalog_problem), retry,
+            huaxia_action=action,
+        )
 
     def _retract_finished(self, result: RetractResult):
         """撤回結束：寫出結果（不是幹部時寫出原因），重新讀取發譜紀錄"""
-        from ui.catalog_settings_dialog import not_officer_text
         from ui.publish_retract_dialog import result_text
         if result.not_officer is not None:
             QMessageBox.warning(self, t("retract.title_short"), not_officer_text(result.not_officer))
@@ -1292,11 +1284,11 @@ class CatalogWindow(QMainWindow):
         from ui.publish_recall_dialog import RecallDialog
         if not self._signed_in_huaxia("recall"):
             return
-        preview = self._while_waiting(
+        done, preview = self._while_waiting(
             "recall", t("recall.reading"), lambda: self._recaller.preview(self._connected()), self.recall,
             "catalog.error.cannot_read",
         )
-        if preview is None:
+        if not done:
             return
         dialog = RecallDialog(preview, self)
         accepted = dialog.exec() == QDialog.Accepted
@@ -1305,23 +1297,22 @@ class CatalogWindow(QMainWindow):
         if not accepted or not chosen:
             return
         if decision is PublishAction.KEEP:
-            done = self._while_waiting(
+            done, _ = self._while_waiting(
                 "recall", t("recall.keeping"), lambda: self._recaller.keep(chosen, self._connected()),
                 self.recall,
             )
-            if done is not None:
+            if done:
                 QMessageBox.information(self, t("recall.title_short"), t("recall.kept", count=len(chosen)))
                 self._show_publish_log()
             return
-        result = self._while_waiting(
+        done, result = self._while_waiting(
             "recall", t("recall.running"), lambda: self._recaller.recall(chosen, self._connected()), self.recall,
         )
-        if result is not None:
+        if done:
             self._recall_finished(result)
 
     def _recall_finished(self, result: RecallResult):
         """收回結束：寫出結果（不是幹部時寫出原因），重新讀取發譜紀錄"""
-        from ui.catalog_settings_dialog import not_officer_text
         from ui.publish_recall_dialog import result_text
         if result.not_officer is not None:
             QMessageBox.warning(self, t("recall.title_short"), not_officer_text(result.not_officer))

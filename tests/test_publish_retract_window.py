@@ -193,6 +193,16 @@ class TestRetractFromCatalogWindow(RetractTestCase):
         panel.table.selectRow(1)
         self.assertTrue(panel.retract_button.isEnabled())
 
+    def test_an_unexpected_failure_while_reading_shows_the_error_bar(self):
+        from services.retract_service import RetractService
+        from ui.catalog_error_bar import CatalogErrorBar
+        window = self.open_catalog()
+        panel = window.findChild(PublishLogPanel)
+        panel.table.selectRow(0)
+        with mock.patch.object(RetractService, "preview", side_effect=ValueError("broken")), answering_prompts():
+            panel.retract_button.click()
+        self.assertFalse(window.findChild(CatalogErrorBar).isHidden())
+
     def test_retracting_from_the_log_removes_the_files_and_writes_a_row(self):
         window = self.open_catalog()
         panel = window.findChild(PublishLogPanel)

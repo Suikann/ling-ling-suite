@@ -7,6 +7,8 @@ BackgroundTask 失敗時只交回例外的訊息，這裡把例外本身當成�
 不是 CatalogError 的例外（程式的錯）歸為「其他」，也照樣交回，不會被吞掉。
 視窗關閉時以 abandon_all 放棄還在跑的工作：背景執行緒之後不再碰視窗。
 要接譜庫的背景長工作（下載、撤銷存入）以 catalog_work 包起來：接不上譜庫時把錯誤交回成結果，不拋出。
+在等待視窗裡做一件碰譜庫（與 HuaXia）的事一律經 wait_for_catalog：失敗時譜庫的錯誤顯示在那個視窗的提示列，
+HuaXia 的錯誤寫成對話框。
 
 使用範例：
     from ui.catalog_tasks import CatalogTasks
@@ -15,14 +17,20 @@ BackgroundTask 失敗時只交回例外的訊息，這裡把例外本身當成�
     tasks.abandon_all()   # closeEvent
     work = catalog_work(connect, lambda catalog, cancel, report: service.restore(groups, catalog, cancel, report),
                         lambda error: DownloadOutcome(error=error))
+    done, result = wait_for_catalog(window, error_bar, title, waiting, work, heading, retry)
 """
-from typing import Any, Callable, List, Tuple, TypeVar
+from typing import Any, Callable, List, Optional, Tuple, TypeVar
 
 from PySide6.QtCore import QObject
+from PySide6.QtWidgets import QMessageBox, QWidget
 
-from core.catalog_errors import CatalogError, as_catalog_error
+from core.catalog_errors import CatalogError, CatalogFailure, as_catalog_error
 from services.catalog_service import CatalogService
+from services.huaxia_client import HuaXiaError
 from ui.background_task import BackgroundTask, Work
+from ui.catalog_error_bar import CatalogErrorBar
+from ui.huaxia_prompts import huaxia_error_text
+from ui.waiting_dialog import run_while_waiting
 
 T = TypeVar("T")
 
@@ -50,6 +58,41 @@ def catalog_work(
             return unreachable(as_catalog_error(e))
         return run(catalog, should_cancel, report)
     return work
+
+
+def wait_for_catalog(
+    parent: QWidget, error_bar: CatalogErrorBar, title: str, waiting: str, work: Callable[[], T], heading: str,
+    retry: Callable[[], Any], stop: Callable[[], None] = lambda: None, action: str = "", huaxia_action: str = "",
+) -> Tuple[bool, Optional[T]]:
+    """在等待視窗裡於背景做一件碰譜庫（與 HuaXia）的事；失敗時寫出原因，不拋出
+
+    HuaXia 的錯誤（給了 huaxia_action 時）以對話框寫出原因；其他錯誤一律當成譜庫的錯誤（不是 CatalogError 的歸為
+    其他），在 error_bar 顯示提示列並寫進紀錄檔，按處理按鈕呼叫 retry。
+
+    Args:
+        parent: 等待視窗與對話框的父元件
+        error_bar: 那個視窗頂端的提示列
+        title: 等待視窗與對話框的標題（也是失敗時記下的動作，除非另給 action）
+        waiting: 等待視窗的說明
+        work: 在背景執行緒呼叫的工作
+        heading: 譜庫失敗時提示列的開頭
+        retry: 提示列按處理按鈕時呼叫
+        stop: 等待視窗按取消時呼叫
+        action: 失敗時記進詳細資料與紀錄檔的動作；省略時為 title
+        huaxia_action: HuaXia 失敗時說明的介面字串鍵開頭（huaxia_prompts.huaxia_error_text）；省略時 HuaXia 的錯誤
+            也當成譜庫的錯誤
+
+    Returns:
+        （成功與否，work 的結果；失敗時為 None）
+    """
+    try:
+        return True, run_while_waiting(parent, title, waiting, work, stop)
+    except Exception as e:
+        if huaxia_action and isinstance(e, HuaXiaError):
+            QMessageBox.warning(parent, title, huaxia_error_text(e, huaxia_action))
+        else:
+            error_bar.show_failure(heading, CatalogFailure.from_error(as_catalog_error(e), action or title), retry)
+        return False, None
 
 
 class CatalogTasks:

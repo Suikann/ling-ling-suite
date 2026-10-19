@@ -37,7 +37,7 @@ from tests.fake_browser import CallbackBrowser
 from tests.fake_huaxia import FakeHuaXia
 from tests.memory_keyring import MemoryKeyring
 from tests.test_main_window import MainWindowTestCase, answering_prompts
-from ui.catalog_settings_dialog import not_officer_text
+from ui.huaxia_prompts import not_officer_text
 from ui.instrumentation_table import InstrumentationTable
 from services.publish_service import GroupCheck, PublishService
 from ui.publish_dialog import PublishPreviewDialog

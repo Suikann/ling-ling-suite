@@ -20,7 +20,7 @@ from core.constants import (
     LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
 from core.catalog_constants import PublishingPlatform
-from core.catalog_errors import CatalogError, CatalogErrorKind, CatalogFailure, as_catalog_error
+from core.catalog_errors import CatalogError, CatalogErrorKind, CatalogFailure
 from core.catalog_sync import PlaceWrite, SyncOutcome, WriteSource, place_writes
 from core.clear_local import ClearPlan
 from core.deposit_revert import LocalProject, RevertChoice, RevertPreview
@@ -58,9 +58,10 @@ from services.split_service import SplitService
 from ui.background_task import BackgroundTask, TaskSlot, TaskTexts, Work
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.recall_reminder_bar import RecallReminderBar
-from ui.catalog_tasks import catalog_work
+from ui.catalog_tasks import catalog_work, wait_for_catalog
 from ui.compress_pdf import size_text
 from ui.instrumentation_table import InstrumentationTable
+from ui.huaxia_prompts import ensure_signed_in, huaxia_error_text, not_officer_text
 from ui.waiting_dialog import run_while_waiting
 from ui.widgets import ask_save_path, not_downloaded_text
 
@@ -129,17 +130,10 @@ _PROJECT_BLOCK_KEYS = {
 def _not_ready_text(readiness: PublishReadiness) -> str:
     """HuaXia 那一側不能發的說明：不是幹部的分類，或發譜函式缺少、版本不符"""
     if readiness.not_officer is not None:
-        from ui.catalog_settings_dialog import not_officer_text
         return not_officer_text(readiness.not_officer)
     if readiness.function_problem is FunctionProblem.MISSING:
         return t("publish.function_missing")
     return t("publish.function_mismatch", found=readiness.function_version, expected=PUBLISH_INTERFACE_VERSION)
-
-
-def _huaxia_error_text(error: HuaXiaError) -> str:
-    """按下發譜時連 HuaXia 失敗的說明"""
-    from ui.catalog_settings_dialog import huaxia_error_text
-    return huaxia_error_text(error, "publish.unreachable", "publish.failed")
 
 
 class MainWindow(QMainWindow):
@@ -709,9 +703,9 @@ class MainWindow(QMainWindow):
         def work() -> list:
             """在背景接譜庫並讀出各處"""
             return self._catalog_factory().read_places(targets, orchestra_type)
-        read, places = self._wait_for_catalog(
-            t("catalog.refresh.title"), t("catalog.refresh.waiting"), work, t("catalog.refresh.heading"),
-            self._refresh_from_catalog,
+        read, places = wait_for_catalog(
+            self, self._catalog_error_bar, t("catalog.refresh.title"), t("catalog.refresh.waiting"), work,
+            t("catalog.refresh.heading"), self._refresh_from_catalog,
         )
         if not read:
             return
@@ -735,31 +729,6 @@ class MainWindow(QMainWindow):
             self._catalog_error_bar.show_failure(
                 t("catalog.refresh.gone", groups=names), failure, self._refresh_from_catalog,
             )
-
-    def _wait_for_catalog(
-        self, title: str, waiting: str, work: Callable[[], Any], heading: str, retry: Callable[[], Any],
-        stop: Callable[[], None] = lambda: None, action: str = "",
-    ) -> Tuple[bool, Any]:
-        """在等待視窗裡於背景做一件碰譜庫的事；失敗時頂端顯示提示列（寫進紀錄檔），按處理按鈕呼叫 retry
-
-        Args:
-            title: 等待視窗的標題（也是失敗時記下的動作，除非另給 action）
-            waiting: 等待視窗的說明
-            work: 在背景執行緒呼叫的工作
-            heading: 失敗時提示列的開頭
-            retry: 提示列按「重試」時呼叫
-            stop: 等待視窗按取消時呼叫
-            action: 失敗時記進詳細資料與紀錄檔的動作；省略時為 title
-
-        Returns:
-            （成功與否，work 的結果；失敗時為 None）
-        """
-        try:
-            return True, run_while_waiting(self, title, waiting, work, stop)
-        except Exception as e:
-            failure = CatalogFailure.from_error(as_catalog_error(e), action or title)
-            self._catalog_error_bar.show_failure(heading, failure, retry)
-            return False, None
 
     def _confirm_unsynced(self) -> bool:
         """專案還有未同步的群組時提醒一次（關閉專案或程式前），回傳可不可以繼續關閉"""
@@ -813,8 +782,9 @@ class MainWindow(QMainWindow):
                 return self._catalog_factory().sync_instrumentation(
                     writes, orchestra_type, operator, WriteSource.SAVE, chosen, review_only=review,
                 )
-            sent, outcome = self._wait_for_catalog(
-                t("catalog.sync.title"), t("catalog.sync.waiting"), work, t("catalog.unsynced.heading"), retry,
+            sent, outcome = wait_for_catalog(
+                self, self._catalog_error_bar, t("catalog.sync.title"), t("catalog.sync.waiting"), work,
+                t("catalog.unsynced.heading"), retry,
             )
             if not sent:
                 return _WriteBack.FAILED
@@ -1376,9 +1346,9 @@ class MainWindow(QMainWindow):
             """在背景接譜庫並算出計畫"""
             catalog = self._catalog_factory()
             return catalog, service.preview(project, catalog)
-        done, result = self._wait_for_catalog(
-            t("deposit.title"), t("deposit.reading"), read, t("catalog.error.cannot_read"), self._deposit_to_catalog,
-            lambda: stopped.append(True),
+        done, result = wait_for_catalog(
+            self, self._catalog_error_bar, t("deposit.title"), t("deposit.reading"), read,
+            t("catalog.error.cannot_read"), self._deposit_to_catalog, lambda: stopped.append(True),
         )
         if not done or stopped:
             return
@@ -1438,9 +1408,9 @@ class MainWindow(QMainWindow):
             """在背景接譜庫並核對出計畫"""
             catalog = self._catalog_factory()
             return catalog, service.preview(project, catalog)
-        done, result = self._wait_for_catalog(
-            t("clear.title"), t("clear.reading"), read, t("catalog.error.cannot_read"), self._clear_local_copies,
-            lambda: stopped.append(True),
+        done, result = wait_for_catalog(
+            self, self._catalog_error_bar, t("clear.title"), t("clear.reading"), read,
+            t("catalog.error.cannot_read"), self._clear_local_copies, lambda: stopped.append(True),
         )
         if not done or stopped:
             return
@@ -1685,14 +1655,14 @@ class MainWindow(QMainWindow):
             return
         if not self._club_settings_enable_huaxia():
             return
-        if not self._huaxia_auth.status().signed_in and not self._sign_in_to_publish():
+        if not ensure_signed_in(self, self._huaxia_auth, t("publish.title"), "publish.sign_in_first"):
             return
         try:
             readiness = run_while_waiting(
                 self, t("publish.title"), t("publish.checking"), self._publisher.prepare, lambda: None,
             )
         except HuaXiaError as e:
-            QMessageBox.warning(self, t("publish.title"), _huaxia_error_text(e))
+            QMessageBox.warning(self, t("publish.title"), huaxia_error_text(e, "publish"))
             return
         if not readiness.ready:
             QMessageBox.warning(self, t("publish.title"), _not_ready_text(readiness))
@@ -1725,7 +1695,7 @@ class MainWindow(QMainWindow):
                 self, t("publish.title"), t("publish.run.preparing"), lambda: runner.start(plans), lambda: None,
             )
         except HuaXiaError as e:
-            QMessageBox.warning(self, t("publish.title"), _huaxia_error_text(e))
+            QMessageBox.warning(self, t("publish.title"), huaxia_error_text(e, "publish"))
             return
         except OSError as e:
             QMessageBox.warning(self, t("publish.title"), t("publish.run.snapshot_failed", error=e))
@@ -1797,9 +1767,9 @@ class MainWindow(QMainWindow):
         def read():
             """在背景接譜庫並讀社團設定"""
             return self._club_settings.read(self._catalog_factory())
-        done, platform = self._wait_for_catalog(
-            t("publish.title"), t("publish.checking"), read, t("publish.club_settings_failed"), self._publish,
-            action=t("catalog.action.read_club_settings"),
+        done, platform = wait_for_catalog(
+            self, self._catalog_error_bar, t("publish.title"), t("publish.checking"), read,
+            t("publish.club_settings_failed"), self._publish, action=t("catalog.action.read_club_settings"),
         )
         if not done:
             return False
@@ -1809,14 +1779,6 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, t("publish.title"), t("publish.club_settings_removed"))
             return False
         return True
-
-    def _sign_in_to_publish(self) -> bool:
-        """還沒登入 HuaXia：先提醒連結 Discord，同意後以 Discord 登入，回傳是否登入成功"""
-        from ui.catalog_settings_dialog import sign_in_huaxia
-        answer = QMessageBox.question(
-            self, t("publish.title"), t("publish.sign_in_first", reminder=t("huaxia.auth.link_discord_first")),
-        )
-        return answer == QMessageBox.Yes and sign_in_huaxia(self, self._huaxia_auth)
 
     # --- 輔助 ---
 
