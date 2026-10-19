@@ -428,18 +428,6 @@ class TestCleaningUp(RunTestCase):
         [result] = self.log(PublishAction.RESULT)
         self.assertEqual(result.files_deleted, [])
 
-    def test_a_file_still_registered_by_a_group_that_failed_is_kept(self):
-        # 「烽火操」第二樂章也對到同一首，它的琵琶底下登記著內容相同的舊檔
-        second = self.add_group("烽火操二", ["琵琶"], b"second")
-        self.project.set_huaxia_link(second, HuaXiaLink(piece_id=self.fenghuo, piece_title="長城隨想－烽火操"))
-        self.project.set_instruments(self.group, ["二胡 I"])
-        self.huaxia.add_score(self.fenghuo, self.pipa, self.old, title="琵琶")
-        self.huaxia.drop_requests("POST", "/rest/v1/rpc/lingling_publish", skip=1)
-        outcome = self.run_publish(self.press_publish())
-        self.assertEqual([g.group.group for g in outcome.failed], ["烽火操二"])
-        self.assertIn(self.old, self.huaxia.objects)
-        self.assertIn((self.pipa, self.old), self.scores(self.fenghuo))
-
 
 class TestOrphans(RunTestCase):
     """每次發譜開始前，清掉這次涉及的曲目底下泠靈路徑格式、但沒有登記的檔；只動泠靈自己的檔"""

@@ -316,6 +316,8 @@ class PublishPreviewDialog(QDialog):
         self._confirm_widgets: List[QWidget] = []
         self._current = PublishStep.PIECE
         self._voice_boxes: Dict[str, QGroupBox] = {}
+        # 「曲目」步每個沒擋下的群組「對到同一首」的提示，以群組 ID 為鍵
+        self._shared_labels: Dict[str, QLabel] = {}
         self.setWindowTitle(t("publish.preview.title", count=len(checks)))
         self.resize(1100, 600)
         self._build_ui()
@@ -436,9 +438,18 @@ class PublishPreviewDialog(QDialog):
         )
 
     def _set_piece(self, group: Group, link: Optional[HuaXiaLink]):
-        """「曲目」步的選擇改了：交給 PublishPreview.set_piece，更新按鈕"""
+        """「曲目」步的選擇改了：交給 PublishPreview.set_piece，更新對到同一首的提示與按鈕"""
         self._preview.set_piece(group, link)
+        self._show_shared()
         self._refresh_buttons()
+
+    def _show_shared(self):
+        """「曲目」步每個群組對到的曲目也有別的群組對到時，紅字寫出是哪幾個群組"""
+        for group_id, label in self._shared_labels.items():
+            group = next(check.group for check in self._checks if check.group.id == group_id)
+            others = self._preview.sharing(group)
+            label.setText(t("publish.piece.shared", groups="、".join(other.name for other in others)) if others else "")
+            label.setVisible(bool(others))
 
     def _build_piece_step(self) -> QWidget:
         """「曲目」步：每個群組一列，擋下的寫出原因，其餘挑選現有或新建；有未同步的值時標出"""
@@ -455,6 +466,7 @@ class PublishPreviewDialog(QDialog):
         for row, check in enumerate(self._checks):
             table.setItem(row, 0, QTableWidgetItem(check.group.name))
             table.setCellWidget(row, 1, self._piece_cell(check))
+        self._show_shared()
         table.resizeRowsToContents()
         layout.addWidget(table)
         note = QLabel(t("publish.piece.new_note"))
@@ -477,6 +489,12 @@ class PublishPreviewDialog(QDialog):
             layout.addWidget(_PieceEditor(
                 group, self._readiness.pieces, lambda link, g=group: self._set_piece(g, link),
             ))
+            shared = QLabel()
+            shared.setObjectName("shared_piece")
+            shared.setStyleSheet(f"color: {_BLOCKED_COLOR};")
+            shared.setVisible(False)
+            layout.addWidget(shared)
+            self._shared_labels[group.id] = shared
         if check.unsynced:
             items = "、".join(catalog_change_text(change) for change in check.unsynced)
             unsynced = QLabel(t("publish.group.unsynced", items=items))

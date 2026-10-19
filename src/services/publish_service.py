@@ -736,6 +736,19 @@ class PublishPreview:
             return bool(link.new_piece.title.strip())
         return any(piece.id == link.piece_id for piece in self.readiness.pieces)
 
+    def sharing(self, group: Group) -> List[Group]:
+        """沒擋下的其他群組裡，對到同一首 HuaXia 曲目的（一個群組對一首曲目，有的話兩邊都還不能發）
+
+        現有曲目比曲目編號；新建、還沒產生編號的曲目各是一首新的，不算同一首。
+        """
+        piece_id = group.huaxia_link.piece_id if group.huaxia_link else ""
+        if not piece_id:
+            return []
+        return [
+            other for other in self.groups
+            if other is not group and other.huaxia_link is not None and other.huaxia_link.piece_id == piece_id
+        ]
+
     def set_piece(self, group: Group, link: Optional[HuaXiaLink]) -> None:
         """「曲目」步的選擇改了：寫進專案，換了曲目就清掉這次的聲部決定
 
@@ -871,9 +884,10 @@ class PublishPreview:
         self.compressed = kept
 
     def step_ready(self, step: PublishStep) -> bool:
-        """這一步是否都決定好了（「下一步」）：「曲目」要每個沒擋下的群組都對到曲目，「聲部」要沒有群組還不能發"""
+        """這一步是否都決定好了（「下一步」）：「曲目」要每個沒擋下的群組都對到曲目、沒有兩個群組對到同一首，
+        「聲部」要沒有群組還不能發"""
         if step is PublishStep.PIECE:
-            return all(self.has_piece(group) for group in self.groups)
+            return all(self.has_piece(group) and not self.sharing(group) for group in self.groups)
         if step is PublishStep.VOICES:
             return not any(self.voice_plan(group).blocked for group in self.groups)
         return True

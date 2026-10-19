@@ -16,7 +16,7 @@ from core.constants import HuaXiaEnsemble
 from core.models import Headcount, HuaXiaLink, NewHuaXiaPiece
 from services.file_service import FileService
 from services.huaxia_client import HuaXiaPart, HuaXiaPiece
-from services.publish_service import PublishPreview, PublishReadiness, PublishStep, check_groups
+from services.publish_service import GroupCheck, PublishPreview, PublishReadiness, PublishStep, check_groups
 from test_publish_preflight import renamed_project
 
 MB = 1000 * 1000
@@ -49,6 +49,21 @@ class PreviewTestCase(unittest.TestCase):
 
 class TestPieceStep(PreviewTestCase):
     """「曲目」步：每個沒擋下的群組都對到曲目才能按「下一步」"""
+
+    def test_two_groups_on_one_huaxia_piece_are_not_ready(self):
+        preview = PublishPreview(
+            self.project, [GroupCheck(self.group), GroupCheck(self.blocked)], self.readiness, FileService(), 20 * MB,
+        )
+        for group in (self.group, self.blocked):
+            preview.set_piece(group, HuaXiaLink(piece_id="hx-1", piece_title="長城隨想－烽火操"))
+        self.assertEqual(preview.sharing(self.group), [self.blocked])
+        self.assertEqual(preview.sharing(self.blocked), [self.group])
+        self.assertFalse(preview.step_ready(PublishStep.PIECE))
+        preview.set_piece(self.blocked, HuaXiaLink(piece_title="春江花月夜", new_piece=NewHuaXiaPiece(
+            "春江花月夜", "", None, HuaXiaEnsemble.TUTTI,
+        )))
+        self.assertEqual(preview.sharing(self.group), [])
+        self.assertTrue(preview.step_ready(PublishStep.PIECE))
 
     def test_a_group_without_a_piece_is_not_ready(self):
         preview = self.preview()

@@ -39,6 +39,7 @@ from tests.memory_keyring import MemoryKeyring
 from tests.test_main_window import MainWindowTestCase, answering_prompts
 from ui.catalog_settings_dialog import not_officer_text
 from ui.instrumentation_table import InstrumentationTable
+from services.publish_service import GroupCheck, PublishService
 from ui.publish_dialog import PublishPreviewDialog
 
 
@@ -340,6 +341,22 @@ class TestNextStep(PublishWindowTestCase):
             choose(dialog, "烽火操", "existing")
             self.assertTrue(button(dialog, "publish.next").isEnabled())
         self.publish(operate=operate)
+
+    def test_two_groups_on_one_piece_say_why_and_next_stays_off(self):
+        project = self.window.project
+        fenghuo, chunjiang = project.groups
+        readiness = PublishService(self.huaxia_auth).prepare()
+        dialog = PublishPreviewDialog(project, [GroupCheck(fenghuo), GroupCheck(chunjiang)], readiness)
+        self.addCleanup(dialog.deleteLater)
+        choose(dialog, "烽火操", "existing")
+        choose(dialog, "春江花月夜", "existing")
+        label = group_cell(dialog, "烽火操").findChild(QLabel, "shared_piece")
+        self.assertFalse(label.isHidden())
+        self.assertEqual(label.text(), t("publish.piece.shared", groups="春江花月夜"))
+        self.assertFalse(button(dialog, "publish.next").isEnabled())
+        choose(dialog, "春江花月夜", "new")
+        self.assertTrue(group_cell(dialog, "烽火操").findChild(QLabel, "shared_piece").isHidden())
+        self.assertTrue(button(dialog, "publish.next").isEnabled())
 
     def test_a_new_piece_without_a_title_is_not_enough(self):
         def operate(dialog):
