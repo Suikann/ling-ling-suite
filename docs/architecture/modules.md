@@ -49,7 +49,7 @@
 | 內附 Google 用戶端檔的位置 | `core/launch_env.py` 的 `bundled_client_secrets_path`：打包版讀資源目錄，從原始碼執行讀 repo 根目錄 |
 | 這次執行的版號（「關於」顯示） | `core/launch_env.py` 的 `app_version`：打包版讀資源目錄裡 CD 由 git tag 寫入的 `version.txt`（`VERSION_FILE`，`LingLingSuite.spec` 收進去），讀不到或從原始碼執行時是開發版 |
 | 在背景做會卡住的事時顯示可取消的等待視窗（例如等瀏覽器登入回來） | `ui/waiting_dialog.py` 的 `run_while_waiting`，背景執行緒同樣由 `BackgroundTask` 管 |
-| 分割、旋轉對話框與比較畫面共用的 UI 輔助 | `ui/widgets.py`：`ThumbnailLoader` 在背景算繪 PDF 頁面（縮圖、比較畫面的頁面），只交出最近一次載入的結果；`ensure_file_exists` 提示找不到檔案 |
+| 分割、旋轉對話框與比較畫面共用的 UI 輔助 | `ui/widgets.py`：`ThumbnailLoader` 在背景算繪 PDF 頁面（縮圖、比較畫面的頁面），只交出最近一次載入的結果，`close` 等還在算繪的執行緒結束才回傳（比較畫面關閉時，呼叫端接著丟掉的壓縮檔才不會還開著）；`ensure_file_exists` 提示找不到檔案 |
 | 存檔對話框：沒打副檔名時補上，補上後的檔名已有檔案時先確認取代 | `ui/widgets.py` 的 `ask_save_path` |
 
 檔名容易誤會的：`ui/merge_dialog.py` 是連結樂章（`LinkMovementsDialog` → `Project.link_movements`），與合併譜無關。

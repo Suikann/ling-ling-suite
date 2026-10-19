@@ -204,12 +204,14 @@ def comparing(operate: Callable[[QDialog], None] = keep_every_compressed_file):
     errors = []
 
     def fake_exec(dialog):
-        """取代 exec：記下開啟的對話框並操作它，不真的進入事件迴圈"""
+        """取代 exec：記下開啟的對話框並操作它，不真的進入事件迴圈；operate 沒按輸出時按取消，像真的 exec 一樣關上才回傳"""
         opened.append(dialog)
         try:
             operate(dialog)
         except Exception as e:
             errors.append(e)
+        if dialog.result() != QDialog.Accepted:
+            dialog.reject()
         return dialog.result()
 
     with mock.patch.object(CompressionCompareDialog, "exec", fake_exec):

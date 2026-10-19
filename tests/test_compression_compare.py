@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from typing import List
 from unittest import mock
@@ -21,6 +22,7 @@ from core.constants import CompressionProblem, CompressionStatus
 from core.locale import t
 from services.compression_service import CompressionResult, CompressionService
 from services.file_service import FileService
+from services.pdf_service import render_page_gray
 from tests.synthetic_pdfs import scanned_pdf
 from tests.test_main_window import RecordingOpener, button_in, wait_until
 from ui.compression_compare import CompressionCompareDialog
@@ -115,6 +117,28 @@ class TestCompareOpen(CompareTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCompareClose(CompareTestCase):
+    """關閉：還在算繪的頁面算完才關上，呼叫端接著丟掉暫存的壓縮檔時檔案沒有被開著（Windows 刪不掉開著的檔）"""
+
+    def test_closing_waits_for_the_page_being_rendered(self):
+        rendering = []
+
+        def slow_render(path: str, page: int, dpi: int):
+            """記下正在算繪的檔，算慢一點，讓關閉時還沒算完"""
+            rendering.append(path)
+            try:
+                time.sleep(0.3)
+                return render_page_gray(path, page, dpi)
+            finally:
+                rendering.remove(path)
+
+        with mock.patch("ui.compression_compare.render_page_gray", slow_render):
+            dialog = self.open_dialog([self.flute])
+            wait_until(lambda: rendering)
+            dialog.reject()
+            self.assertEqual(rendering, [])
 
 
 class TestComparePages(CompareTestCase):

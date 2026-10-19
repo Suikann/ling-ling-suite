@@ -102,7 +102,8 @@ class ThumbnailLoader(QObject):
     """在背景執行緒算繪 PDF 頁面（縮圖、比較畫面的頁面），完成時回到主執行緒通知
 
     只通知最近一次 load 的結果：換選其他檔案或頁面後，前一次晚到的結果或錯誤直接捨棄；
-    cancel 之後（對話框關閉時）也不再通知。
+    cancel 之後也不再通知。對話框關閉時呼叫 close：除了不再通知，還等還在算繪的執行緒結束，
+    算繪開著的 PDF 都關上之後才回傳，呼叫端接著刪掉那些檔才刪得掉（Windows 刪不掉開著的檔）。
     """
 
     _rendered = Signal(int, object)
@@ -122,17 +123,27 @@ class ThumbnailLoader(QObject):
         self._on_ready = on_ready
         self._on_error = on_error
         self._latest = 0
+        self._threads: List[threading.Thread] = []
         self._rendered.connect(self._deliver_ready)
         self._failed.connect(self._deliver_error)
 
     def load(self, *args):
         """開始在背景以 args 呼叫算繪函式；先前還沒完成的載入作廢"""
         self._latest += 1
-        threading.Thread(target=self._run, args=(self._latest, args), daemon=True).start()
+        thread = threading.Thread(target=self._run, args=(self._latest, args), daemon=True)
+        self._threads = [running for running in self._threads if running.is_alive()] + [thread]
+        thread.start()
 
     def cancel(self):
         """作廢還沒完成的載入"""
         self._latest += 1
+
+    def close(self):
+        """作廢還沒完成的載入，並等還在算繪的執行緒都結束才回傳"""
+        self.cancel()
+        for thread in self._threads:
+            thread.join()
+        self._threads = []
 
     def _run(self, ticket: int, args: tuple):
         """在背景執行緒算繪，結果或錯誤連同這次載入的序號送回主執行緒"""
