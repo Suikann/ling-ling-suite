@@ -442,6 +442,8 @@ class HuaXiaEnsemble(str, Enum):
     SIZHU = "sizhu"
 
 
+# HuaXia 場次類型裡的「公演」（events.kinds）：發譜只掛公演，收回只看公演
+CONCERT_KIND = "concert"
 # HuaXia 曲目時長（pieces.duration_min，numeric）的間隔：HuaXia 編輯曲目的表單以 0.5 分鐘為一格，
 # 寫成別的值會讓幹部在網頁上改曲目時被表單擋下
 HUAXIA_DURATION_STEP_MINUTES = 0.5

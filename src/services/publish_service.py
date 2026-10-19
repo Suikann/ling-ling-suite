@@ -30,7 +30,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Collection, Dict, List, NamedTuple, Optional, Set, Tuple
 
-from core.constants import OTHER_SECTION, CompressionStatus, OrchestraType
+from core.constants import CONCERT_KIND, OTHER_SECTION, CompressionStatus, OrchestraType
 from core.models import CatalogChange, Group, Headcount, HuaXiaLink, Project
 from core.naming import is_renamed
 from core.voice_names import duplicate_rows, same_voice
@@ -40,9 +40,6 @@ from services.file_service import FileService
 from services.huaxia_client import (
     PUBLISH_INTERFACE_VERSION, HuaXiaEvent, HuaXiaPart, HuaXiaPiece, HuaXiaScore, lingling_storage_path,
 )
-
-# HuaXia 場次類型裡的「公演」（events.kinds）
-CONCERT_KIND = "concert"
 
 
 class ProjectBlock(Enum):

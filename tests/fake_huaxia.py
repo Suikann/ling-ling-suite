@@ -807,8 +807,30 @@ def _matches(row: Dict[str, Any], column: str, condition: str) -> bool:
     text = str(actual).lower() if isinstance(actual, bool) else str(actual)
     if operator == "in":
         assert value.startswith("(") and value.endswith(")"), condition
-        return text in value[1:-1].split(",")
+        return text in _in_values(value[1:-1])
     return text == value
+
+
+def _in_values(listed: str) -> List[str]:
+    """PostgREST 的 in.(…) 括號裡的值：以逗號分隔，雙引號括起的值裡可以有逗號，反斜線跳脫下一個字"""
+    values: List[str] = []
+    current = ""
+    quoted = escaped = False
+    for char in listed:
+        if escaped:
+            current += char
+            escaped = False
+        elif quoted and char == "\\":
+            escaped = True
+        elif char == '"':
+            quoted = not quoted
+        elif char == "," and not quoted:
+            values.append(current)
+            current = ""
+        else:
+            current += char
+    values.append(current)
+    return values
 
 
 # HuaXia 的 guess_section(n)：依名稱猜聲部組，依序比對，都不符時為 None（省略其中的簡體寫法）

@@ -18,7 +18,8 @@ HuaXia 用戶端
   所以只看路徑就分得出哪份是泠靈發的。發譜的第 1 段以 upload 傳檔（不覆寫，路徑已有檔就是同一份內容）、
   第 3 段以 delete_files 刪掉被取代的檔。
 - 撤回與收回不經發譜函式，以使用者身分經 REST 刪除（delete_scores、delete_parts，HuaXia 的 RLS 照常生效）；
-  刪聲部會連帶刪掉它的排人與樂譜，所以先以 assigned_parts 確認沒排人。
+  刪聲部會連帶刪掉它的排人與樂譜，所以先以 assigned_parts 確認沒排人。收回刪檔前以 registered_paths 確認
+  沒有任何樂譜登記還指著，曲目掛的公演以 piece_events、events_by_id 讀。
 請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
 使用範例：
@@ -60,6 +61,8 @@ _STORAGE_DUPLICATE = "Duplicate"
 _TABLE_PAGE_SIZE = 1000
 # 以 in.(…) 篩選時一個請求帶幾個編號（避免網址過長），多的分成幾個請求
 _IN_FILTER_CHUNK = 50
+# 讀場次的欄位
+_EVENT_COLUMNS = "id,title,starts_at,ends_at,kinds,location"
 # 一個請求最多等這麼久（秒）
 _REQUEST_TIMEOUT = 30
 # PostgREST 回報找不到資料庫函式的錯誤代碼
@@ -203,6 +206,31 @@ def lingling_storage_folder(piece_id: str) -> str:
 def is_lingling_path(path: str) -> bool:
     """Storage 路徑是不是泠靈的路徑格式（lingling_storage_path），也就是泠靈發的檔"""
     return bool(_LINGLING_PATH.fullmatch(path or ""))
+
+
+def _events(rows: List[Dict[str, Any]]) -> List[HuaXiaEvent]:
+    """events 的列轉成場次，依開始時間
+
+    Raises:
+        HuaXiaError: 回應的格式不對
+    """
+    try:
+        events = [
+            HuaXiaEvent(
+                row["id"], row["title"], datetime.datetime.fromisoformat(row["starts_at"]),
+                datetime.datetime.fromisoformat(row["ends_at"]), tuple(row.get("kinds") or ()),
+                row.get("location") or "",
+            )
+            for row in rows
+        ]
+    except (KeyError, TypeError, ValueError) as e:
+        raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected events: {e}") from e
+    return sorted(events, key=lambda event: event.starts_at)
+
+
+def _quoted(value: str) -> str:
+    """PostgREST 的 in.(…) 裡的一個值：加雙引號，裡面的反斜線與雙引號前加反斜線（值裡可能有逗號或括號）"""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _discord_name(user: Dict[str, Any]) -> str:
@@ -466,21 +494,15 @@ class HuaXiaClient:
         Raises:
             HuaXiaError: 連不上或讀取失敗
         """
-        rows = self.select(
-            "events", access_token, "id,title,starts_at,ends_at,kinds,location", semester_id=semester_id,
-        )
-        try:
-            events = [
-                HuaXiaEvent(
-                    row["id"], row["title"], datetime.datetime.fromisoformat(row["starts_at"]),
-                    datetime.datetime.fromisoformat(row["ends_at"]), tuple(row.get("kinds") or ()),
-                    row.get("location") or "",
-                )
-                for row in rows
-            ]
-        except (KeyError, TypeError, ValueError) as e:
-            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected events: {e}") from e
-        return sorted(events, key=lambda event: event.starts_at)
+        return _events(self.select("events", access_token, _EVENT_COLUMNS, semester_id=semester_id))
+
+    def events_by_id(self, access_token: str, event_ids: List[str]) -> List[HuaXiaEvent]:
+        """這幾個場次（看得到的，不分學期；全部讀完），依開始時間
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        return _events(self.select_all("events", access_token, _EVENT_COLUMNS, within=("id", list(event_ids))))
 
     def assigned_parts(self, access_token: str, part_ids: List[str]) -> Set[str]:
         """這幾個聲部裡已經排了人的（part_assignments 有它的列）
@@ -537,14 +559,40 @@ class HuaXiaClient:
         Raises:
             HuaXiaError: 連不上或讀取失敗
         """
+        return self._event_pieces(access_token, "event_id", event_ids)
+
+    def piece_events(self, access_token: str, piece_ids: List[str]) -> List[Tuple[str, str]]:
+        """這幾首曲目掛上的場次（event_pieces，全部讀完）：（場次編號，曲目編號）
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        return self._event_pieces(access_token, "piece_id", piece_ids)
+
+    def _event_pieces(self, access_token: str, column: str, ids: List[str]) -> List[Tuple[str, str]]:
+        """event_pieces 裡這個欄位是其中一個值的列：（場次編號，曲目編號）"""
         rows = self.select_all(
-            "event_pieces", access_token, "event_id,piece_id", within=("event_id", list(event_ids)),
+            "event_pieces", access_token, "event_id,piece_id", within=(column, list(ids)),
             order="event_id.asc,piece_id.asc",
         )
         try:
             return [(row["event_id"], row["piece_id"]) for row in rows]
         except (KeyError, TypeError) as e:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected event pieces: {e}") from e
+
+    def registered_paths(self, access_token: str, paths: List[str]) -> Set[str]:
+        """這些 Storage 路徑裡還有樂譜登記指著的（任何曲目的 scores 列；照 RLS，幹部看得到全部）
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        rows = self.select_all(
+            "scores", access_token, "id,file_path", within=("file_path", [_quoted(path) for path in paths]),
+        )
+        try:
+            return {row["file_path"] for row in rows}
+        except (KeyError, TypeError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected scores: {e}") from e
 
     # --- Storage ---
 

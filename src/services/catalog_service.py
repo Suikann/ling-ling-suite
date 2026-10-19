@@ -1311,13 +1311,14 @@ class CatalogService:
         return _models(self._read_sheets(SHEET_DEPOSIT_LOG)[0], SHEET_DEPOSIT_LOG, DepositLogEntry)
 
     def begin_publish(self, records: Sequence[PublishRecord], operator: str) -> str:
-        """發譜動 HuaXia 之前先寫發譜紀錄：每個群組一列「開始發譜」，一個請求寫入，回傳這次的發譜編號
+        """以新抽的發譜編號寫幾列發譜紀錄，一個請求寫入，回傳這個發譜編號
 
-        寫不進去就不發譜（不會有沒留紀錄的發譜）。請求數固定：列出工作表名稱、讀取、寫入各一次，
+        發譜動 HuaXia 之前先以它寫每個群組一列「開始發譜」，寫不進去就不發譜（不會有沒留紀錄的發譜）；
+        收回與不收回也以它寫，每次一個新的發譜編號。請求數固定：列出工作表名稱、讀取、寫入各一次，
         發譜紀錄還沒建立時另建一次。
 
         Args:
-            records: 各群組要做的（PublishAction.START）
+            records: 要寫的列（發譜是各群組的 PublishAction.START）
             operator: 操作者（登入 HuaXia 的 Discord 名稱）
 
         Returns:
