@@ -1332,7 +1332,8 @@ class CatalogService:
         return publish_id
 
     def record_publish(self, publish_id: str, records: Sequence[PublishRecord], operator: str) -> None:
-        """發譜結束後補上結果：每個群組一列「發譜結果」，發譜編號是 begin_publish 抽的；請求數固定（同 begin_publish）
+        """發譜結束後補上結果：每個群組一列「發譜結果」（連同開始前清孤兒檔的列），發譜編號是 begin_publish 抽的；
+        請求數固定（同 begin_publish）
 
         Raises:
             CatalogError: 讀不到或寫不進去（沒有任何一列被寫入）

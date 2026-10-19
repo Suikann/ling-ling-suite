@@ -9,13 +9,15 @@
   本來就在暫存資料夾，直接用。人數、聲部組與要掛的公演也在這一刻取值。之後專案怎麼改、原檔怎麼搬都不影響這次發譜。
   新建曲目的編號由發譜預覽先產生、存進專案（PublishPreview.assign_piece_ids），這裡只照它發。
 - 執行（run，背景執行緒）：先經譜庫服務寫一列列「開始發譜」到發譜紀錄，寫不進去就什麼都不做。接著：
+  0. 清孤兒檔（services/orphan_cleanup.py）：這次涉及的曲目底下泠靈路徑格式、但沒有登記的檔，扣掉這次要傳的；
+     清不成只寫出原因，照樣發譜。
   1. 傳檔：每首曲目先列出 Storage 裡泠靈資料夾已有的檔，內容相同（路徑相同）的跳過；其餘同時傳 UPLOAD_WORKERS 份，
      先不登記，團員看不到。要求取消時還沒開始傳的不傳，傳完手上的就停，也不切換。
   2. 切換：一個群組呼叫一次 HuaXia 的發譜函式，在一個交易裡完成這個群組的寫入。有檔沒傳上去的群組不呼叫；
      某個群組失敗不影響其他群組。要求取消時做完目前這個群組就停。
   3. 清舊檔：刪掉發譜預覽算出的被取代的舊檔本體（GroupPublish.deletes），只在撤掉指著它的登記的群組都切換成功之後，
      而且不刪這次自己用到的檔。要求取消時做完目前這個群組就停，沒刪的成為孤兒檔（由孤兒檔清理處理）。
-  結束後補一列列「發譜結果」，快照與壓縮檔不論成功、失敗或取消都刪掉（沒刪到的下次啟動清掉）。
+  結束後補一列列「發譜結果」（連同清孤兒檔的列），快照與壓縮檔不論成功、失敗或取消都刪掉（沒刪到的下次啟動清掉）。
 
 中斷等同斷線：已傳的檔下次列出時跳過，新建曲目的編號沿用，發譜函式重跑不重複建，所以重發會從中斷處接著做。
 每個群組的結果寫進紀錄檔（不記 HuaXia 傳回的團員資料）。網路請求與讀檔會卡住呼叫的執行緒，要在背景執行緒呼叫。
@@ -47,6 +49,7 @@ from services.huaxia_auth_service import HuaXiaAuthService
 from services.huaxia_client import (
     PUBLISH_INTERFACE_VERSION, HuaXiaError, HuaXiaEvent, HuaXiaScore, lingling_storage_folder, lingling_storage_path,
 )
+from services.orphan_cleanup import OrphanCleanup, clear_orphans
 from services.publish_service import GroupPublish, PartCreate, PublishReadiness, recheck
 
 # 第 1 段同時傳幾份
@@ -76,6 +79,8 @@ class PublishEvent(Enum):
     SKIPPED = "skipped"              # 一個群組沒有切換（有檔沒傳上去，或取消了）
     DELETED = "deleted"              # 一個群組被取代的舊檔刪掉了
     DELETE_FAILED = "delete_failed"  # 一個群組被取代的舊檔沒刪成，留成孤兒檔
+    ORPHAN_CLEARED = "orphan_cleared"  # 發譜開始前清掉一份孤兒檔（不算在總進度裡）
+    ORPHANS_NOT_CLEARED = "orphans_not_cleared"  # 一首曲目的孤兒檔沒清成（不算在總進度裡）
 
 
 class PublishProgress(NamedTuple):
@@ -85,8 +90,8 @@ class PublishProgress(NamedTuple):
         event: 剛發生的事
         done: 做完幾步
         total: 一共幾步
-        group: 群組名稱
-        name: 檔名（傳檔的事）；其他為空字串
+        group: 群組名稱（清孤兒檔的事是曲名）
+        name: 檔名（傳檔的事）或 Storage 路徑（清舊檔、清孤兒檔的事）；其他為空字串
         detail: 失敗的原因；其他為空字串
     """
     event: PublishEvent
@@ -256,7 +261,8 @@ class PublishOutcome:
     Attributes:
         publish_id: 發譜編號；「開始發譜」寫不進譜庫時為空字串
         groups: 各群組的結果，依專案中的順序；沒開始時為空
-        orphans: 被取代、這次沒刪成的舊檔（取消或刪除失敗；由孤兒檔清理處理）
+        orphans: 被取代、這次沒刪成的舊檔（取消或刪除失敗；下次發同一首時由孤兒檔清理處理）
+        cleanups: 開始前清孤兒檔的結果，一首曲目一個
         error: 「開始發譜」寫不進譜庫：HuaXia 上沒有任何變動
         log_error: 「發譜結果」寫不進譜庫（HuaXia 已照 groups 變動）
         cancelled: 是否因為要求取消而停下
@@ -264,6 +270,7 @@ class PublishOutcome:
     publish_id: str = ""
     groups: List[GroupOutcome] = field(default_factory=list)
     orphans: List[str] = field(default_factory=list)
+    cleanups: List[OrphanCleanup] = field(default_factory=list)
     error: Optional[CatalogError] = None
     log_error: Optional[CatalogError] = None
     cancelled: bool = False
@@ -286,6 +293,10 @@ class _Steps:
     def step(self, event: PublishEvent, group: str, name: str = "", detail: str = "") -> None:
         """做完一步並回報"""
         self.done += 1
+        self.note(event, group, name, detail)
+
+    def note(self, event: PublishEvent, group: str, name: str = "", detail: str = "") -> None:
+        """回報一件不算在總進度裡的事"""
         self._report(PublishProgress(event, self.done, self.total, group, name, detail))
 
 
@@ -383,6 +394,7 @@ class PublishRunner:
         planned_deletes = list(dict.fromkeys(path for group in groups for path in group.deletes))
         uploads = _unique_files(groups)
         steps = _Steps(len(uploads) + len(groups) + len(planned_deletes), report)
+        cleanups = self._clear_orphans(groups, steps)
         uploaded, failed = self._upload(uploads, should_cancel, steps)
         cancelled = should_cancel()
         outcomes = []
@@ -401,10 +413,12 @@ class PublishRunner:
             outcomes, deleted = self._clean(outcomes, should_cancel, steps)
             cancelled = should_cancel()
         outcome = PublishOutcome(
-            publish_id, outcomes, [path for path in planned_deletes if path not in deleted], cancelled=cancelled,
+            publish_id, outcomes, [path for path in planned_deletes if path not in deleted], cleanups,
+            cancelled=cancelled,
         )
+        records = [cleanup.record() for cleanup in cleanups if cleanup.deleted or cleanup.detail]
         try:
-            catalog.record_publish(publish_id, [group.record() for group in outcomes], snapshot.operator)
+            catalog.record_publish(publish_id, records + [group.record() for group in outcomes], snapshot.operator)
         except CatalogError as e:
             outcome = replace(outcome, log_error=e)
         self._record_in_log(outcome)
@@ -442,6 +456,18 @@ class PublishRunner:
         sending = {path for group in groups for path in group.paths}
         groups = [replace(group, deletes=[p for p in group.deletes if p not in sending]) for group in groups]
         return PublishSnapshot(folder, groups, _compressed(plans), operator)
+
+    def _clear_orphans(self, groups: List[GroupSnapshot], steps: _Steps) -> List[OrphanCleanup]:
+        """開始前清掉這次涉及的曲目底下的孤兒檔，不碰這次要傳的檔（還沒登記），清掉的與沒清成的各回報一行"""
+        pieces = {group.piece_id: group.piece_title for group in groups}
+        sending = {path for group in groups for path in group.paths}
+        cleanups = clear_orphans(self._auth, pieces, keep=sending, log=self._log)
+        for cleanup in cleanups:
+            for path in cleanup.deleted:
+                steps.note(PublishEvent.ORPHAN_CLEARED, cleanup.piece_title, path)
+            if cleanup.detail:
+                steps.note(PublishEvent.ORPHANS_NOT_CLEARED, cleanup.piece_title, detail=cleanup.detail)
+        return cleanups
 
     def _upload(
         self, uploads: List[Tuple[GroupSnapshot, SnapshotFile]], should_cancel: Callable[[], bool], steps: _Steps,

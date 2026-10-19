@@ -21,14 +21,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.catalog_errors import CatalogErrorKind
 from core.models import FileInfo, Headcount, HuaXiaLink, NewHuaXiaPiece, Project
 from core.constants import CompressionStatus, HuaXiaEnsemble
+from core.locale import t
 from core.publish_log import PublishAction
 from fake_google_catalog import FakeGoogle
 from services.catalog_service import CatalogService
+from services.activity_log import ActivityLog
 from services.compression_service import CompressionResult, CompressionService
 from services.file_service import FileService
 from services.huaxia_client import PUBLISH_INTERFACE_VERSION, lingling_storage_path
 from services.publish_runner import GroupFailure, PublishEvent, PublishRunner
+from services.orphan_cleanup import clear_orphans
 from services.publish_service import FunctionProblem, PublishPreview, check_groups
+from ui.publish_run import progress_line
 from test_catalog_service import empty_catalog
 from test_publish_preflight import PrepareTestCase
 
@@ -109,9 +113,9 @@ class RunTestCase(PrepareTestCase):
         self.assertTrue(checked.ready)
         return snapshot
 
-    def run_publish(self, snapshot, cancel_when=lambda progress: False):
-        """在這裡（代替背景執行緒）跑完這次發譜；cancel_when 對某次進度為真之後就要求取消"""
-        cancelled = []
+    def run_publish(self, snapshot, cancel_when=lambda progress: False, cancelled=None):
+        """在這裡（代替背景執行緒）跑完這次發譜；cancel_when 對某次進度為真之後、或 cancelled 不是空的時就要求取消"""
+        cancelled = [] if cancelled is None else cancelled
 
         def report(progress):
             self.progress.append(progress)
@@ -119,6 +123,20 @@ class RunTestCase(PrepareTestCase):
                 cancelled.append(True)
 
         return self.runner.run(snapshot, lambda: self.catalog, lambda: bool(cancelled), report)
+
+    def cancel_on_first_upload(self) -> list:
+        """第一份檔傳到假 HuaXia 時就要求取消（那份照樣傳完）：回傳交給 run_publish 的 cancelled"""
+        cancelled = []
+        receive = self.huaxia.request
+
+        def request(method, url, **kwargs):
+            response = receive(method, url, **kwargs)
+            if method == "POST" and "/storage/v1/object/scores/" in url:
+                cancelled.append(True)
+            return response
+
+        self.huaxia.request = request
+        return cancelled
 
     def scores(self, piece_id: str):
         """這首曲目登記的樂譜：（聲部編號，Storage 路徑）"""
@@ -258,11 +276,9 @@ class TestUploadInterrupted(RunTestCase):
         self.assertEqual(self.leftovers(), [])
 
     def test_publishing_again_does_not_upload_what_is_there_and_ends_the_same(self):
-        self.run_publish(
-            self.press_publish(events=[self.concert]),
-            cancel_when=lambda progress: progress.event is PublishEvent.UPLOADED,
-        )
-        self.assertLess(len(self.uploads()), 3)   # 傳完第一份就取消（正在傳的那份會傳完）
+        snapshot = self.press_publish(events=[self.concert])
+        self.run_publish(snapshot, cancelled=self.cancel_on_first_upload())
+        self.assertEqual(len(self.uploads()), 1)   # 傳第一份時取消：那份傳完，其餘不傳
         outcome = self.run_publish(self.press_publish(events=[self.concert]))
         self.assertEqual(outcome.failed, [])
         self.assertEqual(sorted(self.uploads()), sorted(set(self.uploads())))
@@ -356,6 +372,97 @@ class TestCleaningUp(RunTestCase):
         self.assertEqual([g.group.group for g in outcome.failed], ["烽火操二"])
         self.assertIn(self.old, self.huaxia.objects)
         self.assertIn((self.pipa, self.old), self.scores(self.fenghuo))
+
+
+class TestOrphans(RunTestCase):
+    """每次發譜開始前，清掉這次涉及的曲目底下泠靈路徑格式、但沒有登記的檔；只動泠靈自己的檔"""
+
+    def leave_the_old_file_as_an_orphan(self):
+        """發一次，第 3 段刪舊檔時斷線：舊檔沒有登記，留成孤兒檔"""
+        self.huaxia.drop_requests("DELETE", "/storage/v1/object/scores")
+        outcome = self.run_publish(self.press_publish())
+        self.assertEqual(outcome.orphans, [self.old])
+        self.assertNotIn(self.old, [path for _, path in self.scores(self.fenghuo)])
+
+    def test_an_orphan_left_by_an_interrupted_deletion_is_cleared_before_the_next_publish(self):
+        self.leave_the_old_file_as_an_orphan()
+        outcome = self.run_publish(self.press_publish())
+        self.assertNotIn(self.old, self.huaxia.objects)
+        self.assertEqual([(c.piece_id, c.deleted) for c in outcome.cleanups], [(self.fenghuo, [self.old])])
+        [cleared] = self.log(PublishAction.CLEAR_ORPHANS)
+        self.assertEqual((cleared.publish_id, cleared.piece_id), (outcome.publish_id, self.fenghuo))
+        self.assertEqual(cleared.files_deleted, [self.old])
+        self.assertIn(
+            t("publish.run.line.orphan_cleared", group="長城隨想－烽火操", name=self.old),
+            [progress_line(progress) for progress in self.progress],
+        )
+
+    def test_files_not_in_lingling_format_and_registered_lingling_files_are_left_alone(self):
+        # 網頁正在上傳、還沒登記的檔（路徑是時間戳），泠靈資料夾裡不是泠靈格式的檔，這次沒發的聲部登記著的泠靈檔
+        uploading = f"{self.fenghuo}/{self.pipa}/1760000000000_bowing.pdf"
+        stray = f"lingling/{self.fenghuo}/notes.pdf"
+        registered = lingling_storage_path(self.fenghuo, sha(b"registered by the web"))
+        for path in (uploading, stray, registered):
+            self.huaxia.put_object(path)
+        zhongruan = self.huaxia.add_part(self.fenghuo, "中阮", sort=3)
+        self.huaxia.add_score(self.fenghuo, zhongruan, registered, title="中阮")
+        outcome = self.run_publish(self.press_publish())
+        self.assertEqual(outcome.failed, [])
+        for path in (uploading, stray, registered):
+            self.assertIn(path, self.huaxia.objects)
+        self.assertEqual([c.deleted for c in outcome.cleanups], [[]])
+        self.assertEqual(self.log(PublishAction.CLEAR_ORPHANS), [])
+
+    def test_only_the_pieces_in_this_publish_are_cleared(self):
+        elsewhere = lingling_storage_path(self.moli, sha(b"left on another piece"))
+        self.huaxia.put_object(elsewhere)
+        self.run_publish(self.press_publish())
+        self.assertIn(elsewhere, self.huaxia.objects)
+
+    def test_files_this_publish_sends_are_not_cleared_though_not_registered_yet(self):
+        # 上次這首切換失敗：傳上去的新檔沒登記；這次發同樣的內容，清理不能刪掉它們，也不必重傳
+        self.huaxia.drop_requests("POST", "/rest/v1/rpc/lingling_publish")
+        self.assertEqual(len(self.run_publish(self.press_publish()).failed), 1)
+        sent = sorted(self.uploads())
+        outcome = self.run_publish(self.press_publish())
+        self.assertEqual(outcome.failed, [])
+        self.assertEqual([c.deleted for c in outcome.cleanups], [[]])
+        self.assertEqual(sorted(self.uploads()), sent)
+        erhu, pipa, score = (self.stored(self.group, v) for v in ("二胡 I", "琵琶", ""))
+        self.assertEqual(self.scores(self.fenghuo), sorted([(self.erhu, erhu), (self.pipa, pipa), ("", score)]))
+
+    def test_publishing_goes_on_when_the_orphans_cannot_be_listed(self):
+        self.leave_the_old_file_as_an_orphan()
+        self.huaxia.drop_requests("POST", "/storage/v1/object/list/scores")
+        outcome = self.run_publish(self.press_publish())
+        self.assertEqual(outcome.failed, [])
+        self.assertIn(self.old, self.huaxia.objects)
+        [cleanup] = outcome.cleanups
+        self.assertTrue(cleanup.detail)
+        [cleared] = self.log(PublishAction.CLEAR_ORPHANS)
+        self.assertEqual((cleared.files_deleted, cleared.failure["detail"]), ([], cleanup.detail))
+
+
+class TestClearingOrphansDirectly(RunTestCase):
+    """清孤兒檔可以單獨呼叫（收回前也清一次），清掉的檔寫進紀錄檔"""
+
+    def test_clearing_one_piece_keeps_what_the_caller_still_uses_and_logs_what_it_deleted(self):
+        orphan = lingling_storage_path(self.fenghuo, sha(b"orphan"))
+        kept = lingling_storage_path(self.fenghuo, sha(b"about to be registered"))
+        for path in (orphan, kept):
+            self.huaxia.put_object(path)
+        folder = os.path.join(self.temp_dir, "logs")
+        [cleanup] = clear_orphans(
+            self.auth, {self.fenghuo: "長城隨想－烽火操"}, keep=[kept], log=ActivityLog(FileService(), folder),
+        )
+        self.assertEqual(cleanup.deleted, [orphan])
+        self.assertEqual(sorted(p for p in self.huaxia.objects if p.startswith("lingling/")), sorted([self.old, kept]))
+        [name] = os.listdir(folder)
+        with open(os.path.join(folder, name), encoding="utf-8") as f:
+            logged = f.read()
+        self.assertIn(t("publish.log.orphan_cleared"), logged)
+        self.assertIn(orphan, logged)
+        self.assertNotIn(kept, logged)
 
 
 class TestPublishLogFirst(RunTestCase):

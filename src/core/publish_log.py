@@ -4,7 +4,8 @@
 
 譜庫的「發譜紀錄」工作表（core/catalog_constants.py 的 SHEET_PUBLISH_LOG）只新增、不修改：每次發譜在第 1 段之前
 先寫「開始發譜」（PublishAction.START），結束後補「發譜結果」（PublishAction.RESULT），兩者以同一個發譜編號串起來，
-每個群組各一列。撤回、收回與不收回之後也寫在這裡（各自的動作值）。
+每個群組各一列。發譜開始前清掉的孤兒檔（services/orphan_cleanup.py）是「清孤兒檔」（PublishAction.CLEAR_ORPHANS），
+一首曲目一列，與「發譜結果」一起寫入、同一個發譜編號。撤回、收回與不收回之後也寫在這裡（各自的動作值）。
 
 一列記這個群組對到哪首 HuaXia 曲目、新建的曲目與聲部、人數與聲部組的原值與新值、傳了／登記了／撤掉登記的／
 刪了哪些檔（Storage 路徑）、掛了哪些場次與結束時間、沒發成的原因。清單與物件的欄以 JSON 寫進一格（PublishRecord.cells），
@@ -18,6 +19,7 @@
   回報的（帶 HuaXia 的編號，撤回只動這些）；parts_updated 是切換成功時寫進去的；files_uploaded 是這次真的傳上去的；
   files_deleted 是真的刪掉的；events 是這次新掛上的。沒發成時 failure 寫出在哪一段（stage）與原因（code、detail），
   其他欄只有 files_uploaded（傳上去了、沒登記的檔）。
+- 清孤兒檔：piece_id、piece_title 與 files_deleted（刪掉的孤兒檔）；沒清成時 failure 寫出原因（code、detail）。群組欄空白。
 
 使用範例：
     from core.publish_log import PublishAction, PublishRecord
@@ -33,8 +35,9 @@ from typing import Any, Dict, List, Mapping, Optional
 class PublishAction(Enum):
     """發譜紀錄一列的動作；值寫進工作表"""
 
-    START = "start"    # 開始發譜（第 1 段之前）
-    RESULT = "result"  # 發譜結果（結束後）
+    START = "start"                   # 開始發譜（第 1 段之前）
+    RESULT = "result"                 # 發譜結果（結束後）
+    CLEAR_ORPHANS = "clear_orphans"   # 清孤兒檔（發譜開始前清的，一首曲目一列，隨發譜結果寫入）
 
 
 # 以 JSON 寫進一格的欄
