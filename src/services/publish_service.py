@@ -211,8 +211,8 @@ class VoiceRow:
         section: 泠靈的聲部組
         match: 怎麼對到的
         part: 對到的 HuaXia 聲部；沒對上時為 None
-        options: 可以改選的 HuaXia 聲部，依 HuaXia 的排序：名稱規則對到多個時只有那幾個，否則是名稱規則沒配給
-            其他聲部的（別的聲部手動挑過的也列，挑了會成為衝突）
+        options: 可以改選的 HuaXia 聲部，依 HuaXia 的排序：名稱規則對到多個時只有那幾個，否則是還沒配給
+            其他聲部的（記住的手動配對與名稱規則都算）
         can_create: 可以選新建（名稱規則對到多個時不行）
         headcount_differs: 對到的 HuaXia 聲部人數與泠靈不同（本專案有的列才比）
         section_differs: 對到的 HuaXia 聲部的聲部組與泠靈不同（泠靈是「其他」時不比）
@@ -308,7 +308,7 @@ def plan_voices(
             matches[index] = (PartMatch.AMBIGUOUS, None)
     assigned = [part.id for _match, part in matches.values() if part is not None]
     unpaired = [part for part in parts if part.id not in assigned]
-    named = {index: part.id for index, (match, part) in matches.items() if match is PartMatch.NAME}
+    paired = {index: part.id for index, (_match, part) in matches.items() if part is not None}
     next_sort = max((part.sort for part in parts), default=0)
     voice_rows, creates, updates, undecided, unfilled = [], [], [], [], []
     for index, (voice, present, headcount) in enumerate(rows):
@@ -316,7 +316,7 @@ def plan_voices(
         section = project.section_of(voice)
         several = len(candidates[index]) > 1 and index not in decisions.new
         options = candidates[index] if several else [
-            option for option in parts if all(i == index or found != option.id for i, found in named.items())
+            option for option in parts if all(i == index or found != option.id for i, found in paired.items())
         ]
         row = VoiceRow(index, voice, present, headcount, section, match, part, options, can_create=not several)
         if part is not None and present:

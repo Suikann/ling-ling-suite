@@ -372,18 +372,15 @@ class TestVoicesStep(PublishWindowTestCase):
             self.assertIn(t("publish.voices.undecided", voices="二胡 I"), voices_problem(dialog, "烽火操"))
         self.publish(operate=operate)
 
-    def test_conflicting_choices_show_why_and_block_the_next_step(self):
+    def test_a_part_chosen_by_one_voice_is_no_longer_offered_to_another(self):
         self.huaxia.add_part(self.fenghuo, "高胡")
 
         def operate(dialog):
             self.to_voices(dialog)
-            self.assertTrue(button(dialog, "publish.next").isEnabled())
+            self.assertIn("高胡", part_choices(dialog, "烽火操", "琵琶"))
             choose_part(dialog, "烽火操", "二胡 I", "高胡")
-            choose_part(dialog, "烽火操", "琵琶", "高胡")
-            self.assertIn(
-                t("publish.voices.conflict", part="高胡", voices="二胡 I、琵琶"), voices_problem(dialog, "烽火操"),
-            )
-            self.assertFalse(button(dialog, "publish.next").isEnabled())
+            self.assertNotIn("高胡", part_choices(dialog, "烽火操", "琵琶"))
+            self.assertTrue(button(dialog, "publish.next").isEnabled())
         self.publish(operate=operate)
 
     def test_a_chosen_part_is_remembered_in_the_project(self):
