@@ -166,6 +166,14 @@ class TestCompressionBatch(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.output.plan(self.root, [self.flute], output)
 
+    @unittest.skipUnless(os.name == "nt", "只有 Windows 的路徑有磁碟代號")
+    def test_output_on_another_drive_is_allowed(self):
+        other = "Y:" if os.path.splitdrive(self.root)[0].upper() == "Z:" else "Z:"
+        output = other + os.sep + "out"
+        self.assertFalse(self.output.is_blocked(self.root, output))
+        self.assertEqual(self.output.plan(self.root, [self.flute], output).jobs[0].target,
+                         os.path.join(output, "Flute.pdf"))
+
     def test_default_output_and_the_parent_folder_are_allowed(self):
         for output in (self.output.default_output(self.root), self.temp_dir):
             with self.subTest(output=output):
