@@ -10,8 +10,9 @@
   （sign_out_everywhere 扮演在 HuaXia 網頁按了登出全部）。
 - PostgREST：資料表的讀取（select 欄位、eq 與 in 篩選、order、limit 與 offset），各表的讀取權限照 HuaXia 的 RLS
   寫在 _READ_POLICIES。一次最多回傳 max_rows 列（同 Supabase 的 max_rows，預設 1000），多的要分頁讀。
-- rpc：is_officer（帳號啟用且有 admin 或 officer）；發譜函式的版本查詢預設不存在（同 HuaXia 合併 #117 之前），
-  以 install_publish_function 裝上指定的版本。
+- rpc：is_officer（帳號啟用且有 admin 或 officer）；發譜函式與它的版本查詢預設不存在（同 HuaXia 合併 #117 之前），
+  以 install_publish_function 裝上指定的版本。發譜函式照 docs/huaxia/LINGLING.md：以呼叫者身分執行（不是幹部時
+  新增被 RLS 擋下、修改與刪除找不到可以動的列），匿名不能呼叫；任何一步不成就丟出文件裡的錯誤代碼，資料表回到呼叫前。
 - 曲目（pieces）與聲部（piece_parts）：以 add_piece、add_part 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider
   （不實作 in_piece 的排人判斷）；聲部組沒給時照 HuaXia 的觸發器以 guess_section 依名稱補上。
 - 樂譜（scores）、學期（semesters）與場次（events）：以 add_score、add_semester、add_event 加入，曲目掛上場次
@@ -34,6 +35,7 @@
     client = HuaXiaClient(session=huaxia)
 """
 import base64
+import copy
 import datetime
 import hashlib
 import itertools
@@ -45,7 +47,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import requests
 
-from services.huaxia_client import PUBLISH_VERSION_FUNCTION
+from services.huaxia_client import PUBLISH_FUNCTION, PUBLISH_VERSION_FUNCTION
 
 # 假 HuaXia 發的 access token 有效秒數（Supabase 預設 3600）
 TOKEN_LIFETIME = 3600
@@ -88,6 +90,16 @@ class _Response:
         if self._payload is None:
             raise ValueError("No content")
         return self._payload
+
+
+class _FunctionError(Exception):
+    """資料庫函式丟出的錯誤：PostgREST 回的 HTTP 狀態碼與錯誤代碼（SQLSTATE）"""
+
+    def __init__(self, status: int, code: str, message: str):
+        """以 HTTP 狀態碼、錯誤代碼與訊息建立"""
+        super().__init__(message)
+        self.status = status
+        self.code = code
 
 
 def _auth_error(status: int, error_code: str, msg: str) -> _Response:
@@ -250,12 +262,16 @@ class FakeHuaXia:
             self.objects[path] = content
 
     def install_publish_function(self, version: Optional[int]) -> None:
-        """HuaXia 的發譜函式：回報這個介面版本；None 為沒有發譜函式（呼叫時回 PGRST202）"""
+        """裝上 HuaXia 的發譜函式與它的版本查詢，介面版本是 version；None 為沒有發譜函式（呼叫時回 PGRST202）"""
         with self._lock:
             if version is None:
                 self.functions.pop(PUBLISH_VERSION_FUNCTION, None)
+                self.functions.pop(PUBLISH_FUNCTION, None)
             else:
-                self.functions[PUBLISH_VERSION_FUNCTION] = lambda _user_id, _args: version
+                self.functions[PUBLISH_VERSION_FUNCTION] = lambda user_id, _args: self._publish_version(user_id, version)
+                self.functions[PUBLISH_FUNCTION] = lambda user_id, args: self._publish_atomically(
+                    user_id, args.get("payload") or {}, version,
+                )
 
     def sign_in_as(self, discord_name: str) -> None:
         """之後在瀏覽器登入的是這個 Discord 帳號"""
@@ -463,7 +479,119 @@ class FakeHuaXia:
         function = self.functions.get(name)
         if function is None:
             return _Response(404, {"code": "PGRST202", "message": f"Could not find the function public.{name}"})
-        return _Response(200, function(self._caller(record), record["json"] or {}))
+        try:
+            return _Response(200, function(self._caller(record), record["json"] or {}))
+        except _FunctionError as e:
+            return _Response(e.status, {"code": e.code, "message": str(e), "details": None, "hint": None})
+
+    def _publish_version(self, user_id: Optional[str], version: int) -> int:
+        """HuaXia 的 lingling_publish_version：只給登入的人呼叫，回報介面版本"""
+        self._signed_in(user_id, PUBLISH_VERSION_FUNCTION)
+        return version
+
+    def _publish_atomically(self, user_id: Optional[str], payload: Dict[str, Any], version: int) -> Dict[str, Any]:
+        """HuaXia 的 lingling_publish（介面版本 version）：失敗時（_FunctionError）資料表回到呼叫前，同一個交易"""
+        self._signed_in(user_id, PUBLISH_FUNCTION)
+        before = {table: copy.deepcopy(rows) for table, rows in self.tables.items()}
+        try:
+            return self._publish(user_id, payload, version)
+        except _FunctionError:
+            self.tables = before
+            raise
+
+    def _publish(self, user_id: Optional[str], payload: Dict[str, Any], version: int) -> Dict[str, Any]:
+        """照 docs/huaxia/LINGLING.md 切換一首曲目；不符規則時丟 _FunctionError（錯誤代碼照文件）"""
+        if payload.get("version") != version:
+            raise _FunctionError(409, "PT409", f"泠靈的發譜介面版本 {payload.get('version')} 與 HuaXia 的 {version} 不符")
+        piece_id = payload.get("piece_id")
+        if not piece_id:
+            raise _FunctionError(400, "22023", "缺少 piece_id")
+        # 以呼叫者身分執行：RLS 只讓幹部寫，不是幹部時新增被擋下、修改與刪除找不到可以動的列
+        officer = self._is_officer(user_id, {})
+        new_piece = payload.get("new_piece")
+        piece_created = False
+        if isinstance(new_piece, dict):
+            _check_insert(officer, "pieces")
+        if isinstance(new_piece, dict) and not any(p["id"] == piece_id for p in self.tables["pieces"]):
+            self.tables["pieces"].append({
+                "id": piece_id, "title": new_piece["title"], "composer": new_piece.get("composer") or "",
+                "duration_min": new_piece.get("duration_min"), "notes": "", "archived": False,
+                "ensemble": new_piece.get("ensemble") or "tutti", "created_at": _now().isoformat(),
+            })
+            piece_created = True
+        if not any(p["id"] == piece_id for p in self.tables["pieces"]):
+            raise _FunctionError(404, "PT404", f"找不到曲目 {piece_id}")
+        created, new_parts = [], {}
+        for part in payload.get("create_parts") or []:
+            if part["name"] in new_parts:
+                raise _FunctionError(400, "22023", f"同一次發譜新建了兩個「{part['name']}」聲部")
+            _check_insert(officer, "piece_parts")
+            part_id = self.add_part(
+                piece_id, part["name"], _given(part, "needed", "1"), _given(part, "needed_min", 1),
+                part.get("section") or None, _given(part, "sort", 0),
+            )
+            new_parts[part["name"]] = part_id
+            created.append({"id": part_id, "name": part["name"]})
+        for change in payload.get("update_parts") or []:
+            row = self._piece_part(piece_id, change.get("id")) if officer else None
+            if row is None:
+                raise _FunctionError(404, "PT404", f"找不到這首曲目的聲部 {change.get('id')}（可能已被刪除，或沒有權限）")
+            if change.get("needed") is not None:
+                row["needed"] = change["needed"]
+            if change.get("needed_min") is not None:
+                row["needed_min"] = change["needed_min"]
+            if change.get("section") is not None:
+                row["section"] = change["section"] or guess_section(row["name"])
+        removing = set(payload.get("remove_scores") or []) if officer else set()
+        removed = [
+            {"id": row["id"], "part_id": row["part_id"], "file_path": row["file_path"]}
+            for row in self.tables["scores"] if row["piece_id"] == piece_id and row["id"] in removing
+        ]
+        gone = {row["id"] for row in removed}
+        self.tables["scores"] = [row for row in self.tables["scores"] if row["id"] not in gone]
+        added = []
+        for score in payload.get("add_scores") or []:
+            if score.get("new_part") is not None and score.get("part_id") is not None:
+                raise _FunctionError(400, "22023", "樂譜只能指定 part_id 或 new_part 其中一個")
+            if score.get("new_part") is not None and score["new_part"] not in new_parts:
+                raise _FunctionError(400, "22023", f"這次沒有新建「{score['new_part']}」聲部")
+            part_id = new_parts[score["new_part"]] if score.get("new_part") is not None else score.get("part_id")
+            if part_id is not None and self._piece_part(piece_id, part_id) is None:
+                raise _FunctionError(404, "PT404", f"找不到這首曲目的聲部 {part_id}")
+            path = score.get("file_path") or ""
+            if not re.fullmatch(f"lingling/{re.escape(piece_id)}/[0-9a-f]{{64}}\\.pdf", path):
+                raise _FunctionError(400, "22023", f"不是泠靈的樂譜路徑：{path}")
+            if path not in self.objects:
+                raise _FunctionError(404, "PT404", f"檔案還沒傳到 Storage：{path}")
+            _check_insert(officer, "scores")
+            score_id = self.add_score(piece_id, part_id, score["file_path"], score.get("title") or "", created_by=user_id)
+            added.append({"id": score_id, "part_id": part_id, "file_path": score["file_path"]})
+        attached = []
+        for event_id in payload.get("attach_events") or []:
+            if not any(event["id"] == event_id for event in self.tables["events"]):
+                raise _FunctionError(409, "23503", 'insert or update on table "event_pieces" violates foreign key constraint')
+            link = {"event_id": event_id, "piece_id": piece_id}
+            _check_insert(officer, "event_pieces")
+            if link not in self.tables["event_pieces"]:
+                self.tables["event_pieces"].append(link)
+                attached.append(event_id)
+        return {
+            "version": payload.get("version"), "piece_id": piece_id, "piece_created": piece_created,
+            "created_parts": created, "added_scores": added, "removed_scores": removed, "attached_events": attached,
+        }
+
+    @staticmethod
+    def _signed_in(user_id: Optional[str], function: str) -> bool:
+        """只授權給登入的人的資料庫函式：匿名呼叫時丟 _FunctionError（PostgREST 回 401、42501）"""
+        if user_id is None:
+            raise _FunctionError(401, "42501", f"permission denied for function {function}")
+        return True
+
+    def _piece_part(self, piece_id: str, part_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """這首曲目上編號為 part_id 的聲部；沒有時為 None"""
+        return next((
+            row for row in self.tables["piece_parts"] if row["id"] == part_id and row["piece_id"] == piece_id
+        ), None)
 
     def _is_officer(self, user_id: Optional[str], _args: dict) -> bool:
         """HuaXia 的 is_officer()：帳號啟用且有 admin 或 officer"""
@@ -547,6 +675,18 @@ class FakeHuaXia:
         return self._is_active(user_id) and any(
             r["user_id"] == user_id and r["role"] in _INSIDER_ROLES for r in self.tables["user_roles"]
         )
+
+
+def _given(fields: Dict[str, Any], name: str, default: Any) -> Any:
+    """切換內容裡這個欄位的值；省略或 null 時為 default（同 SQL 的 coalesce）"""
+    value = fields.get(name)
+    return default if value is None else value
+
+
+def _check_insert(officer: bool, table: str) -> None:
+    """HuaXia 的 RLS 對新增的檢查：只有幹部能新增，否則丟 _FunctionError（PostgREST 回 403、42501）"""
+    if not officer:
+        raise _FunctionError(403, "42501", f'new row violates row-level security policy for table "{table}"')
 
 
 def _matches(row: Dict[str, Any], column: str, condition: str) -> bool:

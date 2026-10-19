@@ -7,15 +7,15 @@ HuaXia 用戶端
 每個請求都帶 apikey；以使用者身分的請求另帶 Authorization: Bearer <access token>。
 
 用戶端不記任何登入狀態：access token 由呼叫端傳入，續期與輪替、安全儲存由 services/huaxia_auth_service.py 管。
-失敗一律丟出帶類別的 HuaXiaError（連不上、續期權杖已失效、資料庫函式不存在、其他回應錯誤）。
+失敗一律丟出帶類別的 HuaXiaError（連不上、續期權杖已失效、資料庫函式不存在、其他回應錯誤），並帶 HuaXia 回的
+錯誤代碼與狀態碼。
 
-發譜函式的版本查詢（publish_interface_version）：HuaXia 的發譜函式與它的介面由對 HuaXia 的合併請求（#117）定案，
-定案前泠靈這一側只假設「有一個不帶參數、回傳整數介面版本的資料庫函式」，名稱與泠靈要的版本是
-PUBLISH_VERSION_FUNCTION、PUBLISH_INTERFACE_VERSION；介面定案時改這兩個常數，必要時改這一個方法。
-
-泠靈的 Storage 路徑格式（lingling_storage_path、is_lingling_path）同樣由 #117 的依賴說明文件定案，定案前假設為
-「固定前綴 LINGLING_STORAGE_PREFIX／曲目編號／內容的 SHA-256.pdf」。HuaXia 網頁上傳的路徑是
-「曲目編號／聲部編號或 full／時間戳_檔名」，不會以這個前綴開頭，所以只看路徑就分得出哪份是泠靈發的。
+泠靈依賴 HuaXia 的什麼由 HuaXia 的依賴說明文件定，泠靈這邊的複本是 docs/huaxia/LINGLING.md（對 HuaXia 的合併請求 #117）：
+- 發譜函式 PUBLISH_FUNCTION（publish）一次切換一首曲目，全成或全不成；它的介面版本由 PUBLISH_VERSION_FUNCTION
+  回報（publish_interface_version），泠靈要的是 PUBLISH_INTERFACE_VERSION。輸入、輸出與錯誤代碼照文件。
+- 泠靈的 Storage 路徑格式（lingling_storage_path、is_lingling_path）：「固定前綴 LINGLING_STORAGE_PREFIX／曲目編號／
+  內容的 SHA-256.pdf」。HuaXia 網頁上傳的路徑是「曲目編號／聲部編號或 full／時間戳_檔名」，不會以這個前綴開頭，
+  所以只看路徑就分得出哪份是泠靈發的。
 請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
 使用範例：
@@ -39,10 +39,11 @@ from core.constants import HuaXiaEnsemble
 # HuaXia 的 Supabase 專案（HuaXia 的 config.js，main 5cf811d）
 HUAXIA_URL = "https://cluuvrdreqpchfoscowc.supabase.co"
 HUAXIA_PUBLISHABLE_KEY = "sb_publishable_CK-Xpp2OOiaUVh3b1dmgGg_ktahQV_8"
-# HuaXia 回報發譜函式介面版本的資料庫函式（#117 定案前的假設），以及這版泠靈要的介面版本
+# HuaXia 的發譜函式、回報它介面版本的資料庫函式，以及這版泠靈要的介面版本（docs/huaxia/LINGLING.md）
+PUBLISH_FUNCTION = "lingling_publish"
 PUBLISH_VERSION_FUNCTION = "lingling_publish_version"
 PUBLISH_INTERFACE_VERSION = 1
-# 泠靈發的檔在 Storage bucket scores 裡的路徑前綴（#117 定案前的假設）
+# 泠靈發的檔在 Storage bucket scores 裡的路徑前綴（docs/huaxia/LINGLING.md）
 LINGLING_STORAGE_PREFIX = "lingling/"
 _LINGLING_PATH = re.compile(re.escape(LINGLING_STORAGE_PREFIX) + r"[^/]+/[0-9a-f]{64}\.pdf")
 # Storage 列出檔案時一次要幾筆（Supabase 的預設）
@@ -74,15 +75,19 @@ class HuaXiaErrorKind(Enum):
 class HuaXiaError(Exception):
     """HuaXia 請求失敗"""
 
-    def __init__(self, kind: HuaXiaErrorKind, detail: str = ""):
+    def __init__(self, kind: HuaXiaErrorKind, detail: str = "", code: str = "", status: Optional[int] = None):
         """
         Args:
             kind: 失敗的類別
             detail: 補充說明（狀態碼與錯誤訊息），沒有時為空字串
+            code: HuaXia 回的錯誤代碼（Auth 的 error_code，或 PostgREST 的 code，例如發譜函式的 PT409），沒有時為空字串
+            status: HTTP 狀態碼；不是 HuaXia 回的錯誤（例如連不上）時為 None
         """
         super().__init__(detail or kind.value)
         self.kind = kind
         self.detail = detail
+        self.code = code
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -346,6 +351,24 @@ class HuaXiaClient:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected publish version: {version!r}")
         return version
 
+    def publish(self, access_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """以使用者身分呼叫 HuaXia 的發譜函式，切換一首曲目：整次呼叫的寫入全成或全不成
+
+        Args:
+            access_token: 使用者的 access token
+            payload: 這首曲目的切換內容，形狀照 docs/huaxia/LINGLING.md 的「輸入」（含 version）
+
+        Returns:
+            發譜函式的輸出（docs/huaxia/LINGLING.md 的「輸出」：新建的聲部、登記與實際撤掉的樂譜、新掛上的場次）
+
+        Raises:
+            HuaXiaError: 連不上或呼叫失敗；code 是 HuaXia 回的錯誤代碼（例如版本不符的 PT409）
+        """
+        result = self.rpc(PUBLISH_FUNCTION, access_token, {"payload": payload})
+        if not isinstance(result, dict):
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected publish result: {result!r}")
+        return result
+
     def pieces(self, access_token: str) -> List[HuaXiaPiece]:
         """沒封存的曲目，依曲名排序（同 HuaXia 網頁的 order(title)；照 HuaXia 的 RLS，只回看得到的）
 
@@ -546,4 +569,4 @@ def _error_from(status: int, payload: Any) -> HuaXiaError:
         kind = HuaXiaErrorKind.MISSING_FUNCTION
     else:
         kind = HuaXiaErrorKind.REJECTED
-    return HuaXiaError(kind, f"HTTP {status} {code}: {message}".strip())
+    return HuaXiaError(kind, f"HTTP {status} {code}: {message}".strip(), code=str(code), status=status)
