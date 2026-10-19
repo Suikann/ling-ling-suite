@@ -264,7 +264,12 @@ def _place_sheets(titles: Sequence[str]) -> List[str]:
 
 
 class _Batch:
-    """一次寫回要送出的全部格子：改既有列的格子、接在各工作表最後的新列與缺的標題，最後以一個請求送出"""
+    """一次寫回要送出的全部格子：改既有列的格子、接在各工作表最後的新列與缺的標題，最後以一個請求送出
+
+    只新增的紀錄表（發譜紀錄、存入紀錄、編制寫入紀錄）以 append 新增：新列由 Google 接在寫入那一刻的最後一列之後
+    （SheetsPort.write_cells 的 appends），讀與寫之間別台電腦或背景工作新增的列不會被蓋掉。其他工作表的新列以 add
+    寫在讀到的最後一列之後。
+    """
 
     def __init__(self, tables: Dict[str, List[List[str]]], draw: Callable[[Set[str], int], List[str]]):
         """
@@ -277,6 +282,7 @@ class _Batch:
         self._next_row = {sheet: max(len(rows), 1) + 1 for sheet, rows in tables.items()}
         self._taken = {sheet: {row[0] for row in rows[1:] if row} for sheet, rows in tables.items()}
         self.cells: List[CellWrite] = []
+        self.appends: Dict[str, List[List[str]]] = {}
         self.touched: Set[str] = set()
 
     def set(self, sheet: str, row: int, column: str, value: str) -> None:
@@ -292,14 +298,22 @@ class _Batch:
     def add(self, sheet: str, record: Mapping[str, str]) -> int:
         """在工作表最後新增一列（抽一個不撞號的 ID），回傳列號"""
         self._touch(sheet)
+        row = self._next_row.setdefault(sheet, 2)
+        self._next_row[sheet] = row + 1
+        self.cells.append((sheet_range(sheet, f"A{row}"), [self._values(sheet, record)]))
+        return row
+
+    def append(self, sheet: str, record: Mapping[str, str]) -> None:
+        """在只新增的紀錄表最後新增一列（抽一個不撞號的 ID）；送出時由 Google 接在那一刻的最後一列之後"""
+        self._touch(sheet)
+        self.appends.setdefault(sheet, []).append(self._values(sheet, record))
+
+    def _values(self, sheet: str, record: Mapping[str, str]) -> List[str]:
+        """新的一列依 SHEET_HEADERS 排好的值，id 欄是新抽、不撞號的 ID"""
         taken = self._taken.setdefault(sheet, set())
         record_id = self._draw(taken, 1)[0]
         taken.add(record_id)
-        row = self._next_row.setdefault(sheet, 2)
-        self._next_row[sheet] = row + 1
-        values = [record_id if header == "id" else str(record.get(header, "")) for header in SHEET_HEADERS[sheet]]
-        self.cells.append((sheet_range(sheet, f"A{row}"), [values]))
-        return row
+        return [record_id if header == "id" else str(record.get(header, "")) for header in SHEET_HEADERS[sheet]]
 
     def _touch(self, sheet: str) -> None:
         """第一次寫到這張工作表時補上缺的標題（工作表還沒建立，或分譜工作表還沒有新增的欄）"""
@@ -1086,7 +1100,7 @@ class CatalogService:
         for place, (_, orchestra) in zip(places, writes):
             logged = WriteSource.UNDO if place.write.revert else source
             for review in catalogs[orchestra].write_place(batch, place, written_sections[orchestra]):
-                batch.add(SHEET_INSTRUMENTATION_LOG, _log_record(stamp, operator, logged, place.write, review))
+                batch.append(SHEET_INSTRUMENTATION_LOG, _log_record(stamp, operator, logged, place.write, review))
         self._send(batch, titles)
         outcome.written = True
         return outcome
@@ -1166,7 +1180,7 @@ class CatalogService:
         deposit_id = self._draw_ids({row[1] for row in log if len(row) > 1}, 1)[0]
         stamp = now_text()
         for record in planned:
-            batch.add(SHEET_DEPOSIT_LOG, _deposit_row(deposit_id, stamp, operator, record, "", DEPOSIT_PENDING))
+            batch.append(SHEET_DEPOSIT_LOG, _deposit_row(deposit_id, stamp, operator, record, "", DEPOSIT_PENDING))
         self._send(batch, titles)
         return deposit_id
 
@@ -1204,7 +1218,7 @@ class CatalogService:
             elif record.voice == SCORE_VOICE and (record.edition_id, record.movement_id) not in added_scores:
                 added_scores.add((record.edition_id, record.movement_id))
                 _add_score_row(batch, record.edition_id, record.movement_id, file)
-            batch.add(SHEET_DEPOSIT_LOG, _deposit_row(deposit_id, stamp, operator, record, file.head_revision, ""))
+            batch.append(SHEET_DEPOSIT_LOG, _deposit_row(deposit_id, stamp, operator, record, file.head_revision, ""))
         self._send(batch, titles)
 
     def drive_ids(self, count: int) -> List[str]:
@@ -1365,7 +1379,7 @@ class CatalogService:
         batch = _Batch(tables, self._draw_ids)
         stamp = now_text()
         for record in records:
-            batch.add(SHEET_PUBLISH_LOG, {
+            batch.append(SHEET_PUBLISH_LOG, {
                 **record.cells(), "publish_id": publish_id, "time": stamp, "operator": operator,
             })
         self._send(batch, titles)
@@ -1479,7 +1493,7 @@ class CatalogService:
                     if _registered_by(part, entry):
                         batch.set(SHEET_PARTS, row, "drive_file_id", "")
                         batch.set(SHEET_PARTS, row, "file_name", "")
-            batch.add(SHEET_DEPOSIT_LOG, {
+            batch.append(SHEET_DEPOSIT_LOG, {
                 "deposit_id": revert_id, "time": stamp, "operator": operator, "edition_id": entry.edition_id,
                 "movement_id": entry.movement_id, "group": entry.group, "voice": entry.voice,
                 "local_path": entry.local_path, "drive_file_id": entry.drive_file_id, "action": reverted.action.value,
@@ -1921,12 +1935,12 @@ class CatalogService:
         return titles, tables, columns[1:]
 
     def _send(self, batch: "_Batch", titles: Set[str]) -> None:
-        """送出一次寫入的全部格子（一個請求）；寫到還沒建立的工作表時先各建一次。沒有格子時不送"""
-        if not batch.cells:
+        """送出一次寫入的全部格子與紀錄表的新列（一個請求）；寫到還沒建立的工作表時先各建一次。沒有要寫的時不送"""
+        if not batch.cells and not batch.appends:
             return
         for sheet in sorted(batch.touched - titles, key=list(SHEET_HEADERS).index):
             self._call(lambda: self._sheets.add_sheet(sheet))
-        self._call(lambda: self._sheets.write_cells(batch.cells))
+        self._call(lambda: self._sheets.write_cells(batch.cells, list(batch.appends.items())))
 
     def _read_named(self, sheets: Sequence[str]) -> Dict[str, List[List[str]]]:
         """以一次請求讀多張工作表的全部列（含標題列），依工作表名稱交回"""

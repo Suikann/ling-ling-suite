@@ -92,6 +92,21 @@ class TestStartAndResult(PublishLogTestCase):
         self.assertEqual(len(self.rows()), 1)
 
 
+class TestAnotherComputerWritingAtTheSameTime(PublishLogTestCase):
+    """發譜紀錄只新增：別台電腦（或背景的發譜與譜庫視窗的撤回）在讀與寫之間新增的列不會被蓋掉"""
+
+    def test_rows_added_between_reading_and_writing_are_kept(self):
+        other = ["x-1", "p-other", "2026-10-19 10:00:00", "officer_bob", "start"]
+        self.google.sheets.before_each_write(
+            lambda: self.google.sheets.append_by_another_computer(SHEET_PUBLISH_LOG, other),
+        )
+        publish_id = self.catalog.begin_publish([start("烽火操")], "officer_amy")
+        self.catalog.record_publish(publish_id, [PublishRecord(PublishAction.RESULT, group="烽火操")], "officer_amy")
+        rows = self.rows()
+        self.assertEqual([row["publish_id"] for row in rows if row["id"] == "x-1"], ["p-other", "p-other"])
+        self.assertEqual([row["action"] for row in rows if row["publish_id"] == publish_id], ["start", "result"])
+
+
 class TestFixedRequests(PublishLogTestCase):
     """寫入的請求數不隨群組數增加；寫不進去時一列都沒寫"""
 

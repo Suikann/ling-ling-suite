@@ -16,6 +16,7 @@
 """
 import io
 import json
+import re
 import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -23,7 +24,7 @@ from core.catalog_constants import DRIVE_FOLDER_MIME, DRIVE_PDF_MIME
 from core.catalog_errors import CatalogError, CatalogErrorKind, exception_message
 from core.constants import CATALOG_SPREADSHEET_ID_KEY
 from core.catalog_models import DriveFile, DriveListing, DriveRevision
-from services.catalog_ports import CellWrite, sheet_range
+from services.catalog_ports import CellWrite, RowAppend, sheet_range
 from services.catalog_service import CatalogService
 from services.google_auth_service import GoogleAuthService, LoginReason
 
@@ -49,6 +50,8 @@ _RESUMABLE_CHUNK_SIZE = 5 * 1024 * 1024
 _DRIVE_FILE_FIELDS = f"nextPageToken, files({_DRIVE_ONE_FILE_FIELDS})"
 # 列出版本時一頁最多幾個（API 上限 1000；Drive 最多留最近 100 個版本，一頁就列完）
 _REVISION_PAGE_SIZE = 1000
+# 譜庫服務寫入的一格範圍：「'工作表'!欄列」（工作表名裡的單引號寫成兩個）
+_CELL_RANGE = re.compile(r"'((?:[^']|'')*)'!([A-Z]+)([0-9]+)")
 
 
 def open_google_catalog(auth: GoogleAuthService, spreadsheet_id: str) -> CatalogService:
@@ -140,6 +143,8 @@ class GoogleSheets(_Gateway):
         """
         super().__init__("sheets", "v4", credentials, http)
         self._spreadsheet_id = spreadsheet_id
+        # 讀到或建立工作表時記下的 sheetId（新增列與改格子的 batchUpdate 以它指定工作表）
+        self._sheet_ids: Dict[str, int] = {}
 
     def _bound_id(self) -> str:
         """連著的試算表 ID；沒有時不送請求，丟出找不到"""
@@ -157,12 +162,36 @@ class GoogleSheets(_Gateway):
             for value_range in response.get("valueRanges", [])
         ]
 
-    def write_cells(self, data: Sequence[CellWrite]) -> None:
-        """一次寫入多個範圍（values.batchUpdate），值以 RAW 寫入"""
-        self._execute(self._api.spreadsheets().values().batchUpdate(
-            spreadsheetId=self._bound_id(),
-            body={"valueInputOption": "RAW", "data": [{"range": r, "values": v} for r, v in data]},
-        ))
+    def write_cells(self, data: Sequence[CellWrite], appends: Sequence[RowAppend] = ()) -> None:
+        """一次寫入多個範圍並新增列：沒有新增列時是 values.batchUpdate（RAW）；有時是一個 spreadsheets.batchUpdate，
+        格子以 updateCells、新列以 appendCells（接在最後一列有內容的列之後），值都是 stringValue（不解讀成公式或數字）
+
+        sheetId 取自之前讀到或建立的工作表；有沒見過的工作表時先以 sheet_ids 讀一次。
+        """
+        if not appends:
+            self._execute(self._api.spreadsheets().values().batchUpdate(
+                spreadsheetId=self._bound_id(),
+                body={"valueInputOption": "RAW", "data": [{"range": r, "values": v} for r, v in data]},
+            ))
+            return
+        cells = [(_CELL_RANGE.fullmatch(text), values) for text, values in data]
+        names = {match.group(1).replace("''", "'") for match, _ in cells} | {sheet for sheet, _ in appends}
+        if not names <= set(self._sheet_ids):
+            self.sheet_ids()
+        requests = [
+            {"updateCells": {
+                "start": {
+                    "sheetId": self._sheet_ids[match.group(1).replace("''", "'")],
+                    "rowIndex": int(match.group(3)) - 1, "columnIndex": _column_index(match.group(2)),
+                },
+                "rows": _row_data(values), "fields": "userEnteredValue",
+            }}
+            for match, values in cells
+        ] + [
+            {"appendCells": {"sheetId": self._sheet_ids[sheet], "rows": _row_data(rows), "fields": "userEnteredValue"}}
+            for sheet, rows in appends
+        ]
+        self._execute(self._api.spreadsheets().batchUpdate(spreadsheetId=self._bound_id(), body={"requests": requests}))
 
     def append_rows(self, sheet: str, rows: Sequence[List[str]]) -> None:
         """在工作表最後一列之後新增多列（values.append），值以 RAW 寫入"""
@@ -172,27 +201,33 @@ class GoogleSheets(_Gateway):
         ))
 
     def add_sheet(self, title: str) -> None:
-        """建立一張空的工作表"""
-        self._execute(self._api.spreadsheets().batchUpdate(
+        """建立一張空的工作表，記下它的 sheetId"""
+        response = self._execute(self._api.spreadsheets().batchUpdate(
             spreadsheetId=self._bound_id(),
             body={"requests": [{"addSheet": {"properties": {"title": title}}}]},
         ))
+        for reply in response.get("replies", []):
+            properties = reply.get("addSheet", {}).get("properties", {})
+            if "sheetId" in properties:
+                self._sheet_ids[properties.get("title", title)] = properties["sheetId"]
 
     def sheet_titles(self) -> List[str]:
-        """列出所有工作表的名稱（spreadsheets.get，只取名稱）"""
-        response = self._execute(self._api.spreadsheets().get(
-            spreadsheetId=self._bound_id(), fields="sheets.properties.title",
-        ))
-        return [sheet.get("properties", {}).get("title", "") for sheet in response.get("sheets", [])]
-
-    def sheet_ids(self) -> Dict[str, int]:
-        """每張工作表的名稱與 sheetId（spreadsheets.get）"""
+        """列出所有工作表的名稱（spreadsheets.get，取名稱與 sheetId，記下 sheetId）"""
         response = self._execute(self._api.spreadsheets().get(
             spreadsheetId=self._bound_id(), fields="sheets.properties(sheetId,title)",
         ))
-        return {
-            sheet["properties"]["title"]: sheet["properties"]["sheetId"] for sheet in response.get("sheets", [])
-        }
+        properties = [sheet.get("properties", {}) for sheet in response.get("sheets", [])]
+        self._sheet_ids.update({p["title"]: p["sheetId"] for p in properties if "title" in p and "sheetId" in p})
+        return [p.get("title", "") for p in properties]
+
+    def sheet_ids(self) -> Dict[str, int]:
+        """每張工作表的名稱與 sheetId（spreadsheets.get），一併記下"""
+        response = self._execute(self._api.spreadsheets().get(
+            spreadsheetId=self._bound_id(), fields="sheets.properties(sheetId,title)",
+        ))
+        ids = {sheet["properties"]["title"]: sheet["properties"]["sheetId"] for sheet in response.get("sheets", [])}
+        self._sheet_ids.update(ids)
+        return ids
 
     def delete_rows(self, rows: Sequence[Tuple[int, int]]) -> None:
         """一次刪掉多列（batchUpdate）：由下往上刪，列號都以刪除之前的為準"""
@@ -311,6 +346,22 @@ class GoogleDrive(_Gateway):
     def download_revision(self, file_id: str, revision_id: str) -> bytes:
         """下載一個版本的內容（revisions.get，alt=media），回傳原始位元組"""
         return self._send(self._api.revisions().get_media(fileId=file_id, revisionId=revision_id)) or b""
+
+
+def _column_index(letters: str) -> int:
+    """A1 表示法的欄字母轉成從 0 起算的欄號（A 為 0、Z 為 25、AA 為 26）"""
+    index = 0
+    for letter in letters:
+        index = index * 26 + ord(letter) - ord("A") + 1
+    return index - 1
+
+
+def _row_data(rows: Sequence[Sequence[str]]) -> List[dict]:
+    """spreadsheets.batchUpdate 的列：每格是純文字的 stringValue，空字串是空的格子（清掉原值）"""
+    return [
+        {"values": [{"userEnteredValue": {"stringValue": str(value)}} if str(value) else {} for value in row]}
+        for row in rows
+    ]
 
 
 def _drive_file(item: dict) -> DriveFile:

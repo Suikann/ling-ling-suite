@@ -20,6 +20,8 @@ from core.catalog_models import DriveFile, DriveListing, DriveRevision
 
 # 一個範圍與要寫進去的值（由左上角往右下填）
 CellWrite = Tuple[str, List[List[str]]]
+# 一張工作表的名稱與要接在它最後一列有內容的列之後的新列
+RowAppend = Tuple[str, List[List[str]]]
 
 
 def sheet_range(sheet: str, cells: str) -> str:
@@ -52,8 +54,16 @@ class SheetsPort(Protocol):
             CatalogError: 讀取失敗；任一範圍的工作表不存在時整個請求失敗
         """
 
-    def write_cells(self, data: Sequence[CellWrite]) -> None:
-        """一次寫入多個範圍（一個 values.batchUpdate，全成或全不成），值以 RAW 寫入
+    def write_cells(self, data: Sequence[CellWrite], appends: Sequence[RowAppend] = ()) -> None:
+        """一次寫入多個範圍，並在幾張工作表最後一列有內容的列之後新增列（一個請求，全成或全不成），值一律當成純文字
+
+        只新增的工作表（各種紀錄）以 appends 寫：新列由 Google 接在寫入那一刻的最後一列之後，讀與寫之間別人新增的列
+        不會被蓋掉。沒有 appends 時是一個 values.batchUpdate（RAW）；有時是一個 spreadsheets.batchUpdate
+        （updateCells 加 appendCells，cells 先寫，所以新工作表的標題列在新列之前）。
+
+        Args:
+            data: （A1 範圍，值）；範圍是一格的左上角（例如 "'分譜'!B5"）
+            appends: （工作表名稱，新列）
 
         Raises:
             CatalogError: 寫入失敗，沒有任何一格被寫入

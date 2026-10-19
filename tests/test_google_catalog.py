@@ -130,6 +130,49 @@ class TestSheetsRequests(unittest.TestCase):
         self.assertEqual(sent_query(http, 1)["valueInputOption"], ["RAW"])
         self.assertEqual(sent_body(http, 1)["values"], [["p1", "", "=SUM(A1)"]])
 
+    def test_cells_and_rows_appended_after_the_last_row_go_in_one_batch_update(self):
+        http = HttpMockSequence([
+            ok({"sheets": [{"properties": {"sheetId": 3, "title": "分譜"}}]}),
+            ok({"replies": [{"addSheet": {"properties": {"sheetId": 9, "title": "發譜紀錄"}}}]}),
+            ok({}),
+        ])
+        sheets = GoogleSheets("sheet-1", http=http)
+        sheets.sheet_titles()
+        sheets.add_sheet("發譜紀錄")
+        sheets.write_cells(
+            [("'分譜'!B5", [["=1+1", ""]]), ("'發譜紀錄'!A1", [["id", "publish_id"]])],
+            [("發譜紀錄", [["r1", "p1"]])],
+        )
+        self.assertEqual(len(http.request_sequence), 3)
+        self.assertIn(":batchUpdate", http.request_sequence[2][0])
+        self.assertEqual(sent_body(http, 2)["requests"], [
+            {"updateCells": {
+                "start": {"sheetId": 3, "rowIndex": 4, "columnIndex": 1},
+                "rows": [{"values": [{"userEnteredValue": {"stringValue": "=1+1"}}, {}]}],
+                "fields": "userEnteredValue",
+            }},
+            {"updateCells": {
+                "start": {"sheetId": 9, "rowIndex": 0, "columnIndex": 0},
+                "rows": [{"values": [
+                    {"userEnteredValue": {"stringValue": "id"}}, {"userEnteredValue": {"stringValue": "publish_id"}},
+                ]}],
+                "fields": "userEnteredValue",
+            }},
+            {"appendCells": {
+                "sheetId": 9,
+                "rows": [{"values": [
+                    {"userEnteredValue": {"stringValue": "r1"}}, {"userEnteredValue": {"stringValue": "p1"}},
+                ]}],
+                "fields": "userEnteredValue",
+            }},
+        ])
+
+    def test_appending_to_a_sheet_whose_id_is_not_known_asks_for_the_ids_first(self):
+        http = HttpMockSequence([ok({"sheets": [{"properties": {"sheetId": 4, "title": "存入紀錄"}}]}), ok({})])
+        GoogleSheets("sheet-1", http=http).write_cells([], [("存入紀錄", [["r1"]])])
+        self.assertEqual(sent_query(http, 0)["fields"], ["sheets.properties(sheetId,title)"])
+        self.assertEqual(sent_body(http, 1)["requests"][0]["appendCells"]["sheetId"], 4)
+
     def test_adds_a_sheet(self):
         http = HttpMockSequence([ok({})])
         GoogleSheets("sheet-1", http=http).add_sheet("社團設定")
@@ -141,7 +184,7 @@ class TestSheetsRequests(unittest.TestCase):
         self.assertEqual(titles, ["曲目", "社團設定"])
         self.assertEqual(len(http.request_sequence), 1)
         self.assertIn("/spreadsheets/sheet-1?", http.request_sequence[0][0])
-        self.assertEqual(sent_query(http, 0)["fields"], ["sheets.properties.title"])
+        self.assertEqual(sent_query(http, 0)["fields"], ["sheets.properties(sheetId,title)"])
 
     def test_lists_sheet_ids(self):
         http = HttpMockSequence([ok({"sheets": [

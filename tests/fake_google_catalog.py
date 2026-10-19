@@ -167,8 +167,10 @@ class FakeSheets:
         self._sheet_ids: Dict[str, int] = {}
         self._next_sheet_id = itertools.count(1)
         self._frozen: Dict[str, int] = {}
-        # 每次 write_cells 送出的（範圍，值），依送出順序；失敗的請求不記
+        # 每次 write_cells 送出的（範圍，值），依送出順序；接在最後的新列記成（工作表的 A:A，那幾列）；失敗的請求不記
         self.writes: List[List[Tuple[str, List[List[str]]]]] = []
+        # 每次寫入（write_cells、append_rows）生效之前，另一台電腦先做的改動
+        self._before_writes: List[Callable[[], None]] = []
 
     # --- 測試直接操作（不算請求）---
 
@@ -191,6 +193,15 @@ class FakeSheets:
         _, row, col, _, _ = _parse_range(f"'{title}'!{cell}")
         self._put(self._tabs[title], row, col, value)
 
+    def append_by_another_computer(self, title: str, row: Sequence[str]) -> None:
+        """另一台電腦在工作表最後一列有內容的列之後新增一列"""
+        tab = self._tabs[title]
+        tab[:] = _trimmed(tab) + [[str(value) for value in row]]
+
+    def before_each_write(self, change: Callable[[], None]) -> None:
+        """之後每次寫入生效之前，另一台電腦先做 change（例如在同一張紀錄表新增一列；不算這邊的請求）"""
+        self._before_writes.append(change)
+
     def tabs(self) -> List[str]:
         """所有工作表的名稱"""
         return list(self._tabs)
@@ -205,24 +216,36 @@ class FakeSheets:
         """讀多個範圍；任一工作表不存在時整個請求失敗"""
         return self._google.request(lambda: [self._read(text) for text in ranges], "sheets")
 
-    def write_cells(self, data: Sequence[Tuple[str, List[List[str]]]]) -> None:
-        """一次寫入多個範圍，全成或全不成"""
+    def write_cells(
+        self, data: Sequence[Tuple[str, List[List[str]]]], appends: Sequence[Tuple[str, List[List[str]]]] = (),
+    ) -> None:
+        """一次寫入多個範圍，再把新列接在各工作表最後一列有內容的列之後，全成或全不成"""
         def handle():
-            """寫入：先確認每張工作表都在，才逐格寫"""
+            """寫入：先確認每張工作表都在，才逐格寫、接上新列"""
+            self._another_computer_writes()
             targets = [(_parse_range(text), values) for text, values in data]
             for (sheet, *_), _values in targets:
+                self._tab(sheet)
+            for sheet, _rows in appends:
                 self._tab(sheet)
             for (sheet, row, col, _, _), values in targets:
                 for i, line in enumerate(values):
                     for j, value in enumerate(line):
                         self._put(self._tabs[sheet], row + i, col + j, str(value))
-            self.writes.append([(text, [list(line) for line in values]) for text, values in data])
+            for sheet, rows in appends:
+                tab = self._tabs[sheet]
+                tab[:] = _trimmed(tab) + [[str(value) for value in row] for row in rows]
+            self.writes.append(
+                [(text, [list(line) for line in values]) for text, values in data]
+                + [(f"'{sheet}'!A:A", [list(row) for row in rows]) for sheet, rows in appends]
+            )
         self._google.request(handle, "sheets")
 
     def append_rows(self, sheet: str, rows: Sequence[List[str]]) -> None:
         """在最後一列有內容的列之後新增多列"""
         def handle():
             """接在最後一列有內容的列之後"""
+            self._another_computer_writes()
             tab = self._tab(sheet)
             tab[:] = _trimmed(tab) + [[str(value) for value in row] for row in rows]
         self._google.request(handle, "sheets")
@@ -268,6 +291,11 @@ class FakeSheets:
             self._frozen = {name: 1 for name in sheets}
             return self._google.drive.add_file(title, ROOT, b"", DRIVE_SPREADSHEET_MIME)
         return self._google.request(handle, "sheets")
+
+    def _another_computer_writes(self) -> None:
+        """寫入生效之前，套用另一台電腦的改動（before_each_write）"""
+        for change in self._before_writes:
+            change()
 
     def _tab(self, title: str) -> List[List[str]]:
         """取工作表；不存在時照 Google 回 400"""

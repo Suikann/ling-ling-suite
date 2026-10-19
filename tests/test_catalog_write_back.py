@@ -318,6 +318,16 @@ class TestVoicesWithDriveFiles(SyncTestCase):
 class TestWriteLog(WriteBackTestCase):
     """編制寫入紀錄：每一格改動一列，只新增、不修改"""
 
+    def test_log_rows_another_computer_adds_before_the_write_are_kept(self):
+        self.project.set_headcount(self.group, 2, Headcount(3))
+        self.google.sheets.before_each_write(lambda: self.google.sheets.append_by_another_computer(
+            SHEET_INSTRUMENTATION_LOG, ["other", "2026-10-19 10:00:00", "b@example.com"],
+        ))
+        self.assertTrue(self.sync().written)
+        log = records(self.google, SHEET_INSTRUMENTATION_LOG)
+        self.assertIn("other", [r["id"] for r in log])
+        self.assertEqual([(r["voice"], r["new_value"]) for r in log if r["id"] != "other"], [("琵琶", "3")])
+
     def test_each_written_cell_appends_one_row_and_earlier_rows_stay(self):
         add_row(self.google, SHEET_INSTRUMENTATION_LOG, id="old1", time="2026-01-01 00:00:00", field="duration")
         self.project.set_headcount(self.group, 2, Headcount(3))
@@ -336,7 +346,7 @@ class TestWriteLog(WriteBackTestCase):
         writes_before = len(self.google.sheets.writes)
         self.sync()
         cells = [cell for write in self.google.sheets.writes[writes_before:] for cell, _ in write]
-        self.assertEqual(sorted(cells), ["'時長'!D2", "'編制寫入紀錄'!A5"])
+        self.assertEqual(sorted(cells), ["'時長'!D2", "'編制寫入紀錄'!A:A"])
         log_after = records(self.google, SHEET_INSTRUMENTATION_LOG)
         self.assertEqual(log_after[:3], log)
         self.assertEqual([(r["old_value"], r["new_value"]) for r in log_after[3:]], [("430", "440")])

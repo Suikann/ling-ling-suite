@@ -399,6 +399,17 @@ class TestDepositLog(DepositTestCase):
         )
         self.assertEqual(second[0]["revision_before"], second[0]["revision_after"])
 
+    def test_rows_another_computer_adds_while_depositing_are_kept(self):
+        self.google.sheets.before_each_write(lambda: self.google.sheets.append_by_another_computer(
+            SHEET_DEPOSIT_LOG, ["other", "d-other", "", "b@example.com"],
+        ))
+        _, outcome = self.deposit()
+        self.assertIsNone(outcome.error)
+        log = records(self.google, SHEET_DEPOSIT_LOG)
+        self.assertEqual(len([r for r in log if r["deposit_id"] == "d-other"]), 2)
+        self.assertEqual(len(done_rows(self.google)) - 2, 3)
+        self.assertEqual(len([r for r in log if r["state"] == DEPOSIT_PENDING]), 3)
+
     def test_an_old_catalog_gets_the_deposit_log_sheet_with_its_header(self):
         self.google.sheets.delete_tab(SHEET_DEPOSIT_LOG)
         _, outcome = self.deposit()
