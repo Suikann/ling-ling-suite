@@ -198,6 +198,7 @@ class TestGroupChecks(unittest.TestCase):
         self.group.instruments.append("二胡1")
         self.group.present.append(True)
         self.group.headcounts.append(Headcount(1))
+        self.group.vacant.append(False)
         check = self.check()
         self.assertEqual(check.duplicate_rows, [0, 2])
         self.assertTrue(check.blocked)

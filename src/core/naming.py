@@ -129,7 +129,7 @@ def name_slot(
         slot: 0（SCORE_SLOT）為總譜，N 為第 N 份分譜
         settings: 命名設定
         voices: 明確指定的樂器表（每個聲部都有分譜），優先於群組的樂器表；未提供或為空時用群組的樂器表，
-            本專案沒有的聲部跳過
+            本專案沒有、沒有分譜的聲部跳過
 
     Returns:
         這一格的檔名與相對資料夾
@@ -161,7 +161,7 @@ def name_slot(
 
 
 def name_group(group: Group, settings: NamingSettings, voices: Optional[Sequence[str]] = None) -> GroupNaming:
-    """為群組的總譜與分譜命名；第 N 份分譜對應本專案有的第 N 個聲部，多於聲部數的分譜不改名
+    """為群組的總譜與分譜命名；每份分譜用它配到的聲部（Group.pairing），多於聲部數的分譜不改名
 
     Args:
         group: 群組
@@ -251,12 +251,12 @@ def _section_folder(voice: str, sections: Mapping[str, str]) -> str:
 def _voice_slots(group: Group, voices: Optional[Sequence[str]]) -> Tuple[List[Tuple[int, str]], int]:
     """依序配給分譜的聲部與它們的序號，以及樂器表的列數（決定序號位數）
 
-    明確指定且不為空的樂器表每個聲部都配；否則用群組的樂器表，只配本專案有的聲部（Group.pairing），
-    序號是聲部在樂器表中的位置（從 1 起算）。
+    明確指定且不為空的樂器表每個聲部都配；否則用群組的樂器表，只配接分譜的聲部（Group.part_voices：
+    本專案有、沒標沒有分譜的），序號是聲部在樂器表中的位置（從 1 起算）。
     """
     if voices:
         return list(enumerate(voices, start=1)), len(voices)
-    return [(pair.index + 1, pair.voice) for pair in group.pairing()], len(group.instruments)
+    return [(index + 1, voice) for index, voice in group.part_voices()], len(group.instruments)
 
 
 def variable_level(name: str) -> Optional[VariableLevel]:

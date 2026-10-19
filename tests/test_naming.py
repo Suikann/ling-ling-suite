@@ -132,6 +132,13 @@ class TestVoices(unittest.TestCase):
         self.assertEqual(name_slot(group, 2, NamingSettings("{序號}-{樂器}.pdf")).file_name, "03-Horn.pdf")
         self.assertEqual(named_voices(group), ["Flute", "Horn", "Tuba"])
 
+    def test_a_voice_without_a_part_is_skipped_and_the_others_keep_their_own_parts(self):
+        files = _files("a.pdf", "c.pdf")
+        group = _group(["Flute", "Oboe", "Horn"], files=files, vacant=[False, True, False])
+        naming = name_group(group, NamingSettings("{序號}-{樂器}.pdf"))
+        self.assertEqual(_file_names(naming), ["01-Flute.pdf", "03-Horn.pdf"])
+        self.assertEqual(named_voices(group), ["Flute", "Horn"])
+
     def test_parts_beyond_the_voices_in_this_project_are_extra(self):
         files = _files("a.pdf", "b.pdf")
         naming = name_group(_group(["Flute", "Oboe"], files=files, present=[True, False]), NamingSettings("{樂器}.pdf"))

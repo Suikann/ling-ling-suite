@@ -8,7 +8,7 @@
 DepositService.catalog_only），主視窗切回分頁或視窗時以 show_undeposited 照磁碟現況重新比對。
 有只在譜庫的檔時旁邊出現「從譜庫下載回來」，按下以 download_requested 交給主視窗在背景下載回原位。
 """
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QCheckBox, QListWidget, QListWidgetItem,
@@ -296,14 +296,14 @@ class GroupTab(QWidget):
         stale = [ref.file for ref in self._deposit_service.undeposited(self.project) if ref.group is self.group]
         ids = {id(file) for file in stale}
         catalog_only = self._catalog_only()
-        voices = [pair.voice for pair in self.group.pairing()]
+        voices = self._voices_by_file()
         for row in range(self._file_list.count()):
             item = self._file_list.item(row)
             index = item.data(Qt.UserRole)
             if index is None or index >= len(self.group.files):
                 continue
             file = self.group.files[index]
-            inst = f"{voices[index]}  |  " if index < len(voices) else ""
+            inst = f"{voices[id(file)]}  |  " if id(file) in voices else ""
             item.setText(f"{inst}{self._file_text(file, catalog_only)}")
             item.setForeground(QColor(UNSYNCED_COLOR) if id(file) in ids else self._file_list.palette().text())
         self._update_score_display(catalog_only)
@@ -345,14 +345,18 @@ class GroupTab(QWidget):
             self._mismatch_label.setStyleSheet("color: #2ecc71; font-size: 12px;")
 
     def _refresh_file_list(self):
-        """列出分譜與配到的聲部（本專案沒有的聲部跳過）；每列記住它在群組中的位置，拖拉排序後依此還原新順序"""
+        """列出分譜與各自配到的聲部（本專案沒有、沒有分譜的聲部不列）；每列記住它在群組中的位置，拖拉排序後依此還原新順序"""
         self._file_list.clear()
-        voices = [pair.voice for pair in self.group.pairing()]
+        voices = self._voices_by_file()
         for i, f in enumerate(self.group.files):
-            inst = f"{voices[i]}  |  " if i < len(voices) else ""
+            inst = f"{voices[id(f)]}  |  " if id(f) in voices else ""
             item = QListWidgetItem(f"{inst}{f.display_name}")
             item.setData(Qt.UserRole, i)
             self._file_list.addItem(item)
+
+    def _voices_by_file(self) -> Dict[int, str]:
+        """每份配到聲部的分譜（以物件 id 為鍵）配到的聲部"""
+        return {id(pair.file): pair.voice for pair in self.group.pairing() if pair.file is not None}
 
     def _selected_files(self) -> List[FileInfo]:
         """清單中選取的分譜（依群組順序）"""

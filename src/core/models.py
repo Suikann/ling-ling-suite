@@ -114,7 +114,7 @@ class VoicePart(NamedTuple):
     Attributes:
         index: 聲部在樂器表中的位置（從 0 起算；序號依它）
         voice: 聲部名稱
-        file: 配到的分譜；分譜比本專案有的聲部少時，後面的聲部為 None
+        file: 配到的分譜；沒有分譜的聲部（重新勾選、新增或分譜移走了的）為 None
     """
     index: int
     voice: str
@@ -535,8 +535,9 @@ class LinkResult(NamedTuple):
 class Group:
     """群組：一首曲目，或其中一個樂章，及其分譜與總譜
 
-    樂器表（instruments）與逐列對應的「本專案有」（present）、人數（headcounts）是聲部的有序清單；
-    分譜依序配給本專案有的聲部，第 N 份分譜配第 N 個本專案有的聲部（pairing），本專案沒有的聲部配對時跳過。
+    樂器表（instruments）與逐列對應的「本專案有」（present）、人數（headcounts）、沒有分譜（vacant）是聲部的有序清單。
+    每個聲部配自己的分譜：分譜依序配給接分譜的聲部（part_voices：本專案有、沒標沒有分譜的列），
+    第 N 份分譜配第 N 個（pairing）；標了沒有分譜的列跳過，所以本專案有的聲部可以沒有分譜而不接走別的聲部的分譜。
     """
     EDITABLE_FIELDS: ClassVar[FrozenSet[str]] = frozenset({
         "name", "piece_name", "movement_number", "movement_name", "composer", "genre",
@@ -549,6 +550,7 @@ class Group:
     instruments: List[str] = field(default_factory=list)
     present: List[bool] = field(default_factory=list)
     headcounts: List[Headcount] = field(default_factory=list)
+    vacant: List[bool] = field(default_factory=list)
     duration_seconds: Optional[int] = None
     selected_instruments: List[int] = field(default_factory=list)
     piece_name: str = ""
@@ -566,6 +568,7 @@ class Group:
     def __post_init__(self):
         self.present = _present_flags(self.present, len(self.instruments))
         self.headcounts = _headcount_rows(self.headcounts, len(self.instruments))
+        self.vacant = _vacant_flags(self.vacant, self.present)
 
     def to_data(self) -> Dict[str, Any]:
         """專案檔中存的內容；串列一律複製，之後改動群組不會改到這份內容"""
@@ -577,6 +580,7 @@ class Group:
             "instruments": list(self.instruments),
             "present": list(self.present),
             "headcounts": [h.to_data() for h in self.headcounts],
+            "vacant": list(self.vacant),
             "duration_seconds": self.duration_seconds,
             "score_label": self.score_label,
             "selected_instruments": list(self.selected_instruments),
@@ -603,6 +607,7 @@ class Group:
             instruments=data.get("instruments", []),
             present=data.get("present", []),
             headcounts=[Headcount.from_data(h) for h in data.get("headcounts", [])],
+            vacant=data.get("vacant", []),
             duration_seconds=data.get("duration_seconds") or None,
             score_label=data.get("score_label", ""),
             selected_instruments=data.get("selected_instruments", []),
@@ -634,12 +639,12 @@ class Group:
 
     def assign_instruments(
         self, instruments: Iterable[str], present: Optional[Iterable[bool]] = None,
-        headcounts: Optional[Iterable[Headcount]] = None,
+        headcounts: Optional[Iterable[Headcount]] = None, vacant: Optional[Iterable[bool]] = None,
     ) -> None:
-        """換成新的樂器表（聲部清單）與逐列的「本專案有」、人數；不發通知，由專案的操作呼叫
+        """換成新的樂器表（聲部清單）與逐列的「本專案有」、人數、沒有分譜；不發通知，由專案的操作呼叫
 
-        沒給「本專案有」時全都有；沒給人數時，與原樂器表同一聲部的列沿用原本的人數，其餘未填。
-        舊欄位 selected_instruments 跟著維持全選。
+        沒給「本專案有」時全都有；沒給人數時，與原樂器表同一聲部的列沿用原本的人數，其餘未填；
+        沒給沒有分譜時每個本專案有的聲部都依序接分譜。舊欄位 selected_instruments 跟著維持全選。
         """
         instruments = list(instruments)
         if headcounts is None:
@@ -647,18 +652,23 @@ class Group:
         self.instruments = instruments
         self.present = _present_flags(list(present) if present is not None else [], len(self.instruments))
         self.headcounts = _headcount_rows(list(headcounts), len(self.instruments))
+        self.vacant = _vacant_flags(list(vacant) if vacant is not None else [], self.present)
         self.selected_instruments = list(range(len(self.instruments)))
 
-    def pairing(self) -> List[VoicePart]:
-        """本專案有的聲部（依樂器表順序）與各自配到的分譜：第 N 份分譜配第 N 個"""
-        voices = [(i, name) for i, name in enumerate(self.instruments) if self.present[i]]
+    def part_voices(self) -> List[Tuple[int, str]]:
+        """依序接分譜的聲部（樂器表中的位置、名稱）：本專案有、沒標沒有分譜的列；第 N 份分譜配第 N 個"""
         return [
-            VoicePart(i, name, self.files[n] if n < len(self.files) else None) for n, (i, name) in enumerate(voices)
+            (i, name) for i, name in enumerate(self.instruments) if self.present[i] and not self.vacant[i]
         ]
 
+    def pairing(self) -> List[VoicePart]:
+        """本專案有的聲部（依樂器表順序）與各自配到的分譜；沒有分譜的為 None"""
+        parts = {i: self.files[n] for n, (i, _) in enumerate(self.part_voices()) if n < len(self.files)}
+        return [VoicePart(i, name, parts.get(i)) for i, name in enumerate(self.instruments) if self.present[i]]
+
     def extra_files(self) -> List[FileInfo]:
-        """多於本專案有的聲部數、沒有配到聲部的分譜（依原順序）"""
-        return self.files[sum(self.present):]
+        """多於接分譜的聲部數、沒有配到聲部的分譜（依原順序）"""
+        return self.files[len(self.part_voices()):]
 
     def has_catalog_copy(self, file: FileInfo) -> bool:
         """群組記著這份檔在譜庫裡有一份：群組連到譜庫、它是群組的總譜或分譜，而且記著存入指紋
@@ -850,9 +860,10 @@ class SplitPlacement:
     Attributes:
         group_id: 接手新分譜的群組
         created_group: 接手的群組是否為這次分割另建的（復原時移除）
-        instruments: 接手的群組在分割前的樂器表；分割沒有改變它與「本專案有」時為 None
+        instruments: 接手的群組在分割前的樂器表；分割沒有改變它與「本專案有」、沒有分譜時為 None
         present: 接手的群組在分割前逐列的「本專案有」（與 instruments 一起記）；舊版紀錄沒有時為 None（全都有）
         headcounts: 接手的群組在分割前逐列的人數（與 instruments 一起記）；舊版紀錄沒有時為 None（同一聲部沿用分割後的人數）
+        vacant: 接手的群組在分割前逐列的沒有分譜（與 instruments 一起記）；舊版紀錄沒有時為 None（每個本專案有的聲部都接分譜）
         piece_name: 接手的群組在分割前的曲名（分割可能自動偵測填入）；分割沒有改變它時為 None
         source: 合併譜在分割前的位置；專案沒有引用合併譜時為 None
     """
@@ -863,6 +874,7 @@ class SplitPlacement:
     source: Optional[FilePosition] = None
     present: Optional[List[bool]] = None
     headcounts: Optional[List[Headcount]] = None
+    vacant: Optional[List[bool]] = None
 
     def to_data(self) -> Dict[str, Any]:
         """紀錄檔中存的內容"""
@@ -874,6 +886,7 @@ class SplitPlacement:
             "source": self.source.to_data() if self.source else None,
             "present": list(self.present) if self.present is not None else None,
             "headcounts": [h.to_data() for h in self.headcounts] if self.headcounts is not None else None,
+            "vacant": list(self.vacant) if self.vacant is not None else None,
         }
 
     @classmethod
@@ -889,6 +902,7 @@ class SplitPlacement:
             source=FilePosition.from_data(source) if source else None,
             present=data.get("present"),
             headcounts=[Headcount.from_data(h) for h in headcounts] if headcounts is not None else None,
+            vacant=data.get("vacant"),
         )
 
 
@@ -1234,12 +1248,11 @@ class Project:
         if group is None:
             self.ungrouped_files.extend(files)
         else:
-            group.files.extend(files)
-            self._detect_on_entry(group)
+            self._enter_parts(group, files)
         self._changed()
 
     def move_to_group(self, files: Iterable[FileInfo], group: Group) -> None:
-        """把專案內的檔案（未分組或其他群組）搬進群組的分譜尾端，並自動偵測總譜與曲名"""
+        """把專案內的檔案（未分組或其他群組）搬進群組的分譜（規則見 _enter_parts），並自動偵測總譜與曲名"""
         self._move_into(group, files)
         self._changed()
 
@@ -1259,6 +1272,10 @@ class Project:
         """
         group = self._group_referencing(result.replaced) or self._group_referencing([result.source_path])
         self._detach_paths(result.replaced)
+        # 合併譜拿出群組之前的編制：復原時合併譜放回原位，配對才跟分割前一樣
+        before = Group() if group is None else group
+        instruments, present, vacant = list(before.instruments), list(before.present), list(before.vacant)
+        headcounts = list(before.headcounts)
         source_position = self._position_of(result.source_path)
         for ref in self._refs_to([result.source_path]):
             if ref.group is not None:
@@ -1268,13 +1285,12 @@ class Project:
             name = os.path.splitext(os.path.basename(result.source_path))[0]
             group = Group(name=name, score_label=score_label)
             self.groups.append(group)
-        instruments, present, headcounts = list(group.instruments), list(group.present), list(group.headcounts)
         piece_name = group.piece_name
         group.files.extend(result.parts)
         group.assign_instruments(result.voices)
         self._detect_on_entry(group)
         self._changed()
-        voices_changed = (instruments, present) != (group.instruments, group.present)
+        voices_changed = (instruments, present, vacant) != (group.instruments, group.present, group.vacant)
         return SplitPlacement(
             group_id=group.id, created_group=created,
             instruments=instruments if voices_changed else None,
@@ -1282,13 +1298,14 @@ class Project:
             source=source_position,
             present=present if voices_changed else None,
             headcounts=headcounts if voices_changed else None,
+            vacant=vacant if voices_changed else None,
         )
 
     def revert_split(self, record: SplitRecord) -> None:
         """退回一次分割（套用復原分割的結果）
 
         移除新分譜的引用；分割時另建的群組移除（之後才放進去的檔案移回未分組），
-        接手的既有群組被分割改掉的樂器表（連同本專案有與人數）與曲名改回；合併譜已不在專案裡時放回原本的位置
+        接手的既有群組被分割改掉的樂器表（連同本專案有、人數與沒有分譜）與曲名改回；合併譜已不在專案裡時放回原本的位置
         （同一個群組、同樣是分譜或總譜，分譜放回原本的順序；原本的群組已刪除就放回未分組）。
         被取代的檔案不找回。舊版紀錄沒有安置資訊，只移除新分譜的引用。
 
@@ -1303,7 +1320,9 @@ class Project:
                 self._remove_group(group)
             elif group is not None:
                 if placement.instruments is not None:
-                    group.assign_instruments(placement.instruments, placement.present, placement.headcounts)
+                    group.assign_instruments(
+                        placement.instruments, placement.present, placement.headcounts, placement.vacant,
+                    )
                 if placement.piece_name is not None:
                     group.piece_name = placement.piece_name
             if placement.source is not None and not self.references_any([record.source_path]):
@@ -1355,7 +1374,7 @@ class Project:
             self._changed()
 
     def reorder_files(self, group: Group, files: List[FileInfo]) -> None:
-        """依新順序排列群組的分譜
+        """依新順序排列群組的分譜：樂器表不動，接分譜的聲部依序配新順序的分譜（只改配對）
 
         Raises:
             ValueError: 新順序與群組現有的分譜不是同一批檔案
@@ -1371,13 +1390,14 @@ class Project:
         self._changed()
 
     def add_instrument(self, group: Group, name: str) -> None:
-        """在群組樂器表的最後加上一個聲部
+        """在群組樂器表的最後加上一個聲部；有沒配到聲部的分譜時，它配第一份，其他聲部的分譜不動
 
         Raises:
             DuplicateVoiceError: 樂器表已有同一聲部（另一種寫法也算），樂器表不變
         """
         _refuse_duplicate_voice(group.instruments, name)
-        group.assign_instruments(group.instruments + [name], group.present + [True], group.headcounts + [Headcount()])
+        extras = group.extra_files()
+        _place_rows(group, _voice_rows(group) + [_VoiceRow(name, True, Headcount(), extras[0] if extras else None)])
         self._changed()
 
     def rename_instrument(self, group: Group, index: int, name: str) -> None:
@@ -1393,7 +1413,7 @@ class Project:
             _refuse_filed_voices(group, [index])
         instruments = list(group.instruments)
         instruments[index] = name
-        group.assign_instruments(instruments, group.present, group.headcounts)
+        group.assign_instruments(instruments, group.present, group.headcounts, group.vacant)
         self._changed()
 
     def remove_instruments(self, group: Group, rows: Iterable[int]) -> List[FileInfo]:
@@ -1481,8 +1501,7 @@ class Project:
     def set_present(self, group: Group, index: int, present: bool) -> List[FileInfo]:
         """設定樂器表第 index 列「本專案有」與否（只存在專案）
 
-        取消勾選時，它的分譜移到未分組尾端，其他聲部的分譜不動。重新勾選的聲部沒有分譜，
-        分譜依序配給本專案有的聲部，所以它配到下一份，後面的各往後配一個聲部。
+        取消勾選時，它的分譜移到未分組尾端；重新勾選的聲部沒有分譜。兩者其他聲部的分譜都不動。
 
         Args:
             group: 群組
@@ -1492,15 +1511,9 @@ class Project:
         Returns:
             移到未分組的分譜（取消勾選有分譜的聲部時一份，其餘為空）
         """
-        if present:
-            flags = list(group.present)
-            flags[index] = True
-            group.assign_instruments(group.instruments, flags, group.headcounts)
-            self._changed()
-            return []
         rows = _voice_rows(group)
-        moved = [rows[index].part] if rows[index].part is not None else []
-        rows[index] = rows[index]._replace(present=False, part=None)
+        moved = [rows[index].part] if rows[index].part is not None and not present else []
+        rows[index] = rows[index]._replace(present=present, part=rows[index].part if present else None)
         _place_rows(group, rows)
         self.ungrouped_files.extend(moved)
         self._changed()
@@ -1508,8 +1521,6 @@ class Project:
 
     def move_instruments(self, group: Group, rows: Iterable[int], target: int) -> None:
         """把樂器表的幾列（依原順序）移到第 target 列之前（target 為列數時移到最後），分譜跟著各自的聲部走
-
-        沒有分譜的聲部移到有分譜的聲部之前時改為本專案沒有，後面的分譜才不會錯位（見 _place_rows）。
 
         Args:
             group: 群組
@@ -1590,7 +1601,7 @@ class Project:
         """把群組的樂器表換成譜庫的聲部清單，分譜依聲部名稱帶著走（依名稱配對）
 
         每份分譜以它在樂器表的聲部名稱，依同一聲部的規則對到新的聲部；新的聲部用譜庫的寫法與人數。
-        樂器表沒有的聲部在群組有分譜時為本專案沒有，後面的分譜才不會錯位；新清單沒有的聲部，它的分譜移到未分組尾端。
+        樂器表沒有的聲部在群組有分譜時為本專案沒有（這個群組沒有它的分譜）；新清單沒有的聲部，它的分譜移到未分組尾端。
         原本就沒配到聲部的分譜不動。
 
         Args:
@@ -1633,12 +1644,12 @@ class Project:
                 "", row.name, None, row.headcount, *self._merged_section(row.name, place.sections), row.part, False,
             ))
         merged = list(after.get(-1, []))
-        for index, (row, present) in enumerate(zip(rows, _settled_present(rows))):
+        for index, row in enumerate(rows):
             own = voice_index(group_names, row.name)
             merged.append(MergeRow(
                 row.name, group_names[own] if own is not None else "", row.headcount,
                 current[own].headcount if own is not None else None,
-                *self._merged_section(row.name, place.sections), row.part, present,
+                *self._merged_section(row.name, place.sections), row.part, row.present,
             ))
             merged.extend(after.get(index, []))
         return merged
@@ -1994,21 +2005,41 @@ class Project:
         return detected
 
     def _move_into(self, group: Group, files: Iterable[FileInfo]) -> None:
-        """把檔案從專案中原本的位置拿掉、放進群組分譜尾端，並自動偵測"""
+        """把檔案從專案中原本的位置拿掉、放進群組的分譜（_enter_parts）"""
         files = list(files)
         if not files:
             return
         self._detach_files(files)
-        group.files.extend(files)
-        self._detect_on_entry(group)
+        self._enter_parts(group, files)
+
+    @staticmethod
+    def _enter_parts(group: Group, files: Iterable[FileInfo]) -> None:
+        """把檔案放進群組的分譜，配給還沒有分譜的聲部，並自動偵測總譜與曲名
+
+        沒有總譜時先從群組的分譜連同這些檔猜總譜；其餘依序配給本專案有、還沒有分譜的聲部（依樂器表順序），
+        聲部不夠配的接在最後，其他聲部的分譜不動；沒有曲名才猜曲名。
+        """
+        files = list(files)
+        if group.score_file is None:
+            candidates = group.files + files
+            index = detect_score_index([f.display_name for f in candidates])
+            if index is not None:
+                score = candidates[index]
+                _remove_parts(group, [score])
+                files = [f for f in files if f is not score]
+                group.score_file = score
+        _add_parts(group, files)
+        if not group.piece_name.strip():
+            group.piece_name = detect_piece_name([f.display_name for f in group.files])
 
     @staticmethod
     def _assign_score(group: Group, file: FileInfo) -> None:
-        """把檔案設為群組的總譜（原本在分譜清單裡就拿出來），原本的總譜放回分譜尾端"""
-        if group.score_file:
-            group.files.append(group.score_file)
-        group.files = [f for f in group.files if f is not file]
+        """把檔案設為群組的總譜（原本在分譜清單裡就拿出來，它的聲部沒有分譜），原本的總譜放回分譜（_add_parts）"""
+        previous = group.score_file
+        _remove_parts(group, [file])
         group.score_file = file
+        if previous is not None and previous is not file:
+            _add_parts(group, [previous])
 
     def _detach_files(self, files: Iterable[FileInfo]) -> None:
         """把指定的檔案資訊（依物件本身判定）從所在的群組或未分組拿掉"""
@@ -2125,7 +2156,7 @@ class Project:
         elif ref.group.score_file is ref.file:
             ref.group.score_file = None
         else:
-            ref.group.files = [f for f in ref.group.files if f is not ref.file]
+            _remove_parts(ref.group, [ref.file])
 
 
 class _VoiceRow(NamedTuple):
@@ -2149,6 +2180,12 @@ def _present_flags(present: List[bool], count: int) -> List[bool]:
     return [bool(flag) for flag in present[:count]] + [True] * (count - len(present))
 
 
+def _vacant_flags(vacant: List[bool], present: List[bool]) -> List[bool]:
+    """逐列的沒有分譜補齊或截到樂器表的列數；沒記的列與本專案沒有的列為否（本專案有的依序接分譜）"""
+    flags = [bool(flag) for flag in vacant[:len(present)]] + [False] * (len(present) - len(vacant))
+    return [flag and here for flag, here in zip(flags, present)]
+
+
 def _headcount_rows(headcounts: List[Headcount], count: int) -> List[Headcount]:
     """逐列的人數補齊或截到樂器表的列數；沒記的列為未填"""
     return list(headcounts[:count]) + [Headcount()] * (count - len(headcounts))
@@ -2162,21 +2199,46 @@ def _voice_rows(group: Group) -> List[_VoiceRow]:
     ]
 
 
-def _place_rows(group: Group, rows: List[_VoiceRow]) -> None:
-    """依序以這些列為群組的樂器表，分譜跟著各自的聲部，沒配到聲部的分譜留在最後
+def _place_rows(group: Group, rows: List[_VoiceRow], extras: Optional[List[FileInfo]] = None) -> None:
+    """依序以這些列為群組的樂器表，每列配它自己的分譜（本專案沒有的列不配），沒配到聲部的分譜留在最後
 
-    沒有分譜、本專案有的聲部排在有分譜的聲部之前時改為本專案沒有：分譜依序配給本專案有的聲部，
-    否則後面的分譜都會往前錯一位。
+    本專案有、沒有分譜的列，後面還有分譜（別的聲部的或沒配到聲部的）時標成沒有分譜：
+    分譜依序配給接分譜的聲部，否則它會接走後面那份。
+
+    Args:
+        group: 群組
+        rows: 新的各列
+        extras: 沒配到聲部的分譜；省略時沿用群組現有的
     """
-    extras = group.extra_files()
-    group.assign_instruments([row.name for row in rows], _settled_present(rows), [row.headcount for row in rows])
+    extras = group.extra_files() if extras is None else list(extras)
+    last_part = max((i for i, row in enumerate(rows) if row.part is not None), default=-1)
+    vacant = [row.present and row.part is None and (i < last_part or bool(extras)) for i, row in enumerate(rows)]
+    group.assign_instruments(
+        [row.name for row in rows], [row.present for row in rows], [row.headcount for row in rows], vacant,
+    )
     group.files = [row.part for row in rows if row.part is not None] + extras
 
 
-def _settled_present(rows: List[_VoiceRow]) -> List[bool]:
-    """依序以這些列為樂器表時逐列的「本專案有」：沒有分譜的聲部排在有分譜的聲部之前時為本專案沒有（見 _place_rows）"""
-    last_part = max((i for i, row in enumerate(rows) if row.part is not None), default=-1)
-    return [row.present and (row.part is not None or i > last_part) for i, row in enumerate(rows)]
+def _remove_parts(group: Group, files: Iterable[FileInfo]) -> None:
+    """把這些檔（依物件本身判定）從群組的分譜拿掉：配到它們的聲部沒有分譜，其他聲部的分譜不動"""
+    targets = {id(f) for f in files}
+    rows = [row._replace(part=None) if row.part is not None and id(row.part) in targets else row
+            for row in _voice_rows(group)]
+    _place_rows(group, rows, [f for f in group.extra_files() if id(f) not in targets])
+
+
+def _add_parts(group: Group, files: Iterable[FileInfo]) -> None:
+    """把這些檔依序配給本專案有、還沒有分譜的聲部（依樂器表順序），聲部不夠配的接在分譜最後；其他聲部的分譜不動"""
+    rows = _voice_rows(group)
+    extras = group.extra_files()
+    waiting = iter([i for i, row in enumerate(rows) if row.present and row.part is None])
+    for file in files:
+        index = next(waiting, None)
+        if index is None:
+            extras.append(file)
+        else:
+            rows[index] = rows[index]._replace(part=file)
+    _place_rows(group, rows, extras)
 
 
 def _rows_by_name(group: Group, voices: List[Tuple[str, Headcount]]) -> Tuple[List[_VoiceRow], List[FileInfo]]:

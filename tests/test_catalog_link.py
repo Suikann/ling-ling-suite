@@ -398,6 +398,12 @@ class TestApplyCatalogVoices(MergeTestCase):
         self.assertEqual([f.display_name for f in self.project.ungrouped_files], ["b.pdf", "c.pdf"])
         self.assertTrue(notified)
 
+    def test_a_voice_without_a_part_keeps_none_and_the_others_keep_theirs(self):
+        self.project.set_present(self.group, 1, False)
+        self.project.set_present(self.group, 1, True)
+        self.project.apply_catalog_voices(self.group, [("二胡 I", Headcount()), ("二胡 II", Headcount()), ("琵琶", Headcount())])
+        self.assertEqual(self.pairs(), [("二胡 I", "a.pdf"), ("二胡 II", None), ("琵琶", "d.pdf")])
+
 
 class TestUseGroupOnMerge(MergeTestCase):
     """選「用群組的」：編制與配對不變，與譜庫的差異記成下次存檔要寫進去的改動"""

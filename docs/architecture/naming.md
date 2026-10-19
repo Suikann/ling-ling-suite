@@ -21,7 +21,7 @@
 ## 套用命名格式
 
 - `name_slot(group, slot, settings, voices=None)` 把一格（`SCORE_SLOT` 為總譜，N 為第 N 份分譜）轉成 `SlotName(file_name, folders)`；`name_group` 列出整個群組，總譜在前
-- 第 N 份分譜對應本專案有的第 N 個聲部（`Group.pairing`，本專案沒有的聲部跳過，見 [project.md](project.md) 的聲部與分譜的配對）；多於這些聲部數的分譜放在 `extra_files`，不改名
+- 每份分譜用它配到的聲部：第 N 份分譜對應第 N 個接分譜的聲部（`Group.part_voices`，本專案沒有、標了沒有分譜的聲部跳過，見 [project.md](project.md) 的聲部與分譜的配對）；多於這些聲部數的分譜放在 `extra_files`，不改名
 - 樂器表：明確傳入的 `voices` 優先，空的視同未傳入，每個聲部都配；否則用群組自己的樂器表（命名只讀群組的樂器表）
 - 分譜存放模式（`PartsOutputMode`：根目錄／分譜資料夾／聲部組資料夾）只影響分譜，總譜留在子資料夾那一層
 - 命名格式只掃描一次，代入的值不再被替換（曲名是 `{Instrument}` 時原樣保留）

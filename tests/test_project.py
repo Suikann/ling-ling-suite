@@ -571,13 +571,15 @@ class TestVoicesCarryTheirParts(unittest.TestCase):
         self.project.move_instruments(self.group, [0, 1], 3)
         self.assertEqual(self.pairs(), [("Horn", "hn.pdf"), ("Flute", "fl.pdf"), ("Oboe", "ob.pdf")])
 
-    def test_a_voice_without_a_part_moved_before_parts_is_marked_not_in_this_project(self):
-        """分譜依序配給本專案有的聲部；沒有分譜的聲部插進中間，後面的分譜才不會錯位"""
+    def test_a_voice_without_a_part_moved_before_parts_stays_without_a_part(self):
+        """沒有分譜的聲部插進中間，仍是本專案有、沒有分譜，後面的分譜不會錯位"""
         self.project.add_instrument(self.group, "Tuba")
         self.project.move_instruments(self.group, [3], 1)
         self.assertEqual(self.group.instruments, ["Flute", "Tuba", "Oboe", "Horn"])
-        self.assertEqual(self.group.present, [True, False, True, True])
-        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", "ob.pdf"), ("Horn", "hn.pdf")])
+        self.assertEqual(self.group.present, [True, True, True, True])
+        self.assertEqual(
+            self.pairs(), [("Flute", "fl.pdf"), ("Tuba", None), ("Oboe", "ob.pdf"), ("Horn", "hn.pdf")],
+        )
 
     def test_voices_without_parts_stay_in_this_project_when_moved_among_themselves(self):
         self.project.add_instrument(self.group, "Tuba")
@@ -608,11 +610,69 @@ class TestVoicesCarryTheirParts(unittest.TestCase):
         self.assertEqual(self.group.present, [True, True, True, False])
         self.assertEqual(len(self.project.ungrouped_files), 1)
 
-    def test_rechecking_a_voice_gives_it_the_next_part_in_order(self):
-        """本專案有的聲部依序配分譜：重新勾選的聲部配到下一份，後面的各往後配一個聲部"""
+    def test_rechecking_a_voice_leaves_it_without_a_part_and_the_others_keep_theirs(self):
+        """重新勾選的聲部沒有分譜，不會接走後面聲部的分譜"""
+        self.project.set_present(self.group, 1, False)
+        self.assertEqual(self.project.set_present(self.group, 1, True), [])
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", None), ("Horn", "hn.pdf")])
+        self.assertEqual(self.group.present, [True, True, True])
+
+    def test_a_rechecked_voice_does_not_take_a_part_beyond_the_voices(self):
+        self.project.add_files(_infos("extra.pdf"), self.group)
+        self.project.set_present(self.group, 2, False)
+        self.project.set_present(self.group, 2, True)
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", "ob.pdf"), ("Horn", None)])
+        self.assertEqual([f.display_name for f in self.group.extra_files()], ["extra.pdf"])
+
+    def test_moving_and_removing_other_voices_keep_a_voice_without_a_part_empty(self):
         self.project.set_present(self.group, 0, False)
-        self.assertEqual(self.project.set_present(self.group, 0, True), [])
-        self.assertEqual(self.pairs(), [("Flute", "ob.pdf"), ("Oboe", "hn.pdf"), ("Horn", None)])
+        self.project.set_present(self.group, 0, True)
+        self.project.move_instruments(self.group, [2], 0)
+        self.project.remove_instruments(self.group, [2])
+        self.project.rename_instrument(self.group, 1, "Piccolo")
+        self.assertEqual(self.pairs(), [("Horn", "hn.pdf"), ("Piccolo", None)])
+
+    def test_a_part_added_to_the_group_goes_to_a_voice_without_a_part(self):
+        self.project.set_present(self.group, 1, False)
+        self.project.set_present(self.group, 1, True)
+        self.project.add_files(_infos("new.pdf"), self.group)
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", "new.pdf"), ("Horn", "hn.pdf")])
+        self.project.move_to_group([self.project.ungrouped_files[0]], self.group)
+        self.assertEqual([f.display_name for f in self.group.extra_files()], ["Loose.pdf"])
+
+    def test_a_part_taken_out_of_the_group_leaves_its_voice_without_a_part(self):
+        self.project.move_to_ungrouped([self.group.files[0]])
+        self.assertEqual(self.pairs(), [("Flute", None), ("Oboe", "ob.pdf"), ("Horn", "hn.pdf")])
+        self.project.set_score(self.group, self.group.files[0])
+        self.assertEqual(self.pairs(), [("Flute", None), ("Oboe", None), ("Horn", "hn.pdf")])
+
+    def test_a_new_voice_takes_the_first_part_beyond_the_voices(self):
+        self.project.add_files(_infos("tb.pdf"), self.group)
+        self.project.add_instrument(self.group, "Tuba")
+        self.assertEqual(self.pairs()[-1], ("Tuba", "tb.pdf"))
+
+    def test_a_voice_without_a_part_is_saved_and_opened_again(self):
+        self.project.set_present(self.group, 1, False)
+        self.project.set_present(self.group, 1, True)
+        data = {**self.project.to_data(), "version": PROJECT_FILE_VERSION}
+        opened = Project.from_data(data, score_label="總譜")
+        self.assertEqual(
+            [(p.voice, p.file.display_name if p.file else None) for p in opened.groups[0].pairing()],
+            [("Flute", "fl.pdf"), ("Oboe", None), ("Horn", "hn.pdf")],
+        )
+
+    def test_a_project_saved_without_parts_marked_missing_opens_with_the_same_pairing(self):
+        """這一欄以前的專案檔（含舊版）照位置配對，開啟時配對不變、不算修改"""
+        self.project.set_present(self.group, 1, False)
+        data = self.project.to_data()
+        for group in data["groups"]:
+            del group["vacant"]
+        opened = Project.from_data({**data, "version": PROJECT_FILE_VERSION}, score_label="總譜")
+        self.assertEqual(
+            [(p.voice, p.file.display_name if p.file else None) for p in opened.groups[0].pairing()],
+            [("Flute", "fl.pdf"), ("Horn", "hn.pdf")],
+        )
+        self.assertFalse(opened.is_modified())
 
     def test_renaming_keeps_whether_the_voice_is_in_this_project(self):
         self.project.set_present(self.group, 1, False)
@@ -636,6 +696,16 @@ class TestVoicesCarryTheirParts(unittest.TestCase):
         self.project.move_instruments(self.group, [0], 3)
         self.assertEqual([f.display_name for f in self.group.extra_files()], ["extra.pdf"])
         self.assertEqual(self.pairs()[-1], ("Flute", "fl.pdf"))
+
+    def test_undoing_a_split_brings_back_a_voice_without_a_part(self):
+        self.project.set_present(self.group, 1, False)
+        self.project.set_present(self.group, 1, True)
+        result = SplitResult(
+            source_path=self.group.files[0].original_path, parts=_infos("vn.pdf"), voices=["Violin"], replaced=[],
+        )
+        placement = self.project.apply_split(result, score_label="總譜")
+        self.project.revert_split(result.record(SplitPlacement.from_data(placement.to_data())))
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", None), ("Horn", "hn.pdf")])
 
     def test_replacing_the_whole_list_pairs_by_position_and_has_every_voice(self):
         self.project.set_present(self.group, 1, False)

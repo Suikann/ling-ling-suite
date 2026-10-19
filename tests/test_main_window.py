@@ -818,6 +818,13 @@ class TestMainWindowInstrumentationTable(InstrumentListTestCase):
         self.assertEqual(self._tab_rows(0), ["ob.pdf"])
         self.assertTrue(self.is_marked_unsaved())
 
+    def test_rechecking_a_voice_leaves_the_other_parts_with_their_voices(self):
+        editor = self._instrumentation_table()
+        present = editor.findChild(QTableWidget).item(1, editor.column("present"))
+        present.setCheckState(Qt.Unchecked)
+        editor.findChild(QTableWidget).item(1, editor.column("present")).setCheckState(Qt.Checked)
+        self.assertEqual(self._tab_rows(1), ["Flute  |  fl.pdf", "Horn  |  hn.pdf"])
+
     def test_dragging_a_voice_moves_its_part_in_the_group_tab(self):
         self._instrumentation_table().findChild(QTableWidget).rows_dropped.emit([2], 0)
         self.assertEqual(self._tab_rows(1), ["Horn  |  hn.pdf", "Flute  |  fl.pdf", "Oboe  |  ob.pdf"])
