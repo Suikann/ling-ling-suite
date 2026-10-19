@@ -96,6 +96,20 @@ class TestPublishingInBackground(PublishRunWindowTestCase):
         self.assertEqual([row["id"] for row in self.huaxia.tables["pieces"] if row["title"] == "烽火操"], [saved.piece_id])
 
 
+class TestRememberingCreatedParts(PublishRunWindowTestCase):
+    """發成之後，這次新建的聲部記成那些聲部的配對，下次發譜照它對"""
+
+    def test_the_new_parts_are_remembered_in_the_project(self):
+        self.press_publish(new_piece=True)
+        self.finish()
+        link = self.window.project.groups[0].huaxia_link
+        created = {
+            row["name"]: row["id"] for row in self.huaxia.tables["piece_parts"] if row["piece_id"] == link.piece_id
+        }
+        self.assertEqual(link.part_ids, created)
+        self.assertEqual(set(created), {"二胡 I", "琵琶"})
+
+
 class TestFinishing(PublishRunWindowTestCase):
     """完成時列出沒發成的群組與原因，附「重新發譜沒發成的群組」（只對它們開預覽）；「開始發譜」寫不進譜庫時不發並顯示提示列"""
 

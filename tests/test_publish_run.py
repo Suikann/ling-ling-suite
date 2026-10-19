@@ -31,7 +31,9 @@ from services.file_service import FileService
 from services.huaxia_client import PUBLISH_INTERFACE_VERSION, lingling_storage_path
 from services.publish_runner import GroupFailure, PublishEvent, PublishRunner
 from services.orphan_cleanup import clear_orphans
-from services.publish_service import FunctionProblem, PublishPreview, check_groups, storage_slot
+from services.publish_service import (
+    FunctionProblem, PartMatch, PublishPreview, check_groups, plan_voices, storage_slot,
+)
 from ui.publish_run import progress_line
 from test_catalog_service import empty_catalog
 from test_publish_preflight import PrepareTestCase
@@ -263,6 +265,24 @@ class TestNewPiece(RunTestCase):
         [result] = [r for r in self.log(PublishAction.RESULT) if r.group_id == self.chunjiang.id]
         self.assertEqual(result.new_piece["title"], "春江花月夜")
         self.assertEqual([p["id"] for p in result.parts_created], [xiao["id"]])
+
+    def test_parts_created_this_time_are_remembered_for_the_next_publish(self):
+        outcome = self.run_publish(self.press_publish())
+        self.project.remember_huaxia_parts(outcome.created_parts())
+        piece_id = self.chunjiang.huaxia_link.piece_id
+        [xiao] = [row for row in self.huaxia.tables["piece_parts"] if row["piece_id"] == piece_id]
+        self.assertEqual(self.chunjiang.huaxia_link.part_for("簫"), xiao["id"])
+        # 幹部在網頁上又建了一個「簫」：名稱規則對到兩個，記住的配對照樣對到泠靈建的那個
+        self.huaxia.add_part(piece_id, "簫", sort=5)
+        parts = self.service.prepare().parts[piece_id]
+        [row] = plan_voices(self.project, self.chunjiang, parts).rows
+        self.assertEqual((row.match, row.part.id), (PartMatch.CHOSEN, xiao["id"]))
+
+    def test_a_group_relinked_meanwhile_does_not_take_the_created_parts(self):
+        outcome = self.run_publish(self.press_publish())
+        self.project.set_huaxia_link(self.chunjiang, HuaXiaLink(piece_id=self.moli, piece_title="茉莉花"))
+        self.project.remember_huaxia_parts(outcome.created_parts())
+        self.assertEqual(self.chunjiang.huaxia_link.part_ids, {})
 
     def test_publishing_again_after_an_interrupted_switch_keeps_the_piece_and_its_parts(self):
         self.huaxia.drop_requests("POST", "/rest/v1/rpc/lingling_publish", skip=1)

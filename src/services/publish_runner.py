@@ -282,6 +282,15 @@ class PublishOutcome:
         """沒發成的群組"""
         return [group for group in self.groups if not group.published]
 
+    def created_parts(self) -> List[Tuple[str, str, Dict[str, str]]]:
+        """發成的群組這次新建的聲部，交給 Project.remember_huaxia_parts 記成配對：
+        （群組 ID，曲目編號，泠靈的聲部名稱對應新建的聲部編號）；沒有新建聲部的群組不列"""
+        return [
+            (group.group.group_id, group.group.piece_id, {part["name"]: part["id"] for part in created})
+            for group in self.groups
+            if group.published and (created := group.result.get("created_parts") or [])
+        ]
+
 
 class _Steps:
     """總進度：做完一步就回報一次"""

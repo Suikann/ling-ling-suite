@@ -1755,8 +1755,10 @@ class MainWindow(QMainWindow):
         return t("publish.run.progress", done=progress.done, total=progress.total), progress.done, progress.total
 
     def _publish_finished(self, outcome: PublishOutcome, _cancelled: bool):
-        """發譜結束：逐行紀錄接上結果，列出沒發成的群組（可以只重發它們）；發譜紀錄寫不進譜庫時頂端顯示提示列"""
+        """發譜結束：這次新建的聲部記成配對，逐行紀錄接上結果，列出沒發成的群組（可以只重發它們）；
+        發譜紀錄寫不進譜庫時頂端顯示提示列"""
         from ui.publish_run import failure_line, summary_lines
+        self.project.remember_huaxia_parts(outcome.created_parts())
         lines = summary_lines(outcome)
         self._publish_lines += lines
         self._publish_failures = [failure_line(group) for group in outcome.failed]
