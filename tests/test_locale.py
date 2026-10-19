@@ -102,14 +102,16 @@ class TestTrashName(unittest.TestCase):
         self.assertEqual(t("file.deleted"), f"Moved to the {trash_name()}")
 
     def test_no_interface_string_shows_a_placeholder_or_the_other_platform_name(self):
+        """系統回收處只用這個平台的稱呼；Google Drive 自己的垃圾桶（「Drive 垃圾桶」）在每個平台都叫垃圾桶，不算"""
         for locale_code in get_available_locales():
             set_locale(locale_code)
             other = trash_name("posix" if os.name == "nt" else "nt")
+            drive_trash = f"drive {trash_name('posix')}".lower()
             for key in get_keys(locale_code):
                 with self.subTest(locale=locale_code, key=key):
-                    text = t(key)
-                    self.assertNotIn("{trash}", text.lower())
-                    self.assertNotIn(other.lower(), text.lower())
+                    text = t(key).lower()
+                    self.assertNotIn("{trash}", text)
+                    self.assertNotIn(other.lower(), text.replace(drive_trash, ""))
 
 
 if __name__ == "__main__":
