@@ -1,0 +1,6 @@
+#!/bin/sh
+# AppImage 的進入點：直接執行 AppDir 裡 PyInstaller 的資料夾版。
+# 這裡不設 LD_LIBRARY_PATH：PyInstaller 的啟動程式自己設，並把使用者原本的值存進 LD_LIBRARY_PATH_ORIG，
+# 泠靈開外部程式時才還原得回原值（見 src/core/launch_env.py 的 external_process_environment）。
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/lib/LingLingSuite/LingLingSuite" "$@"
