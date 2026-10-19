@@ -6,10 +6,11 @@
 被那次取代的舊檔不會回來，人數與聲部組不改回，場次不動。只動那次發譜結果記下的 HuaXia 編號
 （core/publish_log.py 的 PublishRecord：scores_added、parts_created）與那次登記過的 Storage 檔。
 
-- 預覽（preview）：向 HuaXia 查那次放的檔還在不在、那次新建的聲部有沒有排人、這首曲目所有的檔，把每個聲部歸類
+- 預覽（preview）：向 HuaXia 查那次放的檔還在不在、那次新建的聲部有沒有排人或有人在網頁上設定過（小老師、備註、
+  練習回報、改名）、這首曲目所有的檔，把每個聲部歸類
   （RetractEffect）：撤回後沒有譜、刪掉聲部、聲部留著但沒有譜、只撤這次的、不動。「撤回後沒有譜」是推算的：
   撤掉這次的檔之後，那個聲部在 HuaXia 上已經沒有任何樂譜。那次新建的聲部有人放了別的檔時不刪（刪聲部會連帶刪掉
-  它的樂譜），只撤這次的。沒發成的群組沒有可撤的登記。
+  它的樂譜），只撤這次的；排了人或有人設定過的也不刪，聲部留著但沒有譜。沒發成的群組沒有可撤的登記。
 - 撤回（retract）：重查幹部身分，重讀 HuaXia 再算一次，以使用者身分經 REST 依序撤掉樂譜的登記、刪掉聲部、
   刪 Storage 的檔（只刪撤回後沒有任何登記還指著的），最後寫一列列「撤回」到發譜紀錄（沿用那次的發譜編號）、
   各群組寫一筆紀錄檔。中途中斷時剩下的檔成為孤兒，重做一次撤回會收斂（已撤掉的略過，沒刪的檔再刪一次）。
@@ -47,7 +48,7 @@ class RetractEffect(Enum):
 
     NO_SCORE = "no_score"        # 撤回後沒有譜
     DELETE_PART = "delete_part"  # 刪掉聲部（這次新建、還沒排人）
-    KEEP_PART = "keep_part"      # 聲部留著但沒有譜（這次新建、已經排人）
+    KEEP_PART = "keep_part"      # 聲部留著但沒有譜（這次新建、已經排人或有人在網頁上設定過）
     PARTIAL = "partial"          # 只撤這次的，別人放的留著
     UNTOUCHED = "untouched"      # 不動
 
@@ -59,6 +60,7 @@ class RetractReason(Enum):
     REPLACED = "replaced"                # 這次取代的舊檔不會回來
     NEW_UNASSIGNED = "new_unassigned"    # 這次新建、還沒排人
     ASSIGNED = "assigned"                # 這次新建，但已經排人
+    CONFIGURED = "configured"            # 這次新建，但有人在網頁上設定過（小老師、備註、練習回報、改名）
     OTHERS_KEPT = "others_kept"          # 別人放的檔不動
     NEW_WITH_OTHERS = "new_with_others"  # 這次新建，但別人放了檔，聲部留著
     GONE = "gone"                        # 這次放的檔已不在
@@ -93,7 +95,7 @@ class RetractGroup:
         record: 那次的發譜結果（沒發成的 failure 不為空）；那次沒有結果時是開始發譜
         rows: 逐聲部（依 HuaXia 的排序）加總譜；沒發成時為空
         scores: 要撤掉登記的樂譜（這次登記、現在還在的）
-        parts: 要刪的聲部（這次新建、還沒排人、沒有別人的樂譜）
+        parts: 要刪的聲部（這次新建、還沒排人、沒有別人的樂譜、沒人在網頁上設定過）
         files: 要刪的 Storage 檔（這次登記過、還在 Storage、撤回後沒有任何登記指著）
     """
     record: PublishRecord
@@ -193,10 +195,11 @@ class RetractResult:
 
 
 class _HuaXiaState(NamedTuple):
-    """撤回要的 HuaXia 現況"""
+    """撤回要的 HuaXia 現況：曲目的聲部與樂譜，那次新建的聲部裡已排人的與有人設定過的，Storage 裡泠靈的檔"""
     parts: List[HuaXiaPart]
     scores: List[HuaXiaScore]
     assigned: Set[str]
+    configured: Set[str]
     stored: Set[str]
 
 
@@ -287,7 +290,7 @@ class RetractService:
         token = self._auth.access_token()
         pieces = list(dict.fromkeys(record.piece_id for record in records if _retractable(record)))
         if not pieces:
-            return _HuaXiaState([], [], set(), set())
+            return _HuaXiaState([], [], set(), set(), set())
         parts = self._client.piece_parts(token, pieces)
         scores = self._client.scores(token, pieces)
         existing = {part.id for part in parts}
@@ -295,10 +298,11 @@ class RetractService:
             p["id"] for record in records if _retractable(record) for p in record.parts_created if p.get("id") in existing
         ]
         assigned = self._client.assigned_parts(token, created) if created else set()
+        configured = self._client.configured_parts(token, created) if created else set()
         stored: Set[str] = set()
         for piece_id in pieces:
             stored |= set(self._client.stored_files(token, lingling_storage_folder(piece_id)))
-        return _HuaXiaState(parts, scores, assigned, stored)
+        return _HuaXiaState(parts, scores, assigned, configured, stored)
 
     def _record_in_log(self, groups: List[RetractGroup], error: Optional[HuaXiaError]) -> None:
         """每個群組寫一筆紀錄檔；中途停下時寫出原因（不記 HuaXia 傳回的團員資料）"""
@@ -330,7 +334,7 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
     if not _retractable(record):
         return RetractGroup(record)
     ours = {score["id"] for score in record.scores_added}
-    created = {part["id"] for part in record.parts_created}
+    created = {part["id"]: part.get("name") for part in record.parts_created}
     replaced = {score.get("part_id") for score in record.scores_removed}
     updated = {update["id"]: update for update in record.parts_updated}
     touched = {score.get("part_id") for score in record.scores_added}
@@ -351,7 +355,9 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
             if column in _KEPT_FIELDS and isinstance(values, list)
         }
         new = part is not None and part.id in created
-        if new and part.id not in state.assigned and not others:
+        # 有人在網頁上設定過的不刪：刪聲部會丟掉小老師、備註，練習回報也對不回聲部
+        configured = new and (part.id in state.configured or part.name != created[part.id])
+        if new and part.id not in state.assigned and not others and not configured:
             effect, reason = RetractEffect.DELETE_PART, RetractReason.NEW_UNASSIGNED
             deleting.append(part)
         elif not mine:
@@ -361,7 +367,8 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
             effect = RetractEffect.PARTIAL
             reason = RetractReason.NEW_WITH_OTHERS if new and part.id not in state.assigned else RetractReason.OTHERS_KEPT
         elif new:
-            effect, reason = RetractEffect.KEEP_PART, RetractReason.ASSIGNED
+            reason = RetractReason.ASSIGNED if part.id in state.assigned else RetractReason.CONFIGURED
+            effect = RetractEffect.KEEP_PART
         else:
             effect = RetractEffect.NO_SCORE
             reason = RetractReason.REPLACED if part_id in replaced else RetractReason.ONLY_THIS

@@ -20,7 +20,7 @@ HuaXia 用戶端
   哪份是泠靈發的。發譜的第 1 段以 upload 傳檔（不覆寫，路徑已有檔就是同一份內容）、第 3 段以 delete_files 刪掉
   被取代的檔。
 - 撤回與收回不經發譜函式，以使用者身分經 REST 刪除（delete_scores、delete_parts，HuaXia 的 RLS 照常生效）；
-  刪聲部會連帶刪掉它的排人與樂譜，所以先以 assigned_parts 確認沒排人。收回刪檔前以 registered_paths 確認
+  刪聲部會連帶刪掉它的排人與樂譜，所以先以 assigned_parts 確認沒排人、以 configured_parts 確認沒人在網頁上設定過。收回刪檔前以 registered_paths 確認
   沒有任何樂譜登記還指著，曲目掛的公演以 piece_events、events_by_id 讀。
 請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
@@ -526,6 +526,24 @@ class HuaXiaClient:
             return {row["part_id"] for row in rows}
         except (KeyError, TypeError) as e:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected part assignments: {e}") from e
+
+    def configured_parts(self, access_token: str, part_ids: List[str]) -> Set[str]:
+        """這幾個聲部裡有人在網頁上設定過的：填了小老師（tutor_id）或備註（note），或有練習回報指著它
+        （practice_reports.part_id；刪聲部時 HuaXia 會把它設成 null，回報就對不回聲部）
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        parts = self.select_all("piece_parts", access_token, "id,tutor_id,note", within=("id", list(part_ids)))
+        reports = self.select_all(
+            "practice_reports", access_token, "id,part_id", within=("part_id", list(part_ids)),
+        )
+        try:
+            return {row["id"] for row in parts if row.get("tutor_id") or (row.get("note") or "").strip()} | {
+                row["part_id"] for row in reports
+            }
+        except (KeyError, TypeError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected configured parts: {e}") from e
 
     def delete_scores(self, access_token: str, score_ids: List[str]) -> List[str]:
         """以使用者身分撤掉這些樂譜的登記（刪 scores 的列，不刪 Storage 的檔）；已經不在或沒有權限的略過

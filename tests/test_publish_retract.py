@@ -191,6 +191,34 @@ class TestPreview(RetractTestCase):
         erhu = next(row for row in group.rows if row.name == "二胡1")
         self.assertEqual((erhu.effect, erhu.reason), (RetractEffect.UNTOUCHED, RetractReason.GONE))
 
+    def assert_paigu_kept_as_configured(self):
+        """排鼓（這次新建、沒排人、沒有別人的檔）有人在網頁上設定過：聲部留著但沒有譜、寫出原因，撤回時不刪"""
+        [group] = self.retracter.preview(self.entry()).groups
+        paigu = next(row for row in group.rows if row.name == "排鼓" or row.ours and row.ours[0].part_id == self.paigu)
+        self.assertEqual((paigu.effect, paigu.reason), (RetractEffect.KEEP_PART, RetractReason.CONFIGURED))
+        self.assertEqual(group.parts, [])
+        self.retracter.retract(self.entry(), [self.group.id], self.catalog)
+        self.assertIn(self.paigu, {row["id"] for row in self.huaxia.tables["piece_parts"]})
+        self.assertNotIn(self.paigu, {row["part_id"] for row in self.huaxia.tables["scores"]})
+
+    def test_a_new_part_given_a_tutor_on_the_website_is_kept(self):
+        tutor = self.huaxia.add_account("tutor_cat", roles=("member",))
+        self.huaxia.configure_part(self.paigu, tutor_id=tutor)
+        self.assert_paigu_kept_as_configured()
+
+    def test_a_new_part_given_a_note_on_the_website_is_kept(self):
+        self.huaxia.configure_part(self.paigu, note="第二樂章才進")
+        self.assert_paigu_kept_as_configured()
+
+    def test_a_new_part_with_a_practice_report_is_kept(self):
+        member = self.huaxia.add_account("member_dan", roles=("member",))
+        self.huaxia.add_practice_report(member, self.fenghuo, self.paigu)
+        self.assert_paigu_kept_as_configured()
+
+    def test_a_new_part_renamed_on_the_website_is_kept(self):
+        self.huaxia.rename_part(self.paigu, "排鼓（大）")
+        self.assert_paigu_kept_as_configured()
+
     def test_a_new_part_someone_else_put_a_file_on_is_kept(self):
         self.huaxia.add_score(self.fenghuo, self.paigu, "%s/%s/1700000000_x.pdf" % (self.fenghuo, self.paigu))
         [group] = self.retracter.preview(self.entry()).groups

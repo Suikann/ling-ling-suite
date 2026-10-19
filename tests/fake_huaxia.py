@@ -12,7 +12,8 @@
   寫在 _READ_POLICIES。一次最多回傳 max_rows 列（同 Supabase 的 max_rows，預設 1000），多的要分頁讀。
   撤回與收回用的刪除（DELETE，要有篩選）只有幹部刪得到 scores 與 piece_parts，刪聲部連帶刪掉它的排人與樂譜。
 - 排人（part_assignments，欄位照 HuaXia 的 schema：id、part_id、user_id 或 ringer_id）：以 assign 加入，
-  讀取權限簡化成 is_insider（不實作 in_part）。
+  讀取權限簡化成 is_insider（不實作 in_part）。聲部的小老師與備註以 configure_part 設定；練習回報（practice_reports）
+  以 add_practice_report 加入，讀取權限照 can_see_report 簡化成自己的與 is_staff，刪聲部時它的 part_id 設成 null。
 - rpc：is_officer（帳號啟用且有 admin 或 officer）；發譜函式與它的版本查詢預設不存在（同 HuaXia 合併 #117 之前），
   以 install_publish_function 裝上指定的版本。發譜函式照 docs/huaxia/LINGLING.md：以呼叫者身分執行（不是幹部時
   新增被 RLS 擋下、修改與刪除找不到可以動的列），匿名不能呼叫；任何一步不成就丟出文件裡的錯誤代碼，資料表回到呼叫前。
@@ -125,7 +126,7 @@ class FakeHuaXia:
         self.requests: List[Dict[str, Any]] = []
         self.tables: Dict[str, List[Dict[str, Any]]] = {
             "profiles": [], "user_roles": [], "pieces": [], "piece_parts": [], "scores": [], "semesters": [],
-            "events": [], "event_pieces": [], "part_assignments": [],
+            "events": [], "event_pieces": [], "part_assignments": [], "practice_reports": [],
         }
         # Storage bucket scores 裡的檔：路徑對應內容
         self.objects: Dict[str, bytes] = {}
@@ -203,6 +204,26 @@ class FakeHuaXia:
         """刪掉一個聲部（幹部在網頁上刪了它）"""
         with self._lock:
             self.tables["piece_parts"] = [row for row in self.tables["piece_parts"] if row["id"] != part_id]
+
+    def configure_part(self, part_id: str, tutor_id: Optional[str] = None, note: Optional[str] = None) -> None:
+        """在網頁上設定一個聲部的小老師（tutor_id）或備註（note）；沒給的不改"""
+        with self._lock:
+            for row in self.tables["piece_parts"]:
+                if row["id"] == part_id:
+                    if tutor_id is not None:
+                        row["tutor_id"] = tutor_id
+                    if note is not None:
+                        row["note"] = note
+
+    def add_practice_report(self, user_id: str, piece_id: str, part_id: Optional[str], title: str = "練習") -> str:
+        """一位團員交了一份練習回報（practice_reports 的一列），回傳回報編號"""
+        with self._lock:
+            report_id = str(uuid.uuid4())
+            self.tables["practice_reports"].append({
+                "id": report_id, "user_id": user_id, "piece_id": piece_id, "part_id": part_id, "title": title,
+                "url": "", "note": "", "created_at": _now().isoformat(),
+            })
+            return report_id
 
     def rename_part(self, part_id: str, name: str) -> None:
         """改一個聲部的名稱（幹部在網頁上改了它）"""
@@ -708,6 +729,9 @@ class FakeHuaXia:
             parts = {row["id"] for row in doomed}
             for child in ("part_assignments", "scores"):
                 self.tables[child] = [row for row in self.tables[child] if row.get("part_id") not in parts]
+            for report in self.tables["practice_reports"]:
+                if report["part_id"] in parts:
+                    report["part_id"] = None    # on delete set null
         if "return=representation" not in record["headers"].get("Prefer", ""):
             return _Response(204)
         return _Response(200, [row if columns == ["*"] else {c: row.get(c) for c in columns} for row in doomed])
@@ -871,4 +895,6 @@ _READ_POLICIES: Dict[str, Callable[[FakeHuaXia, Optional[str], Dict[str, Any]], 
         event["id"] == row["event_id"] and fake._can_see_event(caller, event) for event in fake.tables["events"]
     ),
     "part_assignments": lambda fake, caller, row: fake._is_insider(caller),
+    # can_see_report 簡化：自己的與幹部、老師（is_staff）看得到
+    "practice_reports": lambda fake, caller, row: row["user_id"] == caller or fake._is_staff(caller),
 }
