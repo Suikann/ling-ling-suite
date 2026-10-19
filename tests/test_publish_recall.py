@@ -131,6 +131,22 @@ class TestInterrupted(RecallTestCase):
         self.assertNotIn(self.fenghuo, self.listed())
 
 
+class TestManyScores(RecallTestCase):
+    """樂譜很多、撤登記分成幾個請求：後面的請求失敗時，前面已撤的照樣記進「收回」"""
+
+    def test_scores_removed_before_a_later_batch_failed_are_recorded(self):
+        for n in range(60):
+            self.huaxia.add_score(self.fenghuo, self.erhu, f"{self.fenghuo}/{self.erhu}/17000000{n:02d}_x.pdf")
+        piece = self.piece()
+        self.huaxia.drop_requests("DELETE", "/rest/v1/scores", skip=1)
+        result = self.recaller.recall([piece], self.catalog)
+        self.assertIsNotNone(result.error)
+        [row] = self.log(PublishAction.RECALL)
+        remaining = {r["id"] for r in self.huaxia.tables["scores"]}
+        self.assertEqual({s["id"] for s in row.scores_removed}, {s.id for s in piece.scores} - remaining)
+        self.assertTrue(row.scores_removed)
+
+
 class TestRefusedDeletion(RecallTestCase):
     """Storage 刪不掉的檔（回應照樣成功）不算刪掉：記在撤掉的登記而不在刪掉的檔，再收回一次補刪"""
 

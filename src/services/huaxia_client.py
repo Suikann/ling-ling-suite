@@ -36,7 +36,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import requests
 
@@ -61,8 +61,10 @@ _PDF_MIME = "application/pdf"
 _STORAGE_DUPLICATE = "Duplicate"
 # 讀資料表時一次要幾列（Supabase 的 max_rows 預設 1000；HuaXia 設得更小時回得較少，照樣讀到回空為止）
 _TABLE_PAGE_SIZE = 1000
-# 以 in.(…) 篩選時一個請求帶幾個編號（避免網址過長），多的分成幾個請求
+# 以 in.(…) 篩選時一個請求最多帶幾個值，與這些值編碼進網址後最多幾個字元（一般閘道限 8 KB，留空間給其他參數），
+# 多的分成幾個請求
 _IN_FILTER_CHUNK = 50
+_IN_FILTER_URL_LENGTH = 4000
 # 讀場次的欄位
 _EVENT_COLUMNS = "id,title,starts_at,ends_at,kinds,location"
 # 一個請求最多等這麼久（秒）
@@ -101,6 +103,8 @@ class HuaXiaError(Exception):
         self.detail = detail
         self.code = code
         self.status = status
+        # 分成幾個請求的刪除（delete_scores、delete_parts）中途失敗時，失敗之前已經刪掉的編號
+        self.done: List[str] = []
 
 
 @dataclass(frozen=True)
@@ -239,6 +243,21 @@ def _events(rows: List[Dict[str, Any]]) -> List[HuaXiaEvent]:
     return sorted(events, key=lambda event: event.starts_at)
 
 
+def _in_chunks(values: List[str]) -> List[List[str]]:
+    """把 in.(…) 篩選的值分成幾段：每段最多 _IN_FILTER_CHUNK 個，編碼進網址後不超過 _IN_FILTER_URL_LENGTH 個字元
+    （值是很長的 Storage 路徑、或有中文時，一段放得比較少）；一個值本身就超過時自成一段"""
+    chunks: List[List[str]] = []
+    length = 0
+    for value in values:
+        size = len(quote(value, safe="")) + len(quote(","))
+        if not chunks or len(chunks[-1]) >= _IN_FILTER_CHUNK or length + size > _IN_FILTER_URL_LENGTH:
+            chunks.append([])
+            length = 0
+        chunks[-1].append(value)
+        length += size
+    return chunks
+
+
 def _quoted(value: str) -> str:
     """PostgREST 的 in.(…) 裡的一個值：加雙引號，裡面的反斜線與雙引號前加反斜線（值裡可能有逗號或括號）"""
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -367,10 +386,7 @@ class HuaXiaClient:
             batches = [dict(filters or {})]
         else:
             column, values = within
-            batches = [
-                {**(filters or {}), column: f"in.({','.join(values[i:i + _IN_FILTER_CHUNK])})"}
-                for i in range(0, len(values), _IN_FILTER_CHUNK)
-            ]
+            batches = [{**(filters or {}), column: f"in.({','.join(chunk)})"} for chunk in _in_chunks(values)]
         rows: List[Dict[str, Any]] = []
         for batch in batches:
             offset = 0
@@ -568,18 +584,24 @@ class HuaXiaClient:
         return self._delete_ids("piece_parts", access_token, part_ids)
 
     def _delete_ids(self, table: str, access_token: str, ids: List[str]) -> List[str]:
-        """刪掉資料表裡編號是其中之一的列（照 RLS，看不到或不能刪的不刪），回傳真的刪掉的編號"""
+        """刪掉資料表裡編號是其中之一的列（照 RLS，看不到或不能刪的不刪），回傳真的刪掉的編號
+
+        分成幾個請求；某個請求失敗時丟出的 HuaXiaError 的 done 是之前的請求已經刪掉的編號。
+        """
         deleted: List[str] = []
-        for i in range(0, len(ids), _IN_FILTER_CHUNK):
-            rows = self._call(
-                "DELETE", f"/rest/v1/{table}", access_token,
-                params={"id": f"in.({','.join(ids[i:i + _IN_FILTER_CHUNK])})", "select": "id"},
-                headers={"Prefer": "return=representation"},
-            )
+        for chunk in _in_chunks(ids):
             try:
-                deleted.extend(row["id"] for row in rows or [])
-            except (KeyError, TypeError) as e:
-                raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected {table} deletion: {e}") from e
+                rows = self._call(
+                    "DELETE", f"/rest/v1/{table}", access_token,
+                    params={"id": f"in.({','.join(chunk)})", "select": "id"}, headers={"Prefer": "return=representation"},
+                )
+                try:
+                    deleted.extend(row["id"] for row in rows or [])
+                except (KeyError, TypeError) as e:
+                    raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected {table} deletion: {e}") from e
+            except HuaXiaError as e:
+                e.done = list(deleted)
+                raise
         return deleted
 
     def event_pieces(self, access_token: str, event_ids: List[str]) -> List[Tuple[str, str]]:

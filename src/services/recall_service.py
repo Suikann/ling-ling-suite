@@ -305,7 +305,11 @@ class RecallService:
         """
         token = self._auth.access_token()
         current = self._client.scores(token, [piece.piece_id])
-        gone = set(self._client.delete_scores(token, [score.id for score in current]))
+        try:
+            gone = set(self._client.delete_scores(token, [score.id for score in current]))
+        except HuaXiaError as e:
+            removed.extend(score for score in current if score.id in set(e.done))
+            raise
         removed.extend(score for score in current if score.id in gone)
         deletion = delete_unregistered(self._auth, [score.file_path for score in removed] + piece.leftovers)
         deleted.extend(deletion.deleted)

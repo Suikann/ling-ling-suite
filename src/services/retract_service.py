@@ -264,8 +264,16 @@ class RetractService:
         files: Set[str] = set()
         error: Optional[HuaXiaError] = None
         try:
-            removed.update(self._client.delete_scores(token, [s.id for g in groups for s in g.scores]))
-            deleted.update(self._client.delete_parts(token, [p.id for g in groups for p in g.parts]))
+            try:
+                removed.update(self._client.delete_scores(token, [s.id for g in groups for s in g.scores]))
+            except HuaXiaError as e:
+                removed.update(e.done)
+                raise
+            try:
+                deleted.update(self._client.delete_parts(token, [p.id for g in groups for p in g.parts]))
+            except HuaXiaError as e:
+                deleted.update(e.done)
+                raise
             files.update(delete_unregistered(self._auth, [path for group in groups for path in group.files]).deleted)
         except HuaXiaError as e:
             error = e

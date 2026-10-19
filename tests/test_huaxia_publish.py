@@ -10,6 +10,7 @@ import datetime
 import os
 import sys
 import unittest
+from urllib.parse import urlencode
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -227,6 +228,28 @@ class TestNotAnOfficer(RejectionTestCase):
         with self.assertRaises(HuaXiaError) as caught:
             HuaXiaClient(session=self.huaxia).publish_interface_version("")
         self.assertEqual((caught.exception.code, caught.exception.status), ("42501", 401))
+
+
+class TestLongRequests(PublishTestCase):
+    """篩選帶很多值時分成幾個請求：網址不超過一般閘道的上限；刪除中途失敗時交出已經刪掉的"""
+
+    def test_asking_which_long_paths_are_registered_keeps_every_url_short(self):
+        paths = [f"{self.moli}/full/1760000000{n:03d}_{'春江花月夜弓法版' * 12}.pdf" for n in range(50)]
+        self.huaxia.add_score(self.moli, None, paths[-1])
+        self.assertEqual(self.client.registered_paths(self.auth.access_token(), paths), {paths[-1]})
+        reads = [r for r in self.huaxia.requests if r["method"] == "GET" and r["path"] == "/rest/v1/scores"]
+        self.assertGreater(len(reads), 1)
+        for request in reads:
+            self.assertLess(len(urlencode(request["params"])), 8000)
+
+    def test_a_deletion_that_fails_partway_hands_back_what_was_deleted(self):
+        ids = [self.huaxia.add_score(self.moli, None, stored(self.moli, n)) for n in range(60)]
+        self.huaxia.drop_requests("DELETE", "/rest/v1/scores", skip=1)
+        with self.assertRaises(HuaXiaError) as caught:
+            self.client.delete_scores(self.auth.access_token(), ids)
+        remaining = {row["id"] for row in self.huaxia.tables["scores"]}
+        self.assertEqual(sorted(caught.exception.done), sorted(set(ids) - remaining))
+        self.assertTrue(caught.exception.done)
 
 
 class TestStorage(PublishTestCase):
