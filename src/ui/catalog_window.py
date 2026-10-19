@@ -13,11 +13,15 @@ services/download_service.py 下載並核對 MD5）：在背景執行，狀態�
 版本頁的「存入紀錄…」列出動到這個版本的每次存入與撤銷存入（ui/deposit_revert_dialog.py），選一次存入按「撤銷存入…」，
 在等待中讀出撤銷的預覽、開預覽對話框；按「撤銷存入」後交給主視窗（DepositReverter）在背景撤銷、鎖住專案，
 結束時中途失敗的在這個視窗頂端的提示列寫出已撤掉幾份、按「重試」再開一次預覽，沒撤銷的群組列出原因，版本頁重新讀取。
+工具列的「發譜紀錄」（有 HuaXia 登入服務時）在右側面板列出每次發譜與撤回（ui/publish_retract_dialog.py），
+選一次發譜按「撤回…」：沒登入 HuaXia 時先登入，在等待中讀出撤回的預覽（services/retract_service.py）、開預覽對話框，
+按「撤回」後在等待中撤回、寫一列「撤回」，寫出結果並重新讀取列表。
 工具列的「聲部組對照」在右側面板開聲部組對照的編輯器（ui/section_map_editor.py），按儲存才寫入，
 寫入走存檔寫回的同一套比對，被別人改過時開衝突畫面（ui/catalog_conflict_dialog.py）選邊。
 讀到總覽（連上譜庫）後另在背景讀社團設定，把啟用的發譜平台記在偏好設定（services/club_settings_service.py）；
 這一項讀不到時沿用記住的結果，不顯示提示列。
 """
+import functools
 import threading
 from typing import Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 from PySide6.QtWidgets import (
@@ -39,6 +43,7 @@ from core.catalog_download import DownloadItem, folder_items
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import Composer, DepositLogEntry, DriveFile, FolderPdf, Piece, Edition, PieceDetail
 from core.deposit_revert import Deposit, RevertChoice, RevertPreview, deposits
+from core.publish_log import PublishLogEntry, publish_entries
 from core.catalog_sync import Decision, SyncField, SyncItem, SyncOutcome
 from core.voice_suggestions import VoiceCandidates
 from services.activity_log import ActivityLog
@@ -48,12 +53,15 @@ from services.deposit_revert_service import RevertOutcome
 from services.download_service import DownloadOutcome, DownloadService
 from services.google_auth_service import GoogleAuthService
 from services.huaxia_auth_service import HuaXiaAuthService
+from services.huaxia_client import HuaXiaError
+from services.retract_service import RetractResult, RetractService
 from services.google_catalog import open_google_catalog
 from services.preferences_service import PreferencesService
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.background_task import BackgroundTask, TaskSlot, TaskTexts
 from ui.catalog_tasks import CatalogTasks, catalog_work
 from ui.section_map_editor import SectionMapEditor
+from ui.waiting_dialog import run_while_waiting
 from ui.widgets import not_downloaded_text
 
 
@@ -95,7 +103,8 @@ class CatalogWindow(QMainWindow):
             catalog_factory: 在背景執行緒建立譜庫服務的函式，拿不到時丟出 CatalogError；
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
             log: 紀錄檔，讀寫失敗時寫進去；省略時以使用者資料目錄下的紀錄檔資料夾建立
-            huaxia_auth: HuaXia 登入服務，交給譜庫設定的 HuaXia 登入區；省略時譜庫設定沒有 HuaXia 登入區
+            huaxia_auth: HuaXia 登入服務，交給譜庫設定的 HuaXia 登入區，也用在撤回；省略時譜庫設定沒有 HuaXia 登入區，
+                工具列沒有「發譜紀錄」
             voice_candidates: 聲部名稱自動完成的候選來源，讀到譜庫總覽時記下用過的聲部名稱；省略時不記
             reverter: 撤銷存入在背景執行的一方（主視窗）；省略時版本頁沒有「存入紀錄…」
             downloads: 下載服務（主視窗那一份）；省略時版本頁沒有「下載…」
@@ -111,6 +120,7 @@ class CatalogWindow(QMainWindow):
         self._catalog_lock = threading.Lock()
         self._log = log or ActivityLog()
         self._club_settings = ClubSettingsService(preferences, self._log)
+        self._retracter = RetractService(huaxia_auth, self._log) if huaxia_auth is not None else None
         self._downloads = downloads
         self._reverter = reverter
         self._orchestra_type = orchestra_type
@@ -293,7 +303,7 @@ class CatalogWindow(QMainWindow):
             self._catalog = None
 
     def _build_ui(self):
-        """排出工具列（新增資料夾、重新整理、聲部組對照、搜尋）、錯誤提示列、左邊的樹狀清單與右邊的詳細面板、狀態列"""
+        """排出工具列（新增資料夾、重新整理、聲部組對照、發譜紀錄、搜尋）、錯誤提示列、左邊的樹狀清單與右邊的詳細面板、狀態列"""
         self._toolbar = QToolBar()
         self._toolbar.setMovable(False)
         self.addToolBar(self._toolbar)
@@ -307,6 +317,10 @@ class CatalogWindow(QMainWindow):
         section_map_btn = QPushButton(t("catalog.sections.title"))
         section_map_btn.clicked.connect(lambda: self._show_section_map(self._orchestra_type))
         self._toolbar.addWidget(section_map_btn)
+        if self._retracter is not None:
+            publish_log_btn = QPushButton(t("publish_log.button"))
+            publish_log_btn.clicked.connect(self._show_publish_log)
+            self._toolbar.addWidget(publish_log_btn)
         self._toolbar.addSeparator()
         self._search_entry = QLineEdit()
         self._search_entry.setPlaceholderText(t("catalog.toolbar.search"))
@@ -1154,6 +1168,99 @@ class CatalogWindow(QMainWindow):
         if outcome.skipped:
             from ui.deposit_revert_dialog import skipped_text
             QMessageBox.warning(self, t("revert.confirm"), skipped_text(outcome))
+
+    # --- 發譜紀錄與撤回 ---
+
+    def _show_publish_log(self):
+        """經譜庫服務讀發譜紀錄，讀到後在右側面板列出每次發譜與撤回；選一次發譜按「撤回…」就開撤回的預覽"""
+        from ui.publish_retract_dialog import PublishLogPanel
+        self._clear_detail()
+        self._current_detail = None
+        loading = QLabel(t("catalog.loading"))
+        loading.setAlignment(Qt.AlignCenter)
+        self._detail_layout.addWidget(loading)
+        version = self._detail_version
+
+        def on_done(records):
+            """讀到了：換成列表"""
+            if version == self._detail_version:
+                self._clear_detail()
+                panel = PublishLogPanel(publish_entries(records))
+                panel.retract_requested.connect(self._retract)
+                self._detail_layout.addWidget(panel)
+
+        def unreadable():
+            """讀不到：詳細面板寫「讀不到」"""
+            if version == self._detail_version:
+                self._clear_detail()
+                self._detail_layout.addWidget(self._unreadable_label())
+
+        self._read(lambda catalog: catalog.publish_log(), on_done, unreadable, self._show_publish_log)
+
+    def _retract(self, entry: PublishLogEntry):
+        """撤回那次發譜：沒登入 HuaXia 時先登入，在等待中讀預覽、開預覽對話框，按「撤回」後在等待中撤回並寫出結果
+
+        Args:
+            entry: 發譜紀錄列表裡選的那次發譜
+        """
+        from ui.catalog_settings_dialog import sign_in_huaxia
+        from ui.publish_retract_dialog import RetractDialog
+        title = t("retract.title_short")
+        if not self._huaxia_auth.status().signed_in:
+            answer = QMessageBox.question(
+                self, title, t("retract.sign_in_first", reminder=t("huaxia.auth.link_discord_first")),
+            )
+            if answer != QMessageBox.Yes or not sign_in_huaxia(self, self._huaxia_auth):
+                return
+        retry = functools.partial(self._retract, entry)
+        preview = self._while_waiting(t("retract.reading"), lambda: self._retracter.preview(entry), retry)
+        if preview is None:
+            return
+        dialog = RetractDialog(preview, self)
+        accepted = dialog.exec() == QDialog.Accepted
+        chosen = dialog.chosen()
+        dialog.deleteLater()
+        if not accepted or not chosen:
+            return
+        result = self._while_waiting(
+            t("retract.running"), lambda: self._retracter.retract(entry, chosen, self._connected()), retry,
+        )
+        if result is not None:
+            self._retract_finished(result)
+
+    def _while_waiting(self, message: str, work: Callable[[], object], retry: Callable[[], None]):
+        """在等待視窗裡做撤回的一步；連不上 HuaXia 或譜庫時寫出原因、回傳 None
+
+        Args:
+            message: 等待視窗的說明
+            work: 在背景執行緒執行的那一步
+            retry: 接不上譜庫時，提示列按「重試」重來一次撤回
+        """
+        from ui.catalog_settings_dialog import huaxia_error_text
+        try:
+            return run_while_waiting(self, t("retract.title_short"), message, work, lambda: None)
+        except HuaXiaError as e:
+            QMessageBox.warning(self, t("retract.title_short"), huaxia_error_text(
+                e, "retract.unreachable", "retract.failed",
+            ))
+        except CatalogError as e:
+            self._error_bar.show_failure(
+                t("catalog.error.cannot_write"), CatalogFailure.from_error(e, t("retract.title_short")), retry,
+            )
+        return None
+
+    def _retract_finished(self, result: RetractResult):
+        """撤回結束：寫出結果（不是幹部時寫出原因），重新讀取發譜紀錄"""
+        from ui.catalog_settings_dialog import not_officer_text
+        from ui.publish_retract_dialog import result_text
+        if result.not_officer is not None:
+            QMessageBox.warning(self, t("retract.title_short"), not_officer_text(result.not_officer))
+            return
+        if result.error is not None or result.log_error is not None:
+            QMessageBox.warning(self, t("retract.title_short"), result_text(result))
+        else:
+            QMessageBox.information(self, t("retract.title_short"), result_text(result))
+        self._show_publish_log()
 
     # --- 一般下載 ---
 

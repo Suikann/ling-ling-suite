@@ -33,6 +33,7 @@ from services.google_catalog import open_google_catalog, open_google_drive
 from services.huaxia_auth_service import (
     AccountStanding, HuaXiaAuthService, HuaXiaLoginFailed, HuaXiaLoginFailure, HuaXiaReason, NotOfficer,
 )
+from services.huaxia_client import HuaXiaError, HuaXiaErrorKind
 from services.preferences_service import PreferencesService
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.background_task import BackgroundTask
@@ -117,6 +118,23 @@ def not_officer_text(not_officer: NotOfficer) -> str:
     if not not_officer.discord_name:
         return reason
     return t("huaxia.not_officer.with_account", name=not_officer.discord_name, reason=reason)
+
+
+def huaxia_error_text(error: HuaXiaError, unreachable_key: str, failed_key: str) -> str:
+    """連 HuaXia 失敗的說明（發譜與撤回共用）：登入已失效、連不上、沒有登入，其他寫出錯誤
+
+    Args:
+        error: HuaXia 請求的錯誤
+        unreachable_key: 連不上時的介面字串鍵
+        failed_key: 其他錯誤的介面字串鍵（以 error 代入錯誤訊息）
+    """
+    if error.kind is HuaXiaErrorKind.SESSION_GONE:
+        return t("huaxia.auth.session_gone")
+    if error.kind is HuaXiaErrorKind.UNREACHABLE:
+        return t(unreachable_key)
+    if error.kind is HuaXiaErrorKind.SIGNED_OUT:
+        return t("huaxia.auth.not_connected")
+    return t(failed_key, error=str(error))
 
 
 def sign_in_huaxia(parent: QWidget, auth: HuaXiaAuthService) -> bool:

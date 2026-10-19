@@ -113,8 +113,10 @@ SECTION_COLORS = (
 )
 # 標出還沒進譜庫（未同步、未存入）的值與檔的文字顏色；編制表、群組面板與發譜預覽共用
 UNSYNCED_COLOR = "#e67e22"
-# 擋下動作的紅色提示列（例如未存檔時不能存入、清除，撤銷會毀掉唯一一份的群組）；存入、清除與撤銷存入的預覽共用
+# 擋下動作的紅色提示列（例如未存檔時不能存入、清除，撤銷會毀掉唯一一份的群組）；存入、清除、撤銷存入與撤回的預覽共用
 ALERT_BANNER_STYLE = "background-color: #5a2129; color: #ff8a8a; border-radius: 5px; padding: 6px 10px;"
+# 提示列的藍底說明（撤銷存入要先下載回原位、撤回後留下空曲目）
+INFO_BANNER_STYLE = "background-color: #253c63; color: #8fb8ff; border-radius: 5px; padding: 6px 10px;"
 # 關閉視窗時選了取消背景工作，最多等它停下幾秒（停在檔與檔、頁與頁之間，通常不到一秒）；
 # 逾時就放棄它（之後不再送回任何結果）再關閉，暫存檔留待下次啟動清掉。主視窗與譜庫視窗共用
 CLOSE_WAIT_SECONDS = 10

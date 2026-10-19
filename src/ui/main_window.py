@@ -42,7 +42,7 @@ from services.external_opener import ExternalOpener
 from services.file_service import FileService
 from services.google_auth_service import GoogleAuthService
 from services.huaxia_auth_service import HuaXiaAuthService
-from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaError, HuaXiaErrorKind
+from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaError
 from services.import_service import ImportService
 from services.move_history import MoveHistory, MoveResult, PendingMove, RenameVerdict
 from services.workspace_service import WorkspaceService
@@ -136,13 +136,8 @@ def _not_ready_text(readiness: PublishReadiness) -> str:
 
 def _huaxia_error_text(error: HuaXiaError) -> str:
     """按下發譜時連 HuaXia 失敗的說明"""
-    if error.kind is HuaXiaErrorKind.SESSION_GONE:
-        return t("huaxia.auth.session_gone")
-    if error.kind is HuaXiaErrorKind.UNREACHABLE:
-        return t("publish.unreachable")
-    if error.kind is HuaXiaErrorKind.SIGNED_OUT:
-        return t("huaxia.auth.not_connected")
-    return t("publish.failed", error=str(error))
+    from ui.catalog_settings_dialog import huaxia_error_text
+    return huaxia_error_text(error, "publish.unreachable", "publish.failed")
 
 
 class MainWindow(QMainWindow):
