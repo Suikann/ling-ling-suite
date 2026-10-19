@@ -126,6 +126,8 @@ DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_PDF_MIME = "application/pdf"
 # Google 試算表在 Drive 上的 mimeType
 DRIVE_SPREADSHEET_MIME = "application/vnd.google-apps.spreadsheet"
+# Drive 根資料夾（我的雲端硬碟）的別名：請求裡可以代替它的 ID，回應的 parents 卻是真正的 ID，所以不拿來存或比對
+DRIVE_ROOT_ALIAS = "root"
 
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",

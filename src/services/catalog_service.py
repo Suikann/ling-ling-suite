@@ -40,7 +40,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from core.catalog_constants import (
     CATALOG_TRUE, CATALOG_TRUE_VALUES, CLUB_SETTING_PUBLISHING_PLATFORM, DEPOSIT_PENDING, DRIVE_FOLDER_MIME,
-    DRIVE_PDF_MIME,
+    DRIVE_PDF_MIME, DRIVE_ROOT_ALIAS,
     DRIVE_SPREADSHEET_MIME, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, SHEET_COMPOSERS, SHEET_DURATIONS,
     SHEET_DEPOSIT_LOG, SHEET_EDITIONS, SHEET_HEADERS, SHEET_INSTRUMENTATION_LOG, SHEET_MOVEMENTS, SHEET_PARTS, SHEET_PERFORMANCES,
     SHEET_PIECES, SHEET_PUBLISH_LOG, SHEET_SECTIONS, PublishingPlatform,
@@ -1502,6 +1502,14 @@ class CatalogService:
                 "reverts": deposit_id, "group_id": entry.group_id,
             })
         self._send(batch, titles)
+
+    def my_drive(self) -> DriveFile:
+        """我的雲端硬碟的根資料夾，帶它真正的 ID（存成譜庫根資料夾時用這個 ID，才比對得到檔案的 parents）
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        return self._call(lambda: self._drive.get_file(DRIVE_ROOT_ALIAS))
 
     def subfolders(self, folder_id: str) -> List[DriveFile]:
         """列出 Drive 資料夾裡的子資料夾（依名稱排序，不含垃圾桶裡的）

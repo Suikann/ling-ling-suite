@@ -4,7 +4,8 @@
 
 引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫目錄。
 登入區顯示登入的帳號 email 與帳號提醒；登入時在背景等瀏覽器回來，期間顯示可取消的等待視窗。
-瀏覽 Drive 資料夾、找資料夾裡的試算表與建立譜庫目錄都經譜庫服務（services/catalog_service.py）在背景執行，
+瀏覽 Drive 資料夾（最上層是我的雲端硬碟，它本身也能選）、找資料夾裡的試算表與建立譜庫目錄都經譜庫服務
+（services/catalog_service.py）在背景執行；根資料夾一律存成它真正的 ID，不存別名 root。
 失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。找到或建好的譜庫試算表先記在對話框裡，
 按「儲存設定」才寫進偏好設定，取消時偏好設定不變；存的是另一份譜庫試算表時，忘掉記住的發譜平台，
 在背景改讀新譜庫的社團設定（services/club_settings_service.py）。
@@ -12,7 +13,7 @@
 登入前寫出連結 Discord 的提醒，以 Discord 登入時顯示可取消的等待視窗，不是幹部時說明原因；登出在背景進行。
 """
 import re
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QDialogButtonBox, QWidget,
 )
 from PySide6.QtCore import Qt
-from core.catalog_constants import PublishingPlatform
+from core.catalog_constants import DRIVE_ROOT_ALIAS, PublishingPlatform
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import DriveFile
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
@@ -65,11 +66,13 @@ _HUAXIA_REASON_KEYS = {
 
 
 def _extract_folder_id(text: str) -> str:
-    """從網址或純 ID 中擷取資料夾 ID"""
+    """從網址或純 ID 中擷取資料夾 ID；我的雲端硬碟的網址為根資料夾的別名"""
     text = text.strip()
     match = re.search(r'/folders/([a-zA-Z0-9_-]+)', text)
     if match:
         return match.group(1)
+    if re.search(r'/drive/(u/\d+/)?my-drive\b', text):
+        return DRIVE_ROOT_ALIAS
     return text
 
 
@@ -327,24 +330,35 @@ class CatalogSettingsDialog(QDialog):
             self._check_catalog_in_folder()
 
     def _check_catalog_in_folder(self):
-        """在背景找選定資料夾裡的試算表：一份就用它，多份讓使用者選，沒有則提議建立"""
+        """在背景找選定資料夾裡的試算表：一份就用它，多份讓使用者選，沒有則提議建立
+
+        資料夾寫的是根資料夾的別名時先換成真正的 ID 填回欄位，存起來的才比對得到檔案的 parents。
+        """
         folder_id = _extract_folder_id(self._folder_entry.text())
         if not folder_id:
             return
         self._show_folder_status(t("catalog.loading"), "gray")
 
-        def found(sheets: List[DriveFile]):
+        def search() -> Tuple[str, List[DriveFile]]:
+            """（資料夾真正的 ID，裡面的試算表）"""
+            catalog = self._catalog_factory("")
+            real_id = catalog.my_drive().id if folder_id == DRIVE_ROOT_ALIAS else folder_id
+            return real_id, catalog.spreadsheets_in(real_id)
+
+        def found(result: Tuple[str, List[DriveFile]]):
             """找到了"""
+            real_id, sheets = result
+            if real_id != folder_id:
+                self._folder_entry.setText(real_id)
             self._folder_status.setText("")
             if len(sheets) == 1:
                 self._use_catalog(sheets[0])
             elif len(sheets) > 1:
                 self._pick_catalog(sheets)
             else:
-                self._offer_create_catalog(folder_id)
+                self._offer_create_catalog(real_id)
         self._run(
-            lambda: self._catalog_factory("").spreadsheets_in(folder_id), found,
-            t("catalog.error.cannot_read"), t("catalog.action.read"), self._check_catalog_in_folder,
+            search, found, t("catalog.error.cannot_read"), t("catalog.action.read"), self._check_catalog_in_folder,
         )
 
     def _show_folder_status(self, text: str, color: str):
@@ -439,9 +453,6 @@ class _DriveFolderBrowser(QDialog):
         self._error_bar = CatalogErrorBar(log=log)
         self._error_bar.connect_remedies(sign_in)
         layout.addWidget(self._error_bar)
-        self._path_label = QLabel("My Drive")
-        self._path_label.setStyleSheet("font-weight: bold; padding: 4px;")
-        layout.addWidget(self._path_label)
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
         self._tree.itemExpanded.connect(self._on_expand)
@@ -457,37 +468,45 @@ class _DriveFolderBrowser(QDialog):
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-        self._load_children(None, "root")
+        self._load_my_drive()
 
     def done(self, result: int):
         """關閉瀏覽器：放棄還在跑的背景讀取"""
         self._tasks.abandon_all()
         super().done(result)
 
-    def _load_children(self, parent_node: Optional[QTreeWidgetItem], folder_id: str):
+    def _load_my_drive(self):
+        """在背景取我的雲端硬碟（根資料夾真正的 ID），放在最上層並展開，它本身也能選；讀不到時顯示提示列"""
+        def found(root: DriveFile):
+            """讀到了：展開時列出子資料夾"""
+            node = _folder_node(t("catalog.settings.my_drive"), root.id)
+            self._tree.addTopLevelItem(node)
+            node.setExpanded(True)
+
+        def failed(error: CatalogError):
+            """讀不到"""
+            self._error_bar.show_failure(
+                t("catalog.error.cannot_read"), CatalogFailure.from_error(error, t("catalog.action.read")),
+                self._load_my_drive,
+            )
+        self._error_bar.clear()
+        self._tasks.run(lambda: self._connect().my_drive(), found, failed)
+
+    def _load_children(self, parent_node: QTreeWidgetItem, folder_id: str):
         """在背景列出子資料夾並加入樹狀結構；讀不到時顯示提示列，下次展開時再讀"""
         def listed(folders: List[DriveFile]):
             """讀到了"""
-            if parent_node is not None:
-                parent_node.takeChildren()
+            parent_node.takeChildren()
             for folder in folders:
-                node = QTreeWidgetItem([folder.name])
-                node.setData(0, Qt.UserRole, folder.id)
-                node.setData(0, Qt.UserRole + 1, False)
-                node.addChild(QTreeWidgetItem([t("catalog.loading")]))
-                if parent_node is None:
-                    self._tree.addTopLevelItem(node)
-                else:
-                    parent_node.addChild(node)
-            if parent_node is not None and not folders:
+                parent_node.addChild(_folder_node(folder.name, folder.id))
+            if not folders:
                 empty = QTreeWidgetItem([t("catalog.settings.no_folders")])
                 empty.setFlags(Qt.NoItemFlags)
                 parent_node.addChild(empty)
 
         def failed(error: CatalogError):
             """讀不到"""
-            if parent_node is not None:
-                parent_node.setData(0, Qt.UserRole + 1, False)
+            parent_node.setData(0, Qt.UserRole + 1, False)
             self._error_bar.show_failure(
                 t("catalog.error.cannot_read"), CatalogFailure.from_error(error, t("catalog.action.read")),
                 lambda: self._load_children(parent_node, folder_id),
@@ -522,3 +541,12 @@ class _DriveFolderBrowser(QDialog):
         if current:
             self.selected_id = current.data(0, Qt.UserRole) or ""
         self.accept()
+
+
+def _folder_node(name: str, folder_id: str) -> QTreeWidgetItem:
+    """資料夾瀏覽器裡一個還沒展開過的資料夾：底下先放「載入中」，展開時才列出子資料夾"""
+    node = QTreeWidgetItem([name])
+    node.setData(0, Qt.UserRole, folder_id)
+    node.setData(0, Qt.UserRole + 1, False)
+    node.addChild(QTreeWidgetItem([t("catalog.loading")]))
+    return node

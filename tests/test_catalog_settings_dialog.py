@@ -17,7 +17,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QInputDialog, QLabel, QPushButton, QTreeWidget
 
 from core.catalog_constants import DRIVE_SPREADSHEET_MIME, SHEET_HEADERS, PublishingPlatform
@@ -35,7 +35,7 @@ from services.preferences_service import PreferencesService
 from services.secure_storage import SecureStorage
 from tests.fake_browser import CallbackBrowser
 from tests.fake_google import FakeTokenEndpoint, write_client_secrets
-from tests.fake_google_catalog import FakeGoogle
+from tests.fake_google_catalog import ROOT, FakeGoogle
 from tests.fake_huaxia import FakeHuaXia
 from tests.memory_keyring import MemoryKeyring
 from tests.test_main_window import answering_prompts, wait_until
@@ -365,6 +365,21 @@ class TestFindCatalog(CatalogFolderTestCase):
         self.assertFalse(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY))
 
 
+class TestMyDriveTypedAsRoot(CatalogFolderTestCase):
+    """資料夾欄位寫的是 Drive 根資料夾的別名 root 時，存成根資料夾真正的 ID，譜庫的其他地方才比對得到"""
+
+    def test_alias_and_the_my_drive_url_are_saved_as_the_real_id(self):
+        sheet = self.google.drive.add_file("譜庫目錄", mime_type=DRIVE_SPREADSHEET_MIME)
+        for typed in ("root", "https://drive.google.com/drive/my-drive"):
+            with self.subTest(typed=typed):
+                self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, typed)
+                dialog = self.open_dialog()
+                wait_until(lambda: not self.bar(dialog).isHidden() or self.settled(dialog))
+                self.save(dialog)
+                self.assertEqual(self.preferences.get(CATALOG_ROOT_FOLDER_ID_KEY), ROOT)
+                self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), sheet)
+
+
 class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
     """換了譜庫試算表時，記住的發譜平台改成新譜庫的社團設定"""
 
@@ -424,11 +439,11 @@ class TestBrowseFolders(CatalogFolderTestCase):
         def fake_exec(browser):
             seen.append(browser)
             tree = browser.findChild(QTreeWidget)
-            wait_until(lambda: tree.topLevelItemCount() > 0 or not browser.findChild(CatalogErrorBar).isHidden())
+            bar = browser.findChild(CatalogErrorBar)
+            wait_until(lambda: tree.findItems(pick or "*", Qt.MatchWildcard | Qt.MatchRecursive) or not bar.isHidden())
             if not pick:
                 return QDialog.Rejected
-            items = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
-            tree.setCurrentItem(next(item for item in items if item.text(0) == pick))
+            tree.setCurrentItem(tree.findItems(pick, Qt.MatchExactly | Qt.MatchRecursive)[0])
             browser.findChild(QDialogButtonBox).button(QDialogButtonBox.Ok).click()
             return browser.result()
         button = next(b for b in dialog.findChildren(QPushButton) if b.text() == t("catalog.settings.browse"))
@@ -442,6 +457,15 @@ class TestBrowseFolders(CatalogFolderTestCase):
         self.browse(dialog, "譜庫")
         wait_until(lambda: self.settled(dialog))
         self.save(dialog)
+        self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), sheet)
+
+    def test_my_drive_itself_can_be_picked_and_is_saved_under_its_real_id(self):
+        sheet = self.google.drive.add_file("譜庫目錄", mime_type=DRIVE_SPREADSHEET_MIME)
+        dialog = self.open_dialog()
+        self.browse(dialog, t("catalog.settings.my_drive"))
+        wait_until(lambda: self.settled(dialog))
+        self.save(dialog)
+        self.assertEqual(self.preferences.get(CATALOG_ROOT_FOLDER_ID_KEY), ROOT)
         self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), sheet)
 
     def test_unreadable_drive_shows_the_bar_in_the_browser(self):

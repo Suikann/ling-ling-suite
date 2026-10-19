@@ -493,6 +493,11 @@ class TestCreateCatalog(unittest.TestCase):
             self.assertEqual(self.google.sheets.frozen_rows(title), 1)
         self.assertNotIn(ROOT, self.google.drive.file(spreadsheet_id).parents)
 
+    def test_my_drive_is_the_root_folder_under_its_real_id(self):
+        root = self.catalog.my_drive()
+        self.assertEqual(root.id, ROOT)
+        self.assertEqual(root.mime_type, DRIVE_FOLDER_MIME)
+
     def test_creating_again_after_a_failed_move_reuses_the_created_spreadsheet(self):
         pending = PendingCatalog("譜庫目錄", self.folder)
         # 第 1 次請求建試算表、第 2 次取它的中繼資料、第 3 次搬進資料夾

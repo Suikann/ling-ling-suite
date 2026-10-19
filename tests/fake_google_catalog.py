@@ -8,7 +8,8 @@
 試算表與 Drive 的請求另外分開計數（sheets_requests、drive_requests）。
 
 試算表照 Google 的行為：讀取時每列結尾的空格與結尾的空列不回傳；batchUpdate 全成或全不成；
-範圍的工作表不存在時整個請求失敗。Drive 解析查詢字串裡的字串值（反斜線跳脫），沒跳脫好的查詢會失敗；檔案的每次內容是一個版本，
+範圍的工作表不存在時整個請求失敗。Drive 解析查詢字串裡的字串值（反斜線跳脫），沒跳脫好的查詢會失敗；根資料夾照 Drive 有別名 root，
+請求裡的 root 都當成根資料夾，回應的 parents 與取根資料夾得到的是它真正的 ID（ROOT）；檔案的每次內容是一個版本，
 以預先要到的 ID 建檔重送時回 409（已經存在）；可以讓某個檔下載時內容壞掉（corrupt_downloads）；
 舊版本可以設成永久保留（keepForever），也可以扮演 Drive 清掉了某個舊版本（purge_revision）。
 
@@ -34,8 +35,16 @@ from core.catalog_constants import DRIVE_FOLDER_MIME, DRIVE_PDF_MIME, DRIVE_SPRE
 from core.catalog_errors import CatalogError, CatalogErrorKind
 from core.catalog_models import DriveFile, DriveListing, DriveRevision
 
-# 假 Drive 的根資料夾（My Drive）
-ROOT = "root"
+# 假 Drive 的根資料夾（我的雲端硬碟）真正的 ID；照 Drive，請求裡也能寫成別名 ROOT_ALIAS，回應裡一律是真正的 ID
+ROOT = "my-drive-root"
+ROOT_ALIAS = "root"
+# 以 ROOT 或 ROOT_ALIAS 取根資料夾時回應的名稱
+ROOT_NAME = "我的雲端硬碟"
+
+
+def _real_id(file_id: str) -> str:
+    """請求裡的 ID：根資料夾的別名換成真正的 ID，其餘原樣"""
+    return ROOT if file_id == ROOT_ALIAS else file_id
 
 
 @dataclass
@@ -399,6 +408,7 @@ class FakeDrive:
 
     def children(self, folder_id: str) -> List[DriveFile]:
         """資料夾裡不在垃圾桶的檔案與資料夾"""
+        folder_id = _real_id(folder_id)
         return [item.as_file() for item in self._items.values() if folder_id in item.parents and not item.trashed]
 
     def content(self, file_id: str) -> bytes:
@@ -453,14 +463,19 @@ class FakeDrive:
         return self._google.request(handle)
 
     def get_file(self, file_id: str) -> DriveFile:
-        """取檔案的中繼資料；沒有這個檔時找不到"""
-        return self._google.request(lambda: self._item(file_id).as_file())
+        """取檔案的中繼資料；根資料夾（真正的 ID 或別名）回它真正的 ID，沒有這個檔時找不到"""
+        def handle():
+            """根資料夾不在檔案清單裡，另外回應"""
+            if _real_id(file_id) == ROOT:
+                return DriveFile(ROOT, ROOT_NAME, DRIVE_FOLDER_MIME)
+            return self._item(file_id).as_file()
+        return self._google.request(handle)
 
     def create_folder(self, name: str, parent: str, file_id: str = "") -> DriveFile:
         """在 parent 裡建立資料夾；給了 file_id 時以它為 ID（那個 ID 已有檔案時回 409）"""
         def handle():
             """確認上層資料夾存在後建立"""
-            if parent != ROOT:
+            if _real_id(parent) != ROOT:
                 self._item(parent)
             return self._items[self._add(name, DRIVE_FOLDER_MIME, parent, b"", self._claim(file_id))].as_file()
         return self._google.request(handle)
@@ -485,7 +500,7 @@ class FakeDrive:
 
         def handle():
             """確認上層資料夾存在後建立"""
-            if parent != ROOT:
+            if _real_id(parent) != ROOT:
                 self._item(parent)
             return self._items[self._add(name, DRIVE_PDF_MIME, parent, content, self._claim(file_id))].as_file()
         return self._google.request(handle)
@@ -497,7 +512,7 @@ class FakeDrive:
         def handle():
             """確認檔案與目標資料夾存在後更新"""
             item = self._item(file_id)
-            if add_parent and add_parent != ROOT:
+            if add_parent and _real_id(add_parent) != ROOT:
                 self._item(add_parent)
             item.revisions.append((next(self._revision_ids), content))
             self._relocate(item, name, add_parent, remove_parents)
@@ -509,7 +524,7 @@ class FakeDrive:
         def handle():
             """確認檔案與目標資料夾存在後改名、搬移"""
             item = self._item(file_id)
-            if add_parent and add_parent != ROOT:
+            if add_parent and _real_id(add_parent) != ROOT:
                 self._item(add_parent)
             self._relocate(item, name, add_parent, remove_parents)
         self._google.request(handle)
@@ -563,7 +578,9 @@ class FakeDrive:
 
     @staticmethod
     def _relocate(item: _DriveItem, name: str, add_parent: str, remove_parents: Sequence[str]) -> None:
-        """改名、加進 add_parent 並離開 remove_parents"""
+        """改名、加進 add_parent 並離開 remove_parents（根資料夾的別名換成真正的 ID）"""
+        add_parent = _real_id(add_parent) if add_parent else ""
+        remove_parents = [_real_id(parent) for parent in remove_parents]
         if name:
             item.name = name
         if add_parent or remove_parents:
@@ -591,7 +608,7 @@ class FakeDrive:
         """加一個項目（檔案有第一個版本），回傳 ID；沒給 ID 時自己編一個"""
         item_id = item_id or next(self._ids)
         revisions = [] if mime_type == DRIVE_FOLDER_MIME else [(next(self._revision_ids), content)]
-        self._items[item_id] = _DriveItem(item_id, name, mime_type, [parent], revisions)
+        self._items[item_id] = _DriveItem(item_id, name, mime_type, [_real_id(parent)], revisions)
         return item_id
 
 
@@ -645,7 +662,7 @@ def _parse_query(query: str) -> Callable[[_DriveItem], bool]:
         kinds = [kind for kind, _ in clause]
         values = [value for _, value in clause]
         if kinds == ["str", "word", "word"] and values[1:] == ["in", "parents"]:
-            parent = values[0]
+            parent = _real_id(values[0])
             conditions.append(lambda item, parent=parent: parent in item.parents)
         elif kinds == ["word", "word", "str"] and values[0] in ("name", "mimeType") and values[1] in ("=", "!="):
             attribute = "name" if values[0] == "name" else "mime_type"
