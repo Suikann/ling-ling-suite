@@ -49,6 +49,7 @@ from services.workspace_service import WorkspaceService
 from services.preferences_service import PreferencesService
 from services.project_access import AccessResult, ProjectAccess
 from services.publish_runner import PublishOutcome, PublishProgress, PublishRunner
+from services.recall_reminder import RecallReminder
 from services.publish_service import (
     FunctionProblem, ProjectBlock, PublishReadiness, PublishService, check_groups, project_blocks,
 )
@@ -56,6 +57,7 @@ from services.rename_service import assign_default_sections
 from services.split_service import SplitService
 from ui.background_task import BackgroundTask, TaskSlot, TaskTexts, Work
 from ui.catalog_error_bar import CatalogErrorBar
+from ui.recall_reminder_bar import RecallReminderBar
 from ui.catalog_tasks import catalog_work
 from ui.compress_pdf import size_text
 from ui.instrumentation_table import InstrumentationTable
@@ -201,7 +203,13 @@ class MainWindow(QMainWindow):
         # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀
         self._club_settings = ClubSettingsService(preferences, self._log)
         self._publisher = PublishService(self._huaxia_auth)
-        self._publish_runner = PublishRunner(self._huaxia_auth, self.file_service, self._compressor, self._log)
+        # 收回提醒依這台電腦記下的發譜紀錄摘要判斷（不連網、不讀安全儲存）；發譜寫完發譜紀錄後更新摘要
+        self._recall_reminder = RecallReminder(preferences, self._log)
+        self._publish_runner = PublishRunner(
+            self._huaxia_auth, self.file_service, self._compressor, self._log, reminder=self._recall_reminder,
+        )
+        # 頂端收回提醒要寫出的曲名（切換介面語言重建畫面時照樣顯示；按了任一顆按鈕就清空，下次開泠靈再算）
+        self._recall_titles: List[str] = self._recall_reminder.due()
         # 發譜有自己的背景工作（一次一件）：發出去的是快照，不鎖住其他操作，也不占用上面那一件
         self._publishing = TaskSlot(
             self, self._set_publish_status, self._show_publishing_state, self._show_publish_progress,
@@ -305,6 +313,11 @@ class MainWindow(QMainWindow):
         self._catalog_error_bar = CatalogErrorBar(log=self._log)
         self._catalog_error_bar.connect_remedies(self._sign_in_google, self._open_catalog_settings)
         main_layout.addWidget(self._catalog_error_bar)
+        self._recall_reminder_bar = RecallReminderBar()
+        self._recall_reminder_bar.view_requested.connect(self._view_recall)
+        self._recall_reminder_bar.dismissed.connect(self._dismiss_recall_reminder)
+        self._recall_reminder_bar.show_titles(self._recall_titles)
+        main_layout.addWidget(self._recall_reminder_bar)
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
         main_layout.addWidget(splitter, stretch=1)
@@ -1300,17 +1313,28 @@ class MainWindow(QMainWindow):
             return self._open_catalog_settings()
         return True
 
-    def _open_catalog(self):
-        """開啟譜庫瀏覽器，尚未設定時先引導設定"""
+    def _open_catalog(self) -> bool:
+        """開啟譜庫瀏覽器，尚未設定時先引導設定；回傳開了沒有"""
         if not self._catalog_ready():
-            return
+            return False
         from ui.catalog_window import CatalogWindow
         self._catalog_window = CatalogWindow(
-            self._auth_service, self._preferences, log=self._log, huaxia_auth=self._huaxia_auth,
-            voice_candidates=self._voice_candidates, reverter=self, downloads=self._download_service,
-            orchestra_type=self.project.orchestra_type,
+            self._auth_service, self._preferences, catalog_factory=self._catalog_factory, log=self._log,
+            huaxia_auth=self._huaxia_auth, voice_candidates=self._voice_candidates, reverter=self,
+            downloads=self._download_service, orchestra_type=self.project.orchestra_type,
         )
         self._catalog_window.show()
+        return True
+
+    def _view_recall(self):
+        """收回提醒按了「查看並收回」：開譜庫視窗（尚未設定時先引導設定），再開收回畫面（沒登入 HuaXia 時先登入）"""
+        self._recall_titles = []
+        if self._open_catalog():
+            self._catalog_window.recall()
+
+    def _dismiss_recall_reminder(self):
+        """收回提醒按了「之後再說」：這次不再顯示，下次開泠靈再提醒"""
+        self._recall_titles = []
 
     def _open_google_catalog(self) -> "CatalogService":
         """以登入服務的憑證接 Google 的譜庫服務（背景執行緒呼叫，拿不到時丟出 CatalogError）"""

@@ -56,6 +56,7 @@ from services.download_service import DownloadOutcome, DownloadService
 from services.google_auth_service import GoogleAuthService
 from services.huaxia_auth_service import HuaXiaAuthService
 from services.huaxia_client import HuaXiaError
+from services.recall_reminder import RecallReminder
 from services.recall_service import RecallResult, RecallService
 from services.retract_service import RetractResult, RetractService
 from services.google_catalog import open_google_catalog
@@ -123,8 +124,12 @@ class CatalogWindow(QMainWindow):
         self._catalog_lock = threading.Lock()
         self._log = log or ActivityLog()
         self._club_settings = ClubSettingsService(preferences, self._log)
-        self._retracter = RetractService(huaxia_auth, self._log) if huaxia_auth is not None else None
-        self._recaller = RecallService(huaxia_auth, self._log) if huaxia_auth is not None else None
+        # 讀到發譜紀錄、撤回與收回寫完時更新收回提醒的摘要
+        self._reminder = RecallReminder(preferences, self._log)
+        self._retracter = RetractService(huaxia_auth, self._log, self._reminder) if huaxia_auth is not None else None
+        self._recaller = (
+            RecallService(huaxia_auth, self._log, reminder=self._reminder) if huaxia_auth is not None else None
+        )
         self._downloads = downloads
         self._reverter = reverter
         self._orchestra_type = orchestra_type
@@ -1176,7 +1181,7 @@ class CatalogWindow(QMainWindow):
     # --- 發譜紀錄、撤回與收回 ---
 
     def _show_publish_log(self):
-        """經譜庫服務讀發譜紀錄，讀到後在右側面板列出每次發譜、撤回、收回與不收回；
+        """經譜庫服務讀發譜紀錄（一併更新收回提醒的摘要），讀到後在右側面板列出每次發譜、撤回、收回與不收回；
         選一次發譜按「撤回…」就開撤回的預覽，按「收回…」就開收回的預覽"""
         from ui.publish_retract_dialog import PublishLogPanel
         self._clear_detail()
@@ -1192,7 +1197,7 @@ class CatalogWindow(QMainWindow):
                 self._clear_detail()
                 panel = PublishLogPanel(publish_entries(records))
                 panel.retract_requested.connect(self._retract)
-                panel.recall_requested.connect(self._recall)
+                panel.recall_requested.connect(self.recall)
                 self._detail_layout.addWidget(panel)
 
         def unreadable():
@@ -1201,7 +1206,7 @@ class CatalogWindow(QMainWindow):
                 self._clear_detail()
                 self._detail_layout.addWidget(self._unreadable_label())
 
-        self._read(lambda catalog: catalog.publish_log(), on_done, unreadable, self._show_publish_log)
+        self._read(self._reminder.read, on_done, unreadable, self._show_publish_log)
 
     def _retract(self, entry: PublishLogEntry):
         """撤回那次發譜：沒登入 HuaXia 時先登入，在等待中讀預覽、開預覽對話框，按「撤回」後在等待中撤回並寫出結果
@@ -1279,13 +1284,16 @@ class CatalogWindow(QMainWindow):
             QMessageBox.information(self, t("retract.title_short"), result_text(result))
         self._show_publish_log()
 
-    def _recall(self):
-        """收回：沒登入 HuaXia 時先登入，在等待中讀預覽、開收回對話框，按「收回」或「勾選的不收回」後在等待中執行並寫出結果"""
+    def recall(self):
+        """收回：沒登入 HuaXia 時先登入，在等待中讀預覽、開收回對話框，按「收回」或「勾選的不收回」後在等待中執行並寫出結果
+
+        發譜紀錄的「收回…」與主視窗收回提醒的「查看並收回」都從這裡開始。
+        """
         from ui.publish_recall_dialog import RecallDialog
         if not self._signed_in_huaxia("recall"):
             return
         preview = self._while_waiting(
-            "recall", t("recall.reading"), lambda: self._recaller.preview(self._connected()), self._recall,
+            "recall", t("recall.reading"), lambda: self._recaller.preview(self._connected()), self.recall,
             "catalog.error.cannot_read",
         )
         if preview is None:
@@ -1299,14 +1307,14 @@ class CatalogWindow(QMainWindow):
         if decision is PublishAction.KEEP:
             done = self._while_waiting(
                 "recall", t("recall.keeping"), lambda: self._recaller.keep(chosen, self._connected()),
-                self._recall,
+                self.recall,
             )
             if done is not None:
                 QMessageBox.information(self, t("recall.title_short"), t("recall.kept", count=len(chosen)))
                 self._show_publish_log()
             return
         result = self._while_waiting(
-            "recall", t("recall.running"), lambda: self._recaller.recall(chosen, self._connected()), self._recall,
+            "recall", t("recall.running"), lambda: self._recaller.recall(chosen, self._connected()), self.recall,
         )
         if result is not None:
             self._recall_finished(result)
