@@ -22,6 +22,8 @@
 撤銷不毀掉唯一的一份（RevertBlock）：要丟進垃圾桶或還原的檔，Drive 上那份可能是那次存入內容唯一的一份，所以
 群組要在開著的專案裡（存入紀錄的群組 ID；舊的列沒有時以群組名稱認），而且每份這樣的檔本機都有（內容不論，
 存入之後改過的也算），或本機已清除、會先下載回原位並核對 MD5；本機不見、又不是已清除的，整個群組不撤銷。
+本機那份經開著的專案找（LocalProject.local_path）：那個群組裡存入指紋就是 Drive 上那份內容的檔，
+所以存入之後用新的命名格式重新命名過也找得到；專案裡沒有這樣的檔時才看存入時記下的路徑。
 只移除登記的檔不動 Drive，不必有本機那份。
 
 「一起撤掉編制」沿用改連的判斷（core/catalog_revert.py 的 revert_rows），只看那次存入之前這個群組寫進那處的編制；
@@ -35,12 +37,12 @@
 """
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import AbstractSet, Collection, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
+from typing import AbstractSet, Collection, Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from core.catalog_models import CatalogPlace, DepositLogEntry, DriveFile, DriveRevision, InstrumentationLogEntry
 from core.catalog_revert import RevertRow, revert_rows
 from core.deposit import DepositAction
-from core.models import Headcount, Project
+from core.models import FileInfo, Group, Headcount, Project
 from core.paths import path_key
 
 
@@ -141,16 +143,19 @@ class RevertReading:
 
 @dataclass(frozen=True)
 class LocalProject:
-    """撤銷時開著的專案：那次存入的群組在不在裡面、哪些檔本機已清除（呼叫端在主執行緒以專案與磁碟現況判定）
+    """撤銷時開著的專案：那次存入的群組在不在裡面、存入過的檔現在在哪、哪些檔本機已清除
+    （呼叫端在主執行緒以專案與磁碟現況判定）
 
     Attributes:
         group_ids: 專案裡的群組 ID
         group_names: 專案裡的群組名稱（存入紀錄的舊列沒有群組 ID 時以名稱認）
         catalog_only: 本機已清除、只在譜庫的檔的路徑比對鍵（core.paths.path_key）
+        copies: 每個群組（群組 ID，群組名稱）存入過的檔：存入指紋 → 現在的本機路徑
     """
     group_ids: FrozenSet[str] = frozenset()
     group_names: FrozenSet[str] = frozenset()
     catalog_only: FrozenSet[str] = frozenset()
+    copies: Tuple[Tuple[str, str, Mapping[str, str]], ...] = ()
 
     @classmethod
     def of(cls, project: Project, catalog_only: Iterable[str]) -> "LocalProject":
@@ -158,16 +163,42 @@ class LocalProject:
 
         Args:
             project: 開著的專案
-            catalog_only: 那次存入的檔裡，本機已清除、只在譜庫的本機路徑（Project.catalog_only_paths）
+            catalog_only: 那次存入的檔裡，本機已清除、只在譜庫的本機路徑（Project.catalog_only_paths；
+                候選見 deposited_paths）
         """
         return cls(
             frozenset(group.id for group in project.groups), frozenset(group.name for group in project.groups),
             frozenset(path_key(path) for path in catalog_only),
+            tuple((group.id, group.name, {
+                file.deposit_md5: file.original_path for file in _group_files(group) if file.deposit_md5
+            }) for group in project.groups),
         )
+
+    @staticmethod
+    def deposited_paths(project: Project) -> List[str]:
+        """專案裡存入過譜庫（有存入指紋）的檔的路徑：撤銷時本機那份可能在的位置，查只在譜庫時連同存入紀錄的路徑一起看"""
+        return [file.original_path for group in project.groups for file in _group_files(group) if file.deposit_md5]
 
     def has_group(self, entry: DepositLogEntry) -> bool:
         """存入這一列的群組在不在這個專案裡"""
         return entry.group_id in self.group_ids if entry.group_id else entry.group in self.group_names
+
+    def local_path(self, entry: DepositLogEntry, file: Optional[DriveFile]) -> str:
+        """那次存入的一份檔現在在本機的位置
+
+        開著的專案裡那個群組有存入指紋等於 Drive 上那份內容的檔時是它現在的路徑（重新命名過也找得到）；
+        沒有時是存入紀錄記下的路徑。
+
+        Args:
+            entry: 存入紀錄的那一列
+            file: Drive 上那份現在的樣子；已沒有時為 None
+        """
+        if file is not None and file.md5:
+            for group_id, name, copies in self.copies:
+                ours = entry.group_id == group_id if entry.group_id else entry.group == name
+                if ours and file.md5 in copies:
+                    return copies[file.md5]
+        return entry.local_path
 
 
 @dataclass(frozen=True)
@@ -182,6 +213,7 @@ class RevertFile:
         kept: 不動的原因（KEEP）
         later: 之後又存入或撤銷過這個檔的那一列（KeptBecause.REDEPOSITED、REVERTED）
         download: 本機那份已清除（只在譜庫），撤銷前要先下載回原位
+        local_path: 本機那份現在的位置（LocalProject.local_path）；下載回原位、撤掉後拿掉存入指紋都用它
     """
     entry: DepositLogEntry
     action: RevertAction
@@ -190,6 +222,7 @@ class RevertFile:
     kept: Optional[KeptBecause] = None
     later: Optional[DepositLogEntry] = None
     download: bool = False
+    local_path: str = ""
 
     @property
     def destroys(self) -> bool:
@@ -328,7 +361,7 @@ def revert_preview(
         reading: 讀到的譜庫現況
         deposit_id: 要撤銷的存入編號
         local: 開著的專案
-        local_files: 那次存入的檔裡本機有的路徑比對鍵（core.paths.path_key）
+        local_files: 那次存入的檔（現在的位置，LocalProject.local_path）裡本機有的路徑比對鍵（core.paths.path_key）
 
     Returns:
         那次存入與它的每個群組；存入紀錄裡沒有這個存入編號時沒有群組
@@ -353,7 +386,8 @@ def revert_preview(
             outcome = RevertFile(entry, RevertAction.KEEP, file, kept=KeptBecause.UNFINISHED)
         else:
             outcome = replace(_classify(settled, file, revisions, later), entry=entry)
-        if outcome.action in REVERTING and path_key(entry.local_path) in cleared:
+        outcome = replace(outcome, local_path=local.local_path(entry, file))
+        if outcome.action in REVERTING and path_key(outcome.local_path) in cleared:
             outcome = replace(outcome, download=True)
         files.setdefault((entry.group_key, entry.edition_id, entry.movement_id), []).append(outcome)
     groups = [
@@ -372,7 +406,7 @@ def _guard(group: RevertGroup, local: LocalProject, local_files: AbstractSet[str
         return replace(group, block=RevertBlock.NOT_OPEN)
     uncovered = [
         file for file in destroying
-        if not file.download and path_key(file.entry.local_path) not in local_files
+        if not file.download and path_key(file.local_path) not in local_files
     ]
     return replace(group, block=RevertBlock.NO_LOCAL_COPY, uncovered=uncovered) if uncovered else group
 
@@ -448,3 +482,8 @@ def _group(first: DepositLogEntry, files: List[RevertFile], reading: RevertReadi
         reading.instrumentation, edition_id, movement_id, voices, filed, first.group_id, first.group, until,
     )
     return RevertGroup(first.group_id, first.group, edition_id, movement_id, here.place, files, rows)
+
+
+def _group_files(group: Group) -> List[FileInfo]:
+    """群組的總譜與分譜"""
+    return ([group.score_file] if group.score_file else []) + list(group.files)

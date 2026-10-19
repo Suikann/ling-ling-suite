@@ -1563,15 +1563,17 @@ class MainWindow(QMainWindow):
         """譜庫視窗要撤銷一次存入：記下開著的專案（群組、本機已清除的檔、樂團類型），交回在背景讀預覽的函式
 
         預覽照開著的專案判定：那次存入的群組不在這個專案、或本機沒有那次存入的內容時，那個群組不撤銷。
+        本機那份經專案找（存入之後重新命名過也找得到），所以只在譜庫的檔連同專案裡存入過的檔現在的路徑一起看。
 
         Args:
             deposit_id: 要撤銷的存入編號
-            paths: 那次存入的檔的本機路徑
+            paths: 那次存入的檔的本機路徑（存入紀錄記下的）
 
         Returns:
             以譜庫服務讀撤銷預覽的函式（背景執行緒呼叫）
         """
-        local = LocalProject.of(self.project, self._deposit_service.catalog_only(self.project, paths))
+        candidates = list(paths) + LocalProject.deposited_paths(self.project)
+        local = LocalProject.of(self.project, self._deposit_service.catalog_only(self.project, candidates))
         orchestra_type = self.project.orchestra_type
         service = self._revert_service
         return lambda catalog: service.preview(deposit_id, catalog, orchestra_type, local)

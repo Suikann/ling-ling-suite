@@ -21,7 +21,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QPushButton, QTabWidget, QT
 
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY
 from core.deposit_revert import KeptBecause, LocalProject, RevertAction, RevertBlock, RevertChoice, deposits
-from core.models import Project
+from core.models import Project, UndoMapping
 from core.locale import t
 from fake_google_catalog import ROOT
 from services.activity_log import ActivityLog
@@ -151,6 +151,23 @@ class TestRevertInMainWindow(RevertWindowTestCase):
         saved = ProjectService().load_project(self.path)
         self.assertEqual([f.deposit_md5 for f in saved.groups[0].files], ["", ""])
         self.assertTrue(self.status_shows(t("revert.done", count=3)))
+
+
+class TestRevertReader(RevertWindowTestCase):
+    """主視窗記下開著的專案給撤銷預覽：存入之後重新命名、再清除本機的檔，照它現在的路徑認出只在譜庫"""
+
+    def test_a_file_renamed_and_cleared_after_the_deposit_is_downloaded_back_under_its_new_name(self):
+        part = self.window.project.groups[0].files[1]
+        old = part.original_path
+        renamed = os.path.join(os.path.dirname(old), "江樓鐘鼓-琵琶.pdf")
+        os.rename(old, renamed)
+        self.window.project.replace_paths([UndoMapping(old, renamed)])
+        os.remove(renamed)
+        entries = deposits(self.catalog.deposit_log())[0].entries
+        preview = self.window.revert_reader(self.deposit_id, [entry.local_path for entry in entries])(self.catalog)
+        group = preview.groups[0]
+        self.assertIsNone(group.block)
+        self.assertEqual([file.local_path for file in group.downloads()], [renamed])
 
 
 class TestRevertFromCatalogWindow(RevertWindowTestCase):

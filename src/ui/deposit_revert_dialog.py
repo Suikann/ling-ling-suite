@@ -84,7 +84,7 @@ def block_text(group: RevertGroup) -> str:
 
 def _names(files: Sequence[RevertFile]) -> List[str]:
     """檔的本機檔名"""
-    return [os.path.basename(file.entry.local_path) for file in files]
+    return [os.path.basename(file.local_path) for file in files]
 
 
 def file_cells(file: RevertFile) -> Tuple[str, str, str, str]:

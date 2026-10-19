@@ -84,7 +84,7 @@ class RevertOutcome:
     @property
     def reverted_paths(self) -> List[str]:
         """撤掉了的檔的本機路徑（譜庫不再有這份內容，專案要拿掉它們的存入指紋）"""
-        return [file.entry.local_path for file in self.done]
+        return [file.local_path for file in self.done]
 
 
 class DepositRevertService:
@@ -110,7 +110,7 @@ class DepositRevertService:
             deposit_id: 要撤銷的存入編號
             catalog: 譜庫服務
             orchestra_type: 專案的樂團類型
-            local: 開著的專案（呼叫端在主執行緒以專案與磁碟現況判定）
+            local: 開著的專案（呼叫端在主執行緒以專案與磁碟現況判定）；本機那份經它找（LocalProject.local_path）
 
         Returns:
             那次存入與它的每個群組
@@ -119,7 +119,10 @@ class DepositRevertService:
             CatalogError: 讀不到譜庫
         """
         reading = catalog.revert_reading(deposit_id, orchestra_type)
-        paths = {entry.local_path for entry in reading.entries if entry.deposit_id == deposit_id}
+        paths = {
+            local.local_path(entry, reading.files.get(entry.drive_file_id))
+            for entry in reading.entries if entry.deposit_id == deposit_id
+        }
         present = {path_key(path) for path in paths if self._files.file_exists(path)}
         return revert_preview(reading, deposit_id, local, present)
 
@@ -164,7 +167,7 @@ class DepositRevertService:
                     if restored.error is not None or restored.not_done:
                         skipped.append((group, restored))
                         continue
-                if not all(self._files.file_exists(f.entry.local_path) for f in group.kept_locally()):
+                if not all(self._files.file_exists(f.local_path) for f in group.kept_locally()):
                     refused.append((group, RevertBlock.NO_LOCAL_COPY))
                     continue
                 for file in group.reverting():
@@ -216,7 +219,7 @@ class DepositRevertService:
     ) -> DownloadOutcome:
         """把群組裡要撤銷、本機已清除的檔下載回原位"""
         title = group.place.piece_title if group.place else ""
-        items = [DownloadItem(file.file, file.entry.local_path, title) for file in group.downloads()]
+        items = [DownloadItem(file.file, file.local_path, title) for file in group.downloads()]
         start = counter.done
 
         def report(progress: DownloadProgress) -> None:
@@ -240,7 +243,7 @@ class DepositRevertService:
         if self._log is not None:
             self._log.record(LogEntry(
                 t("revert.log.action", action=t(f"revert.action.{file.action.value}")),
-                file_name=file.file.name if file.file else "", path=file.entry.local_path,
+                file_name=file.file.name if file.file else "", path=file.local_path,
             ))
 
 

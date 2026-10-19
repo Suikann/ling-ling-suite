@@ -22,7 +22,7 @@ from core.catalog_revert import RevertOutcome
 from core.catalog_sync import WriteSource, place_writes
 from core.locale import t
 from core.deposit_revert import KeptBecause, LocalProject, RevertAction, RevertBlock, RevertChoice, deposits
-from core.models import Headcount, Project
+from core.models import Headcount, Project, UndoMapping
 from services.activity_log import ActivityLog
 from services.clear_local_service import ClearLocalService
 from services.deposit_revert_service import DepositRevertService
@@ -265,6 +265,35 @@ class TestOnlyCopy(RevertTestCase):
         self.assertEqual([os.path.basename(f.entry.local_path) for f in group.uncovered], ["琵琶.pdf"])
         self.assertEqual(outcome.completed, 0)
         self.assertFalse(self.google.drive.is_trashed(self.registered_ids()["琵琶"]))
+
+    def rename_part(self, file, name: str) -> str:
+        """把一份分譜改名（扮演用新的命名格式重新命名），專案跟著換路徑，回傳新路徑"""
+        old = file.original_path
+        new = os.path.join(os.path.dirname(old), name)
+        os.rename(old, new)
+        self.project.replace_paths([UndoMapping(old, new)])
+        return new
+
+    def test_a_file_renamed_after_the_deposit_is_found_through_the_open_project(self):
+        deposit_id = self.archive()
+        renamed = self.rename_part(self.parts[1], "江樓鐘鼓-琵琶.pdf")
+        preview, outcome = self.revert(deposit_id)
+        self.assertIsNone(preview.groups[0].block)
+        self.assertEqual(outcome.refused, [])
+        self.assertEqual(outcome.completed, 3)
+        self.assertIn(renamed, outcome.reverted_paths)
+        self.project.forget_deposits(outcome.reverted_paths)
+        self.assertEqual(self.parts[1].deposit_md5, "")
+
+    def test_a_renamed_file_cleared_afterwards_comes_back_under_its_new_name(self):
+        deposit_id = self.archive()
+        renamed = self.rename_part(self.parts[1], "江樓鐘鼓-琵琶.pdf")
+        os.remove(renamed)
+        preview, outcome = self.revert(deposit_id, catalog_only=[renamed])
+        self.assertEqual(len(preview.groups[0].downloads()), 1)
+        self.assertIsNone(outcome.error)
+        self.assertEqual(outcome.completed, 3)
+        self.assertEqual(read(renamed), "琵琶".encode())
 
     def test_a_local_file_edited_after_the_preview_does_not_stop_the_group(self):
         deposit_id = self.archive()
