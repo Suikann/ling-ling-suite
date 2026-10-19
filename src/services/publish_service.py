@@ -25,6 +25,7 @@
             checks = check_groups(project)
 """
 import datetime
+import uuid
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
@@ -720,6 +721,26 @@ class PublishPreview:
             self._decisions.pop(group.id, None)
         self.project.set_huaxia_link(group, link)
 
+    def assign_piece_ids(self) -> List[Group]:
+        """按下「發譜」時替要新建曲目、還沒有編號的群組產生曲目編號，寫進專案（之後要自動存檔一次）
+
+        已經有編號的（上次發到一半）沿用：HuaXia 的發譜函式遇到已存在的編號就沿用那首，重發不會重複建。
+
+        Returns:
+            這次產生了編號的群組
+        """
+        assigned = []
+        for group in self.groups:
+            link = group.huaxia_link
+            if link is None or link.new_piece is None or link.piece_id:
+                continue
+            self.project.set_huaxia_link(group, HuaXiaLink(
+                piece_id=str(uuid.uuid4()), piece_title=link.piece_title, new_piece=link.new_piece,
+                part_ids=dict(link.part_ids),
+            ))
+            assigned.append(group)
+        return assigned
+
     def decisions(self, group: Group) -> VoiceDecisions:
         """群組這次在「聲部」步的決定（還沒決定過時是全照預設的一份，之後改它就是改這次的決定）"""
         return self._decisions.setdefault(group.id, VoiceDecisions())
@@ -855,6 +876,29 @@ def upcoming_concerts(events: List[HuaXiaEvent], now: datetime.datetime) -> List
     return [event for event in events if CONCERT_KIND in event.kinds and event.ends_at > now]
 
 
+def recheck(auth: HuaXiaAuthService) -> PublishReadiness:
+    """重查幹部身分（不是幹部就登出）與發譜函式的版本（按下發譜開預覽前、在預覽按下「發譜」開始前各一次）
+
+    Args:
+        auth: HuaXia 登入服務
+
+    Returns:
+        檢查結果（不讀曲目）；能發時帶發譜函式的版本與登入的 Discord 帳號名稱
+
+    Raises:
+        HuaXiaError: 沒有登入、登入已失效或連不上 HuaXia
+    """
+    not_officer = auth.recheck_officer()
+    if not_officer is not None:
+        return PublishReadiness(not_officer=not_officer)
+    version = auth.client.publish_interface_version(auth.access_token())
+    if version is None:
+        return PublishReadiness(function_problem=FunctionProblem.MISSING)
+    if version != PUBLISH_INTERFACE_VERSION:
+        return PublishReadiness(function_problem=FunctionProblem.VERSION_MISMATCH, function_version=version)
+    return PublishReadiness(function_version=version, discord_name=auth.status().discord_name)
+
+
 class PublishService:
     """發譜到 HuaXia：按下發譜時 HuaXia 那一側的檢查"""
 
@@ -876,15 +920,10 @@ class PublishService:
         Raises:
             HuaXiaError: 沒有登入、登入已失效或連不上 HuaXia
         """
-        not_officer = self._auth.recheck_officer()
-        if not_officer is not None:
-            return PublishReadiness(not_officer=not_officer)
+        checked = recheck(self._auth)
+        if not checked.ready:
+            return checked
         token = self._auth.access_token()
-        version = self._client.publish_interface_version(token)
-        if version is None:
-            return PublishReadiness(function_problem=FunctionProblem.MISSING)
-        if version != PUBLISH_INTERFACE_VERSION:
-            return PublishReadiness(function_problem=FunctionProblem.VERSION_MISMATCH, function_version=version)
         pieces = self._client.pieces(token)
         piece_ids = [piece.id for piece in pieces]
         parts: Dict[str, List[HuaXiaPart]] = {piece_id: [] for piece_id in piece_ids}
@@ -900,8 +939,7 @@ class PublishService:
         for event_id, piece_id in self._client.event_pieces(token, [event.id for event in concerts]):
             if piece_id in parts:
                 attached.setdefault(piece_id, set()).add(event_id)
-        return PublishReadiness(
-            function_version=version, pieces=pieces, parts={piece: found for piece, found in parts.items() if found},
+        return replace(
+            checked, pieces=pieces, parts={piece: found for piece, found in parts.items() if found},
             scores={piece: found for piece, found in scores.items() if found}, concerts=concerts, attached=attached,
-            discord_name=self._auth.status().discord_name,
         )

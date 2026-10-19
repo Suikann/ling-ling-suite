@@ -190,7 +190,12 @@ class HuaXiaEvent(NamedTuple):
 
 def lingling_storage_path(piece_id: str, sha256: str) -> str:
     """泠靈發的一份檔在 Storage bucket scores 裡的路徑：固定前綴、曲目編號與內容的 SHA-256（十六進位小寫）"""
-    return f"{LINGLING_STORAGE_PREFIX}{piece_id}/{sha256}.pdf"
+    return f"{lingling_storage_folder(piece_id)}/{sha256}.pdf"
+
+
+def lingling_storage_folder(piece_id: str) -> str:
+    """泠靈發到一首曲目的檔所在的 Storage 資料夾：固定前綴與曲目編號（stored_files 列出它）"""
+    return f"{LINGLING_STORAGE_PREFIX}{piece_id}"
 
 
 def is_lingling_path(path: str) -> bool:

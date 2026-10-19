@@ -135,7 +135,11 @@ class CompressionService:
     def discard(self, result: CompressionResult) -> None:
         """丟掉結果在暫存資料夾裡的壓縮檔（交出之後、或使用者不要這份時）；沒有壓縮檔時什麼都不做"""
         if result.output_path is not None:
-            self._files.discard_directory(os.path.dirname(result.output_path))
+            self.discard_output(result.output_path)
+
+    def discard_output(self, output_path: str) -> None:
+        """丟掉暫存資料夾裡的一份壓縮檔（以 CompressionResult.output_path 指定；發譜用完交出的壓縮檔時）"""
+        self._files.discard_directory(os.path.dirname(output_path))
 
     def _compress_into(
         self, source: str, original_size: int, folder: str, page_count: int,

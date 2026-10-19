@@ -138,7 +138,7 @@ class FakeHuaXia:
         self._refresh_tokens: Dict[str, List[Any]] = {}
         self._access_tokens: Dict[str, Tuple[str, str]] = {}
         self._refresh_gate: Optional[threading.Event] = None
-        # 排定斷線的請求：[方法, 路徑開頭, 還要放過幾個, 還要斷幾個]
+        # 排定斷線的請求：[方法, 路徑, 還要放過幾個, 還要斷幾個]
         self._drops: List[List[Any]] = []
         # 切換會失敗的曲目編號對應（HTTP 狀態碼，錯誤代碼）
         self._switch_failures: Dict[str, Tuple[int, str]] = {}
@@ -306,18 +306,19 @@ class FakeHuaXia:
         """之後的請求都連不上"""
         self.offline = True
 
-    def drop_requests(self, method: str, path_prefix: str, skip: int = 0, times: int = 1) -> None:
-        """排定斷線：方法相同、路徑以 path_prefix 開頭的請求，放過前 skip 個，接著 times 個連不上（丟 ConnectionError，
+    def drop_requests(self, method: str, path: str, skip: int = 0, times: int = 1) -> None:
+        """排定斷線：方法相同、路徑是 path 或在它底下的請求，放過前 skip 個，接著 times 個連不上（丟 ConnectionError，
         HuaXia 沒收到），之後的照常
 
         Args:
             method: HTTP 方法（GET、POST、DELETE…）
-            path_prefix: 路徑開頭，例如 "/storage/v1/object/scores/"（上傳）、"/rest/v1/rpc/lingling_publish"（切換）
+            path: 路徑，例如 "/storage/v1/object/scores"（DELETE 是刪除，POST 它底下的是上傳）、
+                "/rest/v1/rpc/lingling_publish"（切換）
             skip: 先放過幾個
             times: 斷幾個
         """
         with self._lock:
-            self._drops.append([method.upper(), path_prefix, skip, times])
+            self._drops.append([method.upper(), path.rstrip("/"), skip, times])
 
     def fail_switch(self, piece_id: str, status: int = 404, code: str = "PT404") -> None:
         """之後這首曲目的切換（發譜函式）都失敗，丟出這個錯誤代碼，資料表不變（例如幹部剛在網頁上刪了聲部）"""
@@ -405,8 +406,9 @@ class FakeHuaXia:
     def _dropped(self, record: Dict[str, Any]) -> bool:
         """這個請求是不是排定要斷線的（drop_requests）；是的話用掉一次"""
         for drop in self._drops:
-            method, prefix, skip, times = drop
-            if record["method"] != method or not record["path"].startswith(prefix) or times <= 0:
+            method, path, skip, times = drop
+            under = record["path"] == path or record["path"].startswith(path + "/")
+            if record["method"] != method or not under or times <= 0:
                 continue
             if skip > 0:
                 drop[2] -= 1
