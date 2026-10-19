@@ -477,16 +477,16 @@ class TestCreateCatalog(unittest.TestCase):
         self.folder = self.google.drive.add_folder("譜庫")
 
     def test_lists_spreadsheets_in_the_folder(self):
-        sheet = self.google.drive.add_file("譜庫目錄", self.folder, mime_type=DRIVE_SPREADSHEET_MIME)
+        sheet = self.google.drive.add_file("譜庫試算表", self.folder, mime_type=DRIVE_SPREADSHEET_MIME)
         self.google.drive.add_file("說明.pdf", self.folder)
         self.google.drive.add_file("別的", mime_type=DRIVE_SPREADSHEET_MIME)
         self.assertEqual([f.id for f in self.catalog.spreadsheets_in(self.folder)], [sheet])
 
     def test_creates_a_spreadsheet_with_every_sheet_and_a_frozen_header_row_in_the_folder(self):
-        spreadsheet_id = self.catalog.create_catalog(PendingCatalog("譜庫目錄", self.folder))
+        spreadsheet_id = self.catalog.create_catalog(PendingCatalog("譜庫試算表", self.folder))
         self.assertEqual([f.id for f in self.catalog.spreadsheets_in(self.folder)], [spreadsheet_id])
         self.assertEqual(self.google.drive.file(spreadsheet_id).parents, (self.folder,))
-        self.assertEqual(self.google.drive.file(spreadsheet_id).name, "譜庫目錄")
+        self.assertEqual(self.google.drive.file(spreadsheet_id).name, "譜庫試算表")
         self.assertEqual(self.google.sheets.tabs(), list(SHEET_HEADERS))
         for title, headers in SHEET_HEADERS.items():
             self.assertEqual(self.google.sheets.rows(title), [headers])
@@ -499,7 +499,7 @@ class TestCreateCatalog(unittest.TestCase):
         self.assertEqual(root.mime_type, DRIVE_FOLDER_MIME)
 
     def test_creating_again_after_a_failed_move_reuses_the_created_spreadsheet(self):
-        pending = PendingCatalog("譜庫目錄", self.folder)
+        pending = PendingCatalog("譜庫試算表", self.folder)
         # 第 1 次請求建試算表、第 2 次取它的中繼資料、第 3 次搬進資料夾
         self.google.fail_at(3, CatalogErrorKind.OFFLINE)
         with self.assertRaises(CatalogError):

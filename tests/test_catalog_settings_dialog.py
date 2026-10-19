@@ -287,8 +287,9 @@ class CatalogFolderTestCase(LoginAreaTestCase):
     def settled(self, dialog: CatalogSettingsDialog) -> bool:
         """資料夾欄位下方寫出找譜庫試算表的結果"""
         found = t("catalog.settings.catalog_found", name="")
+        done = (t("catalog.settings.catalog_created"), t("catalog.settings.catalog_not_found"))
         return any(
-            label.text().startswith(found) or label.text() == t("catalog.settings.catalog_created")
+            label.text().startswith(found) or label.text() in done
             for label in dialog.findChildren(QLabel)
         )
 
@@ -329,9 +330,9 @@ class TestFindCatalog(CatalogFolderTestCase):
     """資料夾裡有一份試算表就用它；沒有就建立；讀不到時頂端出現提示列"""
 
     def test_uses_the_only_spreadsheet_in_the_folder(self):
-        sheet = self.add_spreadsheet("譜庫目錄")
+        sheet = self.add_spreadsheet("譜庫試算表")
         dialog = self.open_with_folder()
-        self.assertTrue(self.shows(dialog, t("catalog.settings.catalog_found", name="譜庫目錄")))
+        self.assertTrue(self.shows(dialog, t("catalog.settings.catalog_found", name="譜庫試算表")))
         self.save(dialog)
         self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), sheet)
         self.assertEqual(self.saved().get(CATALOG_SPREADSHEET_ID_KEY), sheet)
@@ -346,8 +347,15 @@ class TestFindCatalog(CatalogFolderTestCase):
         self.assertEqual(self.google.sheets.tabs(), list(SHEET_HEADERS))
         self.assertTrue(self.shows(dialog, t("catalog.settings.catalog_created")))
 
+    def test_cancelling_the_name_prompt_says_how_to_create_one(self):
+        with mock.patch.object(QInputDialog, "getText", return_value=("", False)):
+            dialog = self.open_with_folder()
+        self.assertTrue(self.shows(dialog, "此資料夾尚無譜庫試算表。按「瀏覽」再選一次這個資料夾即可建立。"))
+        self.assertEqual(self.google.drive.children(self.folder), [])
+        self.assertFalse(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY))
+
     def test_unreadable_folder_shows_the_bar_and_retry_finds_the_catalog(self):
-        sheet = self.add_spreadsheet("譜庫目錄")
+        sheet = self.add_spreadsheet("譜庫試算表")
         self.google.fail_next(CatalogErrorKind.OFFLINE)
         dialog = self.open_with_folder()
         self.assertTrue(self.bar_text(dialog).startswith("讀不到譜庫｜連不上網路："))
@@ -369,7 +377,7 @@ class TestMyDriveTypedAsRoot(CatalogFolderTestCase):
     """資料夾欄位寫的是 Drive 根資料夾的別名 root 時，存成根資料夾真正的 ID，譜庫的其他地方才比對得到"""
 
     def test_alias_and_the_my_drive_url_are_saved_as_the_real_id(self):
-        sheet = self.google.drive.add_file("譜庫目錄", mime_type=DRIVE_SPREADSHEET_MIME)
+        sheet = self.google.drive.add_file("譜庫試算表", mime_type=DRIVE_SPREADSHEET_MIME)
         for typed in ("root", "https://drive.google.com/drive/my-drive"):
             with self.subTest(typed=typed):
                 self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, typed)
@@ -392,7 +400,7 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
 
     def test_a_new_catalog_without_the_platform_hides_publishing(self):
         self.remember_huaxia()
-        self.add_spreadsheet("譜庫目錄")
+        self.add_spreadsheet("譜庫試算表")
         self.google.sheets.create_tab("曲目", [SHEET_HEADERS["曲目"]])
         self.save(self.open_with_folder())
         self.assertIsNone(ClubSettingsService(self.preferences).remembered())
@@ -401,7 +409,7 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
 
     def test_a_new_catalog_with_the_platform_keeps_publishing(self):
         self.remember_huaxia()
-        sheet = self.add_spreadsheet("譜庫目錄")
+        sheet = self.add_spreadsheet("譜庫試算表")
         self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
         self.save(self.open_with_folder())
         wait_until(lambda: ClubSettingsService(self.saved()).remembered() is PublishingPlatform.HUAXIA)
@@ -410,7 +418,7 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
     def test_cancelling_after_picking_a_catalog_changes_nothing(self):
         self.remember_huaxia()
         self.preferences.save()
-        self.add_spreadsheet("譜庫目錄")
+        self.add_spreadsheet("譜庫試算表")
         dialog = self.open_with_folder()
         dialog.reject()
         self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), "old-sheet")
@@ -420,7 +428,7 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
 
     def test_unreadable_club_settings_of_the_new_catalog_are_written_to_the_log(self):
         self.remember_huaxia()
-        self.add_spreadsheet("譜庫目錄")
+        self.add_spreadsheet("譜庫試算表")
         dialog = self.open_with_folder()
         self.google.fail_next(CatalogErrorKind.OFFLINE)
         self.save(dialog)
@@ -452,7 +460,7 @@ class TestBrowseFolders(CatalogFolderTestCase):
         return seen[0]
 
     def test_picking_a_folder_finds_its_catalog(self):
-        sheet = self.add_spreadsheet("譜庫目錄")
+        sheet = self.add_spreadsheet("譜庫試算表")
         dialog = self.open_dialog()
         self.browse(dialog, "譜庫")
         wait_until(lambda: self.settled(dialog))
@@ -460,7 +468,7 @@ class TestBrowseFolders(CatalogFolderTestCase):
         self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), sheet)
 
     def test_my_drive_itself_can_be_picked_and_is_saved_under_its_real_id(self):
-        sheet = self.google.drive.add_file("譜庫目錄", mime_type=DRIVE_SPREADSHEET_MIME)
+        sheet = self.google.drive.add_file("譜庫試算表", mime_type=DRIVE_SPREADSHEET_MIME)
         dialog = self.open_dialog()
         self.browse(dialog, t("catalog.settings.my_drive"))
         wait_until(lambda: self.settled(dialog))

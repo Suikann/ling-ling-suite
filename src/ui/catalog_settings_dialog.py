@@ -2,9 +2,9 @@
 """
 譜庫設定對話框
 
-引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫目錄。
+引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫試算表。
 登入區顯示登入的帳號 email 與帳號提醒；登入時在背景等瀏覽器回來，期間顯示可取消的等待視窗。
-瀏覽 Drive 資料夾（最上層是我的雲端硬碟，它本身也能選）、找資料夾裡的試算表與建立譜庫目錄都經譜庫服務
+瀏覽 Drive 資料夾（最上層是我的雲端硬碟，它本身也能選）、找資料夾裡的試算表與建立譜庫試算表都經譜庫服務
 （services/catalog_service.py）在背景執行；根資料夾一律存成它真正的 ID，不存別名 root。
 失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。找到或建好的譜庫試算表先記在對話框裡，
 按「儲存設定」才寫進偏好設定，取消時偏好設定不變；存的是另一份譜庫試算表時，忘掉記住的發譜平台，
@@ -204,7 +204,7 @@ class CatalogSettingsDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
         self._update_auth_display()
-        # 開啟時只在已登入時自動找譜庫目錄：安全儲存沒解鎖時不為此再跳一次解鎖視窗
+        # 開啟時只在已登入時自動找譜庫試算表：安全儲存沒解鎖時不為此再跳一次解鎖視窗
         if self._folder_entry.text().strip() and self._auth.status().signed_in:
             self._check_catalog_in_folder()
 
@@ -323,7 +323,7 @@ class CatalogSettingsDialog(QDialog):
         return False
 
     def _browse_folder(self):
-        """以階層式樹狀結構瀏覽 Drive 資料夾，選了就找裡面的譜庫目錄"""
+        """以階層式樹狀結構瀏覽 Drive 資料夾，選了就找裡面的譜庫試算表"""
         dialog = _DriveFolderBrowser(lambda: self._catalog_factory(""), self._sign_in_again, self._log, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_id:
             self._folder_entry.setText(dialog.selected_id)
@@ -367,7 +367,7 @@ class CatalogSettingsDialog(QDialog):
         self._folder_status.setStyleSheet(f"color: {color};")
 
     def _use_catalog(self, sheet: DriveFile):
-        """使用找到的試算表作為譜庫目錄（按「儲存設定」才寫進偏好設定）"""
+        """使用找到的試算表作為譜庫試算表（按「儲存設定」才寫進偏好設定）"""
         self._spreadsheet_id = sheet.id
         self._show_folder_status(t("catalog.settings.catalog_found", name=sheet.name), "#2ecc71")
 
@@ -406,7 +406,7 @@ class CatalogSettingsDialog(QDialog):
             self._show_folder_status(t("catalog.settings.catalog_created"), "#2ecc71")
 
         def create():
-            """建立譜庫目錄（重試時再呼叫一次）"""
+            """建立譜庫試算表（重試時再呼叫一次）"""
             self._show_folder_status(t("catalog.loading"), "gray")
             self._run(
                 lambda: self._catalog_factory("").create_catalog(pending), created,
