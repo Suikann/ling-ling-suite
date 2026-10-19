@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QMenu, QTableWidget, QTableWidgetItem, QSpinBox, QHeaderView,
 )
 from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
+from PySide6.QtGui import QBrush, QColor, QKeySequence, QPalette, QShortcut
 from core.constants import INSTRUMENT_PRESETS, MAX_DURATION_MINUTES, TEXT_EXTENSION, UNSYNCED_COLOR
 from core.instrument_list import instrument_list_text
 from core.locale import localized, t
@@ -581,13 +581,11 @@ class InstrumentationTable(QWidget):
         return combo
 
     def _show_headcount(self, row: int):
-        """把群組裡那一列的人數填進最少、最多、以上三欄（留空顯示空白；以上時停用最多）"""
+        """把群組裡那一列的人數填進最少、最多、以上三欄（見 _show_maximum）"""
         headcount = self._group.headcounts[row]
         filling, self._filling = self._filling, True
         self._table.cellWidget(row, self.column("minimum")).setValue(headcount.minimum or 0)
-        maximum = self._table.cellWidget(row, self.column("maximum"))
-        maximum.setValue(headcount.maximum or 0)
-        maximum.setEnabled(not headcount.open_ended)
+        _show_maximum(self._table.cellWidget(row, self.column("maximum")), headcount)
         self._table.item(row, self.column("open_ended")).setCheckState(
             Qt.Checked if headcount.open_ended else Qt.Unchecked,
         )
@@ -679,12 +677,16 @@ class InstrumentationTable(QWidget):
         self._changed()
 
     def _on_headcount_edited(self, row: int):
-        """改了最少、最多或以上：整列寫進人數範圍，再顯示整理後的值（不重畫整張表，輸入中的欄位才不會被換掉）"""
+        """改了最少、最多或以上：整列寫進人數範圍，再顯示整理後的值（不重畫整張表，輸入中的欄位才不會被換掉）
+
+        最多停在它的下限（等於最少）時算留空。
+        """
         if self._filling or self._group is None:
             return
+        maximum = self._table.cellWidget(row, self.column("maximum"))
         self._project.set_headcount(self._group, row, Headcount(
             self._table.cellWidget(row, self.column("minimum")).value(),
-            self._table.cellWidget(row, self.column("maximum")).value(),
+            maximum.value() if maximum.value() > maximum.minimum() else None,
             self._table.item(row, self.column("open_ended")).checkState() == Qt.Checked,
         ))
         self._show_headcount(row)
@@ -859,6 +861,22 @@ def place_text(piece_title: str, edition_label: str, movement_id: str, movement_
 def _huaxia_text(link: HuaXiaLink) -> str:
     """對到的 HuaXia 曲目的顯示：曲名；發譜時才新建的寫明新建"""
     return t("publish.huaxia_new_piece" if link.new_piece else "publish.huaxia_piece", title=link.piece_title)
+
+
+def _show_maximum(spin: QSpinBox, headcount: Headcount):
+    """最多欄顯示人數範圍的最多
+
+    「以上」時空白並停用。其餘以最少為下限：留空（等於最少）時顯示最少、字變灰，往上調從最少加一開始；
+    最少也沒填時空白。
+    """
+    floor = 0 if headcount.open_ended else headcount.minimum or 0
+    spin.setMinimum(floor)
+    spin.setSpecialValueText(" " if floor == 0 else "")
+    spin.setValue(headcount.maximum or floor)
+    spin.setEnabled(not headcount.open_ended)
+    grey = spin.palette().color(QPalette.Disabled, QPalette.Text).name()
+    # 文字顏色可能由程式的樣式表指定，所以灰字也以樣式表指定才蓋得過
+    spin.setStyleSheet(f"QSpinBox {{ color: {grey}; }}" if floor and spin.value() == floor else "")
 
 
 def _count_spin(maximum: int, blank_zero: bool = True) -> QSpinBox:

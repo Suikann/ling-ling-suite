@@ -189,6 +189,38 @@ class TestHeadcountColumns(InstrumentationTableTestCase):
         self.assertEqual(self.spin(0, "maximum").value(), 0)
         self.assertFalse(self.spin(0, "maximum").isEnabled())
 
+    def test_empty_maximum_shows_the_minimum(self):
+        self.spin(0, "minimum").setValue(6)
+        self.assertEqual(self.group.headcounts[0], Headcount(6))
+        self.assertEqual(self.spin(0, "maximum").text(), "6")
+
+    def test_raising_an_empty_maximum_one_step_stores_the_range(self):
+        self.spin(0, "minimum").setValue(6)
+        self.spin(0, "maximum").stepUp()
+        self.assertEqual(self.group.headcounts[0], Headcount(6, 7))
+        self.assertEqual(self.spin(0, "maximum").text(), "7")
+
+    def test_lowering_the_maximum_to_the_minimum_empties_it(self):
+        self.spin(0, "minimum").setValue(6)
+        self.spin(0, "maximum").setValue(7)
+        self.spin(0, "maximum").stepDown()
+        self.assertEqual(self.group.headcounts[0], Headcount(6))
+        self.assertEqual(self.spin(0, "maximum").text(), "6")
+
+    def test_lowering_the_minimum_keeps_an_empty_maximum_empty(self):
+        self.spin(0, "minimum").setValue(6)
+        self.spin(0, "minimum").setValue(4)
+        self.assertEqual(self.group.headcounts[0], Headcount(4))
+        self.assertEqual(self.spin(0, "maximum").text(), "4")
+
+    def test_open_ended_maximum_is_blank(self):
+        self.spin(0, "minimum").setValue(2)
+        self.open_ended(0).setCheckState(Qt.Checked)
+        self.assertEqual(self.spin(0, "maximum").text().strip(), "")
+        self.open_ended(0).setCheckState(Qt.Unchecked)
+        self.assertEqual(self.group.headcounts[0], Headcount(2))
+        self.assertEqual(self.spin(0, "maximum").text(), "2")
+
     def test_shows_the_stored_headcounts_and_blank_for_unfilled(self):
         self.project.set_headcount(self.group, 2, Headcount(4, 6))
         self.editor.show_group(self.group)
