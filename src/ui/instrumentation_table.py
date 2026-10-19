@@ -70,6 +70,8 @@ _HEADERS = {
 }
 # 人數欄的上限（超過的樂譜要求不實際）
 _MAX_HEADCOUNT = 999
+# 列高比編輯欄多留的空間（格線與上下的間隙）
+_ROW_PADDING = 4
 # 重名的列與本專案沒有的列的文字顏色
 _DUPLICATE_COLOR = QColor("#e74c3c")
 _ABSENT_COLOR = QColor("#888888")
@@ -232,6 +234,7 @@ class InstrumentationTable(QWidget):
         for index in range(len(COLUMNS)):
             header.setSectionResizeMode(index, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(self.column("voice"), QHeaderView.Stretch)
+        self._fit_editors()
         for name in _PROJECT_ONLY if self._edition_page else _EDITION_PAGE_ONLY:
             self._table.setColumnHidden(self.column(name), True)
         self._table.setItemDelegateForColumn(self.column("voice"), VoiceNameDelegate(self._candidates, self._table))
@@ -284,6 +287,7 @@ class InstrumentationTable(QWidget):
         self._score_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._score_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._score_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._score_table.verticalHeader().setDefaultSectionSize(self._row_height())
         self._score_table.setFixedHeight(self._score_table.rowHeight(0) + 2 * self._score_table.frameWidth())
         for name in _PROJECT_ONLY:
             self._score_table.setColumnHidden(self.column(name), True)
@@ -292,9 +296,38 @@ class InstrumentationTable(QWidget):
         self._score_table.item(0, self.column("voice")).setText(t("catalog.page.score"))
         return self._score_table
 
+    def _row_height(self) -> int:
+        """放得下人數欄與聲部組選單的列高（依目前的字型與樣式表量）"""
+        spin, combo = _count_spin(_MAX_HEADCOUNT), QComboBox()
+        combo.addItem(t("instrumentation.section"))
+        heights = []
+        for editor in (spin, combo):
+            editor.ensurePolished()
+            heights.append(max(editor.sizeHint().height(), editor.minimumSizeHint().height()))
+            editor.deleteLater()
+        return max(heights) + _ROW_PADDING
+
+    def _fit_editors(self):
+        """列高放得下每列的編輯欄；最少、最多欄寬放得下三位數與上下箭頭，不隨內容縮窄"""
+        rows = self._table.verticalHeader()
+        rows.setSectionResizeMode(QHeaderView.Fixed)
+        rows.setDefaultSectionSize(max(rows.defaultSectionSize(), self._row_height()))
+        probe = _count_spin(_MAX_HEADCOUNT)
+        probe.setValue(_MAX_HEADCOUNT)
+        probe.ensurePolished()
+        width = probe.sizeHint().width()
+        probe.deleteLater()
+        header = self._table.horizontalHeader()
+        for name in ("minimum", "maximum"):
+            index = self.column(name)
+            header.setSectionResizeMode(index, QHeaderView.Fixed)
+            header.resizeSection(index, max(width, header.sectionSizeHint(index)))
+
     def _link_score_table(self):
         """總譜列跟著編制表的欄寬；兩張表同時只有一列被選取"""
         header = self._table.horizontalHeader()
+        for index in range(len(COLUMNS)):
+            self._score_table.setColumnWidth(index, header.sectionSize(index))
         header.sectionResized.connect(lambda index, _old, size: self._score_table.setColumnWidth(index, size))
         self._score_table.itemSelectionChanged.connect(
             lambda: self._score_table.selectedItems() and self._table.clearSelection(),
