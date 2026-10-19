@@ -1367,10 +1367,10 @@ class Project:
         self._changed()
 
     def clear_score(self, group: Group) -> None:
-        """清除群組的總譜，該檔放回分譜的最前面"""
+        """清除群組的總譜，該檔放回分譜：配給第一個本專案有、還沒有分譜的聲部，沒有時接在最後；其他聲部的分譜不動"""
         if group.score_file:
-            group.files.insert(0, group.score_file)
-            group.score_file = None
+            score, group.score_file = group.score_file, None
+            _add_parts(group, [score])
             self._changed()
 
     def reorder_files(self, group: Group, files: List[FileInfo]) -> None:

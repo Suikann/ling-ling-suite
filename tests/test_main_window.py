@@ -662,7 +662,7 @@ class TestMainWindowGuessesOnlyWhenFilesEnterGroup(MainWindowTestCase):
         self.click_button(t("group.add"))
         saved = self.save_from_menu(path).groups[0]
         self.assertIsNone(saved.score_file)
-        self.assertEqual([f.display_name for f in saved.files], ["Full Score.pdf", "Flute.pdf"])
+        self.assertEqual([f.display_name for f in saved.files], ["Flute.pdf", "Full Score.pdf"])
 
     def test_cleared_piece_name_is_not_set_back_when_a_group_is_added(self):
         files = self.create_files("Brahms Symphony - Flute.pdf", "Brahms Symphony - Oboe.pdf")

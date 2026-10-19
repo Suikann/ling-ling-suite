@@ -448,10 +448,10 @@ class TestGroupEdits(unittest.TestCase):
         self.assertEqual(self.names(self.group.files), ["Flute.pdf", "Horn.pdf", "Score.pdf"])
         self.assert_changed()
 
-    def test_clearing_the_score_puts_it_first_among_parts(self):
+    def test_clearing_the_score_puts_it_back_among_parts(self):
         self.project.clear_score(self.group)
         self.assertIsNone(self.group.score_file)
-        self.assertEqual(self.names(self.group.files), ["Score.pdf", "Flute.pdf", "Oboe.pdf", "Horn.pdf"])
+        self.assertEqual(self.names(self.group.files), ["Flute.pdf", "Oboe.pdf", "Horn.pdf", "Score.pdf"])
         self.assert_changed()
 
     def test_reordering_parts(self):
@@ -646,6 +646,17 @@ class TestVoicesCarryTheirParts(unittest.TestCase):
         self.project.set_score(self.group, self.group.files[0])
         self.assertEqual(self.pairs(), [("Flute", None), ("Oboe", None), ("Horn", "hn.pdf")])
 
+    def test_clearing_the_score_does_not_move_any_voice_s_part(self):
+        self.group.score_file = _info(_path("score.pdf"))
+        self.project.clear_score(self.group)
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", "ob.pdf"), ("Horn", "hn.pdf")])
+        self.assertEqual([f.display_name for f in self.group.extra_files()], ["score.pdf"])
+
+    def test_a_cleared_score_goes_to_a_voice_without_a_part(self):
+        self.project.set_score(self.group, self.group.files[1])
+        self.project.clear_score(self.group)
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", "ob.pdf"), ("Horn", "hn.pdf")])
+
     def test_a_new_voice_takes_the_first_part_beyond_the_voices(self):
         self.project.add_files(_infos("tb.pdf"), self.group)
         self.project.add_instrument(self.group, "Tuba")
@@ -706,6 +717,27 @@ class TestVoicesCarryTheirParts(unittest.TestCase):
         placement = self.project.apply_split(result, score_label="總譜")
         self.project.revert_split(result.record(SplitPlacement.from_data(placement.to_data())))
         self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", None), ("Horn", "hn.pdf")])
+
+    def undo_split(self, source, voices):
+        """把群組裡的 source 分割成 voices 這幾份新分譜，再經紀錄檔的內容復原"""
+        result = SplitResult(
+            source_path=source.original_path, parts=_infos(*(f"{v}.pdf" for v in voices)), voices=list(voices),
+            replaced=[],
+        )
+        placement = self.project.apply_split(result, score_label="總譜")
+        self.project.revert_split(result.record(SplitPlacement.from_data(placement.to_data())))
+
+    def test_undoing_a_split_of_a_part_after_a_voice_without_a_part_restores_every_pairing(self):
+        self.project.set_present(self.group, 1, False)
+        self.project.set_present(self.group, 1, True)
+        self.undo_split(self.group.files[1], ["Violin", "Viola"])
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", None), ("Horn", "hn.pdf")])
+
+    def test_undoing_a_split_that_kept_the_voice_list_restores_every_pairing(self):
+        self.project.add_files(_infos("extra.pdf"), self.group)
+        self.undo_split(self.group.files[1], ["Flute", "Oboe", "Horn"])
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", "ob.pdf"), ("Horn", "hn.pdf")])
+        self.assertEqual([f.display_name for f in self.group.extra_files()], ["extra.pdf"])
 
     def test_replacing_the_whole_list_pairs_by_position_and_has_every_voice(self):
         self.project.set_present(self.group, 1, False)
