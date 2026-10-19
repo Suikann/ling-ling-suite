@@ -1469,9 +1469,9 @@ class CatalogService:
         """撤銷存入後移除登記並寫存入紀錄：寫入前一刻才讀分譜工作表找列號，全部以一個請求寫入
 
         丟進垃圾桶與只移除登記的檔，那次存入的那處、那個聲部（總譜為總譜列）登記它的分譜列清空 drive_file_id、file_name，
-        同一個檔另外登記在別處的列不動；每份撤掉的檔一列存入紀錄，
-        這一批共用一個新抽的存入編號，reverts 記被撤銷的存入編號。只新增、不修改存入紀錄。請求數固定：
-        列出工作表名稱、讀取、寫入各一次，存入紀錄還沒建立時另建一次。
+        同一個檔另外登記在別處的列不動；每份撤掉的檔一列存入紀錄，這一批共用一個新抽的存入編號，reverts 記被撤銷的
+        存入編號，local_path 記本機那份現在的位置（RevertFile.local_path，存入之後重新命名過的是新的路徑）。
+        只新增、不修改存入紀錄。請求數固定：列出工作表名稱、讀取、寫入各一次，存入紀錄還沒建立時另建一次。
 
         Args:
             deposit_id: 被撤銷的存入編號
@@ -1496,7 +1496,8 @@ class CatalogService:
             batch.append(SHEET_DEPOSIT_LOG, {
                 "deposit_id": revert_id, "time": stamp, "operator": operator, "edition_id": entry.edition_id,
                 "movement_id": entry.movement_id, "group": entry.group, "voice": entry.voice,
-                "local_path": entry.local_path, "drive_file_id": entry.drive_file_id, "action": reverted.action.value,
+                "local_path": reverted.local_path or entry.local_path, "drive_file_id": entry.drive_file_id,
+                "action": reverted.action.value,
                 "revision_after": head, "revision_before": reverted.file.head_revision if reverted.file else "",
                 "reverts": deposit_id, "group_id": entry.group_id,
             })

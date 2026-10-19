@@ -285,6 +285,15 @@ class TestOnlyCopy(RevertTestCase):
         self.project.forget_deposits(outcome.reverted_paths)
         self.assertEqual(self.parts[1].deposit_md5, "")
 
+    def test_the_revert_row_records_where_the_file_is_now(self):
+        deposit_id = self.archive()
+        renamed = self.rename_part(self.parts[1], "江樓鐘鼓-琵琶.pdf")
+        self.revert(deposit_id)
+        reverted = [r for r in records(self.google, SHEET_DEPOSIT_LOG) if r["reverts"] == deposit_id]
+        self.assertEqual(sorted(r["local_path"] for r in reverted), sorted([
+            self.score.original_path, self.parts[0].original_path, renamed,
+        ]))
+
     def test_a_renamed_file_cleared_afterwards_comes_back_under_its_new_name(self):
         deposit_id = self.archive()
         renamed = self.rename_part(self.parts[1], "江樓鐘鼓-琵琶.pdf")
