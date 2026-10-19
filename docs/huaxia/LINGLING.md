@@ -1,4 +1,4 @@
-> 複本。正本是 HuaXia 的 `docs/LINGLING.md`，取自 [Suikann/HuaXia 分支 lingling-publish 的 1c337b9](https://github.com/Suikann/HuaXia/blob/1c337b93ce58dfc319c2c359fdaafb87d08b97e2/docs/LINGLING.md)（合併請求 [oshigirimoquan-coder/HuaXia#1](https://github.com/oshigirimoquan-coder/HuaXia/pull/1)；合併後以 HuaXia `main` 為準）。泠靈的 `services/huaxia_client.py` 頂端的常數與 `tests/fake_huaxia.py` 的發譜函式照這份實作，正本改了就同步這份、假 HuaXia 與 `tests/test_huaxia_publish.py`。
+> 複本。正本是 HuaXia 的 `docs/LINGLING.md`，取自 [Suikann/HuaXia 分支 lingling-publish 的 b37648c](https://github.com/Suikann/HuaXia/blob/b37648c124d76efd1d339f6af609b74943a510d9/docs/LINGLING.md)（合併請求 [oshigirimoquan-coder/HuaXia#1](https://github.com/oshigirimoquan-coder/HuaXia/pull/1)；合併後以 HuaXia `main` 為準）。泠靈的 `services/huaxia_client.py` 頂端的常數與 `tests/fake_huaxia.py` 的發譜函式照這份實作，正本改了就同步這份、假 HuaXia 與 `tests/test_huaxia_publish.py`。
 
 # 泠靈依賴說明
 
