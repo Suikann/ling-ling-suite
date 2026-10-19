@@ -176,8 +176,8 @@ class HuaXiaScore(NamedTuple):
 
     @property
     def lingling(self) -> bool:
-        """是泠靈發的（路徑是泠靈的 Storage 路徑格式）"""
-        return is_lingling_path(self.file_path)
+        """是泠靈發到這首曲目的（路徑是這首曲目的泠靈 Storage 路徑；HuaXia 的發譜函式只肯撤這種登記）"""
+        return is_lingling_path(self.file_path) and self.file_path.startswith(f"{lingling_storage_folder(self.piece_id)}/")
 
     @property
     def shown_name(self) -> str:

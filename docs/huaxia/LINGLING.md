@@ -1,4 +1,4 @@
-> 複本。正本是 HuaXia 的 `docs/LINGLING.md`，取自 [Suikann/HuaXia 分支 lingling-publish 的 b37648c](https://github.com/Suikann/HuaXia/blob/b37648c124d76efd1d339f6af609b74943a510d9/docs/LINGLING.md)（合併請求 [oshigirimoquan-coder/HuaXia#1](https://github.com/oshigirimoquan-coder/HuaXia/pull/1)；合併後以 HuaXia `main` 為準）。泠靈的 `services/huaxia_client.py` 頂端的常數與 `tests/fake_huaxia.py` 的發譜函式照這份實作，正本改了就同步這份、假 HuaXia 與 `tests/test_huaxia_publish.py`。
+> 複本。正本是 HuaXia 的 `docs/LINGLING.md`，取自 [Suikann/HuaXia 分支 lingling-publish 的 6e29203](https://github.com/Suikann/HuaXia/blob/6e292037688e814aaea1c18ccc47760ba0eb321e/docs/LINGLING.md)（合併請求 [oshigirimoquan-coder/HuaXia#1](https://github.com/oshigirimoquan-coder/HuaXia/pull/1)；合併後以 HuaXia `main` 為準）。泠靈的 `services/huaxia_client.py` 頂端的常數與 `tests/fake_huaxia.py` 的發譜函式照這份實作，正本改了就同步這份、假 HuaXia 與 `tests/test_huaxia_publish.py`。
 
 # 泠靈依賴說明
 
@@ -84,7 +84,7 @@
 | `create_parts` | 同一次不能有兩個同名的；`section` 空白時由觸發器依名稱判斷 |
 | `update_parts` | 聲部必須屬於這首曲目；`needed`、`needed_min`、`section` 省略或 `null` 就不改，`section` 給空字串等於交給觸發器重新判斷 |
 | `add_scores` | `part_id`（現有聲部）與 `new_part`（這次 `create_parts` 裡的名稱）最多給一個，都不給是總譜；`file_path` 必須是這首曲目的泠靈路徑、檔案已經在 Storage，而且（撤掉這次的 `remove_scores` 之後）沒有任何樂譜登記指著它 |
-| `remove_scores` | 只撤這首曲目的；已經不在的略過 |
+| `remove_scores` | 只撤這首曲目上泠靈發的登記（`file_path` 是這首曲目的泠靈路徑 `lingling/<piece_id>/…`）；有一筆是網頁上傳的、別人放的或別首曲目的，整個不做（錯誤 `22023`）；已經不在的略過 |
 | `attach_events` | 已經掛著的略過 |
 
 執行順序：曲目 → 新建聲部 → 改聲部 → 撤掉登記 → 登記新樂譜 → 掛場次。任何一步出錯，整次呼叫的寫入全部不生效。
@@ -110,7 +110,7 @@
 | `code` | HTTP | 情況 |
 |---|---|---|
 | `PT409` | 409 | 介面版本不符 |
-| `22023` | 400 | 缺 `piece_id`、同名的新聲部、`part_id` 與 `new_part` 同時給、`new_part` 不是這次新建的、不是泠靈路徑 |
+| `22023` | 400 | 缺 `piece_id`、同名的新聲部、`part_id` 與 `new_part` 同時給、`new_part` 不是這次新建的、不是泠靈路徑、`remove_scores` 指到不是這首曲目泠靈發的登記 |
 | `PT404` | 404 | 找不到曲目、聲部不屬於這首曲目（或已被刪、或沒有權限改）、檔案還沒傳到 Storage |
 | `42501` | 401／403 | 不是幹部：RLS 擋下寫入（`new row violates row-level security policy`）；或沒登入，不能呼叫 |
 | `23503` | 409 | 場次不存在 |

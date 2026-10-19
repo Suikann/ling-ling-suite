@@ -630,7 +630,16 @@ class FakeHuaXia:
                 row["needed_min"] = change["needed_min"]
             if change.get("section") is not None:
                 row["section"] = change["section"] or guess_section(row["name"])
-        removing = set(payload.get("remove_scores") or []) if officer else set()
+        own_path = f"lingling/{re.escape(piece_id)}/[0-9a-f]{{64}}-[0-9a-z]{{1,32}}\\.pdf"
+        requested = set(payload.get("remove_scores") or [])
+        # 只撤這首曲目泠靈發的；指到別人放的或別首曲目的就整個不做，已經不在的略過
+        foreign = next((
+            row["id"] for row in self.tables["scores"]
+            if row["id"] in requested and (row["piece_id"] != piece_id or not re.fullmatch(own_path, row["file_path"] or ""))
+        ), None)
+        if foreign is not None:
+            raise _FunctionError(400, "22023", f"不能撤掉這筆樂譜登記（不是這首曲目泠靈發的）：{foreign}")
+        removing = requested if officer else set()
         removed = [
             {"id": row["id"], "part_id": row["part_id"], "file_path": row["file_path"]}
             for row in self.tables["scores"] if row["piece_id"] == piece_id and row["id"] in removing
@@ -647,7 +656,7 @@ class FakeHuaXia:
             if part_id is not None and self._piece_part(piece_id, part_id) is None:
                 raise _FunctionError(404, "PT404", f"找不到這首曲目的聲部 {part_id}")
             path = score.get("file_path") or ""
-            if not re.fullmatch(f"lingling/{re.escape(piece_id)}/[0-9a-f]{{64}}-[0-9a-z]{{1,32}}\\.pdf", path):
+            if not re.fullmatch(own_path, path):
                 raise _FunctionError(400, "22023", f"不是泠靈的樂譜路徑：{path}")
             if path not in self.objects:
                 raise _FunctionError(404, "PT404", f"檔案還沒傳到 Storage：{path}")

@@ -4,7 +4,7 @@ HuaXia 發譜函式的介面測試
 
 經 HuaXiaClient.publish 對假 HuaXia 測：假 HuaXia 的發譜函式照 docs/huaxia/LINGLING.md（HuaXia 依賴說明文件的複本）
 實作，這裡釘住它與文件一致的行為，讓發譜（#122）可以照文件對它寫：一首曲目的寫入全成或全不成、重跑不重複建、
-只撤這首曲目的登記並回傳實際撤掉的、不是幹部寫不進去、版本不符整個不做。
+只撤這首曲目泠靈發的登記並回傳實際撤掉的（要撤別人放的整個不做）、不是幹部寫不進去、版本不符整個不做。
 """
 import datetime
 import os
@@ -106,10 +106,10 @@ class TestExistingPiece(PublishTestCase):
         self.elsewhere = self.huaxia.add_score(self.moli, None, stored(self.moli, 1), "總譜")
         self.huaxia.put_object(stored(self.fenghuo, 2))
 
-    def test_headcounts_change_and_only_this_pieces_registrations_are_removed(self):
+    def test_headcounts_change_and_registrations_already_gone_are_skipped(self):
         out = self.publish(
             piece_id=self.fenghuo, update_parts=[{"id": self.erhu, "needed": "4", "needed_min": 4}],
-            remove_scores=[self.old, self.elsewhere, "99999999-9999-9999-9999-999999999999"],
+            remove_scores=[self.old, "99999999-9999-9999-9999-999999999999"],
             add_scores=[{"part_id": self.erhu, "title": "二胡 I", "file_path": stored(self.fenghuo, 2)}],
         )
         self.assertFalse(out["piece_created"])
@@ -120,6 +120,19 @@ class TestExistingPiece(PublishTestCase):
         self.assertEqual((part["needed"], part["needed_min"], part["section"]), ("4", 4, "拉弦"))
         self.assertEqual(len(self.rows("scores", id=self.elsewhere)), 1)
         self.assertEqual([s["file_path"] for s in self.rows("scores", part_id=self.erhu)], [stored(self.fenghuo, 2)])
+
+    def test_removing_a_score_lingling_did_not_put_on_this_piece_changes_nothing(self):
+        web = self.huaxia.add_score(self.fenghuo, self.erhu, f"{self.fenghuo}/{self.erhu}/1760000000000_bow.pdf")
+        misplaced = self.huaxia.add_score(self.fenghuo, self.erhu, stored(self.moli, 3))
+        for foreign in (web, misplaced, self.elsewhere):
+            before = {t: [dict(row) for row in self.huaxia.tables[t]] for t in ("piece_parts", "scores")}
+            with self.assertRaises(HuaXiaError) as caught:
+                self.publish(
+                    piece_id=self.fenghuo, update_parts=[{"id": self.erhu, "needed": "4"}],
+                    remove_scores=[self.old, foreign],
+                )
+            self.assertEqual((caught.exception.code, caught.exception.status), ("22023", 400))
+            self.assertEqual({t: self.huaxia.tables[t] for t in before}, before)
 
     def test_an_empty_section_is_left_to_huaxias_guess(self):
         self.huaxia.tables["piece_parts"][0]["section"] = "吹管"

@@ -113,6 +113,12 @@ class TestReplacing(FilesTestCase):
         self.assertEqual(erhu.replaces, [])
         self.assertEqual([score.id for score in erhu.others], [web])
 
+    def test_a_lingling_path_of_another_piece_is_not_replaced(self):
+        moved = self.huaxia.add_score(self.fenghuo, self.erhu, lingling_storage_path(self.moli, fingerprint(1), "x"))
+        erhu = self.file(self.plan(), self.paths[1])
+        self.assertEqual(erhu.replaces, [])
+        self.assertEqual([score.id for score in erhu.others], [moved])
+
     def test_the_full_score_replaces_the_lingling_score_without_a_voice(self):
         mine = self.huaxia.add_score(self.fenghuo, None, lingling_storage_path(self.fenghuo, fingerprint(3), "x"))
         web = self.huaxia.add_score(self.fenghuo, None, f"{self.fenghuo}/full/1760000000000_score.pdf")
