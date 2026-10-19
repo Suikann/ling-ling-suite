@@ -103,6 +103,16 @@ When rows were written to the wrong place or a sheet was deleted, restore it fro
 
 Every change anyone made to the spreadsheet after that point is rolled back too, so check with the other score librarians first and redo the changes worth keeping afterwards.
 
+## Distribute
+
+When the club settings (the "社團設定" sheet in the catalog spreadsheet) enable HuaXia, **Distribute…** appears at the bottom and puts a group's voices, headcounts, parts and score on HuaXia, the Huaxia Chinese Orchestra Club's site. You sign in with an officer's Discord account; until HuaXia merges Ling Ling's distribution function it is unavailable, and pressing it explains why.
+
+- Save the project first, and set the orchestra type to Chinese orchestra; groups not renamed yet or missing a minimum headcount are skipped this time, with the reason in the preview
+- The preview has five steps: piece (pick an existing HuaXia piece or create one), voices (which HuaXia voice each maps to; differing headcounts and sections are overwritten by default), files (each replaces the copy Ling Ling put under the same voice last time, others' files stay; files over 20 MB are compressed first), concerts (which events to attach), and confirm
+- After you press "Distribute" it runs in the background and the main window stays editable; what goes out is the files and instrumentation at that moment, so later changes need another distribution. The status bar has "Stop Distributing", the bottom of the main window logs each step, and groups that failed are listed with the reason at the end
+- If the connection drops or you stop halfway, members never see half a set of parts; distributing again picks up where it stopped, without uploading files again or creating the new piece twice
+- Every distribution is recorded on the catalog's "發譜紀錄" sheet; if that can't be written, nothing is distributed
+
 ## Known Limitations
 
 - **Paths are compared case-insensitively**: on every platform, paths that differ only in letter case count as the same file. On Linux, when one folder holds both `Flute.pdf` and `flute.pdf`, Ling Ling Suite treats them as one file; a move first checks whether the destination is a different file and refuses to overwrite it, so no file is damaged.
