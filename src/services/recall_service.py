@@ -30,14 +30,16 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from core.catalog_errors import CatalogError
 from core.constants import CONCERT_KIND
-from core.locale import t
-from core.log_entry import LogEntry
-from core.publish_log import PublishAction, PublishRecord, PublishedPiece, published_pieces
+from core.publish_log import (
+    EventEntry, PublishAction, PublishRecord, PublishedPiece, event_entry, failure_entry, published_pieces, score_entry,
+    utc_now,
+)
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
 from services.huaxia_client import HuaXiaError, HuaXiaErrorKind, HuaXiaEvent, HuaXiaScore
-from services.orphan_cleanup import OrphanCleanup, clear_orphans, delete_unregistered
+from services.huaxia_removal import HuaXiaRemoval
+from services.orphan_cleanup import OrphanCleanup, clear_orphans
 from services.recall_reminder import RecallReminder
 
 
@@ -83,12 +85,9 @@ class RecallPiece:
         """樂譜所在的聲部名稱；總譜（與舊的分組樂譜）為空字串"""
         return self.part_names.get(score.part_id or "", "")
 
-    def events(self) -> List[Dict[str, str]]:
-        """寫進發譜紀錄的公演：掛著的每一場（id、title、ends_at）"""
-        return [
-            {"id": event.id, "title": event.title, "ends_at": event.ends_at.isoformat()}
-            for event in self.ended + self.upcoming
-        ]
+    def events(self) -> List[EventEntry]:
+        """寫進發譜紀錄的公演：掛著的每一場"""
+        return [event_entry(event) for event in self.ended + self.upcoming]
 
 
 @dataclass(frozen=True)
@@ -153,17 +152,12 @@ class RecallResult:
         return sum(len(record.scores_removed) for record in self.records if record.action is PublishAction.RECALL)
 
 
-def _now() -> datetime.datetime:
-    """現在的時間（UTC）"""
-    return datetime.datetime.now(datetime.timezone.utc)
-
-
 class RecallService:
     """收回公演已結束的曲目：預覽（preview）、收回（recall）與不收回（keep）"""
 
     def __init__(
         self, auth: HuaXiaAuthService, log: Optional[ActivityLog] = None,
-        now: Callable[[], datetime.datetime] = _now, reminder: Optional[RecallReminder] = None,
+        now: Callable[[], datetime.datetime] = utc_now, reminder: Optional[RecallReminder] = None,
     ):
         """
         Args:
@@ -177,6 +171,7 @@ class RecallService:
         self._log = log
         self._now = now
         self._reminder = reminder
+        self._removal = HuaXiaRemoval(auth, log, reminder)
 
     def preview(self, catalog: CatalogService) -> RecallPreview:
         """讀發譜紀錄裡發過、還沒收回的曲目，再向 HuaXia 查它們現在的樂譜與掛的公演
@@ -228,7 +223,7 @@ class RecallService:
         Raises:
             HuaXiaError: 沒有登入、登入已失效，或重查幹部身分時連不上 HuaXia（什麼都沒做）
         """
-        not_officer = self._auth.recheck_officer()
+        not_officer = self._removal.recheck()
         if not_officer is not None:
             return RecallResult(not_officer=not_officer)
         pieces = list(pieces)
@@ -244,17 +239,13 @@ class RecallService:
                 error = e
             if error is None or removed or deleted:
                 records.append(_recall_record(piece, removed, deleted, error))
-            self._record_in_log(piece, error)
+            self._removal.record("recall.log.recalled", "recall.log.stopped", error, piece_title=piece.piece_title)
             if error is not None:
                 break
         records += [cleanup.record() for cleanup in cleanups if cleanup.deleted or cleanup.detail]
         log_error = None
         if records:
-            try:
-                catalog.begin_publish(records, self._auth.status().discord_name)
-            except CatalogError as e:
-                log_error = e
-            self._refresh(catalog)
+            log_error = self._removal.write_log(catalog, lambda operator: catalog.begin_publish(records, operator))
         return RecallResult(pieces, records, cleanups, error, log_error)
 
     def keep(self, pieces: Sequence[RecallPiece], catalog: CatalogService) -> str:
@@ -303,33 +294,18 @@ class RecallService:
         Raises:
             HuaXiaError: 連不上或寫入失敗，或 Storage 沒刪掉某些檔（回應照樣成功；那些檔再收回一次時補刪）
         """
-        token = self._auth.access_token()
-        current = self._client.scores(token, [piece.piece_id])
+        current = self._client.scores(self._auth.access_token(), [piece.piece_id])
+        gone: List[str] = []
         try:
-            gone = set(self._client.delete_scores(token, [score.id for score in current]))
-        except HuaXiaError as e:
-            removed.extend(score for score in current if score.id in set(e.done))
-            raise
-        removed.extend(score for score in current if score.id in gone)
-        deletion = delete_unregistered(self._auth, [score.file_path for score in removed] + piece.leftovers)
+            self._removal.remove_scores([score.id for score in current], gone)
+        finally:
+            removed.extend(score for score in current if score.id in set(gone))
+        deletion = self._removal.remove_files([score.file_path for score in removed] + piece.leftovers)
         deleted.extend(deletion.deleted)
         if deletion.not_deleted:
             raise HuaXiaError(
                 HuaXiaErrorKind.REJECTED, f"storage did not delete: {', '.join(deletion.not_deleted)}",
             )
-
-    def _record_in_log(self, piece: RecallPiece, error: Optional[HuaXiaError]) -> None:
-        """寫一筆紀錄檔：收回了，或中途停下的原因（不記 HuaXia 傳回的團員資料）"""
-        if self._log is None:
-            return
-        if error is None:
-            entry = LogEntry(t("recall.log.recalled"), piece_title=piece.piece_title)
-        else:
-            entry = LogEntry(
-                t("recall.log.stopped"), piece_title=piece.piece_title,
-                message=" ".join(part for part in (error.code, error.detail or str(error)) if part),
-            )
-        self._log.record(entry)
 
 
 def _recall_record(
@@ -338,7 +314,7 @@ def _recall_record(
     """發譜紀錄裡這首的「收回」：撤掉的登記、刪掉的檔、那一刻掛著的公演，中途停下的原因"""
     return PublishRecord(
         PublishAction.RECALL, piece_id=piece.piece_id, piece_title=piece.piece_title,
-        scores_removed=[{"id": s.id, "part_id": s.part_id, "file_path": s.file_path} for s in removed],
+        scores_removed=[score_entry(score) for score in removed],
         files_deleted=list(deleted), events=piece.events(),
-        failure=None if error is None else {"code": error.code, "detail": error.detail or str(error)},
+        failure=None if error is None else failure_entry(error.code, error.detail or str(error)),
     )

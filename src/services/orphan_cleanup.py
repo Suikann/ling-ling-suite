@@ -26,7 +26,7 @@ from typing import Collection, Iterable, List, Mapping, NamedTuple, Optional, Se
 
 from core.locale import t
 from core.log_entry import LogEntry
-from core.publish_log import PublishAction, PublishRecord
+from core.publish_log import PublishAction, PublishRecord, failure_entry
 from services.activity_log import ActivityLog
 from services.huaxia_auth_service import HuaXiaAuthService
 from services.huaxia_client import HuaXiaError, is_lingling_path, lingling_storage_folder
@@ -98,7 +98,7 @@ class OrphanCleanup:
         return PublishRecord(
             PublishAction.CLEAR_ORPHANS, piece_id=self.piece_id, piece_title=self.piece_title,
             files_deleted=list(self.deleted),
-            failure={"code": self.code, "detail": self.detail} if self.detail else None,
+            failure=failure_entry(self.code, self.detail) if self.detail else None,
         )
 
 

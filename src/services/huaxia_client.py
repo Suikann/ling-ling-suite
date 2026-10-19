@@ -179,6 +179,11 @@ class HuaXiaScore(NamedTuple):
         """是泠靈發的（路徑是泠靈的 Storage 路徑格式）"""
         return is_lingling_path(self.file_path)
 
+    @property
+    def shown_name(self) -> str:
+        """顯示用的名稱：HuaXia 上的樂譜名稱，沒有名稱時是 Storage 路徑的檔名"""
+        return self.title or self.file_path.rsplit("/", 1)[-1]
+
 
 class HuaXiaEvent(NamedTuple):
     """HuaXia 的一個場次（events 的一列）

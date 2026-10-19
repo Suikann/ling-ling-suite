@@ -39,7 +39,7 @@ def failure_line(group: GroupOutcome) -> str:
     reason = t(f"publish.run.failure.{group.failure.value}")
     if group.detail:
         reason = t("publish.run.failure_detail", reason=reason, detail=group.detail)
-    return t("publish.run.failed_group", group=group.group.group, reason=reason)
+    return t("publish.run.failed_group", group=group.snapshot.name, reason=reason)
 
 
 def summary_lines(outcome: PublishOutcome) -> List[str]:

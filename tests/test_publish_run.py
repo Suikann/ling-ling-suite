@@ -287,7 +287,7 @@ class TestNewPiece(RunTestCase):
     def test_publishing_again_after_an_interrupted_switch_keeps_the_piece_and_its_parts(self):
         self.huaxia.drop_requests("POST", "/rest/v1/rpc/lingling_publish", skip=1)
         first = self.run_publish(self.press_publish())
-        self.assertEqual([g.group.group for g in first.failed], ["春江花月夜"])
+        self.assertEqual([g.snapshot.name for g in first.failed], ["春江花月夜"])
         piece_id = self.chunjiang.huaxia_link.piece_id
         self.run_publish(self.press_publish())
         self.assertEqual(self.chunjiang.huaxia_link.piece_id, piece_id)
@@ -361,7 +361,7 @@ class TestOneGroupFails(TwoPiecesTestCase):
     def test_a_group_whose_file_did_not_upload_is_not_switched(self):
         self.huaxia.drop_requests("POST", f"/storage/v1/object/scores/lingling/{self.moli}", times=99)
         outcome = self.run_publish(self.press_publish())
-        self.assertEqual([(g.group.group, g.failure) for g in outcome.failed], [("茉莉花", GroupFailure.UPLOAD)])
+        self.assertEqual([(g.snapshot.name, g.failure) for g in outcome.failed], [("茉莉花", GroupFailure.UPLOAD)])
         self.assert_published_fenghuo()
         self.assertEqual(self.scores(self.moli), [])
         self.assertEqual([row for row in self.huaxia.tables["piece_parts"] if row["piece_id"] == self.moli], [])
@@ -373,7 +373,7 @@ class TestOneGroupFails(TwoPiecesTestCase):
         self.huaxia.fail_switch(self.moli)
         outcome = self.run_publish(self.press_publish())
         [failed] = outcome.failed
-        self.assertEqual((failed.group.group, failed.failure, failed.code), ("茉莉花", GroupFailure.SWITCH, "PT404"))
+        self.assertEqual((failed.snapshot.name, failed.failure, failed.code), ("茉莉花", GroupFailure.SWITCH, "PT404"))
         self.assert_published_fenghuo()
         self.assertEqual(self.scores(self.moli), [])
         result = next(r for r in self.log(PublishAction.RESULT) if r.group_id == self.molihua.id)
@@ -405,11 +405,11 @@ class TestPublishingFailedGroupsAgain(TwoPiecesTestCase):
     def test_only_the_groups_that_failed_are_published_again(self):
         self.huaxia.drop_requests("POST", "/rest/v1/rpc/lingling_publish", skip=1)
         first = self.run_publish(self.press_publish())
-        self.assertEqual([g.group.group for g in first.failed], ["茉莉花"])
+        self.assertEqual([g.snapshot.name for g in first.failed], ["茉莉花"])
         published = self.scores(self.fenghuo)
         switched = len(self.switched_pieces())
-        outcome = self.run_publish(self.press_publish(group_ids=[g.group.group_id for g in first.failed]))
-        self.assertEqual([(g.group.group, g.failure) for g in outcome.groups], [("茉莉花", None)])
+        outcome = self.run_publish(self.press_publish(group_ids=[g.snapshot.group_id for g in first.failed]))
+        self.assertEqual([(g.snapshot.name, g.failure) for g in outcome.groups], [("茉莉花", None)])
         self.assertEqual(self.switched_pieces()[switched:], [self.moli])
         self.assertEqual(self.scores(self.fenghuo), published)
         self.assertEqual(len(self.scores(self.moli)), 2)

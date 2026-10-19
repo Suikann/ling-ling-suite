@@ -1732,7 +1732,7 @@ class MainWindow(QMainWindow):
         lines = summary_lines(outcome)
         self._publish_lines += lines
         self._publish_failures = [failure_line(group) for group in outcome.failed]
-        self._failed_group_ids = [group.group.group_id for group in outcome.failed]
+        self._failed_group_ids = [group.snapshot.group_id for group in outcome.failed]
         self._publish_panel.show_record(self._publish_lines, self._publish_failures)
         self._publish_panel.show()
         self._set_publish_status("")

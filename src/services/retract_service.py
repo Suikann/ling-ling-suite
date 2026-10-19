@@ -31,16 +31,14 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set
 
 from core.catalog_errors import CatalogError
 from core.constants import HUAXIA_PART_FIELDS
-from core.locale import t
-from core.log_entry import LogEntry
-from core.publish_log import PublishAction, PublishLogEntry, PublishRecord
+from core.publish_log import PublishAction, PublishLogEntry, PublishRecord, failure_entry, score_entry
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
 from services.huaxia_client import (
     HuaXiaError, HuaXiaPart, HuaXiaScore, is_lingling_path, lingling_storage_folder,
 )
-from services.orphan_cleanup import delete_unregistered
+from services.huaxia_removal import HuaXiaRemoval
 from services.recall_reminder import RecallReminder
 
 
@@ -236,8 +234,7 @@ class RetractService:
         """
         self._auth = auth
         self._client = auth.client
-        self._log = log
-        self._reminder = reminder
+        self._removal = HuaXiaRemoval(auth, log, reminder)
 
     def preview(self, entry: PublishLogEntry) -> RetractPreview:
         """向 HuaXia 讀現況，算出每個群組撤回後的樣子
@@ -269,44 +266,35 @@ class RetractService:
         Raises:
             HuaXiaError: 沒有登入、登入已失效，或寫入前就連不上 HuaXia（什麼都沒做）
         """
-        not_officer = self._auth.recheck_officer()
+        not_officer = self._removal.recheck()
         if not_officer is not None:
             return RetractResult(not_officer=not_officer)
         chosen = [record for record in entry.groups if record.group_id in set(group_ids) and _retractable(record)]
         state = self._read(chosen)
-        planned = [_plan(record, state) for record in chosen]
-        groups = [_with_files(group, state) for group in planned]
-        token = self._auth.access_token()
-        removed: Set[str] = set()
-        deleted: Set[str] = set()
-        files: Set[str] = set()
+        groups = [_with_files(_plan(record, state), state) for record in chosen]
+        removed: List[str] = []
+        deleted: List[str] = []
+        files: List[str] = []
         error: Optional[HuaXiaError] = None
         try:
-            try:
-                removed.update(self._client.delete_scores(token, [s.id for g in groups for s in g.scores]))
-            except HuaXiaError as e:
-                removed.update(e.done)
-                raise
-            try:
-                deleted.update(self._client.delete_parts(token, [p.id for g in groups for p in g.parts]))
-            except HuaXiaError as e:
-                deleted.update(e.done)
-                raise
-            files.update(delete_unregistered(self._auth, [path for group in groups for path in group.files]).deleted)
+            self._removal.remove_scores([score.id for group in groups for score in group.scores], removed)
+            self._removal.remove_parts([part.id for group in groups for part in group.parts], deleted)
+            files = self._removal.remove_files(path for group in groups for path in group.files).deleted
         except HuaXiaError as e:
             error = e
-        records = [_retract_record(group, removed, deleted, files, error) for group in groups]
+        records = [_retract_record(group, set(removed), set(deleted), set(files), error) for group in groups]
         if error is not None and not (removed or deleted or files):
             records = []
         log_error = None
         if records:
-            try:
-                catalog.record_publish(entry.publish_id, records, self._auth.status().discord_name)
-            except CatalogError as e:
-                log_error = e
-            if self._reminder is not None:
-                self._reminder.refresh(catalog)
-        self._record_in_log(groups, error)
+            log_error = self._removal.write_log(
+                catalog, lambda operator: catalog.record_publish(entry.publish_id, records, operator),
+            )
+        for group in groups:
+            self._removal.record(
+                "retract.log.retracted", "retract.log.stopped", error, piece_title=group.piece_title,
+                file_name=group.name,
+            )
         return RetractResult(groups, records, error, log_error)
 
     def _read(self, records: Sequence[PublishRecord]) -> _HuaXiaState:
@@ -329,19 +317,6 @@ class RetractService:
             stored |= set(self._client.stored_files(token, lingling_storage_folder(piece_id)))
         return _HuaXiaState(parts, scores, assigned, configured, stored)
 
-    def _record_in_log(self, groups: List[RetractGroup], error: Optional[HuaXiaError]) -> None:
-        """每個群組寫一筆紀錄檔；中途停下時寫出原因（不記 HuaXia 傳回的團員資料）"""
-        if self._log is None:
-            return
-        for group in groups:
-            if error is None:
-                entry = LogEntry(t("retract.log.retracted"), piece_title=group.piece_title, file_name=group.name)
-            else:
-                entry = LogEntry(
-                    t("retract.log.stopped"), piece_title=group.piece_title, file_name=group.name,
-                    message=" ".join(part for part in (error.code, error.detail or str(error)) if part),
-                )
-            self._log.record(entry)
 
 
 def retractable(entry: PublishLogEntry) -> bool:
@@ -433,10 +408,8 @@ def _retract_record(
     return PublishRecord(
         PublishAction.RETRACT, group_id=record.group_id, group=record.group, piece_id=record.piece_id,
         piece_title=record.piece_title,
-        scores_removed=[
-            {"id": s.id, "part_id": s.part_id, "file_path": s.file_path} for s in group.scores if s.id in removed
-        ],
+        scores_removed=[score_entry(score) for score in group.scores if score.id in removed],
         parts_deleted=[{"id": p.id, "name": p.name} for p in group.parts if p.id in deleted],
         files_deleted=[path for path in group.files if path in files],
-        failure=None if error is None else {"code": error.code, "detail": error.detail or str(error)},
+        failure=None if error is None else failure_entry(error.code, error.detail or str(error)),
     )

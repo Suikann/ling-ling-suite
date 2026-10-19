@@ -40,7 +40,7 @@ from core.catalog_errors import CatalogError
 from core.constants import HUAXIA_PART_FIELDS, TEMP_DIR
 from core.locale import t
 from core.log_entry import LogEntry
-from core.publish_log import PublishAction, PublishRecord
+from core.publish_log import PublishAction, PublishRecord, event_entry, failure_entry, score_entry
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.compression_service import CompressionService
@@ -137,7 +137,7 @@ class GroupSnapshot:
 
     Attributes:
         group_id: 群組 ID
-        group: 群組名稱
+        name: 群組名稱
         piece_id: HuaXia 曲目編號（新建的是發譜預覽先產生、存進專案的）
         piece_title: 曲名
         new_piece: 要新建的曲目欄位（發譜函式的 new_piece）；挑選現有曲目時為 None
@@ -149,7 +149,7 @@ class GroupSnapshot:
         events: 要掛的公演
     """
     group_id: str
-    group: str
+    name: str
     piece_id: str
     piece_title: str
     new_piece: Optional[Dict[str, Any]]
@@ -184,12 +184,12 @@ class GroupSnapshot:
     def start_record(self) -> PublishRecord:
         """發譜紀錄裡這個群組的「開始發譜」"""
         return PublishRecord(
-            PublishAction.START, group_id=self.group_id, group=self.group, piece_id=self.piece_id,
+            PublishAction.START, group_id=self.group_id, group=self.name, piece_id=self.piece_id,
             piece_title=self.piece_title, new_piece=self.new_piece,
             parts_created=[create._asdict() for create in self.creates], parts_updated=list(self.updates),
             files_uploaded=sorted(self.paths), scores_added=[file.score() for file in self.files],
-            scores_removed=[_score_entry(score) for score in self.removes], files_deleted=list(self.deletes),
-            events=[_event_entry(event) for event in self.events],
+            scores_removed=[score_entry(score) for score in self.removes], files_deleted=list(self.deletes),
+            events=[event_entry(event) for event in self.events],
         )
 
 
@@ -214,7 +214,7 @@ class GroupOutcome:
     """一個群組發譜的結果
 
     Attributes:
-        group: 群組這次的內容
+        snapshot: 群組這次的內容
         failure: 沒發成在哪一段；發成了為 None
         code: 沒發成時 HuaXia 回的錯誤代碼；沒有時為空字串
         detail: 沒發成的原因；發成了為空字串
@@ -222,7 +222,7 @@ class GroupOutcome:
         uploaded: 這次傳上去、這個群組要用的 Storage 路徑
         deleted: 清舊檔刪掉的 Storage 路徑
     """
-    group: GroupSnapshot
+    snapshot: GroupSnapshot
     failure: Optional[GroupFailure] = None
     code: str = ""
     detail: str = ""
@@ -237,10 +237,10 @@ class GroupOutcome:
 
     def record(self) -> PublishRecord:
         """發譜紀錄裡這個群組的「發譜結果」"""
-        group = self.group
+        group = self.snapshot
         attached = set(self.result.get("attached_events") or [])
         return PublishRecord(
-            PublishAction.RESULT, group_id=group.group_id, group=group.group, piece_id=group.piece_id,
+            PublishAction.RESULT, group_id=group.group_id, group=group.name, piece_id=group.piece_id,
             piece_title=group.piece_title,
             new_piece=group.new_piece if self.result.get("piece_created") else None,
             parts_created=list(self.result.get("created_parts") or []),
@@ -249,8 +249,8 @@ class GroupOutcome:
             scores_added=list(self.result.get("added_scores") or []),
             scores_removed=list(self.result.get("removed_scores") or []),
             files_deleted=list(self.deleted),
-            events=[_event_entry(event) for event in group.events if event.id in attached],
-            failure=None if self.published else {"stage": self.failure.value, "code": self.code, "detail": self.detail},
+            events=[event_entry(event) for event in group.events if event.id in attached],
+            failure=None if self.published else failure_entry(self.code, self.detail, self.failure.value),
         )
 
 
@@ -284,7 +284,7 @@ class PublishOutcome:
         """發成的群組這次新建的聲部，交給 Project.remember_huaxia_parts 記成配對：
         （群組 ID，曲目編號，泠靈的聲部名稱對應新建的聲部編號）；沒有新建聲部的群組不列"""
         return [
-            (group.group.group_id, group.group.piece_id, {part["name"]: part["id"] for part in created})
+            (group.snapshot.group_id, group.snapshot.piece_id, {part["name"]: part["id"] for part in created})
             for group in self.groups
             if group.published and (created := group.result.get("created_parts") or [])
         ]
@@ -415,7 +415,7 @@ class PublishRunner:
             if cancelled or broken is not None:
                 failure = GroupFailure.CANCELLED if broken is None else GroupFailure.UPLOAD
                 outcomes.append(GroupOutcome(group, failure, detail=broken or "", uploaded=mine))
-                steps.step(PublishEvent.SKIPPED, group.group, detail=broken or "")
+                steps.step(PublishEvent.SKIPPED, group.name, detail=broken or "")
                 continue
             outcomes.append(self._switch(group, mine, steps))
             cancelled = should_cancel()
@@ -424,7 +424,7 @@ class PublishRunner:
             outcomes, kept = self._clean(outcomes, should_cancel, steps)
             cancelled = should_cancel()
         orphans = [
-            path for outcome in outcomes if outcome.published for path in outcome.group.deletes
+            path for outcome in outcomes if outcome.published for path in outcome.snapshot.deletes
             if path not in outcome.deleted and path not in kept
         ]
         outcome = PublishOutcome(publish_id, outcomes, list(dict.fromkeys(orphans)), cleanups, cancelled=cancelled)
@@ -500,7 +500,7 @@ class PublishRunner:
         todo = []
         for group, file in uploads:
             if file.storage_path in present:
-                steps.step(PublishEvent.PRESENT, group.group, file.name)
+                steps.step(PublishEvent.PRESENT, group.name, file.name)
             else:
                 todo.append((group, file))
         uploaded: List[str] = []
@@ -512,13 +512,13 @@ class PublishRunner:
                 sent, error = future.result()
                 if error:
                     failed[file.storage_path] = error
-                    steps.step(PublishEvent.UPLOAD_FAILED, group.group, file.name, error)
+                    steps.step(PublishEvent.UPLOAD_FAILED, group.name, file.name, error)
                 elif sent is None:
                     continue
                 else:
                     if sent:
                         uploaded.append(file.storage_path)
-                    steps.step(PublishEvent.UPLOADED if sent else PublishEvent.PRESENT, group.group, file.name)
+                    steps.step(PublishEvent.UPLOADED if sent else PublishEvent.PRESENT, group.name, file.name)
         sent = set(uploaded)
         return [file.storage_path for _, file in todo if file.storage_path in sent], failed
 
@@ -541,9 +541,9 @@ class PublishRunner:
             result = self._client.publish(self._auth.access_token(), group.payload())
         except HuaXiaError as e:
             detail = e.detail or str(e)
-            steps.step(PublishEvent.SWITCH_FAILED, group.group, detail=detail)
+            steps.step(PublishEvent.SWITCH_FAILED, group.name, detail=detail)
             return GroupOutcome(group, GroupFailure.SWITCH, e.code, detail, uploaded=uploaded)
-        steps.step(PublishEvent.SWITCHED, group.group)
+        steps.step(PublishEvent.SWITCHED, group.name)
         return GroupOutcome(group, result=result, uploaded=uploaded)
 
     def _clean(
@@ -558,7 +558,7 @@ class PublishRunner:
         kept: Set[str] = set()
         settled = []
         for outcome in outcomes:
-            paths = list(outcome.group.deletes) if outcome.published else []
+            paths = list(outcome.snapshot.deletes) if outcome.published else []
             if not paths or should_cancel():
                 settled.append(outcome)
                 continue
@@ -566,16 +566,16 @@ class PublishRunner:
                 deletion = delete_unregistered(self._auth, paths)
             except HuaXiaError as e:
                 for path in paths:
-                    steps.step(PublishEvent.DELETE_FAILED, outcome.group.group, path, e.detail or str(e))
+                    steps.step(PublishEvent.DELETE_FAILED, outcome.snapshot.name, path, e.detail or str(e))
                 settled.append(outcome)
                 continue
             for path in paths:
                 if path in deletion.in_use:
-                    steps.step(PublishEvent.IN_USE, outcome.group.group, path)
+                    steps.step(PublishEvent.IN_USE, outcome.snapshot.name, path)
                 elif path in deletion.not_deleted:
-                    steps.step(PublishEvent.DELETE_FAILED, outcome.group.group, path)
+                    steps.step(PublishEvent.DELETE_FAILED, outcome.snapshot.name, path)
                 else:
-                    steps.step(PublishEvent.DELETED, outcome.group.group, path)
+                    steps.step(PublishEvent.DELETED, outcome.snapshot.name, path)
             # 還有登記指著的不是孤兒檔；本來就已經不在 Storage 的也不是
             kept.update(path for path in paths if path not in deletion.deleted and path not in deletion.not_deleted)
             settled.append(replace(outcome, deleted=list(deletion.deleted)))
@@ -587,11 +587,11 @@ class PublishRunner:
             return
         for group in outcome.groups:
             if group.published:
-                entry = LogEntry(t("publish.log.published"), piece_title=group.group.piece_title,
-                                 file_name=group.group.group)
+                entry = LogEntry(t("publish.log.published"), piece_title=group.snapshot.piece_title,
+                                 file_name=group.snapshot.name)
             else:
                 entry = LogEntry(
-                    t("publish.log.failed"), piece_title=group.group.piece_title, file_name=group.group.group,
+                    t("publish.log.failed"), piece_title=group.snapshot.piece_title, file_name=group.snapshot.name,
                     category=t(f"publish.run.failure.{group.failure.value}"),
                     message=" ".join(part for part in (group.code, group.detail) if part),
                 )
@@ -641,12 +641,3 @@ def _updates(plan: GroupPublish) -> List[Dict[str, Any]]:
         updates.append(entry)
     return updates
 
-
-def _score_entry(score: HuaXiaScore) -> Dict[str, Any]:
-    """發譜紀錄裡的一份樂譜：編號、聲部與 Storage 路徑"""
-    return {"id": score.id, "part_id": score.part_id, "file_path": score.file_path}
-
-
-def _event_entry(event: HuaXiaEvent) -> Dict[str, Any]:
-    """發譜紀錄裡的一場公演：編號、名稱與結束時間（收回提醒用）"""
-    return {"id": event.id, "title": event.title, "ends_at": event.ends_at.isoformat()}

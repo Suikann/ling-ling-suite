@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from core.constants import ALERT_BANNER_STYLE, MUTED_COLORS, WARNING_COLORS
 from core.locale import t
 from core.publish_log import PublishAction
-from services.huaxia_client import HuaXiaEvent, HuaXiaScore
+from services.huaxia_client import HuaXiaEvent
 from services.recall_service import RecallPiece, RecallPreview, RecallResult
 
 # 別人放的檔、還要演的曲目與底部份數的字色（同原型的琥珀色）；說明的灰字
@@ -55,11 +55,6 @@ def piece_note(piece: RecallPiece, now: datetime.datetime) -> str:
     if piece.kept:
         parts.append(t("recall.piece.kept"))
     return "・".join(parts)
-
-
-def _score_name(score: HuaXiaScore) -> str:
-    """樂譜的名稱（HuaXia 上的樂譜名稱，沒有名稱時寫 Storage 路徑的檔名）"""
-    return score.title or score.file_path.rsplit("/", 1)[-1]
 
 
 class RecallDialog(QDialog):
@@ -139,7 +134,7 @@ class RecallDialog(QDialog):
         for score in piece.scores:
             source = t("recall.source.lingling") if score.lingling else t("recall.source.others")
             voice = piece.voice(score) or t("retract.full_score")
-            child = QTreeWidgetItem(item, [_score_name(score), voice, source])
+            child = QTreeWidgetItem(item, [score.shown_name, voice, source])
             child.setFlags(Qt.ItemIsEnabled)
             if not score.lingling:
                 for column in range(len(_TREE_COLUMNS)):

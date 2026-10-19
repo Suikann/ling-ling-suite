@@ -146,8 +146,8 @@ class PublishLogPanel(QWidget):
 
 
 def _score_names(scores: Sequence[HuaXiaScore]) -> str:
-    """幾份樂譜的名稱（HuaXia 上的樂譜名稱，沒有名稱時寫 Storage 路徑的檔名）"""
-    return "、".join(t("retract.score_name", name=s.title or s.file_path.rsplit("/", 1)[-1]) for s in scores)
+    """幾份樂譜的名稱（HuaXiaScore.shown_name），以頓號連接"""
+    return "、".join(t("retract.score_name", name=score.shown_name) for score in scores)
 
 
 def row_cells(row: RetractRow) -> Tuple[str, str, str, str]:

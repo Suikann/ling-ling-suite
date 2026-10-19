@@ -25,7 +25,7 @@ services/download_service.py 下載並核對 MD5）：在背景執行，狀態�
 """
 import functools
 import threading
-from typing import Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QStackedWidget,
     QTreeWidget, QTreeWidgetItem, QLabel, QLineEdit, QPushButton,
@@ -1265,15 +1265,27 @@ class CatalogWindow(QMainWindow):
         )
 
     def _retract_finished(self, result: RetractResult):
-        """撤回結束：寫出結果（不是幹部時寫出原因），重新讀取發譜紀錄"""
+        """撤回結束：寫出結果，重新讀取發譜紀錄（_show_removal_result）"""
         from ui.publish_retract_dialog import result_text
+        self._show_removal_result("retract", result, result_text)
+
+    def _show_removal_result(self, action: str, result, text: Callable[[Any], str]):
+        """撤回或收回結束：不是幹部時寫出原因（什麼都沒做）；否則寫出結果（中途停下或紀錄寫不進譜庫時是警告），
+        重新讀取發譜紀錄
+
+        Args:
+            action: 介面字串鍵的開頭（"retract" 或 "recall"）
+            result: 撤回或收回的結果（RetractResult、RecallResult：not_officer、error、log_error）
+            text: 結果的說明
+        """
+        title = t(f"{action}.title_short")
         if result.not_officer is not None:
-            QMessageBox.warning(self, t("retract.title_short"), not_officer_text(result.not_officer))
+            QMessageBox.warning(self, title, not_officer_text(result.not_officer))
             return
         if result.error is not None or result.log_error is not None:
-            QMessageBox.warning(self, t("retract.title_short"), result_text(result))
+            QMessageBox.warning(self, title, text(result))
         else:
-            QMessageBox.information(self, t("retract.title_short"), result_text(result))
+            QMessageBox.information(self, title, text(result))
         self._show_publish_log()
 
     def recall(self):
@@ -1312,16 +1324,9 @@ class CatalogWindow(QMainWindow):
             self._recall_finished(result)
 
     def _recall_finished(self, result: RecallResult):
-        """收回結束：寫出結果（不是幹部時寫出原因），重新讀取發譜紀錄"""
+        """收回結束：寫出結果，重新讀取發譜紀錄（_show_removal_result）"""
         from ui.publish_recall_dialog import result_text
-        if result.not_officer is not None:
-            QMessageBox.warning(self, t("recall.title_short"), not_officer_text(result.not_officer))
-            return
-        if result.error is not None or result.log_error is not None:
-            QMessageBox.warning(self, t("recall.title_short"), result_text(result))
-        else:
-            QMessageBox.information(self, t("recall.title_short"), result_text(result))
-        self._show_publish_log()
+        self._show_removal_result("recall", result, result_text)
 
     # --- 一般下載 ---
 

@@ -45,7 +45,7 @@ import datetime
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypedDict
 
 
 class PublishAction(Enum):
@@ -57,6 +57,51 @@ class PublishAction(Enum):
     RETRACT = "retract"               # 撤回（沿用被撤回那次的發譜編號）
     RECALL = "recall"                 # 收回（一首曲目一列，每次收回抽一個發譜編號）
     KEEP = "keep"                     # 不收回（一首曲目一列，每次標記抽一個發譜編號）
+
+
+class ScoreEntry(TypedDict):
+    """發譜紀錄裡的一份樂譜登記（撤掉登記的、發譜函式回報登記的）：HuaXia 的樂譜編號、聲部編號（總譜為 None）、
+    Storage 路徑"""
+    id: str
+    part_id: Optional[str]
+    file_path: str
+
+
+class EventEntry(TypedDict):
+    """發譜紀錄裡的一場公演：HuaXia 的場次編號、名稱與結束時間（ISO 8601，收回提醒用）"""
+    id: str
+    title: str
+    ends_at: str
+
+
+class FailureEntry(TypedDict, total=False):
+    """發譜紀錄裡沒做完的原因：在哪一段（只有發譜結果有）、HuaXia 的錯誤代碼與說明"""
+    stage: str
+    code: str
+    detail: str
+
+
+def utc_now() -> datetime.datetime:
+    """現在的時間（UTC，帶時區）：收回與收回提醒判斷公演結束與否的預設時間"""
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def score_entry(score: Any) -> ScoreEntry:
+    """一份樂譜（有 id、part_id、file_path，例如 services.huaxia_client.HuaXiaScore）寫成發譜紀錄的樣子"""
+    return ScoreEntry(id=score.id, part_id=score.part_id, file_path=score.file_path)
+
+
+def event_entry(event: Any) -> EventEntry:
+    """一場公演（有 id、title 與帶時區的 ends_at，例如 services.huaxia_client.HuaXiaEvent）寫成發譜紀錄的樣子"""
+    return EventEntry(id=event.id, title=event.title, ends_at=event.ends_at.isoformat())
+
+
+def failure_entry(code: str, detail: str, stage: str = "") -> FailureEntry:
+    """沒做完的原因寫成發譜紀錄的樣子；stage 為空字串時不寫"""
+    entry = FailureEntry(code=code, detail=detail)
+    if stage:
+        entry["stage"] = stage
+    return entry
 
 
 # 以 JSON 寫進一格的欄
@@ -101,10 +146,10 @@ class PublishRecord:
     parts_updated: List[Dict[str, Any]] = field(default_factory=list)
     files_uploaded: List[str] = field(default_factory=list)
     scores_added: List[Dict[str, Any]] = field(default_factory=list)
-    scores_removed: List[Dict[str, Any]] = field(default_factory=list)
+    scores_removed: List[ScoreEntry] = field(default_factory=list)
     files_deleted: List[str] = field(default_factory=list)
-    events: List[Dict[str, Any]] = field(default_factory=list)
-    failure: Optional[Dict[str, Any]] = None
+    events: List[EventEntry] = field(default_factory=list)
+    failure: Optional[FailureEntry] = None
     parts_deleted: List[Dict[str, Any]] = field(default_factory=list)
     publish_id: str = ""
     time: str = ""

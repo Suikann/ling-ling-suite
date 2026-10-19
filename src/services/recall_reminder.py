@@ -24,15 +24,10 @@ from typing import Callable, List, Optional, Sequence
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.constants import RECALL_REMINDER_KEY
 from core.locale import t
-from core.publish_log import PublishRecord, due_reminders, reminder_summary
+from core.publish_log import PublishRecord, due_reminders, reminder_summary, utc_now
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.preferences_service import PreferencesService
-
-
-def _now() -> datetime.datetime:
-    """現在的時間（UTC）"""
-    return datetime.datetime.now(datetime.timezone.utc)
 
 
 class RecallReminder:
@@ -40,7 +35,7 @@ class RecallReminder:
 
     def __init__(
         self, preferences: PreferencesService, log: Optional[ActivityLog] = None,
-        now: Callable[[], datetime.datetime] = _now,
+        now: Callable[[], datetime.datetime] = utc_now,
     ):
         """
         Args:
