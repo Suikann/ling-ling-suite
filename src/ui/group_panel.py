@@ -7,6 +7,8 @@
 群組分頁標出未存入的檔（存入譜庫後本機又改過，推算在存入服務）與只在譜庫的檔（本機沒有、譜庫裡有一份，見
 DepositService.catalog_only），主視窗切回分頁或視窗時以 show_undeposited 照磁碟現況重新比對。
 有只在譜庫的檔時旁邊出現「從譜庫下載回來」，按下以 download_requested 交給主視窗在背景下載回原位。
+分譜清單依樂器表順序列出每份分譜配到的聲部，本專案有而沒有分譜的聲部列成一個空格（_PartList）：
+分譜拖到空格上就配給那個聲部（Project.pair_part），拖到其他位置照舊只排分譜的順序（Project.reorder_files）。
 """
 from typing import Dict, List, Optional, Set
 from PySide6.QtWidgets import (
@@ -24,6 +26,32 @@ from core.paths import path_key
 from services.deposit_service import DepositService
 from services.file_service import FileService
 from services.import_service import ImportService
+
+
+# 分譜清單的空格記著它是樂器表的第幾列（分譜的列在 Qt.UserRole 記它在群組分譜中的位置）
+_VOICE_ROW_ROLE = Qt.UserRole + 1
+
+
+class _PartList(DragListWidget):
+    """群組的分譜清單：分譜放到沒有分譜的聲部的空格上時不自己搬動，改發出 part_dropped，由分頁經編輯操作配對"""
+
+    # 分譜在群組分譜中的位置、空格的聲部在樂器表的列（從 0 起算）
+    part_dropped = Signal(int, int)
+
+    def dropEvent(self, event):
+        """放下一份分譜：落在空格上時發出 part_dropped，其餘照清單原本的拖拉排序"""
+        target = self.itemAt(event.position().toPoint())
+        dragged = self.selectedItems()
+        if (
+            event.source() is self and target is not None and target.data(_VOICE_ROW_ROLE) is not None
+            and self.dropIndicatorPosition() == QAbstractItemView.OnItem and len(dragged) == 1
+            and dragged[0].data(Qt.UserRole) is not None
+        ):
+            event.setDropAction(Qt.IgnoreAction)
+            event.accept()
+            self.part_dropped.emit(dragged[0].data(Qt.UserRole), target.data(_VOICE_ROW_ROLE))
+            return
+        super().dropEvent(event)
 
 
 class UngroupedTab(QWidget):
@@ -219,9 +247,10 @@ class GroupTab(QWidget):
         catalog_only_row.addWidget(self._download_back_btn)
         layout.addLayout(catalog_only_row)
         layout.addWidget(QLabel(t("group.file_list")))
-        self._file_list = DragListWidget()
+        self._file_list = _PartList()
         self._file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._file_list.model().rowsMoved.connect(self._on_files_reordered)
+        self._file_list.part_dropped.connect(self._on_part_dropped)
         QShortcut(QKeySequence("Delete"), self._file_list, self._delete_selected_files)
         QShortcut(QKeySequence("Ctrl+A"), self._file_list, self._file_list.selectAll)
         layout.addWidget(self._file_list, stretch=1)
@@ -345,13 +374,25 @@ class GroupTab(QWidget):
             self._mismatch_label.setStyleSheet("color: #2ecc71; font-size: 12px;")
 
     def _refresh_file_list(self):
-        """列出分譜與各自配到的聲部（本專案沒有、沒有分譜的聲部不列）；每列記住它在群組中的位置，拖拉排序後依此還原新順序"""
+        """依樂器表順序列出分譜與各自配到的聲部，本專案有而沒有分譜的聲部列成空格，多出的分譜在最後
+
+        分譜的列記住它在群組中的位置，拖拉排序後依此還原新順序；空格記住聲部的列，不能拖、不能選。
+        """
         self._file_list.clear()
-        voices = self._voices_by_file()
-        for i, f in enumerate(self.group.files):
-            inst = f"{voices[id(f)]}  |  " if id(f) in voices else ""
-            item = QListWidgetItem(f"{inst}{f.display_name}")
-            item.setData(Qt.UserRole, i)
+        position = {id(f): i for i, f in enumerate(self.group.files)}
+        for pair in self.group.pairing():
+            if pair.file is None:
+                item = QListWidgetItem(f"{pair.voice}  |  {t('group.no_part')}")
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsDropEnabled)
+                item.setForeground(QColor("gray"))
+                item.setData(_VOICE_ROW_ROLE, pair.index)
+            else:
+                item = QListWidgetItem(f"{pair.voice}  |  {pair.file.display_name}")
+                item.setData(Qt.UserRole, position[id(pair.file)])
+            self._file_list.addItem(item)
+        for f in self.group.extra_files():
+            item = QListWidgetItem(f.display_name)
+            item.setData(Qt.UserRole, position[id(f)])
             self._file_list.addItem(item)
 
     def _voices_by_file(self) -> Dict[int, str]:
@@ -360,14 +401,24 @@ class GroupTab(QWidget):
 
     def _selected_files(self) -> List[FileInfo]:
         """清單中選取的分譜（依群組順序）"""
-        rows = sorted(self._file_list.row(item) for item in self._file_list.selectedItems())
-        return [self.group.files[i] for i in rows if 0 <= i < len(self.group.files)]
+        positions = sorted(
+            i for i in (item.data(Qt.UserRole) for item in self._file_list.selectedItems()) if i is not None
+        )
+        return [self.group.files[i] for i in positions if 0 <= i < len(self.group.files)]
 
     def _on_files_reordered(self):
+        """拖拉排序後依清單的新順序排分譜（空格不算）"""
         order = [self._file_list.item(i).data(Qt.UserRole) for i in range(self._file_list.count())]
-        if sorted(i for i in order if i is not None) != list(range(len(self.group.files))):
+        order = [i for i in order if i is not None]
+        if sorted(order) != list(range(len(self.group.files))):
             return
         self.project.reorder_files(self.group, [self.group.files[i] for i in order])
+        self.refresh()
+
+    def _on_part_dropped(self, position: int, row: int):
+        """分譜放到沒有分譜的聲部的空格上：配給那個聲部"""
+        if 0 <= position < len(self.group.files):
+            self.project.pair_part(self.group, self.group.files[position], row)
         self.refresh()
 
     def _add_files(self):

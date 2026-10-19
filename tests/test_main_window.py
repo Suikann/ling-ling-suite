@@ -818,12 +818,25 @@ class TestMainWindowInstrumentationTable(InstrumentListTestCase):
         self.assertEqual(self._tab_rows(0), ["ob.pdf"])
         self.assertTrue(self.is_marked_unsaved())
 
-    def test_rechecking_a_voice_leaves_the_other_parts_with_their_voices(self):
+    def _recheck_oboe(self):
+        """「Oboe」取消勾選再勾回來：它沒有分譜"""
         editor = self._instrumentation_table()
-        present = editor.findChild(QTableWidget).item(1, editor.column("present"))
-        present.setCheckState(Qt.Unchecked)
+        editor.findChild(QTableWidget).item(1, editor.column("present")).setCheckState(Qt.Unchecked)
         editor.findChild(QTableWidget).item(1, editor.column("present")).setCheckState(Qt.Checked)
-        self.assertEqual(self._tab_rows(1), ["Flute  |  fl.pdf", "Horn  |  hn.pdf"])
+
+    def test_rechecking_a_voice_leaves_the_other_parts_with_their_voices(self):
+        self._recheck_oboe()
+        no_part = t("group.no_part")
+        self.assertEqual(self._tab_rows(1), ["Flute  |  fl.pdf", f"Oboe  |  {no_part}", "Horn  |  hn.pdf"])
+
+    def test_dropping_a_part_onto_a_voice_without_a_part_pairs_only_them(self):
+        self._recheck_oboe()
+        _settle()
+        listing = self.window.findChild(QTabWidget).widget(1).findChild(QListWidget)
+        listing.part_dropped.emit(1, 1)
+        no_part = t("group.no_part")
+        self.assertEqual(self._tab_rows(1), ["Flute  |  fl.pdf", "Oboe  |  hn.pdf", f"Horn  |  {no_part}"])
+        self.assertTrue(self.is_marked_unsaved())
 
     def test_dragging_a_voice_moves_its_part_in_the_group_tab(self):
         self._instrumentation_table().findChild(QTableWidget).rows_dropped.emit([2], 0)

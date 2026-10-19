@@ -193,6 +193,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "group.no_instruments": "請先在左側新增樂器",
         "group.mismatch": "{n_inst} 個樂器 / {n_files} 個檔案（不匹配）",
         "group.match": "{count} 個樂器 = {count} 個檔案",
+        "group.no_part": "（沒有分譜）",
         "group.loading": "群組面板（載入中...）",
         "group.move_to_group": "移至群組...",
         # 未分組
@@ -1247,6 +1248,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "group.no_instruments": "Add instruments on the left first",
         "group.mismatch": "{n_inst} instruments / {n_files} files (mismatch)",
         "group.match": "{count} instruments = {count} files",
+        "group.no_part": "(no part)",
         "group.loading": "Group Panel (loading...)",
         "group.move_to_group": "Move to Group...",
         # 未分組

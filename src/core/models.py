@@ -1384,6 +1384,27 @@ class Project:
         group.files = list(files)
         self._changed()
 
+    def pair_part(self, group: Group, file: FileInfo, index: int) -> None:
+        """把群組的一份分譜配給樂器表第 index 列（本專案有、還沒有分譜的聲部）；它原本的聲部沒有分譜，其他聲部不動
+
+        Args:
+            group: 群組
+            file: 群組的分譜（配到聲部的或多出的）
+            index: 聲部的列（從 0 起算）
+
+        Raises:
+            ValueError: 那一列本專案沒有或已有分譜，或這份檔不是群組的分譜；群組不變
+        """
+        rows = _voice_rows(group)
+        if not any(f is file for f in group.files):
+            raise ValueError("只能配群組自己的分譜")
+        if not rows[index].present or rows[index].part is not None:
+            raise ValueError("只能配給本專案有、還沒有分譜的聲部")
+        rows = [row._replace(part=None) if row.part is file else row for row in rows]
+        rows[index] = rows[index]._replace(part=file)
+        _place_rows(group, rows, [f for f in group.extra_files() if f is not file])
+        self._changed()
+
     def set_instruments(self, group: Group, instruments: Iterable[str]) -> None:
         """設定群組的樂器表（聲部清單）；舊欄位 selected_instruments 跟著維持全選"""
         group.assign_instruments(instruments)

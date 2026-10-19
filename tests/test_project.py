@@ -657,6 +657,28 @@ class TestVoicesCarryTheirParts(unittest.TestCase):
         self.project.clear_score(self.group)
         self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", "ob.pdf"), ("Horn", "hn.pdf")])
 
+    def test_a_part_dragged_onto_a_voice_without_a_part_changes_only_that_pairing(self):
+        self.project.add_instrument(self.group, "Tuba")
+        self.project.move_instruments(self.group, [3], 1)
+        self.project.pair_part(self.group, self.group.files[2], 1)
+        self.assertEqual(
+            self.pairs(), [("Flute", "fl.pdf"), ("Tuba", "hn.pdf"), ("Oboe", "ob.pdf"), ("Horn", None)],
+        )
+
+    def test_a_part_beyond_the_voices_dragged_onto_a_voice_without_a_part(self):
+        self.project.add_files(_infos("extra.pdf"), self.group)
+        self.project.set_present(self.group, 1, False)
+        self.project.set_present(self.group, 1, True)
+        extra = self.group.extra_files()[0]
+        self.project.pair_part(self.group, extra, 1)
+        self.assertEqual(self.pairs(), [("Flute", "fl.pdf"), ("Oboe", "extra.pdf"), ("Horn", "hn.pdf")])
+
+    def test_pairing_a_part_with_a_voice_that_has_one_or_is_not_in_this_project_is_refused(self):
+        self.project.set_present(self.group, 1, False)
+        for index in (0, 1):
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                self.project.pair_part(self.group, self.group.files[1], index)
+
     def test_a_new_voice_takes_the_first_part_beyond_the_voices(self):
         self.project.add_files(_infos("tb.pdf"), self.group)
         self.project.add_instrument(self.group, "Tuba")

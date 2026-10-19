@@ -209,10 +209,11 @@ class TestSplitFromMainWindow(MainWindowTestCase):
         return [e.text() for e in dialog.findChildren(QLineEdit)]
 
     def shown_parts(self) -> List[str]:
-        """目前分頁的分譜清單列出的檔名"""
+        """目前分頁的分譜清單列出的檔名（沒有分譜的聲部的空格不算）"""
         _settle()
         listing = self.window.findChild(QTabWidget).currentWidget().findChild(QListWidget)
-        return [listing.item(i).text().rsplit("  |  ", 1)[-1] for i in range(listing.count())]
+        names = [listing.item(i).text().rsplit("  |  ", 1)[-1] for i in range(listing.count())]
+        return [name for name in names if name != t("group.no_part")]
 
     def tab_names(self) -> List[str]:
         """主視窗各分頁的標題"""
