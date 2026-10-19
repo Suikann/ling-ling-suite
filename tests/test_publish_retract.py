@@ -107,6 +107,12 @@ class TestRetracting(RetractTestCase):
         self.retracter.retract(self.entry(), [self.group.id], self.catalog)
         self.assertIn(pipa, self.huaxia.objects)
 
+    def test_a_file_another_piece_still_points_to_is_not_deleted(self):
+        pipa = next(s["file_path"] for s in self.outcome.groups[0].result["added_scores"] if s["part_id"] == self.pipa)
+        self.huaxia.add_score(self.moli, None, pipa, title="借用")
+        self.retracter.retract(self.entry(), [self.group.id], self.catalog)
+        self.assertIn(pipa, self.huaxia.objects)
+
     def test_someone_no_longer_an_officer_changes_nothing(self):
         before = self.tables()
         self.huaxia.remove_roles("officer_amy")

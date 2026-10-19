@@ -70,7 +70,7 @@ class FilesTestCase(PrepareTestCase):
         voices = plan_voices(self.project, self.group, readiness.parts.get(self.fenghuo, []))
         files = plan_files(self.group, voices, readiness.scores.get(self.fenghuo, []), FileService())
         plan = group_publish(self.group, voices, files, {}, set(), [], 10 ** 9, Fingerprints(FileService()))
-        return plan_deletions([plan], readiness.scores)[0]
+        return plan_deletions([plan])[0]
 
     def stored(self, index: int) -> str:
         """這個群組第 index 份本機檔（0 總譜、1 二胡 I、2 琵琶）照現在的內容發出去時的 Storage 路徑"""
@@ -151,7 +151,7 @@ class TestNeverDeletingFilesInUse(FilesTestCase):
         self.huaxia.add_score(self.fenghuo, self.erhu, old)
         self.assertEqual(self.publish().deletes, [old])
 
-    def test_a_file_another_voice_still_uses_is_not_deleted(self):
+    def test_a_file_this_publish_still_uses_is_not_deleted(self):
         shared = self.stored(2)
         erhu = self.huaxia.add_score(self.fenghuo, self.erhu, shared)
         self.huaxia.add_score(self.fenghuo, self.pipa, shared)

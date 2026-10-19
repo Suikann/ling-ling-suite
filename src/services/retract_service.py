@@ -12,7 +12,7 @@
   撤掉這次的檔之後，那個聲部在 HuaXia 上已經沒有任何樂譜。那次新建的聲部有人放了別的檔時不刪（刪聲部會連帶刪掉
   它的樂譜），只撤這次的；排了人或有人設定過的也不刪，聲部留著但沒有譜。沒發成的群組沒有可撤的登記。
 - 撤回（retract）：重查幹部身分，重讀 HuaXia 再算一次，以使用者身分經 REST 依序撤掉樂譜的登記、刪掉聲部、
-  刪 Storage 的檔（只刪撤回後沒有任何登記還指著的），最後寫一列列「撤回」到發譜紀錄（沿用那次的發譜編號）、
+  刪 Storage 的檔（經 orphan_cleanup.delete_unregistered，只刪那一刻沒有任何登記還指著的），最後寫一列列「撤回」到發譜紀錄（沿用那次的發譜編號）、
   各群組寫一筆紀錄檔。中途中斷時剩下的檔成為孤兒，重做一次撤回會收斂（已撤掉的略過，沒刪的檔再刪一次）。
 連錯的那次新建了曲目時，撤回後留下一首空曲目，由幹部在網頁刪除（RetractGroup.new_piece）。
 寫完「撤回」後更新收回提醒的摘要（有傳入時）。網路請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
@@ -37,6 +37,7 @@ from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
 from services.huaxia_client import (
     HuaXiaError, HuaXiaPart, HuaXiaScore, is_lingling_path, lingling_storage_folder,
 )
+from services.orphan_cleanup import delete_unregistered
 from services.recall_reminder import RecallReminder
 
 # 覆寫聲部時可能改的欄位（發譜紀錄 parts_updated 裡的［原值，新值］），撤回不改回
@@ -96,7 +97,7 @@ class RetractGroup:
         rows: 逐聲部（依 HuaXia 的排序）加總譜；沒發成時為空
         scores: 要撤掉登記的樂譜（這次登記、現在還在的）
         parts: 要刪的聲部（這次新建、還沒排人、沒有別人的樂譜、沒人在網頁上設定過）
-        files: 要刪的 Storage 檔（這次登記過、還在 Storage、撤回後沒有任何登記指著）
+        files: 要刪的 Storage 檔（這次登記過、泠靈路徑格式、還在 Storage；刪之前再確認沒有任何登記指著）
     """
     record: PublishRecord
     rows: List[RetractRow] = field(default_factory=list)
@@ -234,7 +235,7 @@ class RetractService:
         """
         state = self._read(entry.groups)
         groups = [_plan(record, state) for record in entry.groups]
-        return RetractPreview(entry, [_with_files(group, state, [group]) for group in groups])
+        return RetractPreview(entry, [_with_files(group, state) for group in groups])
 
     def retract(self, entry: PublishLogEntry, group_ids: Sequence[str], catalog: CatalogService) -> RetractResult:
         """撤回這次發譜裡這幾個群組：重查幹部身分、重讀現況，撤掉登記、刪聲部、刪檔，寫一列列「撤回」
@@ -256,7 +257,7 @@ class RetractService:
         chosen = [record for record in entry.groups if record.group_id in set(group_ids) and _retractable(record)]
         state = self._read(chosen)
         planned = [_plan(record, state) for record in chosen]
-        groups = [_with_files(group, state, planned) for group in planned]
+        groups = [_with_files(group, state) for group in planned]
         token = self._auth.access_token()
         removed: Set[str] = set()
         deleted: Set[str] = set()
@@ -265,10 +266,7 @@ class RetractService:
         try:
             removed.update(self._client.delete_scores(token, [s.id for g in groups for s in g.scores]))
             deleted.update(self._client.delete_parts(token, [p.id for g in groups for p in g.parts]))
-            paths = list(dict.fromkeys(path for group in groups for path in group.files))
-            if paths:
-                self._client.delete_files(token, paths)
-                files.update(paths)
+            files.update(delete_unregistered(self._auth, [path for group in groups for path in group.files]).deleted)
         except HuaXiaError as e:
             error = e
         records = [_retract_record(group, removed, deleted, files, error) for group in groups]
@@ -378,20 +376,13 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
     return RetractGroup(record, rows, removing, deleting)
 
 
-def _with_files(group: RetractGroup, state: _HuaXiaState, together: Sequence[RetractGroup]) -> RetractGroup:
-    """補上要刪的 Storage 檔：這次登記過、還在 Storage，而且撤掉一起撤回的群組的登記、刪掉它們要刪的聲部之後，
-    沒有任何登記還指著的（已經撤掉登記、檔還在的也算，重做撤回因此會收斂）"""
+def _with_files(group: RetractGroup, state: _HuaXiaState) -> RetractGroup:
+    """補上要刪的 Storage 檔：這次登記過、泠靈路徑格式、還在 Storage 的（已經撤掉登記、檔還在的也算，重做撤回
+    因此會收斂）；真的刪之前由 delete_unregistered 確認沒有任何登記還指著"""
     if not _retractable(group.record):
         return group
-    gone_scores = {score.id for other in together for score in other.scores}
-    gone_parts = {part.id for other in together for part in other.parts}
-    still = {
-        score.file_path for score in state.scores
-        if score.id not in gone_scores and score.part_id not in gone_parts
-    }
     paths = dict.fromkeys(score["file_path"] for score in group.record.scores_added)
-    files = [path for path in paths if is_lingling_path(path) and path in state.stored and path not in still]
-    return replace(group, files=files)
+    return replace(group, files=[path for path in paths if is_lingling_path(path) and path in state.stored])
 
 
 def _retract_record(

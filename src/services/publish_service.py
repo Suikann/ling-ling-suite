@@ -646,31 +646,25 @@ def group_publish(
     )
 
 
-def plan_deletions(plans: List[GroupPublish], scores: Dict[str, List[HuaXiaScore]]) -> List[GroupPublish]:
+def plan_deletions(plans: List[GroupPublish]) -> List[GroupPublish]:
     """算出各群組清舊檔（第 3 段）要刪的 Storage 檔，回傳填好 deletes 的各群組（順序不變）
 
-    每筆樂譜登記各有自己的 Storage 檔，被取代的樂譜的檔照理只有它指著；仍保留檢查：只在切換後沒有任何樂譜登記
-    還指著它（讀到的所有樂譜扣掉這次撤掉登記的）、這次發譜也沒有再用到它（要傳的與不必重傳的）時才刪，同一個檔
-    只算在第一個取代它的群組。發譜的第 3 段只能刪這裡算出的檔，而且要在撤掉指著它的登記的那些群組都切換成功之後。
+    要刪的是被取代的樂譜的檔，扣掉這次發譜還要用到的（要傳的與不必重傳的），同一個檔只算在第一個取代它的群組。
+    第 3 段刪之前再經 orphan_cleanup.delete_unregistered 確認那一刻沒有任何樂譜登記指著它。
 
     Args:
         plans: 這次發譜的各群組（group_publish）
-        scores: 按下發譜時讀到的樂譜，以曲目編號為鍵（PublishReadiness.scores）
 
     Returns:
         各群組，deletes 填好
     """
-    unregistered = {score.id for plan in plans for score in plan.replaces}
-    in_use = {
-        score.file_path for found in scores.values() for score in found if score.id not in unregistered
-    }
-    in_use |= {file.storage_path for plan in plans for file in plan.sent if file.storage_path}
+    sending = {file.storage_path for plan in plans for file in plan.sent if file.storage_path}
     taken: Set[str] = set()
     settled = []
     for plan in plans:
         deletes = []
         for score in plan.replaces:
-            if score.file_path and score.file_path not in in_use and score.file_path not in taken:
+            if score.file_path and score.file_path not in sending and score.file_path not in taken:
                 taken.add(score.file_path)
                 deletes.append(score.file_path)
         settled.append(replace(plan, deletes=deletes))
@@ -841,7 +835,7 @@ class PublishPreview:
                 self.size_limit, self._fingerprints,
             )
             for group in self.groups
-        ], self.readiness.scores)
+        ])
 
     def is_attached(self, group: Group, event_id: str) -> bool:
         """群組對到的曲目已經掛著這場公演"""

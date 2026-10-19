@@ -15,8 +15,9 @@
      先不登記，團員看不到。要求取消時還沒開始傳的不傳，傳完手上的就停，也不切換。
   2. 切換：一個群組呼叫一次 HuaXia 的發譜函式，在一個交易裡完成這個群組的寫入。有檔沒傳上去的群組不呼叫；
      某個群組失敗不影響其他群組。要求取消時做完目前這個群組就停。
-  3. 清舊檔：刪掉發譜預覽算出的被取代的舊檔本體（GroupPublish.deletes），只在撤掉指著它的登記的群組都切換成功之後，
-     而且不刪這次自己用到的檔。要求取消時做完目前這個群組就停，沒刪的成為孤兒檔（由孤兒檔清理處理）。
+  3. 清舊檔：切換成功的群組刪掉它被取代的舊檔本體（GroupPublish.deletes，不含這次自己用到的檔），經
+     orphan_cleanup.delete_unregistered：那一刻還有任何樂譜登記指著的不刪（例如撤掉指著它的登記的另一個群組
+     切換失敗）。要求取消時做完目前這個群組就停，沒刪的成為孤兒檔（由孤兒檔清理處理）。
   結束後補一列列「發譜結果」（連同清孤兒檔的列），快照與壓縮檔不論成功、失敗或取消都刪掉（沒刪到的下次啟動清掉）。
 
 中斷等同斷線：已傳的檔下次列出時跳過，新建曲目的編號沿用，發譜函式重跑不重複建，所以重發會從中斷處接著做。
@@ -49,7 +50,7 @@ from services.huaxia_auth_service import HuaXiaAuthService
 from services.huaxia_client import (
     PUBLISH_INTERFACE_VERSION, HuaXiaError, HuaXiaEvent, HuaXiaScore, lingling_storage_folder,
 )
-from services.orphan_cleanup import OrphanCleanup, clear_orphans
+from services.orphan_cleanup import OrphanCleanup, clear_orphans, delete_unregistered
 from services.publish_service import GroupPublish, PartCreate, PublishReadiness, recheck
 from services.recall_reminder import RecallReminder
 
@@ -79,6 +80,7 @@ class PublishEvent(Enum):
     SWITCH_FAILED = "switch_failed"  # 一個群組的切換失敗
     SKIPPED = "skipped"              # 一個群組沒有切換（有檔沒傳上去，或取消了）
     DELETED = "deleted"              # 一個群組被取代的舊檔刪掉了
+    IN_USE = "in_use"                # 一個群組被取代的舊檔還有樂譜登記指著，不刪
     DELETE_FAILED = "delete_failed"  # 一個群組被取代的舊檔沒刪成，留成孤兒檔
     ORPHAN_CLEARED = "orphan_cleared"  # 發譜開始前清掉一份孤兒檔（不算在總進度裡）
     ORPHANS_NOT_CLEARED = "orphans_not_cleared"  # 一首曲目的孤兒檔沒清成（不算在總進度裡）
@@ -395,9 +397,8 @@ class PublishRunner:
             publish_id = catalog.begin_publish([group.start_record() for group in groups], snapshot.operator)
         except CatalogError as e:
             return PublishOutcome(error=e)
-        planned_deletes = list(dict.fromkeys(path for group in groups for path in group.deletes))
         uploads = _unique_files(groups)
-        steps = _Steps(len(uploads) + len(groups) + len(planned_deletes), report)
+        steps = _Steps(len(uploads) + len(groups) + sum(len(group.deletes) for group in groups), report)
         cleanups = self._clear_orphans(groups, steps)
         uploaded, failed = self._upload(uploads, should_cancel, steps)
         cancelled = should_cancel()
@@ -412,14 +413,15 @@ class PublishRunner:
                 continue
             outcomes.append(self._switch(group, mine, steps))
             cancelled = should_cancel()
-        deleted: Set[str] = set()
+        kept: Set[str] = set()
         if not cancelled:
-            outcomes, deleted = self._clean(outcomes, should_cancel, steps)
+            outcomes, kept = self._clean(outcomes, should_cancel, steps)
             cancelled = should_cancel()
-        outcome = PublishOutcome(
-            publish_id, outcomes, [path for path in planned_deletes if path not in deleted], cleanups,
-            cancelled=cancelled,
-        )
+        orphans = [
+            path for outcome in outcomes if outcome.published for path in outcome.group.deletes
+            if path not in outcome.deleted and path not in kept
+        ]
+        outcome = PublishOutcome(publish_id, outcomes, list(dict.fromkeys(orphans)), cleanups, cancelled=cancelled)
         records = [cleanup.record() for cleanup in cleanups if cleanup.deleted or cleanup.detail]
         try:
             catalog.record_publish(publish_id, records + [group.record() for group in outcomes], snapshot.operator)
@@ -541,38 +543,36 @@ class PublishRunner:
     def _clean(
         self, outcomes: List[GroupOutcome], should_cancel: Callable[[], bool], steps: _Steps,
     ) -> Tuple[List[GroupOutcome], Set[str]]:
-        """第 3 段：每個切換成功的群組刪掉它被取代的舊檔，只刪撤掉指著它的登記的群組都切換成功的；
-        要求取消時做完目前這個群組就停
+        """第 3 段：每個切換成功的群組刪掉它被取代的舊檔（還有樂譜登記指著的不刪，例如撤掉指著它的登記的另一個
+        群組切換失敗）；要求取消時做完目前這個群組就停
 
         Returns:
-            （各群組的結果，填好刪掉的路徑；刪掉的全部路徑）
+            （各群組的結果，填好刪掉的路徑；還有登記指著、不刪的路徑）
         """
-        switched = {outcome.group.group_id for outcome in outcomes if outcome.published}
-        pointing: Dict[str, Set[str]] = {}
-        for outcome in outcomes:
-            for score in outcome.group.removes:
-                pointing.setdefault(score.file_path, set()).add(outcome.group.group_id)
-        deleted: Set[str] = set()
+        kept: Set[str] = set()
         settled = []
         for outcome in outcomes:
-            paths = [
-                path for path in outcome.group.deletes if pointing.get(path, set()) <= switched
-            ] if outcome.published else []
+            paths = list(outcome.group.deletes) if outcome.published else []
             if not paths or should_cancel():
                 settled.append(outcome)
                 continue
             try:
-                self._client.delete_files(self._auth.access_token(), paths)
+                deletion = delete_unregistered(self._auth, paths)
             except HuaXiaError as e:
                 for path in paths:
                     steps.step(PublishEvent.DELETE_FAILED, outcome.group.group, path, e.detail or str(e))
                 settled.append(outcome)
                 continue
             for path in paths:
-                steps.step(PublishEvent.DELETED, outcome.group.group, path)
-            deleted.update(paths)
-            settled.append(replace(outcome, deleted=paths))
-        return settled, deleted
+                if path in deletion.deleted:
+                    steps.step(PublishEvent.DELETED, outcome.group.group, path)
+                elif path in deletion.in_use:
+                    steps.step(PublishEvent.IN_USE, outcome.group.group, path)
+                else:
+                    steps.step(PublishEvent.DELETE_FAILED, outcome.group.group, path)
+            kept.update(deletion.in_use)
+            settled.append(replace(outcome, deleted=list(deletion.deleted)))
+        return settled, kept
 
     def _record_in_log(self, outcome: PublishOutcome) -> None:
         """每個群組的結果與沒刪成的舊檔各寫一筆紀錄檔（不記 HuaXia 傳回的團員資料）"""

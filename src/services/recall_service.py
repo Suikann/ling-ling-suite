@@ -10,7 +10,8 @@
   分成已結束與還沒結束的（RecallPiece）。公演都已結束、沒有還要演的、也沒標過不收回的才建議收回（suggested）；
   依最近結束的那場公演分組（RecallPreview.groups）。
 - 收回（recall）：重查幹部身分，先以孤兒檔清理清一次那首的（登記還在，只清真正的孤兒），再以使用者身分經 REST
-  撤掉那首所有樂譜的登記，最後刪檔：只刪撤掉之後沒有任何樂譜登記還指著的（不論哪首曲目）。一首曲目一列「收回」
+  撤掉那首所有樂譜的登記，最後刪檔：經 orphan_cleanup.delete_unregistered，只刪撤掉之後沒有任何樂譜登記還指著的
+  （不論哪首曲目）。一首曲目一列「收回」
   （連同清孤兒檔的列）以新抽的發譜編號寫進發譜紀錄，也寫紀錄檔。中途停下時已撤的不會回來，沒刪成的檔記在那列，
   再收回一次時補刪（PublishedPiece.leftovers）。
 - 不收回（keep）：一首曲目一列「不收回」寫進發譜紀錄，之後不再建議收回；不動 HuaXia。
@@ -36,7 +37,7 @@ from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
 from services.huaxia_client import HuaXiaError, HuaXiaEvent, HuaXiaScore
-from services.orphan_cleanup import OrphanCleanup, clear_orphans
+from services.orphan_cleanup import OrphanCleanup, clear_orphans, delete_unregistered
 from services.recall_reminder import RecallReminder
 
 
@@ -308,12 +309,8 @@ class RecallService:
         current = self._client.scores(token, [piece.piece_id])
         gone = set(self._client.delete_scores(token, [score.id for score in current]))
         removed.extend(score for score in current if score.id in gone)
-        paths = list(dict.fromkeys([score.file_path for score in removed if score.file_path] + piece.leftovers))
-        still = self._client.registered_paths(token, paths) if paths else set()
-        doomed = [path for path in paths if path not in still]
-        if doomed:
-            self._client.delete_files(token, doomed)
-        return removed, doomed
+        paths = [score.file_path for score in removed] + piece.leftovers
+        return removed, delete_unregistered(self._auth, paths).deleted
 
     def _record_in_log(self, piece: RecallPiece, error: Optional[HuaXiaError]) -> None:
         """寫一筆紀錄檔：收回了，或中途停下的原因（不記 HuaXia 傳回的團員資料）"""
