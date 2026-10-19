@@ -527,6 +527,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.settings.default_catalog_name": "譜庫試算表",
         "catalog.settings.catalog_created": "已建立譜庫試算表。",
         "catalog.settings.save": "儲存設定",
+        "catalog.settings.publishing_platform": "發譜平台：{platform}（在譜庫試算表的「{sheet}」工作表設定）",
+        "catalog.settings.publishing_platform_unset": "未設定",
         # 譜庫 - 瀏覽器
         "catalog.title": "譜庫管理",
         "catalog.toolbar.add_composer": "新增作曲家",
@@ -1738,6 +1740,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.settings.default_catalog_name": "Catalog Spreadsheet",
         "catalog.settings.catalog_created": "Catalog spreadsheet created.",
         "catalog.settings.save": "Save Settings",
+        "catalog.settings.publishing_platform": "Distribution platform: {platform} (set in the \"{sheet}\" sheet of the catalog spreadsheet)",
+        "catalog.settings.publishing_platform_unset": "Not set",
         # Catalog - Browser
         "catalog.title": "Catalog Manager",
         "catalog.toolbar.add_composer": "Add Composer",

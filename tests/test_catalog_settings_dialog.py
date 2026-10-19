@@ -6,6 +6,7 @@
 選資料夾、找與建立譜庫試算表經譜庫服務、對假 Google：結果寫進偏好設定與假 Google，失敗時提示列出現。不測畫面。
 登入服務的安全儲存、Google 權杖端點與開瀏覽器都換成替身。
 HuaXia 登入區只在社團設定啟用 HuaXia 發譜時出現，對假 HuaXia 測登入、不是幹部的說明與登出的接線。
+記住的發譜平台照社團設定裡的寫法寫出，沒有時寫未設定。
 """
 import os
 import shutil
@@ -250,6 +251,19 @@ class TestHuaXiaLoginArea(LoginAreaTestCase):
         wait_until(lambda: self.shows(dialog, t("huaxia.auth.not_connected")))
         wait_until(lambda: self.huaxia_keyring.stored() == [])
         self.assertEqual(self.huaxia.logouts(), ["local"])
+
+
+class TestPublishingPlatformHint(LoginAreaTestCase):
+    """寫出這台電腦記住的發譜平台，與到哪裡設定"""
+
+    def test_names_the_remembered_platform_as_written_in_club_settings(self):
+        self.preferences.set(CLUB_PUBLISHING_PLATFORM_KEY, PublishingPlatform.HUAXIA.value)
+        dialog = self.open_dialog()
+        self.assertTrue(self.shows(dialog, "發譜平台：華夏國樂社（在譜庫試算表的「社團設定」工作表設定）"))
+
+    def test_says_not_set_when_nothing_is_remembered(self):
+        dialog = self.open_dialog()
+        self.assertTrue(self.shows(dialog, "發譜平台：未設定（在譜庫試算表的「社團設定」工作表設定）"))
 
 
 class CatalogFolderTestCase(LoginAreaTestCase):

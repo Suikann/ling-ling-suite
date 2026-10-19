@@ -4,6 +4,7 @@
 
 引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫試算表。
 登入區顯示登入的帳號 email 與帳號提醒；登入時在背景等瀏覽器回來，期間顯示可取消的等待視窗。
+選資料夾的步驟下方寫出這台電腦記住的發譜平台（照社團設定裡的寫法，沒有時寫未設定）與到譜庫試算表的社團設定工作表設定。
 瀏覽 Drive 資料夾（最上層是我的雲端硬碟，它本身也能選）、找資料夾裡的試算表與建立譜庫試算表都經譜庫服務
 （services/catalog_service.py）在背景執行；根資料夾一律存成它真正的 ID，不存別名 root。
 失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。找到或建好的譜庫試算表先記在對話框裡，
@@ -21,7 +22,9 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QDialogButtonBox, QWidget,
 )
 from PySide6.QtCore import Qt
-from core.catalog_constants import DRIVE_ROOT_ALIAS, PublishingPlatform
+from core.catalog_constants import (
+    DRIVE_ROOT_ALIAS, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, PublishingPlatform,
+)
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import DriveFile
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
@@ -191,6 +194,9 @@ class CatalogSettingsDialog(QDialog):
         self._folder_status.setWordWrap(True)
         step2_layout.addWidget(self._folder_status)
         layout.addWidget(step2)
+        platform_hint = QLabel(self._publishing_platform_text())
+        platform_hint.setWordWrap(True)
+        layout.addWidget(platform_hint)
         if self._huaxia is not None and self._club_settings.remembered() is PublishingPlatform.HUAXIA:
             layout.addWidget(self._build_huaxia_area())
         # --- 底部按鈕 ---
@@ -207,6 +213,13 @@ class CatalogSettingsDialog(QDialog):
         # 開啟時只在已登入時自動找譜庫試算表：安全儲存沒解鎖時不為此再跳一次解鎖視窗
         if self._folder_entry.text().strip() and self._auth.status().signed_in:
             self._check_catalog_in_folder()
+
+    def _publishing_platform_text(self) -> str:
+        """這台電腦記住的發譜平台（照社團設定裡的寫法）與到哪裡設定"""
+        platform = self._club_settings.remembered()
+        names = [name for name, value in PUBLISHING_PLATFORM_NAMES.items() if value is platform]
+        name = names[0] if names else t("catalog.settings.publishing_platform_unset")
+        return t("catalog.settings.publishing_platform", platform=name, sheet=SHEET_CLUB_SETTINGS)
 
     def _build_huaxia_area(self) -> QGroupBox:
         """排出 HuaXia 登入區：登入狀態、登入或登出、連結 Discord 的提醒與狀態旁的原因"""
