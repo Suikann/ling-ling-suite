@@ -36,7 +36,7 @@ from core.publish_log import PublishAction, PublishRecord, PublishedPiece, publi
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
-from services.huaxia_client import HuaXiaError, HuaXiaEvent, HuaXiaScore
+from services.huaxia_client import HuaXiaError, HuaXiaErrorKind, HuaXiaEvent, HuaXiaScore
 from services.orphan_cleanup import OrphanCleanup, clear_orphans, delete_unregistered
 from services.recall_reminder import RecallReminder
 
@@ -239,7 +239,7 @@ class RecallService:
             removed: List[HuaXiaScore] = []
             deleted: List[str] = []
             try:
-                removed, deleted = self._recall_piece(piece, removed)
+                self._recall_piece(piece, removed, deleted)
             except HuaXiaError as e:
                 error = e
             if error is None or removed or deleted:
@@ -292,25 +292,27 @@ class RecallService:
         if self._reminder is not None:
             self._reminder.refresh(catalog)
 
-    def _recall_piece(self, piece: RecallPiece, removed: List[HuaXiaScore]) -> Tuple[List[HuaXiaScore], List[str]]:
+    def _recall_piece(self, piece: RecallPiece, removed: List[HuaXiaScore], deleted: List[str]) -> None:
         """收回一首：重讀登記、撤掉全部，再刪沒有登記還指著的檔（含上次沒刪成的）
 
         Args:
             piece: 要收回的曲目
-            removed: 撤掉登記的樂譜（中途失敗時呼叫端仍拿得到已撤的）
-
-        Returns:
-            （撤掉登記的樂譜，刪掉的 Storage 路徑）
+            removed: 填入撤掉登記的樂譜（中途失敗時呼叫端仍拿得到已撤的）
+            deleted: 填入刪掉的 Storage 路徑
 
         Raises:
-            HuaXiaError: 連不上或寫入失敗（removed 是失敗前撤掉的）
+            HuaXiaError: 連不上或寫入失敗，或 Storage 沒刪掉某些檔（回應照樣成功；那些檔再收回一次時補刪）
         """
         token = self._auth.access_token()
         current = self._client.scores(token, [piece.piece_id])
         gone = set(self._client.delete_scores(token, [score.id for score in current]))
         removed.extend(score for score in current if score.id in gone)
-        paths = [score.file_path for score in removed] + piece.leftovers
-        return removed, delete_unregistered(self._auth, paths).deleted
+        deletion = delete_unregistered(self._auth, [score.file_path for score in removed] + piece.leftovers)
+        deleted.extend(deletion.deleted)
+        if deletion.not_deleted:
+            raise HuaXiaError(
+                HuaXiaErrorKind.REJECTED, f"storage did not delete: {', '.join(deletion.not_deleted)}",
+            )
 
     def _record_in_log(self, piece: RecallPiece, error: Optional[HuaXiaError]) -> None:
         """寫一筆紀錄檔：收回了，或中途停下的原因（不記 HuaXia 傳回的團員資料）"""

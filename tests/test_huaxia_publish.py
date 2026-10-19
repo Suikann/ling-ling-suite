@@ -245,8 +245,17 @@ class TestStorage(PublishTestCase):
         kept, gone = stored(self.moli, 1), stored(self.moli, 2)
         self.huaxia.put_object(kept)
         self.huaxia.put_object(gone)
-        self.client.delete_files(token, [gone, stored(self.moli, 3)])
+        self.assertEqual(self.client.delete_files(token, [gone, stored(self.moli, 3)]), [gone])
         self.assertEqual(sorted(self.huaxia.objects), [kept])
+
+    def test_deleting_reports_only_the_files_storage_really_deleted(self):
+        token = self.auth.access_token()
+        refused, gone = stored(self.moli, 1), stored(self.moli, 2)
+        for path in (refused, gone):
+            self.huaxia.put_object(path)
+        self.huaxia.refuse_storage_deletes(refused)
+        self.assertEqual(self.client.delete_files(token, [refused, gone]), [gone])
+        self.assertEqual(sorted(self.huaxia.objects), [refused])
 
     def test_a_member_cannot_upload_or_delete(self):
         token = self.auth.access_token()
@@ -255,7 +264,7 @@ class TestStorage(PublishTestCase):
         self.huaxia.remove_roles("officer_amy")
         with self.assertRaises(HuaXiaError):
             self.client.upload(token, stored(self.moli, 2), b"%PDF")
-        self.client.delete_files(token, [path])
+        self.assertEqual(self.client.delete_files(token, [path]), [])
         self.assertEqual(sorted(self.huaxia.objects), [path])
 
     def test_a_dropped_request_is_unreachable_and_later_ones_go_through(self):

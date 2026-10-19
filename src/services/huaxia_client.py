@@ -684,13 +684,25 @@ class HuaXiaClient:
             raise
         return True
 
-    def delete_files(self, access_token: str, paths: List[str]) -> None:
-        """刪掉 Storage bucket scores 裡的這些檔（一個請求）；已經沒有的略過
+    def delete_files(self, access_token: str, paths: List[str]) -> List[str]:
+        """刪掉 Storage bucket scores 裡的這些檔（一個請求）
+
+        Storage 對已經沒有的檔與 RLS 擋下的檔都不報錯，只是不列在回應的清單裡，所以以回應判斷哪些真的刪掉了。
+
+        Returns:
+            真的刪掉的路徑，依 paths 的順序
 
         Raises:
-            HuaXiaError: 連不上或刪除失敗
+            HuaXiaError: 連不上、刪除失敗或回應的格式不對
         """
-        self._call("DELETE", f"/storage/v1/object/{_STORAGE_BUCKET}", access_token, json={"prefixes": list(paths)})
+        removed = self._call(
+            "DELETE", f"/storage/v1/object/{_STORAGE_BUCKET}", access_token, json={"prefixes": list(paths)},
+        )
+        try:
+            names = {entry["name"] for entry in removed or []}
+        except (KeyError, TypeError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected storage deletion: {e}") from e
+        return [path for path in paths if path in names]
 
     # --- 共用 ---
 

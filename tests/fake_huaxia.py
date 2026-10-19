@@ -30,7 +30,8 @@
 擴充（之後的工單）：新資料表加進 tables 與 _READ_POLICIES；寫入在 _rest 裡依方法分派（POST、PATCH、DELETE）；
 新的 rpc 函式加進 functions（名稱對應以（使用者 ID，參數）求值的函式）；Storage 的請求在 _storage 依路徑分派。
 每個請求都記在 requests，可以設成連不上（go_offline）、讓某幾個請求斷線（drop_requests，例如第 1 段的某次上傳）、
-讓某首曲目的切換失敗（fail_switch），或讓續期卡住直到放行（hold_refreshes）。
+讓某首曲目的切換失敗（fail_switch）、讓 Storage 的某些檔刪不掉（refuse_storage_deletes，同 RLS 擋下時回 200 與
+不含它們的清單），或讓續期卡住直到放行（hold_refreshes）。
 
 使用範例：
     from tests.fake_huaxia import FakeHuaXia
@@ -146,6 +147,8 @@ class FakeHuaXia:
         self._drops: List[List[Any]] = []
         # 切換會失敗的曲目編號對應（HTTP 狀態碼，錯誤代碼）
         self._switch_failures: Dict[str, Tuple[int, str]] = {}
+        # Storage 刪不掉的路徑（同 RLS 擋下：照樣回 200，只是不在刪掉的清單裡）
+        self._kept_objects: set = set()
 
     # --- 測試設定 ---
 
@@ -358,6 +361,11 @@ class FakeHuaXia:
         """之後這首曲目的切換（發譜函式）都失敗，丟出這個錯誤代碼，資料表不變（例如幹部剛在網頁上刪了聲部）"""
         with self._lock:
             self._switch_failures[piece_id] = (status, code)
+
+    def refuse_storage_deletes(self, *paths: str) -> None:
+        """之後刪 Storage 的這幾個檔都刪不掉（扮演 Storage 的 RLS 擋下）：回應照樣是 200，只是不在刪掉的清單裡"""
+        with self._lock:
+            self._kept_objects.update(paths)
 
     def hold_refreshes(self) -> threading.Event:
         """之後的續期請求收到後先卡住，直到回傳的 Event 被 set 才回應"""
@@ -747,7 +755,9 @@ class FakeHuaXia:
         if path == "object/scores" and method == "DELETE":
             # scores_delete：只有幹部刪得到；刪不到的不算錯，只是不在回傳的清單裡
             names = (record["json"] or {}).get("prefixes") or []
-            gone = [name for name in names if name in self.objects] if self._is_officer(caller, {}) else []
+            gone = [
+                name for name in names if name in self.objects and name not in self._kept_objects
+            ] if self._is_officer(caller, {}) else []
             for name in gone:
                 del self.objects[name]
             return _Response(200, [{"name": name, "bucket_id": "scores"} for name in gone])

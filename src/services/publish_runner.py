@@ -547,7 +547,7 @@ class PublishRunner:
         群組切換失敗）；要求取消時做完目前這個群組就停
 
         Returns:
-            （各群組的結果，填好刪掉的路徑；還有登記指著、不刪的路徑）
+            （各群組的結果，填好刪掉的路徑；不必刪的路徑：還有登記指著的與本來就已經不在 Storage 的）
         """
         kept: Set[str] = set()
         settled = []
@@ -564,13 +564,14 @@ class PublishRunner:
                 settled.append(outcome)
                 continue
             for path in paths:
-                if path in deletion.deleted:
-                    steps.step(PublishEvent.DELETED, outcome.group.group, path)
-                elif path in deletion.in_use:
+                if path in deletion.in_use:
                     steps.step(PublishEvent.IN_USE, outcome.group.group, path)
-                else:
+                elif path in deletion.not_deleted:
                     steps.step(PublishEvent.DELETE_FAILED, outcome.group.group, path)
-            kept.update(deletion.in_use)
+                else:
+                    steps.step(PublishEvent.DELETED, outcome.group.group, path)
+            # 還有登記指著的不是孤兒檔；本來就已經不在 Storage 的也不是
+            kept.update(path for path in paths if path not in deletion.deleted and path not in deletion.not_deleted)
             settled.append(replace(outcome, deleted=list(deletion.deleted)))
         return settled, kept
 

@@ -131,6 +131,17 @@ class TestInterrupted(RecallTestCase):
         self.assertNotIn(self.fenghuo, self.listed())
 
 
+class TestRefusedDeletion(RecallTestCase):
+    """Storage 刪不掉的檔（回應照樣成功）不算刪掉：記在撤掉的登記而不在刪掉的檔，再收回一次補刪"""
+
+    def test_a_file_storage_refuses_to_delete_is_left_for_the_next_recall(self):
+        self.huaxia.refuse_storage_deletes(self.bowing)
+        self.recaller.recall([self.piece()], self.catalog)
+        [row] = self.log(PublishAction.RECALL)
+        self.assertNotIn(self.bowing, row.files_deleted)
+        self.assertIn(self.bowing, self.piece().leftovers)
+
+
 class TestPreview(RecallTestCase):
     """預覽讀發譜紀錄裡發過的曲目，再向 HuaXia 查樂譜與掛的公演"""
 

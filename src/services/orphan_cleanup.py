@@ -22,7 +22,7 @@ Storage 檔的刪除與孤兒檔清理
     deletion = delete_unregistered(huaxia_auth, replaced_paths)   # deletion.deleted 是真的刪掉的
 """
 from dataclasses import dataclass, field
-from typing import Collection, Iterable, List, Mapping, NamedTuple, Optional
+from typing import Collection, Iterable, List, Mapping, NamedTuple, Optional, Set
 
 from core.locale import t
 from core.log_entry import LogEntry
@@ -38,7 +38,8 @@ class StorageDeletion(NamedTuple):
     Attributes:
         deleted: 真的刪掉的
         in_use: 還有樂譜登記指著、不刪的
-        not_deleted: 沒有登記指著、但沒刪掉的（例如 HuaXia 的權限擋下）
+        not_deleted: 沒有登記指著、Storage 卻沒刪掉、還在的（例如 RLS 擋下；回應照樣成功，以回應的清單判斷）。
+            本來就已經不在 Storage 的不在任何一項裡
     """
     deleted: List[str]
     in_use: List[str]
@@ -53,7 +54,7 @@ def delete_unregistered(auth: HuaXiaAuthService, paths: Iterable[str]) -> Storag
         paths: 要考慮的 Storage 路徑（重複的與空字串略過）
 
     Returns:
-        刪掉的、還在用的與沒刪掉的，各依 paths 的順序
+        刪掉的、還在用的與沒刪掉的，各依 paths 的順序；有沒刪掉的時另列出它們所在的資料夾，分出本來就已經不在的
 
     Raises:
         HuaXiaError: 連不上、讀不到登記或刪除失敗
@@ -64,9 +65,15 @@ def delete_unregistered(auth: HuaXiaAuthService, paths: Iterable[str]) -> Storag
         return StorageDeletion([], [], [])
     registered = client.registered_paths(auth.access_token(), paths)
     doomed = [path for path in paths if path not in registered]
-    if doomed:
-        client.delete_files(auth.access_token(), doomed)
-    return StorageDeletion(doomed, [path for path in paths if path in registered], [])
+    deleted = set(client.delete_files(auth.access_token(), doomed)) if doomed else set()
+    left = [path for path in doomed if path not in deleted]
+    present: Set[str] = set()
+    for folder in dict.fromkeys(path.rsplit("/", 1)[0] for path in left):
+        present |= set(client.stored_files(auth.access_token(), folder))
+    return StorageDeletion(
+        [path for path in doomed if path in deleted], [path for path in paths if path in registered],
+        [path for path in left if path in present],
+    )
 
 
 @dataclass(frozen=True)

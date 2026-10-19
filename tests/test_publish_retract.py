@@ -107,6 +107,14 @@ class TestRetracting(RetractTestCase):
         self.retracter.retract(self.entry(), [self.group.id], self.catalog)
         self.assertIn(pipa, self.huaxia.objects)
 
+    def test_files_storage_refuses_to_delete_are_not_recorded_as_deleted(self):
+        pipa = next(s["file_path"] for s in self.outcome.groups[0].result["added_scores"] if s["part_id"] == self.pipa)
+        self.huaxia.refuse_storage_deletes(pipa)
+        self.retracter.retract(self.entry(), [self.group.id], self.catalog)
+        [row] = self.log(PublishAction.RETRACT)
+        self.assertNotIn(pipa, row.files_deleted)
+        self.assertIn(pipa, self.huaxia.objects)
+
     def test_a_file_another_piece_still_points_to_is_not_deleted(self):
         pipa = next(s["file_path"] for s in self.outcome.groups[0].result["added_scores"] if s["part_id"] == self.pipa)
         self.huaxia.add_score(self.moli, None, pipa, title="借用")

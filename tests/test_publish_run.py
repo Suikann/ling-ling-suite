@@ -409,6 +409,15 @@ class TestCleaningUp(RunTestCase):
         self.assertEqual(result.files_deleted, [])
         self.assertIsNone(result.failure)
 
+    def test_a_deletion_storage_silently_refuses_is_an_orphan_not_recorded_as_deleted(self):
+        self.huaxia.refuse_storage_deletes(self.old)
+        outcome = self.run_publish(self.press_publish())
+        self.assertEqual(outcome.failed, [])
+        self.assertEqual(outcome.orphans, [self.old])
+        self.assertIn(self.old, self.huaxia.objects)
+        [result] = self.log(PublishAction.RESULT)
+        self.assertEqual(result.files_deleted, [])
+
     def test_a_replaced_file_another_piece_still_registers_is_kept(self):
         # 封存的舊曲目（預覽讀不到）也登記著這個檔：清舊檔前向 HuaXia 查全部的登記
         archived = self.huaxia.add_piece("舊的烽火操", archived=True)
@@ -525,6 +534,13 @@ class TestClearingOrphansDirectly(RunTestCase):
 
 class TestClearingOrphansAcrossPieces(TwoPiecesTestCase):
     """孤兒檔是沒有任何樂譜登記指著的檔，不論登記在哪首曲目"""
+
+    def test_an_orphan_storage_refuses_to_delete_is_not_reported_as_cleared(self):
+        orphan = lingling_storage_path(self.fenghuo, sha(b"orphan"), "score")
+        self.huaxia.put_object(orphan)
+        self.huaxia.refuse_storage_deletes(orphan)
+        [cleanup] = clear_orphans(self.auth, {self.fenghuo: "長城隨想－烽火操"})
+        self.assertEqual(cleanup.deleted, [])
 
     def test_a_file_registered_by_another_piece_is_not_an_orphan(self):
         borrowed = lingling_storage_path(self.fenghuo, sha(b"borrowed"), "score")
