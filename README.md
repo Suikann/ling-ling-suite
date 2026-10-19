@@ -4,6 +4,8 @@
 
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
+[Homepage](https://suikann.github.io/ling-ling-suite/en/) | [Privacy Policy](https://suikann.github.io/ling-ling-suite/en/privacy.html)
+
 ## Overview
 
 **Ling Ling Suite** is a desktop application built to streamline the post-processing of orchestral score parts. It handles batch renaming, PDF splitting, PDF rotation, and file organization --- all within a visual, project-based workflow.
@@ -163,6 +165,9 @@ python3 -m venv .venv
 
 - **CI:** Automated testing on push/PR (Python 3.12, Windows and Linux)
 - **CD:** Push a `v*` tag to trigger portable EXE build and GitHub Release
+- **Pages:** `website/` holds the homepage and privacy policy (Traditional Chinese at the root, English under `en/`). When it changes on `develop`, `.github/workflows/pages.yml` publishes it to GitHub Pages at `https://suikann.github.io/ling-ling-suite/`. The repository's Pages source must be set to "GitHub Actions"
+  - Switching to a subdomain: enter it under Settings > Pages > Custom domain in the repository and add a DNS CNAME record pointing to `suikann.github.io`; no file in the repository changes (Pages ignores CNAME files when publishing from GitHub Actions). Afterwards the `suikann.github.io/ling-ling-suite` URLs redirect to the subdomain, so the links above keep working; if the domain lapses, clearing Custom domain brings back the original URL. Either way, update the homepage and privacy policy URLs in the Google Console to the actual URLs
+  - When the privacy policy changes, update both languages and the effective date on both pages
 
 ## License
 

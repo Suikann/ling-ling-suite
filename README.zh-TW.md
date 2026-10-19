@@ -4,6 +4,8 @@
 
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
+[首頁](https://suikann.github.io/ling-ling-suite/) | [隱私權政策](https://suikann.github.io/ling-ling-suite/privacy.html)
+
 ## 專案簡介
 
 **泠靈小工具**是一套桌面應用程式，旨在解決樂團譜務人員在處理分譜檔案時的命名、分割與整理需求。提供視覺化的 PDF 分割與旋轉、模板化批次重新命名、以及專案化的檔案管理工作流。
@@ -162,6 +164,9 @@ python3 -m venv .venv
 
 - **CI：**每次 push/PR 自動執行測試（Python 3.12，Windows 與 Linux）
 - **CD：**推送 `v*` 標籤自動打包可攜式 EXE 並建立 GitHub Release
+- **Pages：**`website/` 是首頁與隱私權政策（繁體中文在根層，英文在 `en/`），`develop` 上它有改動時由 `.github/workflows/pages.yml` 發布到 GitHub Pages，網址為 `https://suikann.github.io/ling-ling-suite/`。repo 的 Pages 來源要設成「GitHub Actions」
+  - 改用子網域：在 repo 的 Settings > Pages > Custom domain 填入子網域，並在 DNS 加一筆指向 `suikann.github.io` 的 CNAME 記錄；repo 裡的檔案都不必改（以 GitHub Actions 發布時 Pages 不讀 CNAME 檔）。設好後 `suikann.github.io/ling-ling-suite` 的網址會自動轉到子網域，上方的連結照常可用；網域不續約時清掉 Custom domain 就回到原網址。兩種情況都要把 Google Console 的首頁與隱私權政策網址改成實際的網址
+  - 改了隱私權政策的內容時，同時改中英兩版與兩頁的生效日期
 
 ## 授權
 
