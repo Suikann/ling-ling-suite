@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.catalog_constants import SHEET_HEADERS, SHEET_PUBLISH_LOG
 from core.catalog_errors import CatalogError, CatalogErrorKind
-from core.publish_log import PublishAction, PublishRecord
+from core.publish_log import PublishAction, PublishRecord, publish_entries
 from fake_google_catalog import FakeGoogle
 from services.catalog_service import CatalogService
 from test_catalog_service import empty_catalog
@@ -109,6 +109,59 @@ class TestFixedRequests(PublishLogTestCase):
         with self.assertRaises(CatalogError):
             self.catalog.begin_publish([start("烽火操")], "officer_amy")
         self.assertEqual(self.rows(), [])
+
+
+class TestEntries(unittest.TestCase):
+    """發譜紀錄的列表：一次發譜一項（有結果時列結果），同一次寫入的撤回一項，新的在前"""
+
+    @staticmethod
+    def row(action: PublishAction, publish_id: str, time: str, group: str, failure=None) -> PublishRecord:
+        """讀回來的一列"""
+        return PublishRecord(
+            action, group_id=f"g-{group}", group=group, publish_id=publish_id, time=time, operator="officer_amy",
+            failure=failure,
+        )
+
+    def test_publishes_and_retracts_are_listed_newest_first(self):
+        rows = [
+            self.row(PublishAction.START, "P1", "10/05 22:10", "烽火操"),
+            self.row(PublishAction.START, "P1", "10/05 22:10", "茉莉花"),
+            self.row(PublishAction.RESULT, "P1", "10/05 22:12", "烽火操"),
+            self.row(PublishAction.RESULT, "P1", "10/05 22:12", "茉莉花", failure={"stage": "switch"}),
+            self.row(PublishAction.START, "P2", "10/06 09:00", "春江花月夜"),
+            self.row(PublishAction.RETRACT, "P1", "10/07 08:00", "烽火操"),
+        ]
+        entries = publish_entries(rows)
+        self.assertEqual(
+            [(e.publish_id, e.action, e.time, e.finished) for e in entries],
+            [("P1", PublishAction.RETRACT, "10/07 08:00", True), ("P2", PublishAction.START, "10/06 09:00", False),
+             ("P1", PublishAction.START, "10/05 22:10", True)],
+        )
+        self.assertEqual([r.action for r in entries[2].groups], [PublishAction.RESULT, PublishAction.RESULT])
+        self.assertEqual([r.action for r in entries[1].groups], [PublishAction.START])
+
+    def test_retracts_written_at_different_times_are_separate(self):
+        rows = [
+            self.row(PublishAction.START, "P1", "10/05 22:10", "烽火操"),
+            self.row(PublishAction.RETRACT, "P1", "10/07 08:00", "烽火操"),
+            self.row(PublishAction.RETRACT, "P1", "10/08 08:00", "烽火操"),
+        ]
+        self.assertEqual([e.action for e in publish_entries(rows)], [PublishAction.RETRACT] * 2 + [PublishAction.START])
+
+    def test_a_retract_row_reads_back(self):
+        google = FakeGoogle()
+        empty_catalog(google)
+        catalog = CatalogService(google.sheets, google.drive, sleep=lambda seconds: None)
+        publish_id = catalog.begin_publish([start("烽火操")], "officer_amy")
+        retract = PublishRecord(
+            PublishAction.RETRACT, group_id="g-烽火操", group="烽火操", piece_id="hx-1",
+            parts_deleted=[{"id": "p-9", "name": "排鼓"}],
+        )
+        catalog.record_publish(publish_id, [retract], "officer_amy")
+        [_, row] = catalog.publish_log()
+        self.assertEqual((row.action, row.publish_id, row.parts_deleted), (
+            PublishAction.RETRACT, publish_id, [{"id": "p-9", "name": "排鼓"}],
+        ))
 
 
 if __name__ == '__main__':

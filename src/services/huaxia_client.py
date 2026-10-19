@@ -17,6 +17,8 @@ HuaXia 用戶端
   內容的 SHA-256.pdf」。HuaXia 網頁上傳的路徑是「曲目編號／聲部編號或 full／時間戳_檔名」，不會以這個前綴開頭，
   所以只看路徑就分得出哪份是泠靈發的。發譜的第 1 段以 upload 傳檔（不覆寫，路徑已有檔就是同一份內容）、
   第 3 段以 delete_files 刪掉被取代的檔。
+- 撤回與收回不經發譜函式，以使用者身分經 REST 刪除（delete_scores、delete_parts，HuaXia 的 RLS 照常生效）；
+  刪聲部會連帶刪掉它的排人與樂譜，所以先以 assigned_parts 確認沒排人。
 請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
 使用範例：
@@ -30,7 +32,7 @@ import datetime
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 from urllib.parse import urlencode
 
 import requests
@@ -479,6 +481,57 @@ class HuaXiaClient:
         except (KeyError, TypeError, ValueError) as e:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected events: {e}") from e
         return sorted(events, key=lambda event: event.starts_at)
+
+    def assigned_parts(self, access_token: str, part_ids: List[str]) -> Set[str]:
+        """這幾個聲部裡已經排了人的（part_assignments 有它的列）
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        rows = self.select_all(
+            "part_assignments", access_token, "part_id", within=("part_id", list(part_ids)), order="part_id.asc",
+        )
+        try:
+            return {row["part_id"] for row in rows}
+        except (KeyError, TypeError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected part assignments: {e}") from e
+
+    def delete_scores(self, access_token: str, score_ids: List[str]) -> List[str]:
+        """以使用者身分撤掉這些樂譜的登記（刪 scores 的列，不刪 Storage 的檔）；已經不在或沒有權限的略過
+
+        Returns:
+            真的刪掉的樂譜編號
+
+        Raises:
+            HuaXiaError: 連不上或刪除失敗
+        """
+        return self._delete_ids("scores", access_token, score_ids)
+
+    def delete_parts(self, access_token: str, part_ids: List[str]) -> List[str]:
+        """以使用者身分刪掉這些聲部；HuaXia 會連帶刪掉它們的排人與樂譜（on delete cascade），呼叫前先確認沒排人
+
+        Returns:
+            真的刪掉的聲部編號（已經不在或沒有權限的略過）
+
+        Raises:
+            HuaXiaError: 連不上或刪除失敗
+        """
+        return self._delete_ids("piece_parts", access_token, part_ids)
+
+    def _delete_ids(self, table: str, access_token: str, ids: List[str]) -> List[str]:
+        """刪掉資料表裡編號是其中之一的列（照 RLS，看不到或不能刪的不刪），回傳真的刪掉的編號"""
+        deleted: List[str] = []
+        for i in range(0, len(ids), _IN_FILTER_CHUNK):
+            rows = self._call(
+                "DELETE", f"/rest/v1/{table}", access_token,
+                params={"id": f"in.({','.join(ids[i:i + _IN_FILTER_CHUNK])})", "select": "id"},
+                headers={"Prefer": "return=representation"},
+            )
+            try:
+                deleted.extend(row["id"] for row in rows or [])
+            except (KeyError, TypeError) as e:
+                raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected {table} deletion: {e}") from e
+        return deleted
 
     def event_pieces(self, access_token: str, event_ids: List[str]) -> List[Tuple[str, str]]:
         """這幾個場次掛著的曲目（event_pieces，全部讀完）：（場次編號，曲目編號）

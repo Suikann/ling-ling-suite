@@ -97,7 +97,7 @@ SHEET_HEADERS = {
     SHEET_PUBLISH_LOG: [
         "id", "publish_id", "time", "operator", "action", "group_id", "group", "piece_id", "piece_title",
         "new_piece", "parts_created", "parts_updated", "files_uploaded", "scores_added", "scores_removed",
-        "files_deleted", "events", "failure",
+        "files_deleted", "events", "failure", "parts_deleted",
     ],
 }
 

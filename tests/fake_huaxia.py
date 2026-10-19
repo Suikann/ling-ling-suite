@@ -10,6 +10,8 @@
   （sign_out_everywhere 扮演在 HuaXia 網頁按了登出全部）。
 - PostgREST：資料表的讀取（select 欄位、eq 與 in 篩選、order、limit 與 offset），各表的讀取權限照 HuaXia 的 RLS
   寫在 _READ_POLICIES。一次最多回傳 max_rows 列（同 Supabase 的 max_rows，預設 1000），多的要分頁讀。
+  撤回與收回用的刪除（DELETE，要有篩選）只有幹部刪得到 scores 與 piece_parts，刪聲部連帶刪掉它的排人與樂譜。
+- 排人（part_assignments）：以 assign 加入，讀取權限簡化成 is_insider。
 - rpc：is_officer（帳號啟用且有 admin 或 officer）；發譜函式與它的版本查詢預設不存在（同 HuaXia 合併 #117 之前），
   以 install_publish_function 裝上指定的版本。發譜函式照 docs/huaxia/LINGLING.md：以呼叫者身分執行（不是幹部時
   新增被 RLS 擋下、修改與刪除找不到可以動的列），匿名不能呼叫；任何一步不成就丟出文件裡的錯誤代碼，資料表回到呼叫前。
@@ -122,7 +124,7 @@ class FakeHuaXia:
         self.requests: List[Dict[str, Any]] = []
         self.tables: Dict[str, List[Dict[str, Any]]] = {
             "profiles": [], "user_roles": [], "pieces": [], "piece_parts": [], "scores": [], "semesters": [],
-            "events": [], "event_pieces": [],
+            "events": [], "event_pieces": [], "part_assignments": [],
         }
         # Storage bucket scores 裡的檔：路徑對應內容
         self.objects: Dict[str, bytes] = {}
@@ -261,6 +263,11 @@ class FakeHuaXia:
         """把曲目掛上場次（event_pieces 的一列，幹部在網頁上掛的）"""
         with self._lock:
             self.tables["event_pieces"].append({"event_id": event_id, "piece_id": piece_id})
+
+    def assign(self, part_id: str, user_id: str) -> None:
+        """把一位團員排進聲部（part_assignments 的一列，幹部在網頁上排的）"""
+        with self._lock:
+            self.tables["part_assignments"].append({"part_id": part_id, "user_id": user_id})
 
     def put_object(self, path: str, content: bytes = b"pdf") -> None:
         """在 Storage 的 bucket scores 放一個檔"""
@@ -649,10 +656,12 @@ class FakeHuaXia:
         )
 
     def _rest(self, table: str, record: Dict[str, Any]) -> _Response:
-        """/rest/v1/<table>：目前只有讀取（GET），照 RLS 只回呼叫者看得到的列，依 order 排序、照 offset 與 limit
-        取一段，一次最多 max_rows 列"""
+        """/rest/v1/<table>：讀取（GET）照 RLS 只回呼叫者看得到的列，依 order 排序、照 offset 與 limit
+        取一段，一次最多 max_rows 列；刪除（DELETE）見 _delete"""
         if table not in self.tables:
             return _Response(404, {"code": "PGRST205", "message": f"Could not find the table public.{table}"})
+        if record["method"] == "DELETE":
+            return self._delete(table, record)
         if record["method"] != "GET":
             return _Response(405, {"message": "Method not supported by the fake"})
         caller = self._caller(record)
@@ -672,6 +681,28 @@ class FakeHuaXia:
         if columns != ["*"]:
             rows = [{c: row.get(c) for c in columns} for row in rows]
         return _Response(200, rows)
+
+    def _delete(self, table: str, record: Dict[str, Any]) -> _Response:
+        """DELETE /rest/v1/<table>：刪掉符合篩選的列，照 HuaXia 的 RLS 只有幹部刪得到 scores 與 piece_parts
+        （score_write、part_write；其他人刪不到任何列，不算錯）；沒有篩選時同 Supabase 的 safeupdate 拒絕。
+        刪聲部連帶刪掉它的排人與樂譜（on delete cascade）。帶 Prefer: return=representation 時回傳刪掉的列"""
+        params = dict(record["params"])
+        columns = [c.strip() for c in params.pop("select", "*").split(",")]
+        if not params:
+            return _Response(400, {"code": "21000", "message": "DELETE requires a WHERE clause"})
+        allowed = table in _DELETE_TABLES and self._is_officer(self._caller(record), {})
+        doomed = [
+            row for row in self.tables[table] if allowed and all(_matches(row, k, v) for k, v in params.items())
+        ]
+        gone = {id(row) for row in doomed}
+        self.tables[table] = [row for row in self.tables[table] if id(row) not in gone]
+        if table == "piece_parts":
+            parts = {row["id"] for row in doomed}
+            for child in ("part_assignments", "scores"):
+                self.tables[child] = [row for row in self.tables[child] if row.get("part_id") not in parts]
+        if "return=representation" not in record["headers"].get("Prefer", ""):
+            return _Response(204)
+        return _Response(200, [row if columns == ["*"] else {c: row.get(c) for c in columns} for row in doomed])
 
     def _storage(self, path: str, record: Dict[str, Any]) -> _Response:
         """/storage/v1/...：bucket scores 的列出某個資料夾底下一層、上傳（不覆寫）與刪除（照 Supabase 的回應格式）"""
@@ -789,6 +820,10 @@ def guess_section(name: str) -> Optional[str]:
     return next((section for section, pattern in _SECTION_GUESSES if re.search(pattern, name, re.IGNORECASE)), None)
 
 
+# 撤回與收回經 REST 刪除的資料表（HuaXia 的 RLS 讓幹部刪得到的：score_write、part_write）
+_DELETE_TABLES = frozenset({"scores", "piece_parts"})
+
+
 # HuaXia 的 is_insider() 認的身分組
 _INSIDER_ROLES = frozenset({"admin", "officer", "leader", "member", "newbie", "teacher", "alumni"})
 
@@ -805,4 +840,5 @@ _READ_POLICIES: Dict[str, Callable[[FakeHuaXia, Optional[str], Dict[str, Any]], 
     "event_pieces": lambda fake, caller, row: any(
         event["id"] == row["event_id"] and fake._can_see_event(caller, event) for event in fake.tables["events"]
     ),
+    "part_assignments": lambda fake, caller, row: fake._is_insider(caller),
 }
