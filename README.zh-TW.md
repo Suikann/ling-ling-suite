@@ -59,13 +59,36 @@
 
 ## 下載
 
-前往 **[Releases](../../releases)** 頁面下載最新版本。免安裝，解壓即可使用。
+前往 **[Releases](../../releases)** 頁面下載最新版本，免安裝：
+
+- **Windows**：下載 `LingLingSuite-portable.zip`，解壓即可使用
+- **Linux**：下載 `LingLingSuite-x86_64.AppImage`，加上執行權限（`chmod +x LingLingSuite-x86_64.AppImage`）即可執行；先看下方的「Linux 注意事項」
 
 升級後請不要再用舊版開啟新版存過的專案檔：舊版看不懂新的欄位，存檔時會把它們丟掉。新版遇到更新版本存的專案檔時會唯讀開啟，不能存檔。
 
+## Linux 注意事項
+
+AppImage 只支援 x86_64、glibc 2.39 以上（Ubuntu 24.04 以後、Debian 13、Arch 系、近年的 Fedora）。
+
+- **選單捷徑與更新**：用 [Gear Lever](https://github.com/mijorus/gearlever) 匯入 AppImage，它會建立選單捷徑，也能檢查新版。不用 Gear Lever 時自己寫一份 `~/.local/share/applications/lingling-suite.desktop`，`Exec=` 填 AppImage 的完整路徑；檔名與 `StartupWMClass` 都要是 `lingling-suite`，視窗管理器才對得起捷徑與視窗：
+  ```ini
+  [Desktop Entry]
+  Type=Application
+  Name=Ling Ling Suite
+  Name[zh_TW]=泠靈小工具
+  Exec=/home/你的帳號/Applications/LingLingSuite-x86_64.AppImage
+  Categories=Office;
+  StartupWMClass=lingling-suite
+  ```
+- **中文字型**：泠靈用系統的字型，沒有中文字型時中文會變成方框。請安裝中文字型，例如 `noto-fonts-cjk`（Arch 系）或 `fonts-noto-cjk`（Debian、Ubuntu）
+- **記住登入**：登入狀態存在系統的 Secret Service。GNOME、KDE 通常已經有；Hyprland 這類自己組的環境要自行安裝並執行 Secret Service（例如 `gnome-keyring`）。沒有時照樣能登入，只是登入狀態旁會寫「這次登入不會被記住：這台電腦沒有安全儲存」，下次開泠靈要重新登入
+- **沒有 FUSE 時**：AppImage 開不起來、錯誤訊息提到 FUSE 時，改用 `APPIMAGE_EXTRACT_AND_RUN=1 ./LingLingSuite-x86_64.AppImage` 執行；每次啟動會先解開到暫存資料夾，開得比較慢
+- **退回 X11 時**：有 Wayland 時泠靈直接用 Wayland。在 X11 下（或設了 `QT_QPA_PLATFORM=xcb`）執行時，系統要有 Qt 的 xcb 外掛需要的 `libxcb-cursor`（Debian、Ubuntu 叫 `libxcb-cursor0`）等 xcb 函式庫，缺了會出現 `Could not load the Qt platform plugin "xcb"`
+- **系統的檔案對話框**：要用桌面環境自己的開檔、存檔對話框，安裝 `xdg-desktop-portal-gtk`，並在啟動時設 `QT_QPA_PLATFORMTHEME=xdgdesktopportal`（例如 `.desktop` 寫成 `Exec=env QT_QPA_PLATFORMTHEME=xdgdesktopportal /完整路徑/LingLingSuite-x86_64.AppImage`）；沒設時用 Qt 內建的對話框
+
 ## 快速開始
 
-1. 啟動 `LingLingSuite.exe`
+1. 啟動 `LingLingSuite.exe`（Linux 執行 `LingLingSuite-x86_64.AppImage`）
 2. 透過**匯入**選單加入 PDF 檔案或資料夾
 3. **建立群組**，每個群組代表一首曲目，或其中一個樂章
 4. 切到群組分頁，在左側的**編制表**設定該群組的聲部（手動輸入或載入預設樂器表）；拖動聲部時分譜跟著走，這場缺的分譜取消勾選「本專案有」；各聲部的人數（最少、最多或「以上」）與群組的時長也在這裡填
@@ -117,6 +140,7 @@
 
 - **路徑比對不分大小寫**：所有平台都把只差大小寫的路徑當成同一個檔。Linux 上同一資料夾同時有 `Flute.pdf` 與 `flute.pdf` 時，泠靈會把兩者當成同一個檔；搬移前會確認目的地是不是另一個檔，擋下覆寫，檔案不會損壞。
 - **檔名照 Windows 規則清理**：Linux 上也把 Windows 不允許的字元（`< > : " / \ | ? *`）換成底線，因為檔案會上傳到 Drive、給 Windows 使用者下載。
+- **Google 登入的名額**：泠靈內附的 Google 用戶端是未經 Google 驗證的正式版，終身最多讓 100 個 Google 帳號登入，所有社團共用。每個社團只用譜庫帳號登入就只佔一個名額，請不要拿個人帳號試用。名額用完時，已登入過的帳號照常使用，新的帳號會無法登入，要等維護者換上新的用戶端、發新版後重新登入。
 
 ## 開發者指南
 
@@ -169,12 +193,15 @@ python3 -m venv .venv
 
 `build.sh` 選 Python 的方式與 `run.sh` 相同，會裝 PyInstaller、執行測試，再建出 `dist/LingLingSuite/`。
 
+**建置 AppImage：**建好資料夾版後執行 `scripts/build_appimage.sh`，它下載固定版本的 appimagetool 與 runtime、核對檢查碼，產出 `dist/LingLingSuite-x86_64.AppImage` 與 `.zsync`。本機建出的 AppImage 的 glibc 下限是本機的版本，要發佈的一律由 CD 在 `ubuntu-24.04` 上建置。
+
 打包參數只有 `LingLingSuite.spec` 一份，`build.bat`、`build.sh` 與 CD 都只跑它。
 
 ## CI/CD
 
 - **CI：**每次 push/PR 自動執行測試（Python 3.12，Windows 與 Linux）
-- **CD：**推送 `v*` 標籤自動打包可攜式 EXE 並建立 GitHub Release
+- **CD：**推送 `v*` 標籤時建出 Windows 的 `LingLingSuite-portable.zip` 與 Linux 的 `LingLingSuite-x86_64.AppImage`（附 `.zsync`），兩者都建好才放進同一個 GitHub 發行版；手動執行（workflow_dispatch）只上傳成工作產物，不建發行版
+  - 發行版不要勾「預發行版」（Set as a pre-release）：AppImage 內嵌的更新資訊只認最新的正式發行版（`latest`），勾了之後 Gear Lever 檢查不到這一版
 - **Pages：**`website/` 是首頁與隱私權政策（繁體中文在根層，英文在 `en/`），`develop` 上它有改動時由 `.github/workflows/pages.yml` 發布到 GitHub Pages，網址為 `https://suikann.github.io/ling-ling-suite/`。repo 的 Pages 來源要設成「GitHub Actions」
   - 改用子網域：在 repo 的 Settings > Pages > Custom domain 填入子網域，並在 DNS 加一筆指向 `suikann.github.io` 的 CNAME 記錄；repo 裡的檔案都不必改（以 GitHub Actions 發布時 Pages 不讀 CNAME 檔）。設好後 `suikann.github.io/ling-ling-suite` 的網址會自動轉到子網域，上方的連結照常可用；網域不續約時清掉 Custom domain 就回到原網址。兩種情況都要把 Google Console 的首頁與隱私權政策網址改成實際的網址
   - 改了隱私權政策的內容時，同時改中英兩版與兩頁的生效日期

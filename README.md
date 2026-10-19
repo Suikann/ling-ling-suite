@@ -60,13 +60,36 @@ Built-in instrument lists for common ensembles:
 
 ## Download
 
-Download the latest portable EXE from the **[Releases](../../releases)** page. No installation required --- extract and run.
+Download the latest version from the **[Releases](../../releases)** page. No installation required:
+
+- **Windows**: download `LingLingSuite-portable.zip`, extract and run
+- **Linux**: download `LingLingSuite-x86_64.AppImage`, make it executable (`chmod +x LingLingSuite-x86_64.AppImage`) and run it; read "Linux Notes" below first
 
 After upgrading, do not open project files saved by the new version with an older version: the older version does not understand the new fields and drops them when it saves. A newer version opens project files saved by an even newer one read-only, and cannot save them.
 
+## Linux Notes
+
+The AppImage supports x86_64 only and needs glibc 2.39 or later (Ubuntu 24.04 and later, Debian 13, Arch-based distributions, recent Fedora).
+
+- **Menu shortcut and updates**: import the AppImage with [Gear Lever](https://github.com/mijorus/gearlever); it creates a menu shortcut and checks for new versions. Without Gear Lever, write `~/.local/share/applications/lingling-suite.desktop` yourself with the full path of the AppImage in `Exec=`; both the file name and `StartupWMClass` must be `lingling-suite` so the window manager matches the shortcut to the window:
+  ```ini
+  [Desktop Entry]
+  Type=Application
+  Name=Ling Ling Suite
+  Name[zh_TW]=泠靈小工具
+  Exec=/home/you/Applications/LingLingSuite-x86_64.AppImage
+  Categories=Office;
+  StartupWMClass=lingling-suite
+  ```
+- **Chinese fonts**: Ling Ling Suite uses the system fonts; without a Chinese font, Chinese text shows as boxes. Install one, for example `noto-fonts-cjk` (Arch-based) or `fonts-noto-cjk` (Debian, Ubuntu)
+- **Remembering sign-ins**: sign-ins are stored in the system's Secret Service. GNOME and KDE usually provide one; on hand-assembled setups such as Hyprland, install and run a Secret Service yourself (for example `gnome-keyring`). Without one you can still sign in, but the sign-in status reads "This sign-in won't be remembered: no secure storage on this computer" and you sign in again the next time you open Ling Ling Suite
+- **Without FUSE**: if the AppImage does not start and the error mentions FUSE, run it as `APPIMAGE_EXTRACT_AND_RUN=1 ./LingLingSuite-x86_64.AppImage`; it extracts itself to a temporary folder on every start, so it opens more slowly
+- **Falling back to X11**: Ling Ling Suite uses Wayland when it is available. Running under X11 (or with `QT_QPA_PLATFORM=xcb`) needs the xcb libraries of Qt's xcb plugin, such as `libxcb-cursor` (`libxcb-cursor0` on Debian and Ubuntu); without them you get `Could not load the Qt platform plugin "xcb"`
+- **System file dialogs**: to use your desktop's own open and save dialogs, install `xdg-desktop-portal-gtk` and start with `QT_QPA_PLATFORMTHEME=xdgdesktopportal` (for example `Exec=env QT_QPA_PLATFORMTHEME=xdgdesktopportal /full/path/LingLingSuite-x86_64.AppImage` in the `.desktop` file); otherwise Qt's built-in dialogs are used
+
 ## Quick Start
 
-1. Launch `LingLingSuite.exe`
+1. Launch `LingLingSuite.exe` (on Linux, run `LingLingSuite-x86_64.AppImage`)
 2. **Import** PDF files or folders via the Import menu
 3. **Organize groups** --- each group = one piece, or one of its movements
 4. **Set up the voices** of a group in the instrumentation table on the left while its tab is open (manual entry or load preset); dragging a voice takes its part along, and unchecking "In Project" sets aside a part this project does not have; each voice's headcount (min, max, or "or more") and the group's duration are entered here too
@@ -118,6 +141,7 @@ When the club settings (the "社團設定" sheet in the catalog spreadsheet) ena
 
 - **Paths are compared case-insensitively**: on every platform, paths that differ only in letter case count as the same file. On Linux, when one folder holds both `Flute.pdf` and `flute.pdf`, Ling Ling Suite treats them as one file; a move first checks whether the destination is a different file and refuses to overwrite it, so no file is damaged.
 - **File names are cleaned by Windows rules**: Linux also replaces characters Windows does not allow (`< > : " / \ | ? *`) with underscores, because the files are uploaded to Drive and downloaded by Windows users.
+- **Google sign-in slots**: the Google client bundled with Ling Ling Suite is an unverified production app, which allows at most 100 Google accounts to sign in over its lifetime, shared by all clubs. A club that signs in only with its catalog account takes one slot, so please do not try it out with a personal account. When the slots run out, accounts that have signed in before keep working, but new accounts cannot sign in until the maintainer ships a new version with a new client and everyone signs in again.
 
 ## Development
 
@@ -170,12 +194,15 @@ python3 -m venv .venv
 
 `build.sh` picks Python the same way as `run.sh`, installs PyInstaller, runs the tests, and builds `dist/LingLingSuite/`.
 
+**Build the AppImage:** after building the folder version, run `scripts/build_appimage.sh`. It downloads pinned versions of appimagetool and the runtime, verifies their checksums, and produces `dist/LingLingSuite-x86_64.AppImage` and its `.zsync`. An AppImage built locally requires the local glibc version; releases are always built by CD on `ubuntu-24.04`.
+
 `LingLingSuite.spec` is the only set of build options; `build.bat`, `build.sh`, and CD all run it.
 
 ## CI/CD
 
 - **CI:** Automated testing on push/PR (Python 3.12, Windows and Linux)
-- **CD:** Push a `v*` tag to trigger portable EXE build and GitHub Release
+- **CD:** Pushing a `v*` tag builds the Windows `LingLingSuite-portable.zip` and the Linux `LingLingSuite-x86_64.AppImage` (with its `.zsync`), and puts them into one GitHub release once both are built; a manual run (workflow_dispatch) only uploads them as workflow artifacts and creates no release
+  - Do not tick "Set as a pre-release": the update information embedded in the AppImage only follows the latest full release (`latest`), so Gear Lever would not see a pre-release
 - **Pages:** `website/` holds the homepage and privacy policy (Traditional Chinese at the root, English under `en/`). When it changes on `develop`, `.github/workflows/pages.yml` publishes it to GitHub Pages at `https://suikann.github.io/ling-ling-suite/`. The repository's Pages source must be set to "GitHub Actions"
   - Switching to a subdomain: enter it under Settings > Pages > Custom domain in the repository and add a DNS CNAME record pointing to `suikann.github.io`; no file in the repository changes (Pages ignores CNAME files when publishing from GitHub Actions). Afterwards the `suikann.github.io/ling-ling-suite` URLs redirect to the subdomain, so the links above keep working; if the domain lapses, clearing Custom domain brings back the original URL. Either way, update the homepage and privacy policy URLs in the Google Console to the actual URLs
   - When the privacy policy changes, update both languages and the effective date on both pages
