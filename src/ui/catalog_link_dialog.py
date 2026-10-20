@@ -3,6 +3,7 @@
 群組連到譜庫的對話框
 
 依序挑曲目 → 版本 → 樂章或整首；各層找不到時可選「新建」，以群組的曲名、作曲家、樂章編號與名稱建立。
+選到任一「新建」項時，選單下方說明新建的資料取自群組資訊、要到群組分頁更改。
 開啟時依群組的曲名與樂章編號預選。按「連線」後在背景讀那一處（或新建後再讀），回到主執行緒交給專案的
 連線操作（Project.link_group），連上就發出 linked 並關閉；兩邊都有編制時先開合併差異表（CatalogMergeDialog），
 照選的那一邊連線，取消就留在這裡重新挑。讀寫譜庫都經譜庫服務在背景執行，失敗時頂端顯示
@@ -21,7 +22,7 @@ from typing import Callable, List, Optional, Tuple
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QMessageBox, QPushButton, QVBoxLayout,
+    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout,
 )
 
 from core.catalog_errors import CatalogError, CatalogFailure
@@ -87,7 +88,7 @@ class CatalogLinkDialog(QDialog):
         self, log: Optional[ActivityLog], sign_in: Optional[Callable[[], bool]],
         open_settings: Optional[Callable[[], bool]],
     ):
-        """排出提示列、曲目、版本、樂章三個選單與按鈕"""
+        """排出提示列、曲目、版本、樂章三個選單、新建說明與按鈕"""
         layout = QVBoxLayout(self)
         self._error_bar = CatalogErrorBar(log=log)
         self._error_bar.connect_remedies(sign_in, open_settings)
@@ -100,6 +101,10 @@ class CatalogLinkDialog(QDialog):
         form.addRow(t("catalog.link.edition"), self._edition_combo)
         form.addRow(t("catalog.link.movement"), self._movement_combo)
         layout.addLayout(form)
+        self._new_hint = QLabel(t("catalog.link.new_hint"))
+        self._new_hint.setWordWrap(True)
+        self._new_hint.hide()
+        layout.addWidget(self._new_hint)
         self._piece_combo.currentIndexChanged.connect(self._on_piece_chosen)
         self._edition_combo.currentIndexChanged.connect(self._forget_pending)
         self._movement_combo.currentIndexChanged.connect(self._forget_pending)
@@ -183,8 +188,10 @@ class CatalogLinkDialog(QDialog):
         return " ".join(part for part in parts if part)
 
     def _forget_pending(self, _index: int = 0):
-        """選擇改了：之前準備的新建不再沿用"""
+        """選擇改了：之前準備的新建不再沿用；有選到「新建」項時顯示新建說明"""
         self._pending = None
+        combos = (self._piece_combo, self._edition_combo, self._movement_combo)
+        self._new_hint.setVisible(any(combo.count() and combo.currentData() is None for combo in combos))
 
     # --- 連線 ---
 
