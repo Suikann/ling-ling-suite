@@ -173,3 +173,34 @@ class TestRefresh(ClubSettingsTestCase):
         self.club.refresh(connect)
         self.assertIn("ValueError: bad value", self.log_text())
         self.assertIn("譜庫讀寫失敗", self.log_text())
+
+
+class TestSubscribe(ClubSettingsTestCase):
+    """記住的結果寫入後通知訂閱者（重讀完成、忘掉時）；讀不到時記住的不變，不通知"""
+
+    def setUp(self):
+        super().setUp()
+        self.notified = []
+        self.listener = lambda: self.notified.append(self.club.remembered())
+        self.club.subscribe(self.listener)
+
+    def test_reading_notifies_with_the_new_result_remembered(self):
+        self.club_settings(["發譜平台", "華夏國樂社"])
+        self.club.refresh(lambda: self.catalog)
+        self.club_settings()
+        self.club.read(self.catalog)
+        self.assertEqual(self.notified, [PublishingPlatform.HUAXIA, None])
+
+    def test_forgetting_notifies(self):
+        self.club.forget()
+        self.assertEqual(self.notified, [None])
+
+    def test_unreadable_does_not_notify(self):
+        self.google.fail_next(CatalogErrorKind.OFFLINE)
+        self.club.refresh(lambda: self.catalog)
+        self.assertEqual(self.notified, [])
+
+    def test_no_longer_notified_after_unsubscribing(self):
+        self.club.unsubscribe(self.listener)
+        self.club.forget()
+        self.assertEqual(self.notified, [])
