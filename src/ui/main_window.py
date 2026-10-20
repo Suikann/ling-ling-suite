@@ -365,6 +365,7 @@ class MainWindow(QMainWindow):
         template_row.addWidget(QLabel(t("panel.master_template")))
         self._master_template_entry = QLineEdit(self.project.master_template)
         self._master_template_entry.textEdited.connect(lambda text: self.project.set_master_template(text))
+        self._master_template_entry.setToolTip(t("panel.template_segment_tip"))
         template_row.addWidget(self._master_template_entry, stretch=1)
         self._vars_btn = QPushButton(t("panel.insert_variable"))
         self._vars_btn.clicked.connect(self._show_variable_menu)

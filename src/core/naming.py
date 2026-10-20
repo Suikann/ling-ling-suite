@@ -30,6 +30,8 @@ from core.voice_names import instrument_key
 SCORE_SLOT = 0
 # 命名格式中的 {變數}
 _VARIABLE_PATTERN = re.compile(r"\{([^{}]+)\}")
+# 命名格式中的 [條件片段]（方括號內至少有一個 {變數}、沒有其他方括號）或 {變數}
+_PART_PATTERN = re.compile(r"\[(?P<segment>[^\[\]]*\{[^{}\[\]]+\}[^\[\]]*)\]|\{(?P<variable>[^{}]+)\}")
 # 分隔符號：空的變數連同相鄰的一串分隔符號省略
 _SEPARATORS = "-_ \u3000"
 # 中英文變數名稱到模板變數的對應
@@ -311,7 +313,8 @@ def _variables(group: Group, number: str, voice: str) -> Dict[str, str]:
 def _substitute(template: str, variables: Dict[str, str]) -> str:
     """把命名格式中的 {變數} 換成值；空的變數連同左邊緊鄰的一串分隔符號省略，左邊沒有東西時改省略右邊那一串
 
-    不是模板變數的 {…} 視同空的變數。只掃描命名格式一次，代入的值不再被替換，也不會被省略。
+    不是模板變數的 {…} 視同空的變數；有變數為空的條件片段 […] 整段視同一個空的變數。
+    只掃描命名格式一次，代入的值不再被替換、不被當成語法，也不會被省略。
     """
     parts: List[Tuple[str, bool]] = []
     trim_right = False
@@ -333,12 +336,24 @@ def _substitute(template: str, variables: Dict[str, str]) -> str:
 
 
 def _template_parts(template: str, variables: Dict[str, str]) -> Iterator[Tuple[str, bool]]:
-    """依序列出命名格式的字面文字與變數的值，各附上是否為字面文字；不是模板變數的 {…} 的值為空字串"""
+    """依序列出命名格式的字面文字與變數的值，各附上是否為字面文字
+
+    不是模板變數的 {…} 的值為空字串。條件片段內的變數都有值時列出片段的內容（不含方括號），
+    否則整段當成一個值為空字串的變數。
+    """
     position = 0
-    for match in _VARIABLE_PATTERN.finditer(template):
+    for match in _PART_PATTERN.finditer(template):
         if match.start() > position:
             yield template[position:match.start()], True
-        yield variables.get(match.group(1), ""), False
         position = match.end()
+        segment = match.group("segment")
+        if segment is None:
+            yield variables.get(match.group("variable"), ""), False
+            continue
+        inner = list(_template_parts(segment, variables))
+        if all(text for text, is_literal in inner if not is_literal):
+            yield from inner
+        else:
+            yield "", False
     if position < len(template):
         yield template[position:], True

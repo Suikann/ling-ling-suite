@@ -78,6 +78,7 @@ class DriveRenameDialog(QDialog):
         template_row.addWidget(QLabel(t("catalog.rename.template_label")))
         self._template_entry = QLineEdit(localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN))
         self._template_entry.textChanged.connect(self._update_preview)
+        self._template_entry.setToolTip(t("panel.template_segment_tip"))
         template_row.addWidget(self._template_entry, stretch=1)
         layout.addLayout(template_row)
         var_names = ", ".join(f"{{{v.name}}}" for v in TEMPLATE_VARIABLES)
