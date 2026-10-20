@@ -628,6 +628,10 @@ class Group:
             huaxia_link=HuaXiaLink.from_data(data["huaxia_link"]) if data.get("huaxia_link") else None,
         )
 
+    def display_name(self) -> str:
+        """畫面上代表這個群組的文字：群組名稱，空白時用群組 ID 前 8 碼"""
+        return self.name or self.id[:8]
+
     def update(self, **fields: Any) -> None:
         """修改群組的文字與小模板欄位（EDITABLE_FIELDS）；不發通知，專案裡的群組經由 Project.update_group 修改
 

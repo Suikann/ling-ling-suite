@@ -723,6 +723,32 @@ class TestMainWindowKeepsTypedInput(MainWindowTestCase):
         self.assertEqual(self._saved_group(path).piece_name, "Brahms Symphony")
 
 
+class TestMainWindowTabLabelFollowsGroupName(MainWindowTestCase):
+    """群組分頁的標籤跟著群組名稱：名稱一改就換，清空時改顯示群組 ID 前 8 碼"""
+
+    def _tab_text(self) -> str:
+        """第一個群組分頁（未分組之後那個）的標籤"""
+        return self.window.findChild(QTabWidget).tabText(1)
+
+    def test_typing_in_the_group_name_changes_the_tab_label(self):
+        self.open_from_menu(Project(groups=[Group(name="第一樂章")]))
+        QTest.keyClicks(field_in(self.window, "第一樂章"), " I")
+        self.assertEqual(self._tab_text(), "第一樂章 I")
+
+    def test_clearing_the_group_name_shows_the_start_of_the_group_id(self):
+        group = Group(id="0123456789abcdef", name="I")
+        self.open_from_menu(Project(groups=[group]))
+        QTest.keyClick(field_in(self.window, "I"), Qt.Key_Backspace)
+        self.assertEqual(self._tab_text(), "01234567")
+
+    def test_typing_in_the_group_name_keeps_the_name_field(self):
+        self.open_from_menu(Project(groups=[Group(name="第一樂章")]))
+        name_field = field_in(self.window, "第一樂章")
+        QTest.keyClicks(name_field, " I")
+        QTest.keyClicks(name_field, "I")
+        self.assertEqual(self._tab_text(), "第一樂章 II")
+
+
 class InstrumentListTestCase(MainWindowTestCase):
     """操作主視窗編制表的測試共用的輔助"""
 

@@ -167,7 +167,7 @@ class MainWindow(QMainWindow):
         """
         super().__init__(parent)
         self.project = self._blank_project()
-        self.project.subscribe(self._update_title)
+        self.project.subscribe(self._on_project_changed)
         self._preferences = preferences
         self.file_service = FileService()
         self.import_service = ImportService(self.file_service)
@@ -432,7 +432,14 @@ class MainWindow(QMainWindow):
         tab = GroupTab(group, self.project, self.file_service, self.import_service, self._deposit_service)
         tab.groups_changed.connect(self._rebuild_tabs)
         tab.download_requested.connect(lambda group_id: self.download_back([group_id]))
-        self._tab_widget.addTab(tab, group.name or group.id[:8])
+        self._tab_widget.addTab(tab, group.display_name())
+
+    def _refresh_tab_labels(self):
+        """群組分頁的標籤改成群組現在的名稱；不重建分頁，正在輸入的欄位不會失去焦點"""
+        for index in range(self._tab_widget.count()):
+            group = getattr(self._tab_widget.widget(index), "group", None)
+            if group is not None:
+                self._tab_widget.setTabText(index, group.display_name())
 
     def _current_group(self) -> Optional[Group]:
         """目前分頁的群組；未分組分頁為 None"""
@@ -539,7 +546,7 @@ class MainWindow(QMainWindow):
     def _set_project(self, project: Project, path: Optional[str]):
         """換成另一個專案（新增或開啟）：訂閱它的「已變更」通知並重建畫面"""
         self.project = project
-        self.project.subscribe(self._update_title)
+        self.project.subscribe(self._on_project_changed)
         self._project_path = path
         self._suggested_name = ""
         self._catalog_error_bar.clear()
@@ -1794,7 +1801,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(select_all)
         cbs = []
         for g in self.project.groups:
-            cb = QCheckBox(g.name or g.id[:8])
+            cb = QCheckBox(g.display_name())
             cb.setChecked(True)
             cb.setProperty("gid", g.id)
             lay.addWidget(cb)
@@ -1837,6 +1844,11 @@ class MainWindow(QMainWindow):
 
     def _insert_variable(self, var_name: str):
         self._master_template_entry.insert(f"{{{var_name}}}")
+
+    def _on_project_changed(self):
+        """專案「已變更」通知：更新視窗標題與群組分頁的標籤"""
+        self._update_title()
+        self._refresh_tab_labels()
 
     def _update_title(self):
         title = t("app.title")
