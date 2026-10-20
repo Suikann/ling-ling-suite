@@ -2,7 +2,9 @@
 """
 譜庫設定對話框
 
-引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫試算表。
+引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫總表。
+新建的譜庫總表標題列用當下的介面語言；選資料夾的步驟下方的「欄位語言」選單寫出連到的譜庫總表現在的標題語言
+（各工作表不一致時不選），換語言時在背景把各工作表的標題列整列改寫（core/catalog_headers.py）。
 登入區顯示登入的帳號 email 與帳號提醒；登入時在背景等瀏覽器回來，期間顯示可取消的等待視窗。
 選資料夾的步驟下方寫出這台電腦記住的發譜平台（照社團設定裡的寫法，沒有時寫未設定）與到譜庫試算表的社團設定工作表設定；
 開著的時候重讀社團設定完成（例如譜庫視窗連上譜庫），經 Qt 訊號回到主執行緒改寫這一行，HuaXia 登入區跟著出現或藏起。
@@ -19,7 +21,7 @@ from typing import Callable, List, Optional, Tuple
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QMessageBox, QGroupBox,
+    QPushButton, QMessageBox, QGroupBox, QComboBox,
     QTreeWidget, QTreeWidgetItem, QDialogButtonBox, QWidget,
 )
 from PySide6.QtCore import Qt, Signal
@@ -28,7 +30,7 @@ from core.catalog_constants import (
 )
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import DriveFile
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, LOCALE_EN, LOCALE_ZH_TW
 from core.locale import get_locale, t
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingCatalog
@@ -58,6 +60,11 @@ _LOGIN_FAILURE_KEYS = {
     LoginFailure.TIMED_OUT: "catalog.auth.timed_out",
     LoginFailure.DENIED: "catalog.auth.denied",
     LoginFailure.SCOPES_MISSING: "catalog.auth.scopes_missing",
+}
+# 欄位語言選單的選項：語言代碼與顯示的名稱
+_HEADER_LANGUAGE_KEYS = {
+    LOCALE_ZH_TW: "menu.view.language.zh_TW",
+    LOCALE_EN: "menu.view.language.en",
 }
 # HuaXia 登入狀態旁的原因對應的介面字串（安全儲存的三種與 Google 共用）
 _HUAXIA_REASON_KEYS = {
@@ -142,6 +149,8 @@ class CatalogSettingsDialog(QDialog):
         self._tasks = CatalogTasks(self)
         # 找到或建好的譜庫試算表；按「儲存設定」才寫進偏好設定
         self._spreadsheet_id = self._prefs.get(CATALOG_SPREADSHEET_ID_KEY) or ""
+        # 連到的譜庫總表現在的標題語言；還沒讀到或各工作表不一致時為 None
+        self._header_locale: Optional[str] = None
         self.setWindowTitle(t("catalog.settings.title"))
         self.setMinimumWidth(560)
         self._build_ui()
@@ -204,6 +213,16 @@ class CatalogSettingsDialog(QDialog):
         self._folder_status = QLabel("")
         self._folder_status.setWordWrap(True)
         step2_layout.addWidget(self._folder_status)
+        language_row = QHBoxLayout()
+        language_row.addWidget(QLabel(t("catalog.settings.header_language")))
+        self._header_language = QComboBox()
+        for locale, key in _HEADER_LANGUAGE_KEYS.items():
+            self._header_language.addItem(t(key), locale)
+        self._header_language.activated.connect(lambda _: self._rewrite_headers(self._header_language.currentData()))
+        language_row.addWidget(self._header_language)
+        language_row.addStretch()
+        step2_layout.addLayout(language_row)
+        self._show_header_language(None, enabled=False)
         layout.addWidget(step2)
         self._platform_hint = QLabel()
         self._platform_hint.setWordWrap(True)
@@ -327,9 +346,9 @@ class CatalogSettingsDialog(QDialog):
 
     def _run(
         self, work: Callable[[], object], done: Callable[[object], None], heading: str, action: str,
-        retry: Callable[[], None],
+        retry: Callable[[], None], undo: Optional[Callable[[], None]] = None,
     ):
-        """在背景執行 work，完成時呼叫 done；失敗時清掉資料夾狀態、顯示提示列，按「重試」呼叫 retry
+        """在背景執行 work，完成時呼叫 done；失敗時清掉資料夾狀態（或呼叫 undo）、顯示提示列，按「重試」呼叫 retry
 
         Args:
             work: 經譜庫服務的工作（背景執行緒呼叫）
@@ -337,10 +356,14 @@ class CatalogSettingsDialog(QDialog):
             heading: 提示列的開頭（讀不到譜庫、寫不進譜庫）
             action: 失敗的動作，記進詳細資料與紀錄檔
             retry: 提示列按「重試」時呼叫
+            undo: 失敗時代替清掉資料夾狀態要做的事；省略時清掉資料夾狀態
         """
         def failed(error: CatalogError):
             """失敗：提示列寫出類別與怎麼辦"""
-            self._folder_status.setText("")
+            if undo is None:
+                self._folder_status.setText("")
+            else:
+                undo()
             self._error_bar.show_failure(heading, CatalogFailure.from_error(error, action), retry)
         self._error_bar.clear()
         self._tasks.run(work, done, failed)
@@ -402,9 +425,40 @@ class CatalogSettingsDialog(QDialog):
         self._folder_status.setStyleSheet(f"color: {color};")
 
     def _use_catalog(self, sheet: DriveFile):
-        """使用找到的試算表作為譜庫試算表（按「儲存設定」才寫進偏好設定）"""
+        """使用找到的試算表作為譜庫總表（按「儲存設定」才寫進偏好設定），在背景讀它的標題語言"""
         self._spreadsheet_id = sheet.id
         self._show_folder_status(t("catalog.settings.catalog_found", name=sheet.name), "#2ecc71")
+        self._read_header_language()
+
+    def _read_header_language(self):
+        """在背景讀連到的譜庫總表的標題語言，寫進欄位語言選單"""
+        spreadsheet_id = self._spreadsheet_id
+        self._show_header_language(None, enabled=False)
+        self._run(
+            lambda: self._catalog_factory(spreadsheet_id).header_locale(), self._show_header_language,
+            t("catalog.error.cannot_read"), t("catalog.action.read_header_language"), self._read_header_language,
+            undo=lambda: None,
+        )
+
+    def _rewrite_headers(self, locale: str):
+        """在背景把連到的譜庫總表各工作表的標題列改寫成 locale 的語言；寫不進去時選單改回原本的語言"""
+        if locale == self._header_locale:
+            return
+        spreadsheet_id = self._spreadsheet_id
+        before = self._header_locale
+        self._show_header_language(locale, enabled=False)
+        self._run(
+            lambda: self._catalog_factory(spreadsheet_id).set_header_locale(locale),
+            lambda _: self._show_header_language(locale),
+            t("catalog.error.cannot_write"), t("catalog.action.write_header_language"),
+            lambda: self._rewrite_headers(locale), undo=lambda: self._show_header_language(before),
+        )
+
+    def _show_header_language(self, locale: Optional[str], enabled: bool = True):
+        """欄位語言選單選到 locale（None 時不選），記為譜庫總表現在的標題語言"""
+        self._header_locale = locale
+        self._header_language.setCurrentIndex(self._header_language.findData(locale) if locale else -1)
+        self._header_language.setEnabled(enabled)
 
     def _pick_catalog(self, sheets: List[DriveFile]):
         """資料夾內有多個試算表時，讓使用者選擇"""
@@ -439,6 +493,7 @@ class CatalogSettingsDialog(QDialog):
             """建好了（按「儲存設定」才寫進偏好設定）"""
             self._spreadsheet_id = spreadsheet_id
             self._show_folder_status(t("catalog.settings.catalog_created"), "#2ecc71")
+            self._show_header_language(pending.locale)
 
         def create():
             """建立譜庫試算表（重試時再呼叫一次）"""

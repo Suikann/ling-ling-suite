@@ -530,6 +530,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.settings.save": "儲存設定",
         "catalog.settings.publishing_platform": "發譜平台：{platform}（在譜庫試算表的「{sheet}」工作表設定）",
         "catalog.settings.publishing_platform_unset": "未設定",
+        "catalog.settings.header_language": "欄位語言：",
         # 譜庫 - 瀏覽器
         "catalog.title": "譜庫管理",
         "catalog.toolbar.add_composer": "新增作曲家",
@@ -712,6 +713,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.action.read_publish_log": "讀取發譜紀錄",
         "catalog.error.cannot_write": "寫不進譜庫",
         "catalog.action.create_catalog": "建立譜庫試算表",
+        "catalog.action.read_header_language": "讀取欄位語言",
+        "catalog.action.write_header_language": "改寫欄位名稱",
         "catalog.saving": "寫入中...",
         # 譜庫 - 存檔時寫回編制（衝突畫面、刪除聲部、聲部組的影響範圍）
         "catalog.sync.title": "寫回譜庫",
@@ -1747,6 +1750,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.settings.save": "Save Settings",
         "catalog.settings.publishing_platform": "Distribution platform: {platform} (set in the \"{sheet}\" sheet of the catalog spreadsheet)",
         "catalog.settings.publishing_platform_unset": "Not set",
+        "catalog.settings.header_language": "Column language:",
         # Catalog - Browser
         "catalog.title": "Catalog Manager",
         "catalog.toolbar.add_composer": "Add Composer",
@@ -1929,6 +1933,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.action.read_publish_log": "Read publish log",
         "catalog.error.cannot_write": "Can't write to the catalog",
         "catalog.action.create_catalog": "Create catalog spreadsheet",
+        "catalog.action.read_header_language": "Read column language",
+        "catalog.action.write_header_language": "Rewrite column names",
         "catalog.saving": "Saving...",
         "catalog.sync.title": "Write Back to Catalog",
         "catalog.sync.waiting": "Writing the instrumentation to the catalog…",

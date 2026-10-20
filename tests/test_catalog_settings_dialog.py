@@ -21,9 +21,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QInputDialog, QLabel, QPushButton, QTreeWidget
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QDialog, QDialogButtonBox, QInputDialog, QLabel, QPushButton, QTreeWidget,
+)
 
-from core.catalog_constants import DRIVE_SPREADSHEET_MIME, SHEET_HEADERS, SHEET_PIECES, PublishingPlatform
+from core.catalog_constants import DRIVE_SPREADSHEET_MIME, SHEET_HEADERS, SHEET_PARTS, SHEET_PIECES, PublishingPlatform
 from core.catalog_headers import header_row
 from core.catalog_errors import CatalogErrorKind
 from core.constants import (
@@ -432,6 +434,70 @@ class TestFindCatalog(CatalogFolderTestCase):
         self.assertFalse(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY))
 
 
+class TestHeaderLanguage(CatalogFolderTestCase):
+    """欄位語言選單：寫出連到的譜庫總表現在的標題語言，換語言時整份改寫標題列；讀寫不到時頂端出現提示列"""
+
+    def setUp(self):
+        super().setUp()
+        self.sheet = self.add_spreadsheet("譜庫總表")
+        for sheet, headers in SHEET_HEADERS.items():
+            self.google.sheets.create_tab(sheet, [headers])
+
+    def combo(self, dialog: CatalogSettingsDialog) -> QComboBox:
+        """欄位語言選單"""
+        return dialog.findChild(QComboBox)
+
+    def open_and_read(self) -> CatalogSettingsDialog:
+        """開啟並等到選單寫出標題語言（或提示列出現）"""
+        dialog = self.open_with_folder()
+        wait_until(lambda: self.combo(dialog).isEnabled() or not self.bar(dialog).isHidden())
+        return dialog
+
+    def choose(self, dialog: CatalogSettingsDialog, locale: str) -> None:
+        """在選單選一種語言"""
+        combo = self.combo(dialog)
+        index = combo.findData(locale)
+        combo.setCurrentIndex(index)
+        combo.activated.emit(index)
+
+    def test_disabled_until_a_catalog_is_linked(self):
+        self.google.drive.trash(self.sheet)
+        dialog = self.open_dialog()
+        self.assertFalse(self.combo(dialog).isEnabled())
+
+    def test_shows_the_language_of_the_linked_catalog(self):
+        dialog = self.open_and_read()
+        self.assertEqual(self.combo(dialog).currentData(), LOCALE_EN)
+        self.assertEqual(self.combo(dialog).currentText(), "English")
+
+    def test_choosing_another_language_rewrites_every_header_row(self):
+        dialog = self.open_and_read()
+        self.choose(dialog, LOCALE_ZH_TW)
+        wait_until(lambda: self.google.sheets.rows(SHEET_PARTS)[0] == header_row(SHEET_PARTS, LOCALE_ZH_TW))
+        wait_until(lambda: self.combo(dialog).isEnabled())
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0], header_row(SHEET_PIECES, LOCALE_ZH_TW))
+        self.assertEqual(self.combo(dialog).currentData(), LOCALE_ZH_TW)
+
+    def test_a_failed_rewrite_shows_the_bar_and_keeps_the_language(self):
+        dialog = self.open_and_read()
+        self.google.fail_next(CatalogErrorKind.OFFLINE)
+        self.choose(dialog, LOCALE_ZH_TW)
+        wait_until(lambda: not self.bar(dialog).isHidden())
+        self.assertTrue(self.bar_text(dialog).startswith("寫不進譜庫｜連不上網路："))
+        self.assertEqual(self.combo(dialog).currentData(), LOCALE_EN)
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0], SHEET_HEADERS[SHEET_PIECES])
+        next(b for b in self.bar(dialog).findChildren(QPushButton) if b.text() == "重試").click()
+        wait_until(lambda: self.combo(dialog).currentData() == LOCALE_ZH_TW)
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0], header_row(SHEET_PIECES, LOCALE_ZH_TW))
+
+    def test_a_new_catalog_shows_the_language_it_was_created_in(self):
+        self.google.drive.trash(self.sheet)
+        with mock.patch.object(QInputDialog, "getText", return_value=("社團譜庫", True)):
+            dialog = self.open_with_folder()
+        wait_until(lambda: self.combo(dialog).isEnabled())
+        self.assertEqual(self.combo(dialog).currentData(), get_locale())
+
+
 class TestMyDriveTypedAsRoot(CatalogFolderTestCase):
     """資料夾欄位寫的是 Drive 根資料夾的別名 root 時，存成根資料夾真正的 ID，譜庫的其他地方才比對得到"""
 
@@ -483,7 +549,6 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
         self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), "old-sheet")
         self.assertEqual(self.saved().get(CATALOG_SPREADSHEET_ID_KEY), "old-sheet")
         self.assertIs(ClubSettingsService(self.saved()).remembered(), PublishingPlatform.HUAXIA)
-        self.assertEqual(self.connected_to, [""])
 
     def test_the_same_catalog_is_read_again_without_forgetting_first(self):
         self.remember_huaxia()
