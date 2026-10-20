@@ -12,7 +12,7 @@ import unittest
 SRC_DIR = os.path.join(os.path.dirname(__file__), '..', 'src')
 sys.path.insert(0, SRC_DIR)
 
-from core.locale import get_available_locales, get_keys, get_locale, set_locale, t, trash_name
+from core.locale import get_available_locales, get_keys, get_locale, language_names, set_locale, t, trash_name
 
 REFERENCE_LOCALE = "zh_TW"
 
@@ -74,6 +74,17 @@ class TestStringKeys(unittest.TestCase):
             with self.subTest(locale=locale_code):
                 self.assertEqual([], sorted(reference - keys), f"{locale_code} 缺少的鍵")
                 self.assertEqual([], sorted(keys - reference), f"{locale_code} 多出的鍵")
+
+
+class TestLanguageNames(unittest.TestCase):
+    """可選的介面語言與它們顯示的名稱"""
+
+    def test_lists_traditional_chinese_then_english_by_their_own_names(self):
+        self.addCleanup(set_locale, get_locale())
+        for locale_code in get_available_locales():
+            with self.subTest(locale=locale_code):
+                set_locale(locale_code)
+                self.assertEqual(language_names(), [("zh_TW", "繁體中文"), ("en", "English")])
 
 
 class TestTrashName(unittest.TestCase):

@@ -85,9 +85,9 @@ class TestVariableTable(unittest.TestCase):
             score_value, part_value = self.EXPECTED[var.name]
             for name in (var.name, var.name_en):
                 with self.subTest(variable=name):
-                    settings = NamingSettings(f"[{{{name}}}].pdf")
-                    self.assertEqual(name_slot(self.group, SCORE_SLOT, settings).file_name, f"[{score_value}].pdf")
-                    self.assertEqual(name_slot(self.group, 2, settings).file_name, f"[{part_value}].pdf")
+                    settings = NamingSettings(f"({{{name}}}).pdf")
+                    self.assertEqual(name_slot(self.group, SCORE_SLOT, settings).file_name, f"({score_value}).pdf")
+                    self.assertEqual(name_slot(self.group, 2, settings).file_name, f"({part_value}).pdf")
 
 
 class TestVoices(unittest.TestCase):
@@ -175,6 +175,112 @@ class TestSubstitution(unittest.TestCase):
     def test_unknown_variables_lists_names_not_in_the_template_variables(self):
         self.assertEqual(unknown_variables("{序號}{foo}-{Instrument}{曲名}{bar}{foo}.pdf"), ["foo", "bar"])
         self.assertEqual(unknown_variables("{序號}-{Instrument}.pdf"), [])
+
+
+class TestEmptyVariables(unittest.TestCase):
+    """空變數連同左邊緊鄰的一串分隔符號省略，在開頭時改省略右邊那一串"""
+
+    def _name(self, template, **fields):
+        return name_slot(_group(["Flute"], **fields), 1, NamingSettings(template)).file_name
+
+    def test_empty_variable_drops_the_separators_on_its_left(self):
+        name = self._name("{序號}-{曲名}-{樂章名稱}-{樂器}.pdf", piece_name="泰芙努特")
+        self.assertEqual(name, "01-泰芙努特-Flute.pdf")
+
+    def test_empty_variable_at_the_start_drops_the_separators_on_its_right(self):
+        self.assertEqual(self._name("{樂章名稱}-{樂器}.pdf"), "Flute.pdf")
+
+    def test_empty_variable_after_leading_separators_drops_the_separators_on_both_sides(self):
+        name = self._name("-{樂章名稱}-{曲名}.pdf", piece_name="泰芙努特")
+        self.assertEqual(name, "泰芙努特.pdf")
+
+    def test_consecutive_empty_variables_drop_every_separator_between_them(self):
+        self.assertEqual(self._name("{樂章編號} - {樂章名稱}_{樂器}.pdf"), "Flute.pdf")
+        self.assertEqual(self._name("{序號}-{樂章編號}-{樂章名稱}-{樂器}.pdf"), "01-Flute.pdf")
+
+    def test_hyphen_underscore_and_half_and_full_width_spaces_are_separators(self):
+        for separator in ("-", "_", " ", "\u3000", " -\u3000_"):
+            with self.subTest(separator=separator):
+                self.assertEqual(self._name(f"{{序號}}{separator}{{樂章名稱}}.pdf"), "01.pdf")
+
+    def test_other_text_beside_an_empty_variable_is_kept(self):
+        self.assertEqual(self._name("第{樂章編號}章-{樂器}.pdf"), "第章-Flute.pdf")
+        self.assertEqual(self._name("{樂器}.{樂章名稱}.pdf"), "Flute..pdf")
+        self.assertEqual(self._name("{樂器}（{樂章名稱}）.pdf"), "Flute（）.pdf")
+        self.assertEqual(self._name("{樂器}、{樂章名稱}.pdf"), "Flute、.pdf")
+
+    def test_unknown_variable_counts_as_empty(self):
+        self.assertEqual(self._name("{序號}-{foo}-{樂器}.pdf"), "01-Flute.pdf")
+        self.assertEqual(self._name("{foo}_{樂器}.pdf"), "Flute.pdf")
+
+    def test_separators_inside_values_are_kept(self):
+        name = self._name("{曲名}-{樂章名稱}-{樂器}.pdf", piece_name="A--B-")
+        self.assertEqual(name, "A--B--Flute.pdf")
+
+    def test_names_without_empty_variables_are_unchanged(self):
+        name = self._name("{序號}--{曲名}_ {樂器}.pdf", piece_name="Sym")
+        self.assertEqual(name, "01--Sym_ Flute.pdf")
+
+    def test_subfolder_template_follows_the_same_rule(self):
+        group = _group(["Flute"], piece_name="Sym")
+        settings = NamingSettings("{樂器}.pdf", subfolder_template="{樂章編號}-{曲名}-{樂章名稱}")
+        self.assertEqual(name_slot(group, 1, settings).folders, ("Sym",))
+
+
+class TestConditionalSegments(unittest.TestCase):
+    """[…] 內含變數時是條件片段：片段內有變數為空就整段省略，否則去掉方括號照常代入"""
+
+    def _name(self, template, **fields):
+        return name_slot(_group(["Flute"], **fields), 1, NamingSettings(template)).file_name
+
+    def test_segment_is_dropped_when_its_variable_is_empty_and_unwrapped_when_it_has_a_value(self):
+        template = "{序號}-{曲名}[（{樂章名稱}）]-{樂器}.pdf"
+        self.assertEqual(self._name(template, piece_name="泰芙努特"), "01-泰芙努特-Flute.pdf")
+        self.assertEqual(self._name(template, piece_name="絲路", movement_name="駝鈴"), "01-絲路（駝鈴）-Flute.pdf")
+
+    def test_segment_is_dropped_when_any_of_its_variables_is_empty(self):
+        template = "{曲名}[ {樂章編號}.{樂章名稱}].pdf"
+        self.assertEqual(self._name(template, piece_name="Sym", movement_number="2", movement_name="Largo"),
+                         "Sym 2.Largo.pdf")
+        self.assertEqual(self._name(template, piece_name="Sym", movement_number="2"), "Sym.pdf")
+        self.assertEqual(self._name(template, piece_name="Sym"), "Sym.pdf")
+
+    def test_segment_at_the_start_middle_or_end(self):
+        self.assertEqual(self._name("[第{樂章編號}章-]{曲名}.pdf", piece_name="泰芙努特"), "泰芙努特.pdf")
+        self.assertEqual(self._name("[第{樂章編號}章-]{曲名}.pdf", piece_name="Sym", movement_number="3"),
+                         "第3章-Sym.pdf")
+        self.assertEqual(self._name("{曲名}-[{樂章名稱}]-{樂器}.pdf", piece_name="Sym"), "Sym-Flute.pdf")
+        self.assertEqual(self._name("{曲名}-{樂器}[-{樂章名稱}].pdf", piece_name="Sym"), "Sym-Flute.pdf")
+
+    def test_dropped_segment_counts_as_an_empty_variable_for_separators(self):
+        self.assertEqual(self._name("[{樂章編號}]-{樂器}.pdf"), "Flute.pdf")
+        self.assertEqual(self._name("{序號} _ [第{樂章編號}章].pdf"), "01.pdf")
+
+    def test_kept_segment_reads_as_its_content_for_separators(self):
+        self.assertEqual(self._name("[{樂章編號}-]{樂章名稱}.pdf", movement_number="2"), "2.pdf")
+
+    def test_brackets_without_a_variable_are_literal_text(self):
+        self.assertEqual(self._name("{序號}-[總譜]-{樂器}.pdf"), "01-[總譜]-Flute.pdf")
+
+    def test_unpaired_brackets_are_literal_text(self):
+        self.assertEqual(self._name("[{序號}-{樂器}.pdf"), "[01-Flute.pdf")
+        self.assertEqual(self._name("{序號}]-{樂器}.pdf"), "01]-Flute.pdf")
+        self.assertEqual(self._name("[[{序號}]-{樂器}.pdf"), "[01-Flute.pdf")
+
+    def test_unknown_variable_in_a_segment_counts_as_empty(self):
+        self.assertEqual(self._name("{序號}[-{foo}]-{樂器}.pdf"), "01-Flute.pdf")
+
+    def test_brackets_in_values_are_not_syntax(self):
+        self.assertEqual(self._name("{曲名}-{樂器}.pdf", piece_name="[{樂器}]"), "[{樂器}]-Flute.pdf")
+        self.assertEqual(self._name("{曲名}[{樂章名稱}]-{樂器}.pdf", piece_name="A[", movement_name="]B"),
+                         "A[]B-Flute.pdf")
+
+    def test_subfolder_template_supports_segments(self):
+        group = _group(["Flute"], piece_name="Sym")
+        settings = NamingSettings("{樂器}.pdf", subfolder_template="{曲名}[ - 第{樂章編號}樂章]")
+        self.assertEqual(name_slot(group, 1, settings).folders, ("Sym",))
+        group.movement_number = "2"
+        self.assertEqual(name_slot(group, 1, settings).folders, ("Sym - 第2樂章",))
 
 
 class TestFolders(unittest.TestCase):

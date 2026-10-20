@@ -17,7 +17,7 @@ from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
-    LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
+    PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
 from core.catalog_constants import PublishingPlatform
 from core.catalog_errors import CatalogError, CatalogErrorKind, CatalogFailure
@@ -25,7 +25,7 @@ from core.catalog_sync import PlaceWrite, SyncOutcome, WriteSource, place_writes
 from core.clear_local import ClearPlan
 from core.deposit_revert import LocalProject, RevertChoice, RevertPreview
 from core.launch_env import app_version, current_build
-from core.locale import t, get_locale, localized, set_locale
+from core.locale import t, get_locale, language_names, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
 from core.voice_names import duplicate_rows
@@ -142,6 +142,8 @@ class MainWindow(QMainWindow):
     # 登入在背景執行緒進行：「沒存進安全儲存」的通知經這個訊號轉回主執行緒才提示
     _login_not_saved = Signal()
     _huaxia_login_not_saved = Signal()
+    # 重讀社團設定多在背景執行緒完成（譜庫視窗、譜庫設定的「儲存設定」）：經這個訊號轉回主執行緒更新「發譜」
+    _club_settings_read = Signal()
 
     def __init__(
         self, preferences: PreferencesService, parent=None, history: Optional[MoveHistory] = None,
@@ -167,7 +169,7 @@ class MainWindow(QMainWindow):
         """
         super().__init__(parent)
         self.project = self._blank_project()
-        self.project.subscribe(self._update_title)
+        self.project.subscribe(self._on_project_changed)
         self._preferences = preferences
         self.file_service = FileService()
         self.import_service = ImportService(self.file_service)
@@ -194,8 +196,11 @@ class MainWindow(QMainWindow):
         self._clear_service = ClearLocalService(self.file_service, self._log, standard_folders=_standard_folders())
         self._download_service = DownloadService(self.file_service, self._log)
         self._revert_service = DepositRevertService(self.file_service, self._download_service, self._log)
-        # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀
+        # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀。
+        # 社團設定服務全程式一份，傳給譜庫視窗與譜庫設定：哪裡重讀完成都通知這裡更新按鈕
         self._club_settings = ClubSettingsService(preferences, self._log)
+        self._club_settings_read.connect(self._show_publish_button)
+        self._club_settings.subscribe(self._club_settings_read.emit)
         self._publisher = PublishService(self._huaxia_auth)
         # 收回提醒依這台電腦記下的發譜紀錄摘要判斷（不連網、不讀安全儲存）；發譜寫完發譜紀錄後更新摘要
         self._recall_reminder = RecallReminder(preferences, self._log)
@@ -277,8 +282,8 @@ class MainWindow(QMainWindow):
         self._add_action(tools_menu, t("menu.tools.cleanup_workspace"), self._open_workspace_cleanup)
         view_menu = mb.addMenu(t("menu.view"))
         lang_menu = view_menu.addMenu(t("menu.view.language"))
-        for code, label_key in [(LOCALE_ZH_TW, "menu.view.language.zh_TW"), (LOCALE_EN, "menu.view.language.en")]:
-            action = QAction(t(label_key), self)
+        for code, name in language_names():
+            action = QAction(name, self)
             action.triggered.connect(lambda checked=False, c=code: self._set_language(c))
             lang_menu.addAction(action)
         help_menu = mb.addMenu(t("menu.help"))
@@ -365,6 +370,7 @@ class MainWindow(QMainWindow):
         template_row.addWidget(QLabel(t("panel.master_template")))
         self._master_template_entry = QLineEdit(self.project.master_template)
         self._master_template_entry.textEdited.connect(lambda text: self.project.set_master_template(text))
+        self._master_template_entry.setToolTip(t("panel.template_segment_tip"))
         template_row.addWidget(self._master_template_entry, stretch=1)
         self._vars_btn = QPushButton(t("panel.insert_variable"))
         self._vars_btn.clicked.connect(self._show_variable_menu)
@@ -432,7 +438,14 @@ class MainWindow(QMainWindow):
         tab = GroupTab(group, self.project, self.file_service, self.import_service, self._deposit_service)
         tab.groups_changed.connect(self._rebuild_tabs)
         tab.download_requested.connect(lambda group_id: self.download_back([group_id]))
-        self._tab_widget.addTab(tab, group.name or group.id[:8])
+        self._tab_widget.addTab(tab, group.display_name())
+
+    def _refresh_tab_labels(self):
+        """群組分頁的標籤改成群組現在的名稱；不重建分頁，正在輸入的欄位不會失去焦點"""
+        for index in range(self._tab_widget.count()):
+            group = getattr(self._tab_widget.widget(index), "group", None)
+            if group is not None:
+                self._tab_widget.setTabText(index, group.display_name())
 
     def _current_group(self) -> Optional[Group]:
         """目前分頁的群組；未分組分頁為 None"""
@@ -478,12 +491,10 @@ class MainWindow(QMainWindow):
             tab.show_undeposited()
 
     def changeEvent(self, event):
-        """切回這個視窗時：目前的群組分頁重新比對未存入的檔（本機的檔可能在別的程式裡改過），
-        「發譜」依記住的社團設定顯示或隱藏（例如關掉讀過社團設定的譜庫視窗）"""
+        """切回這個視窗時：目前的群組分頁重新比對未存入的檔（本機的檔可能在別的程式裡改過）"""
         super().changeEvent(event)
         if event.type() == QEvent.ActivationChange and self.isActiveWindow():
             self._show_undeposited()
-            self._show_publish_button()
 
     # --- 編制表回呼 ---
 
@@ -539,7 +550,7 @@ class MainWindow(QMainWindow):
     def _set_project(self, project: Project, path: Optional[str]):
         """換成另一個專案（新增或開啟）：訂閱它的「已變更」通知並重建畫面"""
         self.project = project
-        self.project.subscribe(self._update_title)
+        self.project.subscribe(self._on_project_changed)
         self._project_path = path
         self._suggested_name = ""
         self._catalog_error_bar.clear()
@@ -1277,7 +1288,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, t("huaxia.auth.title"), t("catalog.auth.reason.not_saved"))
 
     def _catalog_ready(self) -> bool:
-        """譜庫已設定（登入 Google、有譜庫試算表）；還沒有時先引導設定，回傳設定完成與否"""
+        """譜庫已設定（登入 Google、有譜庫總表）；還沒有時先引導設定，回傳設定完成與否"""
         spreadsheet_id = self._preferences.get(CATALOG_SPREADSHEET_ID_KEY)
         if self._auth_service.get_credentials() is None or not spreadsheet_id:
             return self._open_catalog_settings()
@@ -1292,6 +1303,7 @@ class MainWindow(QMainWindow):
             self._auth_service, self._preferences, catalog_factory=self._catalog_factory, log=self._log,
             huaxia_auth=self._huaxia_auth, voice_candidates=self._voice_candidates, reverter=self,
             downloads=self._download_service, orchestra_type=self.project.orchestra_type,
+            club_settings=self._club_settings,
         )
         self._catalog_window.show()
         return True
@@ -1618,6 +1630,7 @@ class MainWindow(QMainWindow):
         from ui.catalog_settings_dialog import CatalogSettingsDialog
         dialog = CatalogSettingsDialog(
             self._auth_service, self._preferences, self, log=self._log, huaxia_auth=self._huaxia_auth,
+            club_settings=self._club_settings,
         )
         accepted = dialog.exec() == CatalogSettingsDialog.Accepted
         self._show_publish_button()
@@ -1794,7 +1807,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(select_all)
         cbs = []
         for g in self.project.groups:
-            cb = QCheckBox(g.name or g.id[:8])
+            cb = QCheckBox(g.display_name())
             cb.setChecked(True)
             cb.setProperty("gid", g.id)
             lay.addWidget(cb)
@@ -1837,6 +1850,11 @@ class MainWindow(QMainWindow):
 
     def _insert_variable(self, var_name: str):
         self._master_template_entry.insert(f"{{{var_name}}}")
+
+    def _on_project_changed(self):
+        """專案「已變更」通知：更新視窗標題與群組分頁的標籤"""
+        self._update_title()
+        self._refresh_tab_labels()
 
     def _update_title(self):
         title = t("app.title")

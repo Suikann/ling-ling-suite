@@ -894,8 +894,10 @@ class PublishPreview:
         self.compressed = kept
 
     def step_ready(self, step: PublishStep) -> bool:
-        """這一步是否都決定好了（「下一步」）：「曲目」要每個沒擋下的群組都對到曲目、沒有兩個群組對到同一首，
-        「聲部」要沒有群組還不能發"""
+        """這一步是否都決定好了（「下一步」）：要有沒擋下的群組（全都擋下時哪一步都不算），「曲目」要每個沒擋下的
+        群組都對到曲目、沒有兩個群組對到同一首，「聲部」要沒有群組還不能發"""
+        if not self.groups:
+            return False
         if step is PublishStep.PIECE:
             return all(self.has_piece(group) and not self.sharing(group) for group in self.groups)
         if step is PublishStep.VOICES:

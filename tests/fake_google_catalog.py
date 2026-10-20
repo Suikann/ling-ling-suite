@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-假 Google：記憶體裡的譜庫試算表加 Drive
+假 Google：記憶體裡的譜庫總表加 Drive
 
 實作試算表關口與 Drive 關口（services/catalog_ports.py），注入給譜庫服務。每次呼叫計為一次請求（requests），
 可以設定在第 N 次請求時丟出某類錯誤（fail_at，可選擇在請求已經生效之後才丟出，扮演回應沒收到），

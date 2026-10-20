@@ -15,12 +15,14 @@ from core.catalog_constants import (
     SHEET_PARTS, SHEET_PERFORMANCES, SHEET_PIECES, PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
+from core.catalog_headers import header_row, localized_sheets
+from core.constants import LOCALE_EN, LOCALE_ZH_TW
 from fake_google_catalog import ROOT, FakeGoogle
 from services.catalog_service import CatalogService, PendingCatalog
 
 
 def empty_catalog(google: FakeGoogle) -> None:
-    """在假 Google 建出只有標題列的譜庫試算表"""
+    """在假 Google 建出只有標題列的譜庫總表"""
     for title, headers in SHEET_HEADERS.items():
         google.sheets.create_tab(title, [headers])
 
@@ -469,7 +471,7 @@ class TestDriveWrites(CatalogTestCase):
 
 
 class TestCreateCatalog(unittest.TestCase):
-    """譜庫設定：找資料夾裡的試算表、在資料夾裡建立新的譜庫試算表"""
+    """譜庫設定：找資料夾裡的試算表、在資料夾裡建立新的譜庫總表"""
 
     def setUp(self):
         self.google = FakeGoogle()
@@ -477,21 +479,28 @@ class TestCreateCatalog(unittest.TestCase):
         self.folder = self.google.drive.add_folder("譜庫")
 
     def test_lists_spreadsheets_in_the_folder(self):
-        sheet = self.google.drive.add_file("譜庫試算表", self.folder, mime_type=DRIVE_SPREADSHEET_MIME)
+        sheet = self.google.drive.add_file("譜庫總表", self.folder, mime_type=DRIVE_SPREADSHEET_MIME)
         self.google.drive.add_file("說明.pdf", self.folder)
         self.google.drive.add_file("別的", mime_type=DRIVE_SPREADSHEET_MIME)
         self.assertEqual([f.id for f in self.catalog.spreadsheets_in(self.folder)], [sheet])
 
     def test_creates_a_spreadsheet_with_every_sheet_and_a_frozen_header_row_in_the_folder(self):
-        spreadsheet_id = self.catalog.create_catalog(PendingCatalog("譜庫試算表", self.folder))
+        spreadsheet_id = self.catalog.create_catalog(PendingCatalog("譜庫總表", self.folder, LOCALE_EN))
         self.assertEqual([f.id for f in self.catalog.spreadsheets_in(self.folder)], [spreadsheet_id])
         self.assertEqual(self.google.drive.file(spreadsheet_id).parents, (self.folder,))
-        self.assertEqual(self.google.drive.file(spreadsheet_id).name, "譜庫試算表")
+        self.assertEqual(self.google.drive.file(spreadsheet_id).name, "譜庫總表")
         self.assertEqual(self.google.sheets.tabs(), list(SHEET_HEADERS))
         for title, headers in SHEET_HEADERS.items():
             self.assertEqual(self.google.sheets.rows(title), [headers])
             self.assertEqual(self.google.sheets.frozen_rows(title), 1)
         self.assertNotIn(ROOT, self.google.drive.file(spreadsheet_id).parents)
+
+    def test_header_rows_are_written_in_the_language_given(self):
+        self.catalog.create_catalog(PendingCatalog("譜庫總表", self.folder, LOCALE_ZH_TW))
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0][:3], ["編號", "作曲家編號", "曲名"])
+        for title in SHEET_HEADERS:
+            self.assertEqual(self.google.sheets.rows(title), [header_row(title, LOCALE_ZH_TW)])
+        self.assertEqual(self.catalog.header_locale(), LOCALE_ZH_TW)
 
     def test_my_drive_is_the_root_folder_under_its_real_id(self):
         root = self.catalog.my_drive()
@@ -499,7 +508,7 @@ class TestCreateCatalog(unittest.TestCase):
         self.assertEqual(root.mime_type, DRIVE_FOLDER_MIME)
 
     def test_creating_again_after_a_failed_move_reuses_the_created_spreadsheet(self):
-        pending = PendingCatalog("譜庫試算表", self.folder)
+        pending = PendingCatalog("譜庫總表", self.folder, LOCALE_ZH_TW)
         # 第 1 次請求建試算表、第 2 次取它的中繼資料、第 3 次搬進資料夾
         self.google.fail_at(3, CatalogErrorKind.OFFLINE)
         with self.assertRaises(CatalogError):
@@ -508,6 +517,49 @@ class TestCreateCatalog(unittest.TestCase):
         everywhere = self.catalog.spreadsheets_in(ROOT) + self.catalog.spreadsheets_in(self.folder)
         self.assertEqual([f.id for f in everywhere], [spreadsheet_id])
         self.assertEqual(self.google.drive.file(spreadsheet_id).parents, (self.folder,))
+
+
+class TestHeaderLanguage(CatalogTestCase):
+    """譜庫標題列的語言：從各工作表的標題列認出，整份改寫成另一種語言；讀寫照欄位位置，不受語言影響"""
+
+    def setUp(self):
+        super().setUp()
+        add_row(self.google, SHEET_COMPOSERS, id="c1", name="彭修文")
+        add_row(self.google, SHEET_PIECES, id="p1", composer_id="c1", title="春江花月夜")
+
+    def test_a_catalog_with_english_headers_reads_as_english(self):
+        self.assertEqual(self.catalog.header_locale(), LOCALE_EN)
+
+    def test_sheets_disagreeing_have_no_language(self):
+        self.google.sheets.create_tab(SHEET_PARTS, [header_row(SHEET_PARTS, LOCALE_ZH_TW)])
+        self.assertIsNone(self.catalog.header_locale())
+
+    def test_rewriting_changes_every_header_row_and_keeps_the_records(self):
+        self.google.requests = 0
+        self.catalog.set_header_locale(LOCALE_ZH_TW)
+        self.assertEqual(self.google.requests, 2)
+        for sheet in SHEET_HEADERS:
+            self.assertEqual(self.google.sheets.rows(sheet)[0], header_row(sheet, LOCALE_ZH_TW))
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[1][:3], ["p1", "c1", "春江花月夜"])
+        self.assertEqual(self.catalog.header_locale(), LOCALE_ZH_TW)
+        self.assertEqual([p.title for p in self.catalog.overview(ROOT).pieces], ["春江花月夜"])
+        self.catalog.set_header_locale(LOCALE_EN)
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0], SHEET_HEADERS[SHEET_PIECES])
+
+    def test_rewriting_fills_the_columns_an_old_sheet_is_missing(self):
+        self.google.sheets.create_tab(SHEET_PARTS, [SHEET_HEADERS[SHEET_PARTS][:9], ["pt1", "e1", "m1", "二胡 I"]])
+        self.catalog.set_header_locale(LOCALE_ZH_TW)
+        self.assertEqual(self.google.sheets.rows(SHEET_PARTS)[0], header_row(SHEET_PARTS, LOCALE_ZH_TW))
+
+    def test_sheets_not_yet_created_are_left_alone(self):
+        self.google.sheets.delete_tab(SHEET_PARTS)
+        self.catalog.set_header_locale(LOCALE_ZH_TW)
+        self.assertNotIn(SHEET_PARTS, self.google.sheets.tabs())
+        self.assertEqual(self.catalog.header_locale(), LOCALE_ZH_TW)
+
+    def test_localized_sheets_leave_out_the_club_settings(self):
+        self.assertNotIn("社團設定", localized_sheets())
+        self.assertEqual(len(localized_sheets()), len(SHEET_HEADERS) - 1)
 
 
 class TestWithoutGoogleClient(unittest.TestCase):

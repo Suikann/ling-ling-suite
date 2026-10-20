@@ -81,6 +81,7 @@ class PreviewDialog(QDialog):
         subfolder_row.addWidget(self._subfolder_cb)
         subfolder_row.addWidget(QLabel(t("panel.subfolder_template")))
         self._subfolder_entry = QLineEdit(self._project.subfolder_template)
+        self._subfolder_entry.setToolTip(t("panel.template_segment_tip"))
         self._subfolder_entry.textEdited.connect(
             lambda text: self._project.set_output_settings(subfolder_template=text),
         )

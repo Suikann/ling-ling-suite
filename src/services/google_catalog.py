@@ -11,7 +11,7 @@
 使用範例：
     from services.google_catalog import open_google_catalog, catalog_error_from
     catalog = open_google_catalog(auth, spreadsheet_id)   # 拿不到憑證時丟出 CatalogError（要在背景執行緒呼叫）
-    setup = open_google_drive(auth)                       # 還沒有譜庫試算表時（譜庫設定）
+    setup = open_google_drive(auth)                       # 還沒有譜庫總表時（譜庫設定）
     error = catalog_error_from(exception)                 # CatalogError，kind 為六種類別之一
 """
 import io
@@ -59,7 +59,7 @@ def open_google_catalog(auth: GoogleAuthService, spreadsheet_id: str) -> Catalog
 
     Args:
         auth: Google 登入服務
-        spreadsheet_id: 譜庫試算表的 ID
+        spreadsheet_id: 譜庫總表的 ID
 
     Returns:
         接上 Google 試算表與 Drive 的譜庫服務
@@ -75,15 +75,15 @@ def open_google_catalog(auth: GoogleAuthService, spreadsheet_id: str) -> Catalog
 
 
 def open_google_drive(auth: GoogleAuthService) -> CatalogService:
-    """還沒有譜庫試算表時，以登入服務的憑證建立接 Google 的譜庫服務（要在背景執行緒呼叫）
+    """還沒有譜庫總表時，以登入服務的憑證建立接 Google 的譜庫服務（要在背景執行緒呼叫）
 
-    譜庫設定以它瀏覽 Drive 資料夾、找資料夾裡的試算表、建立新的譜庫試算表；讀寫譜庫試算表的方法都丟出找不到。
+    譜庫設定以它瀏覽 Drive 資料夾、找資料夾裡的試算表、建立新的譜庫總表；讀寫譜庫總表的方法都丟出找不到。
 
     Args:
         auth: Google 登入服務
 
     Returns:
-        接上 Google Drive、還沒有連著譜庫試算表的譜庫服務
+        接上 Google Drive、還沒有連著譜庫總表的譜庫服務
 
     Raises:
         CatalogError: 拿不到憑證時，連不上 Google 為斷網，其餘為要重新登入
@@ -137,7 +137,7 @@ class GoogleSheets(_Gateway):
     def __init__(self, spreadsheet_id: str, credentials: Optional["Credentials"] = None, http: Any = None):
         """
         Args:
-            spreadsheet_id: 譜庫試算表的 ID；還沒有譜庫試算表時為空字串，只能建立新的試算表
+            spreadsheet_id: 譜庫總表的 ID；還沒有譜庫總表時為空字串，只能建立新的試算表
             credentials: Google 憑證
             http: 代替網路的 httplib2.Http（測試用）
         """

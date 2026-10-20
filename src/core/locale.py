@@ -15,7 +15,7 @@
     template = localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN)
 """
 import os
-from typing import Dict, FrozenSet, Optional, TypeVar
+from typing import Dict, FrozenSet, List, Optional, Tuple, TypeVar
 from core.constants import LOCALE_EN, LOCALE_ZH_TW
 
 _T = TypeVar("_T")
@@ -24,6 +24,12 @@ _T = TypeVar("_T")
 _TRASH_NAMES = {
     LOCALE_ZH_TW: ("資源回收桶", "垃圾桶"),
     LOCALE_EN: ("recycle bin", "trash"),
+}
+
+# 可選的介面語言（依顯示順序）與它們名稱的字串鍵
+_LANGUAGE_NAME_KEYS = {
+    LOCALE_ZH_TW: "menu.view.language.zh_TW",
+    LOCALE_EN: "menu.view.language.en",
 }
 
 _current_locale = LOCALE_ZH_TW
@@ -156,6 +162,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "orchestra.western": "管弦樂團",
         "panel.master_template": "命名格式：",
         "panel.insert_variable": "插入變數",
+        "panel.template_segment_tip": "用 [ ] 包住一段：段內有變數為空時，整段省略",
         "panel.subfolder": "將各群組分別放入子資料夾",
         "panel.subfolder_template": "  資料夾模板：",
         "panel.parts_subfolder": "分譜放入子資料夾",
@@ -520,15 +527,16 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.settings.pick_folder": "選取資料夾",
         "catalog.settings.no_folders": "（無子資料夾）",
         "catalog.settings.my_drive": "我的雲端硬碟",
-        "catalog.settings.catalog_found": "已連結譜庫試算表：{name}",
-        "catalog.settings.catalog_not_found": "此資料夾尚無譜庫試算表。按「瀏覽」再選一次這個資料夾即可建立。",
-        "catalog.settings.pick_catalog": "此資料夾有多個試算表，請選擇譜庫試算表：",
-        "catalog.settings.create_prompt": "此資料夾尚無譜庫試算表。請輸入名稱以建立：",
-        "catalog.settings.default_catalog_name": "譜庫試算表",
-        "catalog.settings.catalog_created": "已建立譜庫試算表。",
+        "catalog.settings.catalog_found": "已連結譜庫總表：{name}",
+        "catalog.settings.catalog_not_found": "此資料夾尚無譜庫總表。按「瀏覽」再選一次這個資料夾即可建立。",
+        "catalog.settings.pick_catalog": "此資料夾有多個試算表，請選擇譜庫總表：",
+        "catalog.settings.create_prompt": "此資料夾尚無譜庫總表。請輸入名稱以建立：",
+        "catalog.settings.default_catalog_name": "譜庫總表",
+        "catalog.settings.catalog_created": "已建立譜庫總表。",
         "catalog.settings.save": "儲存設定",
-        "catalog.settings.publishing_platform": "發譜平台：{platform}（在譜庫試算表的「{sheet}」工作表設定）",
+        "catalog.settings.publishing_platform": "發譜平台：{platform}（在譜庫總表的「{sheet}」工作表設定）",
         "catalog.settings.publishing_platform_unset": "未設定",
+        "catalog.settings.header_language": "欄位語言：",
         # 譜庫 - 瀏覽器
         "catalog.title": "譜庫管理",
         "catalog.toolbar.add_composer": "新增作曲家",
@@ -663,6 +671,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.link.new_piece": "新建曲目「{title}」",
         "catalog.link.new_edition": "新建版本",
         "catalog.link.new_movement": "新建樂章「{name}」",
+        "catalog.link.new_hint": "新建的資料取自群組資訊，要更改請至群組分頁",
         "catalog.link.confirm": "連線",
         "catalog.merge.title": "「{group}」與譜庫都已經有編制",
         "catalog.merge.intro": "兩邊的編制不一樣，整張表用其中一份。選「用群組的」，下次存檔時覆寫譜庫。",
@@ -709,7 +718,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.action.read_club_settings": "讀取社團設定",
         "catalog.action.read_publish_log": "讀取發譜紀錄",
         "catalog.error.cannot_write": "寫不進譜庫",
-        "catalog.action.create_catalog": "建立譜庫試算表",
+        "catalog.action.create_catalog": "建立譜庫總表",
+        "catalog.action.read_header_language": "讀取欄位語言",
+        "catalog.action.write_header_language": "改寫欄位名稱",
         "catalog.saving": "寫入中...",
         # 譜庫 - 存檔時寫回編制（衝突畫面、刪除聲部、聲部組的影響範圍）
         "catalog.sync.title": "寫回譜庫",
@@ -772,6 +783,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "publish.piece.group": "群組",
         "publish.piece.huaxia": "對到 HuaXia 的曲目",
         "publish.piece.existing": "挑選現有",
+        "publish.piece.pick": "請挑選",
         "publish.piece.new": "新建",
         "publish.piece.with_composer": "{title}（{composer}）",
         "publish.piece.title": "曲名",
@@ -780,6 +792,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "publish.piece.ensemble": "類型",
         "publish.piece.new_note": "新建的曲目在發譜一開始先記下編號並自動存檔，重發不會重複建。",
         "publish.piece.shared": "{groups}也對到這首：一個群組對一首 HuaXia 曲目",
+        "publish.piece.nothing_to_publish": "沒有可以發譜的群組，請先處理下列群組的問題。",
         "publish.group.not_renamed": "還沒重新命名（發譜從輸出位置讀檔）",
         "publish.group.unfilled": "沒填最少人數：{voices}",
         "publish.group.duplicates": "樂器表有重名：{rows}",
@@ -1369,6 +1382,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "orchestra.western": "Western Orchestra",
         "panel.master_template": "Naming Format:",
         "panel.insert_variable": "Insert Variable",
+        "panel.template_segment_tip": "Text in [ ] is left out when a variable inside it is empty",
         "panel.subfolder": "Create Subfolders",
         "panel.subfolder_template": "  Folder Template:",
         "panel.parts_subfolder": "Put parts in subfolder",
@@ -1742,6 +1756,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.settings.save": "Save Settings",
         "catalog.settings.publishing_platform": "Distribution platform: {platform} (set in the \"{sheet}\" sheet of the catalog spreadsheet)",
         "catalog.settings.publishing_platform_unset": "Not set",
+        "catalog.settings.header_language": "Column language:",
         # Catalog - Browser
         "catalog.title": "Catalog Manager",
         "catalog.toolbar.add_composer": "Add Composer",
@@ -1876,6 +1891,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.link.new_piece": "New piece \"{title}\"",
         "catalog.link.new_edition": "New edition",
         "catalog.link.new_movement": "New movement \"{name}\"",
+        "catalog.link.new_hint": "New items use the group's info; to change it, edit the group's tab",
         "catalog.link.confirm": "Link",
         "catalog.merge.title": "\"{group}\" and the catalog both have an instrumentation",
         "catalog.merge.intro": "The two instrumentations differ; the whole table uses one of them. \"Use the group's\" overwrites the catalog on the next save.",
@@ -1923,6 +1939,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "catalog.action.read_publish_log": "Read publish log",
         "catalog.error.cannot_write": "Can't write to the catalog",
         "catalog.action.create_catalog": "Create catalog spreadsheet",
+        "catalog.action.read_header_language": "Read column language",
+        "catalog.action.write_header_language": "Rewrite column names",
         "catalog.saving": "Saving...",
         "catalog.sync.title": "Write Back to Catalog",
         "catalog.sync.waiting": "Writing the instrumentation to the catalog…",
@@ -1983,6 +2001,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "publish.piece.group": "Group",
         "publish.piece.huaxia": "HuaXia piece",
         "publish.piece.existing": "Pick existing",
+        "publish.piece.pick": "Choose one",
         "publish.piece.new": "Create new",
         "publish.piece.with_composer": "{title} ({composer})",
         "publish.piece.title": "Title",
@@ -1991,6 +2010,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "publish.piece.ensemble": "Ensemble",
         "publish.piece.new_note": "A new piece's ID is recorded and the project auto-saved when distribution starts, so distributing again won't create it twice.",
         "publish.piece.shared": "{groups} also chose this piece: one group goes to one HuaXia piece",
+        "publish.piece.nothing_to_publish": "No group can be distributed yet. Fix the problems listed below first.",
         "publish.group.not_renamed": "Not renamed yet (distribution reads files from the output location)",
         "publish.group.unfilled": "Minimum headcount missing: {voices}",
         "publish.group.duplicates": "Duplicate voices in the instrument list: {rows}",
@@ -2503,6 +2523,11 @@ def set_locale(locale_code: str):
 def get_available_locales():
     """取得所有可用語言代碼"""
     return list(_STRINGS.keys())
+
+
+def language_names() -> List[Tuple[str, str]]:
+    """可選的介面語言，依顯示順序列出（語言代碼，名稱）；語言選單與譜庫的欄位語言選單共用"""
+    return [(code, t(key)) for code, key in _LANGUAGE_NAME_KEYS.items()]
 
 
 def get_keys(locale_code: str) -> FrozenSet[str]:

@@ -17,7 +17,9 @@ from core.catalog_constants import (
     SHEET_SECTIONS,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
+from core.catalog_headers import header_row
 from core.catalog_sync import Choice, Decision, SyncField, Verdict, WriteSource, place_writes
+from core.constants import LOCALE_ZH_TW
 from core.models import CatalogChangeKind, FiledVoicesError, Headcount, Project
 from test_catalog_link import LinkTestCase, ProjectLinkTestCase, part_file, records
 from test_catalog_service import add_row
@@ -397,6 +399,30 @@ class TestFirstWrite(SyncTestCase):
         self.assertEqual(len(records(self.google, SHEET_DURATIONS)), 1)
         self.assertEqual(self.google.sheets.rows(SHEET_DURATIONS)[0], SHEET_HEADERS[SHEET_DURATIONS])
         self.assertEqual(self.project.catalog_changes(self.group), [])
+
+
+class TestFirstWriteInChinese(SyncTestCase):
+    """標題列是中文的舊譜庫第一次寫入時，補的欄與新建的工作表也寫中文標題，不混用"""
+
+    def setUp(self):
+        super().setUp()
+        for sheet in self.google.sheets.tabs():
+            rows = self.google.sheets.rows(sheet)
+            self.google.sheets.create_tab(sheet, [header_row(sheet, LOCALE_ZH_TW)] + rows[1:])
+        for sheet in (SHEET_DURATIONS, SHEET_SECTIONS, SHEET_INSTRUMENTATION_LOG):
+            self.google.sheets.delete_tab(sheet)
+        old_headers = header_row(SHEET_PARTS, LOCALE_ZH_TW)[:9]
+        self.google.sheets.create_tab(SHEET_PARTS, [old_headers, ["pt1", "e1", "m1", "二胡 I", "1", "ok"]])
+
+    def test_added_columns_and_new_sheets_get_chinese_headers(self):
+        self.link()
+        self.project.set_headcount(self.group, 0, Headcount(6))
+        self.project.set_duration(self.group, 300)
+        self.assertTrue(self.sync().written)
+        self.assertEqual(self.google.sheets.rows(SHEET_PARTS)[0], header_row(SHEET_PARTS, LOCALE_ZH_TW))
+        for sheet in (SHEET_DURATIONS, SHEET_SECTIONS, SHEET_INSTRUMENTATION_LOG):
+            self.assertEqual(self.google.sheets.rows(sheet)[0], header_row(sheet, LOCALE_ZH_TW))
+
 
 
 class TestRequests(LinkTestCase):

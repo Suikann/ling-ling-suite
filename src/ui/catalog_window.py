@@ -20,8 +20,8 @@ services/download_service.py 下載並核對 MD5）：在背景執行，狀態�
 收回或寫「不收回」，寫出結果並重新讀取列表。
 工具列的「聲部組對照」在右側面板開聲部組對照的編輯器（ui/section_map_editor.py），按儲存才寫入，
 寫入走存檔寫回的同一套比對，被別人改過時開衝突畫面（ui/catalog_conflict_dialog.py）選邊。
-讀到總覽（連上譜庫）後另在背景讀社團設定，把啟用的發譜平台記在偏好設定（services/club_settings_service.py）；
-這一項讀不到時沿用記住的結果，不顯示提示列。
+讀到總覽（連上譜庫）後另在背景讀社團設定，把啟用的發譜平台記在偏好設定（services/club_settings_service.py），
+讀完由社團設定服務通知主視窗；這一項讀不到時沿用記住的結果，不顯示提示列。
 """
 import functools
 import threading
@@ -97,11 +97,12 @@ class CatalogWindow(QMainWindow):
         reverter: Optional[DepositReverter] = None,
         downloads: Optional[DownloadService] = None,
         orchestra_type: OrchestraType = DEFAULT_ORCHESTRA_TYPE,
+        club_settings: Optional[ClubSettingsService] = None,
     ):
         """
         Args:
             auth_service: Google 登入服務
-            preferences: 偏好設定（譜庫試算表 ID、根資料夾 ID；連上譜庫時記下社團設定的發譜平台）
+            preferences: 偏好設定（譜庫總表 ID、根資料夾 ID；連上譜庫時記下社團設定的發譜平台）
             parent: 父元件
             catalog_factory: 在背景執行緒建立譜庫服務的函式，拿不到時丟出 CatalogError；
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
@@ -112,6 +113,7 @@ class CatalogWindow(QMainWindow):
             reverter: 撤銷存入在背景執行的一方（主視窗）；省略時版本頁沒有「存入紀錄…」
             downloads: 下載服務（主視窗那一份）；省略時版本頁沒有「下載…」
             orchestra_type: 開著的專案的樂團類型：版本頁與聲部組對照一開始顯示這一套，可以切換
+            club_settings: 社團設定服務（全程式一份，主視窗訂閱它的通知），也交給譜庫設定；省略時以偏好設定與紀錄檔建立
         """
         super().__init__(parent)
         self._auth = auth_service
@@ -122,7 +124,7 @@ class CatalogWindow(QMainWindow):
         self._catalog: Optional[CatalogService] = None
         self._catalog_lock = threading.Lock()
         self._log = log or ActivityLog()
-        self._club_settings = ClubSettingsService(preferences, self._log)
+        self._club_settings = club_settings or ClubSettingsService(preferences, self._log)
         # 讀到發譜紀錄、撤回與收回寫完時更新收回提醒的摘要
         self._reminder = RecallReminder(preferences, self._log)
         self._retracter = RetractService(huaxia_auth, self._log, self._reminder) if huaxia_auth is not None else None
@@ -293,7 +295,9 @@ class CatalogWindow(QMainWindow):
             是否存了設定
         """
         from ui.catalog_settings_dialog import CatalogSettingsDialog
-        dialog = CatalogSettingsDialog(self._auth, self._prefs, self, log=self._log, huaxia_auth=self._huaxia_auth)
+        dialog = CatalogSettingsDialog(
+            self._auth, self._prefs, self, log=self._log, huaxia_auth=self._huaxia_auth, club_settings=self._club_settings,
+        )
         if dialog.exec() != QDialog.Accepted:
             return False
         self._forget_connection()

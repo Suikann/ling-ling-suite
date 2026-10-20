@@ -6,9 +6,12 @@
 每一步列出全部群組，擋下的群組寫出原因（發譜前的檢查見 services/publish_service.py）。這次的選擇與各步的規則
 （選好了沒、「下一步」「發譜」按不按得下去）在 publish_service.PublishPreview，這裡只排畫面、把操作交給它：
 
-- 「曲目」：每個群組挑一首 HuaXia 的現有曲目（已封存的不列）或新建一首，新建的曲名、作曲家、時長（分鐘）與
-  合奏／絲竹帶入預設值（NewHuaXiaPiece.for_group）、都能改；每次選擇經 Project.set_huaxia_link 立即寫進專案。
-  有未同步值的群組標出哪些值還沒進譜庫。每個沒擋下的群組都對到曲目（新建的要有曲名）才能按「下一步」。
+- 「曲目」：每個群組挑一首 HuaXia 的現有曲目（已封存的不列）或新建一首。一列依序是「挑選現有」、現有曲目選單
+  （第一項是挑不到的「請挑選」；直接從選單挑一首就算選了「挑選現有」）與「新建」；新建的曲名、作曲家、時長（分鐘）與
+  合奏／絲竹放在下一行、只在選「新建」時顯示，帶入預設值（NewHuaXiaPiece.for_group）、都能改。每次選擇經
+  Project.set_huaxia_link 立即寫進專案；選「挑選現有」而選單停在「請挑選」時清掉對應。
+  有未同步值的群組標出哪些值還沒進譜庫。每個沒擋下的群組都對到曲目（新建的要有曲名）才能按「下一步」；
+  全部群組都擋下時頂端寫一行沒有可以發譜的群組，「下一步」按不下去。
 - 「聲部」：每個群組列出樂器表每一列對到 HuaXia 的哪個聲部（publish_service.plan_voices）、HuaXia 現在的值、
   變動與發譜後的值，以及只在 HuaXia 的聲部（不動）。本專案有的聲部可以改選新建或還沒被配對的 HuaXia 聲部
   （名稱規則對到多個時只列那幾個），挑了就經 Project.choose_huaxia_part 記進專案；人數或聲部組不同時「覆寫」
@@ -203,22 +206,28 @@ class _PieceEditor(QWidget):
         self._filling = False
 
     def _build_ui(self):
-        """排出「挑選現有」「新建」、現有曲目選單與新建的欄位"""
-        layout = QHBoxLayout(self)
+        """排出「挑選現有」與緊跟著的現有曲目選單、「新建」，新建的欄位放在下一行"""
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
+        choices = QHBoxLayout()
         self._existing = QRadioButton(t("publish.piece.existing"))
         self._new = QRadioButton(t("publish.piece.new"))
         choice = QButtonGroup(self)
         for button in (self._existing, self._new):
             choice.addButton(button)
             button.clicked.connect(self._changed)
-            layout.addWidget(button)
         self._piece_combo = QComboBox()
         self._piece_combo.setObjectName("existing_pieces")
+        # 第一項是挑不到的「請挑選」（setPlaceholderText 在不可編輯的選單上不一定畫得出來）
+        self._piece_combo.addItem(t("publish.piece.pick"), None)
+        self._piece_combo.model().item(0).setEnabled(False)
         for piece in self._pieces:
             self._piece_combo.addItem(_piece_text(piece), piece.id)
-        self._piece_combo.currentIndexChanged.connect(self._changed)
-        layout.addWidget(self._piece_combo)
+        self._piece_combo.currentIndexChanged.connect(self._picked)
+        for widget in (self._existing, self._piece_combo, self._new):
+            choices.addWidget(widget)
+        choices.addStretch()
+        layout.addLayout(choices)
         self._new_fields = QWidget()
         fields = QHBoxLayout(self._new_fields)
         fields.setContentsMargins(0, 0, 0, 0)
@@ -237,46 +246,53 @@ class _PieceEditor(QWidget):
                               ("publish.piece.duration", self._duration), ("publish.piece.ensemble", self._ensemble)):
             fields.addWidget(QLabel(t(label)))
             fields.addWidget(widget)
+        fields.addStretch()
         self._title.editingFinished.connect(self._changed)
         self._composer.editingFinished.connect(self._changed)
         self._duration.valueChanged.connect(self._changed)
         self._ensemble.currentIndexChanged.connect(self._changed)
         layout.addWidget(self._new_fields)
-        layout.addStretch()
 
     def _show(self, link: Optional[HuaXiaLink]):
-        """顯示目前的對應：新建的填欄位，現有的選到那首（已不在可挑的清單時不選），沒對到時兩者都不選"""
+        """顯示目前的對應：新建的填欄位，現有的選到那首（已不在可挑的清單時停在「請挑選」），沒對到時兩者都不選"""
         new = (link.new_piece if link else None) or NewHuaXiaPiece.for_group(self._group)
         self._title.setText(new.title)
         self._composer.setText(new.composer)
         self._duration.setValue(new.duration_min or 0)
         self._ensemble.setCurrentIndex(self._ensemble.findData(new.ensemble.value))
         index = self._piece_combo.findData(link.piece_id) if link and not link.new_piece else -1
-        self._piece_combo.setCurrentIndex(index)
+        self._piece_combo.setCurrentIndex(max(index, 0))
         self._existing.setChecked(link is not None and link.new_piece is None)
         self._new.setChecked(link is not None and link.new_piece is not None)
         self._existing.setEnabled(bool(self._pieces))
-        self._show_fields()
-
-    def _show_fields(self):
-        """只顯示選了的那一種的欄位"""
-        self._piece_combo.setVisible(not self._new.isChecked())
+        self._piece_combo.setEnabled(bool(self._pieces))
         self._new_fields.setVisible(self._new.isChecked())
 
-    def _changed(self, *_args):
-        """選擇或欄位改了：交出新的對應"""
+    def _picked(self, *_args):
+        """從現有曲目選單挑了一首：同時選「挑選現有」，交出新的對應"""
         if self._filling:
             return
-        self._show_fields()
+        self._existing.setChecked(True)
+        self._changed()
+
+    def _changed(self, *_args):
+        """選擇或欄位改了：交出新的對應；選「挑選現有」而選單停在「請挑選」時交出沒對到（None）"""
+        if self._filling:
+            return
+        self._new_fields.setVisible(self._new.isChecked())
         if self._new.isChecked():
             piece = NewHuaXiaPiece(
                 self._title.text().strip(), self._composer.text().strip(), self._duration.value() or None,
                 HuaXiaEnsemble(self._ensemble.currentData()),
             )
             self._on_change(HuaXiaLink(piece_title=piece.title, new_piece=piece))
-        elif self._existing.isChecked() and self._piece_combo.currentIndex() >= 0:
-            piece = self._pieces[self._piece_combo.currentIndex()]
-            self._on_change(HuaXiaLink(piece_id=piece.id, piece_title=piece.title))
+        elif self._existing.isChecked():
+            index = self._piece_combo.currentIndex() - 1
+            if index < 0:
+                self._on_change(None)
+            else:
+                piece = self._pieces[index]
+                self._on_change(HuaXiaLink(piece_id=piece.id, piece_title=piece.title))
 
 
 class PublishPreviewDialog(QDialog):
@@ -438,9 +454,10 @@ class PublishPreviewDialog(QDialog):
         )
 
     def _set_piece(self, group: Group, link: Optional[HuaXiaLink]):
-        """「曲目」步的選擇改了：交給 PublishPreview.set_piece，更新對到同一首的提示與按鈕"""
+        """「曲目」步的選擇改了：交給 PublishPreview.set_piece，更新對到同一首的提示與按鈕，列高跟著新建的欄位調整"""
         self._preview.set_piece(group, link)
         self._show_shared()
+        self._piece_table.resizeRowsToContents()
         self._refresh_buttons()
 
     def _show_shared(self):
@@ -452,12 +469,19 @@ class PublishPreviewDialog(QDialog):
             label.setVisible(bool(others))
 
     def _build_piece_step(self) -> QWidget:
-        """「曲目」步：每個群組一列，擋下的寫出原因，其餘挑選現有或新建；有未同步的值時標出"""
+        """「曲目」步：每個群組一列，擋下的寫出原因，其餘挑選現有或新建；有未同步的值時標出。
+        全部群組都擋下時頂端寫一行沒有可以發譜的群組"""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
+        nothing = QLabel(t("publish.piece.nothing_to_publish"))
+        nothing.setObjectName("nothing_to_publish")
+        nothing.setStyleSheet(f"color: {_BLOCKED_COLOR};")
+        nothing.setVisible(not self._preview.groups)
+        layout.addWidget(nothing)
         table = QTableWidget(len(self._checks), 2)
         table.setObjectName("piece_step")
+        self._piece_table = table
         table.setHorizontalHeaderLabels([t("publish.piece.group"), t("publish.piece.huaxia")])
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.NoEditTriggers)

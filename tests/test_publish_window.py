@@ -2,7 +2,7 @@
 """
 發譜按鈕與發譜預覽「曲目」步的接線測試（offscreen）
 
-社團設定（這台電腦記住的）啟用 HuaXia 時主視窗才有「發譜」；按下時重讀社團設定、重查幹部身分（沒登入先登入），
+社團設定（這台電腦記住的）啟用 HuaXia 時主視窗才有「發譜」，譜庫視窗重讀完成時跟著出現或消失；按下時重讀社團設定、重查幹部身分（沒登入先登入），
 擋下時寫出原因、不開預覽。預覽每個群組一列：擋下的群組寫出原因，其餘挑 HuaXia 的現有曲目或新建，
 選擇經編輯操作寫進專案；編制表上方顯示群組對到的 HuaXia 曲目。主視窗接假 Google 與假 HuaXia，不測畫面。
 """
@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QWidget,
 )
 
-from core.constants import CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, HuaXiaEnsemble, OrchestraType
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, HuaXiaEnsemble, OrchestraType
 from core.locale import t
 from core.models import FileInfo, Headcount, HuaXiaLink, NewHuaXiaPiece, Project
 from fake_google_catalog import FakeGoogle
@@ -36,7 +36,7 @@ from test_catalog_service import empty_catalog
 from tests.fake_browser import CallbackBrowser
 from tests.fake_huaxia import FakeHuaXia
 from tests.memory_keyring import MemoryKeyring
-from tests.test_main_window import MainWindowTestCase, answering_prompts
+from tests.test_main_window import MainWindowTestCase, answering_prompts, wait_until
 from ui.huaxia_prompts import not_officer_text
 from ui.instrumentation_table import InstrumentationTable
 from services.publish_service import GroupCheck, PublishService
@@ -81,19 +81,35 @@ def blocked_reason(dialog: PublishPreviewDialog, name: str) -> str:
     return label.text() if label is not None else ""
 
 
+def piece_combo(dialog: PublishPreviewDialog, name: str) -> QComboBox:
+    """這個群組的現有曲目選單"""
+    return group_cell(dialog, name).findChild(QComboBox, "existing_pieces")
+
+
 def piece_choices(dialog: PublishPreviewDialog, name: str) -> list:
-    """這個群組可以挑的現有曲目"""
-    combo = group_cell(dialog, name).findChild(QComboBox, "existing_pieces")
-    return [combo.itemText(i) for i in range(combo.count())]
+    """這個群組可以挑的現有曲目（選單裡挑得到的各項，不含「請挑選」）"""
+    combo = piece_combo(dialog, name)
+    return [combo.itemText(i) for i in range(combo.count()) if combo.model().item(i).isEnabled()]
+
+
+def piece_option(dialog: PublishPreviewDialog, name: str, option: str) -> QRadioButton:
+    """這個群組的「挑選現有」（option 為 existing）或「新建」（new）"""
+    return next(
+        b for b in group_cell(dialog, name).findChildren(QRadioButton) if b.text() == t(f"publish.piece.{option}")
+    )
+
+
+def pick_piece(dialog: PublishPreviewDialog, name: str, text: str):
+    """這個群組在現有曲目選單裡挑寫著 text 的那一首（不先按「挑選現有」）"""
+    combo = piece_combo(dialog, name)
+    combo.setCurrentIndex(combo.findText(text))
 
 
 def choose(dialog: PublishPreviewDialog, name: str, option: str, piece: int = 0):
     """這個群組按「挑選現有」並挑第 piece 首，或按「新建」"""
-    cell = group_cell(dialog, name)
     if option == "existing":
-        cell.findChild(QComboBox, "existing_pieces").setCurrentIndex(piece)
-    button = next(b for b in cell.findChildren(QRadioButton) if b.text() == t(f"publish.piece.{option}"))
-    button.click()
+        pick_piece(dialog, name, piece_choices(dialog, name)[piece])
+    piece_option(dialog, name, option).click()
 
 
 def button(dialog: PublishPreviewDialog, key: str) -> QPushButton:
@@ -226,6 +242,17 @@ class TestPublishButton(PublishWindowTestCase):
         self.window = self.new_window()
         self.assertTrue(self.publish_button().isHidden())
 
+    def test_follows_club_settings_read_by_the_catalog_window(self):
+        self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, self.google.drive.add_folder("譜庫"))
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"]])
+        self.trigger_menu(t("menu.catalog.open"))
+        self.addCleanup(self.window._catalog_window.close)
+        wait_until(lambda: self.publish_button().isHidden())
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        self.window._catalog_window.close()
+        self.trigger_menu(t("menu.catalog.open"))
+        wait_until(lambda: not self.publish_button().isHidden())
+
 
 class TestPressingPublish(PublishWindowTestCase):
     """按下發譜：重讀社團設定、重查幹部身分，擋下時說明原因、不開預覽"""
@@ -298,6 +325,56 @@ class TestPieceStep(PublishWindowTestCase):
             self.assertEqual(piece_choices(dialog, "烽火操"), ["長城隨想－烽火操（劉文金）"])
         self.publish(operate=operate)
 
+    def test_the_piece_menu_sits_between_existing_and_new_and_the_new_fields_go_below(self):
+        def operate(dialog):
+            dialog.show()
+            combo = piece_combo(dialog, "烽火操")
+            existing, new = piece_option(dialog, "烽火操", "existing"), piece_option(dialog, "烽火操", "new")
+            x = lambda widget: widget.mapTo(dialog, widget.rect().topLeft()).x()
+            self.assertLess(x(existing), x(combo))
+            self.assertLess(x(combo), x(new))
+            title = group_cell(dialog, "烽火操").findChildren(QLineEdit)[0]
+            self.assertFalse(title.isVisible())
+            new.click()
+            self.assertTrue(title.isVisible())
+            y = lambda widget: widget.mapTo(dialog, widget.rect().topLeft()).y()
+            self.assertGreaterEqual(y(title), y(combo) + combo.height())
+        self.publish(operate=operate)
+
+    def test_the_row_grows_to_show_the_new_fields(self):
+        def operate(dialog):
+            dialog.show()
+            table = dialog.findChild(QTableWidget, "piece_step")
+            row = next(r for r in range(table.rowCount()) if table.item(r, 0).text() == "烽火操")
+            before = table.rowHeight(row)
+            choose(dialog, "烽火操", "new")
+            self.assertGreater(table.rowHeight(row), before)
+            self.assertGreaterEqual(table.rowHeight(row), table.cellWidget(row, 1).sizeHint().height())
+        self.publish(operate=operate)
+
+    def test_the_piece_menu_starts_on_a_placeholder(self):
+        def operate(dialog):
+            self.assertEqual(piece_combo(dialog, "烽火操").currentText(), t("publish.piece.pick"))
+        self.publish(operate=operate)
+
+    def test_picking_from_the_menu_alone_chooses_the_existing_piece(self):
+        def operate(dialog):
+            pick_piece(dialog, "烽火操", "長城隨想－烽火操（劉文金）")
+            self.assertTrue(piece_option(dialog, "烽火操", "existing").isChecked())
+            self.assertTrue(button(dialog, "publish.next").isEnabled())
+        self.publish(operate=operate)
+        group = self.window.project.groups[0]
+        self.assertEqual(group.huaxia_link, HuaXiaLink(piece_id=self.fenghuo, piece_title="長城隨想－烽火操"))
+
+    def test_back_to_existing_with_nothing_picked_clears_the_new_piece(self):
+        def operate(dialog):
+            choose(dialog, "烽火操", "new")
+            self.assertTrue(button(dialog, "publish.next").isEnabled())
+            piece_option(dialog, "烽火操", "existing").click()
+            self.assertFalse(button(dialog, "publish.next").isEnabled())
+        self.publish(operate=operate)
+        self.assertIsNone(self.window.project.groups[0].huaxia_link)
+
     def test_choosing_an_existing_piece_writes_the_link(self):
         self.publish(operate=lambda dialog: choose(dialog, "烽火操", "existing"))
         group = self.window.project.groups[0]
@@ -357,6 +434,23 @@ class TestNextStep(PublishWindowTestCase):
         choose(dialog, "春江花月夜", "new")
         self.assertTrue(group_cell(dialog, "烽火操").findChild(QLabel, "shared_piece").isHidden())
         self.assertTrue(button(dialog, "publish.next").isEnabled())
+
+    def test_no_group_to_publish_says_so_and_next_stays_off(self):
+        self.window.project.set_headcount(self.window.project.groups[0], 1, Headcount())
+        self.save()
+
+        def operate(dialog):
+            label = dialog.findChild(QLabel, "nothing_to_publish")
+            self.assertFalse(label.isHidden())
+            self.assertEqual(label.text(), t("publish.piece.nothing_to_publish"))
+            self.assertFalse(button(dialog, "publish.next").isEnabled())
+        _, opened = self.publish(operate=operate)
+        self.assertEqual(len(opened), 1)
+
+    def test_the_nothing_to_publish_line_is_hidden_when_a_group_can_be_published(self):
+        def operate(dialog):
+            self.assertTrue(dialog.findChild(QLabel, "nothing_to_publish").isHidden())
+        self.publish(operate=operate)
 
     def test_a_new_piece_without_a_title_is_not_enough(self):
         def operate(dialog):

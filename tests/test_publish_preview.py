@@ -2,7 +2,7 @@
 """
 發譜預覽各步的規則測試（PublishPreview，不碰畫面）
 
-「曲目」步：群組對到可以挑的現有曲目或有曲名的新建曲目才算選好，擋下的群組不算；選回同一首現有曲目時
+「曲目」步：群組對到可以挑的現有曲目或有曲名的新建曲目才算選好，擋下的群組不算、全都擋下時不算選好；選回同一首現有曲目時
 沿用手動挑的聲部配對，換了曲目就丟掉這次的聲部決定。「聲部」步：有群組還不能發時「下一步」按不下去。
 """
 import os
@@ -75,6 +75,13 @@ class TestPieceStep(PreviewTestCase):
         preview.set_piece(self.group, HuaXiaLink(piece_id="hx-1", piece_title="長城隨想－烽火操"))
         self.assertIsNone(self.blocked.huaxia_link)
         self.assertTrue(preview.step_ready(PublishStep.PIECE))
+
+    def test_no_group_to_publish_is_not_ready(self):
+        preview = PublishPreview(self.project, [GroupCheck(self.group, not_renamed=True)], self.readiness,
+                                 FileService(), 20 * MB)
+        self.assertEqual(preview.groups, [])
+        self.assertFalse(preview.step_ready(PublishStep.PIECE))
+        self.assertFalse(preview.step_ready(PublishStep.VOICES))
 
     def test_a_piece_no_longer_offered_is_not_ready(self):
         self.project.set_huaxia_link(self.group, HuaXiaLink(piece_id="hx-old", piece_title="春節序曲"))

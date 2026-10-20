@@ -2,14 +2,17 @@
 """
 譜庫設定對話框
 
-引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫試算表。
+引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫總表。
+新建的譜庫總表標題列用當下的介面語言；選資料夾的步驟下方的「欄位語言」選單寫出連到的譜庫總表現在的標題語言
+（各工作表不一致時不選），換語言時在背景把各工作表的標題列整列改寫（core/catalog_headers.py）。
 登入區顯示登入的帳號 email 與帳號提醒；登入時在背景等瀏覽器回來，期間顯示可取消的等待視窗。
-選資料夾的步驟下方寫出這台電腦記住的發譜平台（照社團設定裡的寫法，沒有時寫未設定）與到譜庫試算表的社團設定工作表設定。
-瀏覽 Drive 資料夾（最上層是我的雲端硬碟，它本身也能選）、找資料夾裡的試算表與建立譜庫試算表都經譜庫服務
+選資料夾的步驟下方寫出這台電腦記住的發譜平台（照社團設定裡的寫法，沒有時寫未設定）與到譜庫總表的社團設定工作表設定；
+開著的時候重讀社團設定完成（例如譜庫視窗連上譜庫），經 Qt 訊號回到主執行緒改寫這一行，HuaXia 登入區跟著出現或藏起。
+瀏覽 Drive 資料夾（最上層是我的雲端硬碟，它本身也能選）、找資料夾裡的試算表與建立譜庫總表都經譜庫服務
 （services/catalog_service.py）在背景執行；根資料夾一律存成它真正的 ID，不存別名 root。
-失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。找到或建好的譜庫試算表先記在對話框裡，
-按「儲存設定」才寫進偏好設定，取消時偏好設定不變；存的是另一份譜庫試算表時，忘掉記住的發譜平台，
-在背景改讀新譜庫的社團設定（services/club_settings_service.py）。
+失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。找到或建好的譜庫總表先記在對話框裡，
+按「儲存設定」才寫進偏好設定，取消時偏好設定不變；存了就在背景重讀社團設定（services/club_settings_service.py），
+存的是另一份譜庫總表時先忘掉記住的發譜平台。重讀完成時由社團設定服務通知主視窗，不經這個（可能已關閉的）對話框。
 這台電腦記住的社團設定啟用 HuaXia 發譜時，另有 HuaXia 登入區（services/huaxia_auth_service.py）：
 登入前寫出連結 Discord 的提醒，以 Discord 登入時顯示可取消的等待視窗，不是幹部時說明原因；登出在背景進行。
 """
@@ -18,17 +21,17 @@ from typing import Callable, List, Optional, Tuple
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QMessageBox, QGroupBox,
+    QPushButton, QMessageBox, QGroupBox, QComboBox,
     QTreeWidget, QTreeWidgetItem, QDialogButtonBox, QWidget,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from core.catalog_constants import (
     DRIVE_ROOT_ALIAS, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import DriveFile
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
-from core.locale import t
+from core.locale import get_locale, language_names, t
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingCatalog
 from services.club_settings_service import ClubSettingsService
@@ -107,22 +110,27 @@ def sign_in_google(parent: QWidget, auth: GoogleAuthService) -> bool:
 class CatalogSettingsDialog(QDialog):
     """譜庫設定對話框"""
 
+    # 社團設定服務寫入記住的結果（可能在背景執行緒），轉回主執行緒改寫發譜平台那一行
+    _club_settings_read = Signal()
+
     def __init__(
         self, auth_service: GoogleAuthService,
         preferences: PreferencesService, parent=None,
         catalog_factory: Optional[Callable[[str], CatalogService]] = None,
         log: Optional[ActivityLog] = None,
         huaxia_auth: Optional[HuaXiaAuthService] = None,
+        club_settings: Optional[ClubSettingsService] = None,
     ):
         """
         Args:
             auth_service: Google 登入服務
-            preferences: 偏好設定（譜庫試算表 ID、根資料夾 ID、記住的發譜平台）
+            preferences: 偏好設定（譜庫總表 ID、根資料夾 ID、記住的發譜平台）
             parent: 父元件
             catalog_factory: 在背景執行緒以試算表 ID（還沒有時為空字串）建立譜庫服務的函式，拿不到時丟出 CatalogError；
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
             log: 紀錄檔，讀寫失敗時寫進去；省略時以使用者資料目錄下的紀錄檔資料夾建立
             huaxia_auth: HuaXia 登入服務（全程式一份）；省略時沒有 HuaXia 登入區
+            club_settings: 社團設定服務（全程式一份，主視窗訂閱它的通知）；省略時以偏好設定與紀錄檔建立
         """
         super().__init__(parent)
         self._huaxia = huaxia_auth
@@ -131,16 +139,27 @@ class CatalogSettingsDialog(QDialog):
         self._prefs = preferences
         self._catalog_factory = catalog_factory or self._open_google
         self._log = log or ActivityLog()
-        self._club_settings = ClubSettingsService(preferences, self._log)
+        self._club_settings = club_settings or ClubSettingsService(preferences, self._log)
+        self._huaxia_area: Optional[QGroupBox] = None
         self._tasks = CatalogTasks(self)
-        # 找到或建好的譜庫試算表；按「儲存設定」才寫進偏好設定
+        # 找到或建好的譜庫總表；按「儲存設定」才寫進偏好設定
         self._spreadsheet_id = self._prefs.get(CATALOG_SPREADSHEET_ID_KEY) or ""
+        # 連到的譜庫總表現在的標題語言；還沒讀到或各工作表不一致時為 None
+        self._header_locale: Optional[str] = None
         self.setWindowTitle(t("catalog.settings.title"))
         self.setMinimumWidth(560)
         self._build_ui()
+        self._club_settings_read.connect(self._show_publishing_platform)
+        self._club_listener = self._club_settings_read.emit
+        self._club_settings.subscribe(self._club_listener)
+        # 沒經過 done() 就刪掉（例如隨父視窗刪掉）時也不再收通知；不引用 self，刪掉時仍能呼叫
+        club_settings, listener = self._club_settings, self._club_listener
+        self.destroyed.connect(lambda: club_settings.unsubscribe(listener))
 
     def done(self, result: int):
-        """關閉對話框：放棄還在跑的背景工作，之後它們不再碰這個對話框（HuaXia 登出照常在背景跑完）"""
+        """關閉對話框：不再收社團設定的通知，放棄還在跑的背景工作，之後它們不再碰這個對話框
+        （重讀社團設定與 HuaXia 登出照常在背景跑完）"""
+        self._club_settings.unsubscribe(self._club_listener)
         self._tasks.abandon_all()
         if self._huaxia_task is not None:
             self._huaxia_task.abandon()
@@ -193,12 +212,21 @@ class CatalogSettingsDialog(QDialog):
         self._folder_status = QLabel("")
         self._folder_status.setWordWrap(True)
         step2_layout.addWidget(self._folder_status)
+        language_row = QHBoxLayout()
+        language_row.addWidget(QLabel(t("catalog.settings.header_language")))
+        self._header_language = QComboBox()
+        for locale, name in language_names():
+            self._header_language.addItem(name, locale)
+        self._header_language.activated.connect(lambda _: self._rewrite_headers(self._header_language.currentData()))
+        language_row.addWidget(self._header_language)
+        language_row.addStretch()
+        step2_layout.addLayout(language_row)
+        self._show_header_language(None, enabled=False)
         layout.addWidget(step2)
-        platform_hint = QLabel(self._publishing_platform_text())
-        platform_hint.setWordWrap(True)
-        layout.addWidget(platform_hint)
-        if self._huaxia is not None and self._club_settings.remembered() is PublishingPlatform.HUAXIA:
-            layout.addWidget(self._build_huaxia_area())
+        self._platform_hint = QLabel()
+        self._platform_hint.setWordWrap(True)
+        layout.addWidget(self._platform_hint)
+        self._show_publishing_platform()
         # --- 底部按鈕 ---
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -210,16 +238,28 @@ class CatalogSettingsDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
         self._update_auth_display()
-        # 開啟時只在已登入時自動找譜庫試算表：安全儲存沒解鎖時不為此再跳一次解鎖視窗
+        # 開啟時只在已登入時自動找譜庫總表：安全儲存沒解鎖時不為此再跳一次解鎖視窗
         if self._folder_entry.text().strip() and self._auth.status().signed_in:
             self._check_catalog_in_folder()
 
-    def _publishing_platform_text(self) -> str:
-        """這台電腦記住的發譜平台（照社團設定裡的寫法）與到哪裡設定"""
+    def _show_publishing_platform(self):
+        """寫出這台電腦記住的發譜平台（照社團設定裡的寫法）與到哪裡設定；啟用 HuaXia 時顯示 HuaXia 登入區
+
+        登入區第一次要顯示時才建（建立時讀安全儲存），之後拿掉 HuaXia 只藏起來。
+        """
         platform = self._club_settings.remembered()
         names = [name for name, value in PUBLISHING_PLATFORM_NAMES.items() if value is platform]
         name = names[0] if names else t("catalog.settings.publishing_platform_unset")
-        return t("catalog.settings.publishing_platform", platform=name, sheet=SHEET_CLUB_SETTINGS)
+        self._platform_hint.setText(t("catalog.settings.publishing_platform", platform=name, sheet=SHEET_CLUB_SETTINGS))
+        if self._huaxia is None:
+            return
+        huaxia = platform is PublishingPlatform.HUAXIA
+        if huaxia and self._huaxia_area is None:
+            self._huaxia_area = self._build_huaxia_area()
+            layout = self.layout()
+            layout.insertWidget(layout.indexOf(self._platform_hint) + 1, self._huaxia_area)
+        if self._huaxia_area is not None:
+            self._huaxia_area.setVisible(huaxia)
 
     def _build_huaxia_area(self) -> QGroupBox:
         """排出 HuaXia 登入區：登入狀態、登入或登出、連結 Discord 的提醒與狀態旁的原因"""
@@ -305,9 +345,9 @@ class CatalogSettingsDialog(QDialog):
 
     def _run(
         self, work: Callable[[], object], done: Callable[[object], None], heading: str, action: str,
-        retry: Callable[[], None],
+        retry: Callable[[], None], undo: Optional[Callable[[], None]] = None,
     ):
-        """在背景執行 work，完成時呼叫 done；失敗時清掉資料夾狀態、顯示提示列，按「重試」呼叫 retry
+        """在背景執行 work，完成時呼叫 done；失敗時清掉資料夾狀態（或呼叫 undo）、顯示提示列，按「重試」呼叫 retry
 
         Args:
             work: 經譜庫服務的工作（背景執行緒呼叫）
@@ -315,10 +355,14 @@ class CatalogSettingsDialog(QDialog):
             heading: 提示列的開頭（讀不到譜庫、寫不進譜庫）
             action: 失敗的動作，記進詳細資料與紀錄檔
             retry: 提示列按「重試」時呼叫
+            undo: 失敗時代替清掉資料夾狀態要做的事；省略時清掉資料夾狀態
         """
         def failed(error: CatalogError):
             """失敗：提示列寫出類別與怎麼辦"""
-            self._folder_status.setText("")
+            if undo is None:
+                self._folder_status.setText("")
+            else:
+                undo()
             self._error_bar.show_failure(heading, CatalogFailure.from_error(error, action), retry)
         self._error_bar.clear()
         self._tasks.run(work, done, failed)
@@ -336,7 +380,7 @@ class CatalogSettingsDialog(QDialog):
         return False
 
     def _browse_folder(self):
-        """以階層式樹狀結構瀏覽 Drive 資料夾，選了就找裡面的譜庫試算表"""
+        """以階層式樹狀結構瀏覽 Drive 資料夾，選了就找裡面的譜庫總表"""
         dialog = _DriveFolderBrowser(lambda: self._catalog_factory(""), self._sign_in_again, self._log, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_id:
             self._folder_entry.setText(dialog.selected_id)
@@ -380,9 +424,40 @@ class CatalogSettingsDialog(QDialog):
         self._folder_status.setStyleSheet(f"color: {color};")
 
     def _use_catalog(self, sheet: DriveFile):
-        """使用找到的試算表作為譜庫試算表（按「儲存設定」才寫進偏好設定）"""
+        """使用找到的試算表作為譜庫總表（按「儲存設定」才寫進偏好設定），在背景讀它的標題語言"""
         self._spreadsheet_id = sheet.id
         self._show_folder_status(t("catalog.settings.catalog_found", name=sheet.name), "#2ecc71")
+        self._read_header_language()
+
+    def _read_header_language(self):
+        """在背景讀連到的譜庫總表的標題語言，寫進欄位語言選單"""
+        spreadsheet_id = self._spreadsheet_id
+        self._show_header_language(None, enabled=False)
+        self._run(
+            lambda: self._catalog_factory(spreadsheet_id).header_locale(), self._show_header_language,
+            t("catalog.error.cannot_read"), t("catalog.action.read_header_language"), self._read_header_language,
+            undo=lambda: None,
+        )
+
+    def _rewrite_headers(self, locale: str):
+        """在背景把連到的譜庫總表各工作表的標題列改寫成 locale 的語言；寫不進去時選單改回原本的語言"""
+        if locale == self._header_locale:
+            return
+        spreadsheet_id = self._spreadsheet_id
+        before = self._header_locale
+        self._show_header_language(locale, enabled=False)
+        self._run(
+            lambda: self._catalog_factory(spreadsheet_id).set_header_locale(locale),
+            lambda _: self._show_header_language(locale),
+            t("catalog.error.cannot_write"), t("catalog.action.write_header_language"),
+            lambda: self._rewrite_headers(locale), undo=lambda: self._show_header_language(before),
+        )
+
+    def _show_header_language(self, locale: Optional[str], enabled: bool = True):
+        """欄位語言選單選到 locale（None 時不選），記為譜庫總表現在的標題語言"""
+        self._header_locale = locale
+        self._header_language.setCurrentIndex(self._header_language.findData(locale) if locale else -1)
+        self._header_language.setEnabled(enabled)
 
     def _pick_catalog(self, sheets: List[DriveFile]):
         """資料夾內有多個試算表時，讓使用者選擇"""
@@ -411,15 +486,16 @@ class CatalogSettingsDialog(QDialog):
         if not ok or not name.strip():
             self._show_folder_status(t("catalog.settings.catalog_not_found"), "#f39c12")
             return
-        pending = PendingCatalog(name.strip(), folder_id)
+        pending = PendingCatalog(name.strip(), folder_id, get_locale())
 
         def created(spreadsheet_id: str):
             """建好了（按「儲存設定」才寫進偏好設定）"""
             self._spreadsheet_id = spreadsheet_id
             self._show_folder_status(t("catalog.settings.catalog_created"), "#2ecc71")
+            self._show_header_language(pending.locale)
 
         def create():
-            """建立譜庫試算表（重試時再呼叫一次）"""
+            """建立譜庫總表（重試時再呼叫一次）"""
             self._show_folder_status(t("catalog.loading"), "gray")
             self._run(
                 lambda: self._catalog_factory("").create_catalog(pending), created,
@@ -428,7 +504,10 @@ class CatalogSettingsDialog(QDialog):
         create()
 
     def _save_settings(self):
-        """儲存設定；換了譜庫試算表時忘掉記住的發譜平台，在背景改讀新譜庫的社團設定（讀不到時就是沒有，寫進紀錄檔）"""
+        """儲存設定，在背景重讀譜庫的社團設定；換了譜庫總表時先忘掉記住的發譜平台
+
+        讀不到時記住的不變（換了試算表時就是沒有），寫進紀錄檔；讀完由社團設定服務通知主視窗。
+        """
         spreadsheet_id = self._spreadsheet_id
         changed = spreadsheet_id != (self._prefs.get(CATALOG_SPREADSHEET_ID_KEY) or "")
         self._prefs.set(CATALOG_ROOT_FOLDER_ID_KEY, _extract_folder_id(self._folder_entry.text()))
@@ -436,7 +515,7 @@ class CatalogSettingsDialog(QDialog):
         if changed:
             self._club_settings.forget()
         self._prefs.save()
-        if changed:
+        if spreadsheet_id:
             # 對話框關閉後背景工作照常跑完（只是不再交回）；refresh 不丟出例外，讀不到時自己寫進紀錄檔
             club, connect = self._club_settings, self._catalog_factory
             self._tasks.run(lambda: club.refresh(lambda: connect(spreadsheet_id)), lambda _: None, lambda _: None)

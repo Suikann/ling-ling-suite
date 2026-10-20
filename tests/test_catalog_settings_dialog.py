@@ -3,28 +3,35 @@
 譜庫設定對話框的接線測試
 
 登入區只測與登入服務的接線：登入狀態旁的原因、帳號 email、帳號提醒，以及登入沒有完成時的提示。
-選資料夾、找與建立譜庫試算表經譜庫服務、對假 Google：結果寫進偏好設定與假 Google，失敗時提示列出現。不測畫面。
+選資料夾、找與建立譜庫總表經譜庫服務、對假 Google：結果寫進偏好設定與假 Google，失敗時提示列出現。不測畫面。
 登入服務的安全儲存、Google 權杖端點與開瀏覽器都換成替身。
 HuaXia 登入區只在社團設定啟用 HuaXia 發譜時出現，對假 HuaXia 測登入、不是幹部的說明與登出的接線。
-記住的發譜平台照社團設定裡的寫法寫出，沒有時寫未設定。
+記住的發譜平台照社團設定裡的寫法寫出，沒有時寫未設定；開著時重讀完成（在背景執行緒）就改寫，HuaXia 登入區跟著出現或藏起。
+「儲存設定」不論試算表換了沒都在背景重讀社團設定；對話框關掉、刪掉之後重讀照樣完成。
 """
 import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QInputDialog, QLabel, QPushButton, QTreeWidget
+from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QDialog, QDialogButtonBox, QInputDialog, QLabel, QPushButton, QTreeWidget,
+)
 
-from core.catalog_constants import DRIVE_SPREADSHEET_MIME, SHEET_HEADERS, PublishingPlatform
+from core.catalog_constants import DRIVE_SPREADSHEET_MIME, SHEET_HEADERS, SHEET_PARTS, SHEET_PIECES, PublishingPlatform
+from core.catalog_headers import header_row
 from core.catalog_errors import CatalogErrorKind
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY
-from core.locale import t
+from core.constants import (
+    CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, LOCALE_EN, LOCALE_ZH_TW,
+)
+from core.locale import get_locale, set_locale, t
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.club_settings_service import ClubSettingsService
@@ -42,6 +49,13 @@ from tests.memory_keyring import MemoryKeyring
 from tests.test_main_window import answering_prompts, wait_until
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.catalog_settings_dialog import CatalogSettingsDialog
+
+
+def read_in_background(read) -> None:
+    """在背景執行緒讀社團設定（像譜庫視窗連上譜庫時那樣），讀完才返回"""
+    thread = threading.Thread(target=read)
+    thread.start()
+    thread.join()
 
 
 class LoginAreaTestCase(unittest.TestCase):
@@ -204,6 +218,24 @@ class TestHuaXiaLoginArea(LoginAreaTestCase):
         self.assertFalse(any(b.text() == t("huaxia.auth.connect") for b in dialog.findChildren(QPushButton)))
         self.assertEqual(self.huaxia_keyring.calls, [])
 
+    def test_appears_and_disappears_with_a_read_finished_while_open(self):
+        google = FakeGoogle()
+        catalog = CatalogService(google.sheets, google.drive, sleep=lambda seconds: None)
+        club = ClubSettingsService(self.preferences)
+        dialog = CatalogSettingsDialog(self.auth, self.preferences, huaxia_auth=self.huaxia_auth, club_settings=club)
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.reject)
+        google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        read_in_background(lambda: club.read(catalog))
+        wait_until(lambda: self.visible(dialog, t("huaxia.auth.not_connected")))
+        google.sheets.create_tab("社團設定", [["鍵", "值"]])
+        read_in_background(lambda: club.read(catalog))
+        wait_until(lambda: not self.visible(dialog, t("huaxia.auth.not_connected")))
+
+    def visible(self, dialog: CatalogSettingsDialog, text: str) -> bool:
+        """對話框裡是否有一段沒被藏起來、文字等於 text 的標籤"""
+        return any(label.text() == text and label.isVisibleTo(dialog) for label in dialog.findChildren(QLabel))
+
     def test_shown_with_the_reminder_before_signing_in(self):
         self.enable_huaxia()
         dialog = self.open_dialog()
@@ -259,15 +291,15 @@ class TestPublishingPlatformHint(LoginAreaTestCase):
     def test_names_the_remembered_platform_as_written_in_club_settings(self):
         self.preferences.set(CLUB_PUBLISHING_PLATFORM_KEY, PublishingPlatform.HUAXIA.value)
         dialog = self.open_dialog()
-        self.assertTrue(self.shows(dialog, "發譜平台：華夏國樂社（在譜庫試算表的「社團設定」工作表設定）"))
+        self.assertTrue(self.shows(dialog, "發譜平台：華夏國樂社（在譜庫總表的「社團設定」工作表設定）"))
 
     def test_says_not_set_when_nothing_is_remembered(self):
         dialog = self.open_dialog()
-        self.assertTrue(self.shows(dialog, "發譜平台：未設定（在譜庫試算表的「社團設定」工作表設定）"))
+        self.assertTrue(self.shows(dialog, "發譜平台：未設定（在譜庫總表的「社團設定」工作表設定）"))
 
 
 class CatalogFolderTestCase(LoginAreaTestCase):
-    """選資料夾與譜庫試算表的共用骨架：已登入；譜庫服務接假 Google，記下以哪個試算表 ID 建立"""
+    """選資料夾與譜庫總表的共用骨架：已登入；譜庫服務接假 Google，記下以哪個試算表 ID 建立"""
 
     def setUp(self):
         super().setUp()
@@ -276,6 +308,9 @@ class CatalogFolderTestCase(LoginAreaTestCase):
         self.folder = self.google.drive.add_folder("譜庫")
         self.connected_to = []
         self.log_dir = os.path.join(self.temp_dir, "logs")
+        self.log = ActivityLog(FileService(), self.log_dir)
+        # 全程式一份的社團設定服務（主視窗建立後傳進來）
+        self.club = ClubSettingsService(self.preferences, self.log)
 
     def catalog(self, spreadsheet_id: str) -> CatalogService:
         """接假 Google 的譜庫服務"""
@@ -285,21 +320,21 @@ class CatalogFolderTestCase(LoginAreaTestCase):
     def open_dialog(self) -> CatalogSettingsDialog:
         """開啟譜庫設定，譜庫服務接假 Google"""
         dialog = CatalogSettingsDialog(
-            self.auth, self.preferences, catalog_factory=self.catalog, log=ActivityLog(FileService(), self.log_dir),
+            self.auth, self.preferences, catalog_factory=self.catalog, log=self.log, club_settings=self.club,
         )
         self.addCleanup(dialog.deleteLater)
         self.addCleanup(dialog.reject)
         return dialog
 
     def open_with_folder(self) -> CatalogSettingsDialog:
-        """資料夾已設定時開啟，等找譜庫試算表的結果（找到、建好、沒有，或提示列出現）"""
+        """資料夾已設定時開啟，等找譜庫總表的結果（找到、建好、沒有，或提示列出現）"""
         self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, self.folder)
         dialog = self.open_dialog()
         wait_until(lambda: not self.bar(dialog).isHidden() or self.settled(dialog))
         return dialog
 
     def settled(self, dialog: CatalogSettingsDialog) -> bool:
-        """資料夾欄位下方寫出找譜庫試算表的結果"""
+        """資料夾欄位下方寫出找譜庫總表的結果"""
         found = t("catalog.settings.catalog_found", name="")
         done = (t("catalog.settings.catalog_created"), t("catalog.settings.catalog_not_found"))
         return any(
@@ -344,9 +379,9 @@ class TestFindCatalog(CatalogFolderTestCase):
     """資料夾裡有一份試算表就用它；沒有就建立；讀不到時頂端出現提示列"""
 
     def test_uses_the_only_spreadsheet_in_the_folder(self):
-        sheet = self.add_spreadsheet("譜庫試算表")
+        sheet = self.add_spreadsheet("譜庫總表")
         dialog = self.open_with_folder()
-        self.assertTrue(self.shows(dialog, t("catalog.settings.catalog_found", name="譜庫試算表")))
+        self.assertTrue(self.shows(dialog, t("catalog.settings.catalog_found", name="譜庫總表")))
         self.save(dialog)
         self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), sheet)
         self.assertEqual(self.saved().get(CATALOG_SPREADSHEET_ID_KEY), sheet)
@@ -361,15 +396,27 @@ class TestFindCatalog(CatalogFolderTestCase):
         self.assertEqual(self.google.sheets.tabs(), list(SHEET_HEADERS))
         self.assertTrue(self.shows(dialog, t("catalog.settings.catalog_created")))
 
+    def test_a_new_catalog_has_headers_in_the_interface_language(self):
+        self.addCleanup(set_locale, get_locale())
+        for locale in (LOCALE_ZH_TW, LOCALE_EN):
+            with self.subTest(locale=locale):
+                set_locale(locale)
+                self.google = FakeGoogle()
+                self.folder = self.google.drive.add_folder("譜庫")
+                with mock.patch.object(QInputDialog, "getText", return_value=("社團譜庫", True)):
+                    dialog = self.open_with_folder()
+                wait_until(lambda: self.shows(dialog, t("catalog.settings.catalog_created")))
+                self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0], header_row(SHEET_PIECES, locale))
+
     def test_cancelling_the_name_prompt_says_how_to_create_one(self):
         with mock.patch.object(QInputDialog, "getText", return_value=("", False)):
             dialog = self.open_with_folder()
-        self.assertTrue(self.shows(dialog, "此資料夾尚無譜庫試算表。按「瀏覽」再選一次這個資料夾即可建立。"))
+        self.assertTrue(self.shows(dialog, "此資料夾尚無譜庫總表。按「瀏覽」再選一次這個資料夾即可建立。"))
         self.assertEqual(self.google.drive.children(self.folder), [])
         self.assertFalse(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY))
 
     def test_unreadable_folder_shows_the_bar_and_retry_finds_the_catalog(self):
-        sheet = self.add_spreadsheet("譜庫試算表")
+        sheet = self.add_spreadsheet("譜庫總表")
         self.google.fail_next(CatalogErrorKind.OFFLINE)
         dialog = self.open_with_folder()
         self.assertTrue(self.bar_text(dialog).startswith("讀不到譜庫｜連不上網路："))
@@ -387,11 +434,75 @@ class TestFindCatalog(CatalogFolderTestCase):
         self.assertFalse(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY))
 
 
+class TestHeaderLanguage(CatalogFolderTestCase):
+    """欄位語言選單：寫出連到的譜庫總表現在的標題語言，換語言時整份改寫標題列；讀寫不到時頂端出現提示列"""
+
+    def setUp(self):
+        super().setUp()
+        self.sheet = self.add_spreadsheet("譜庫總表")
+        for sheet, headers in SHEET_HEADERS.items():
+            self.google.sheets.create_tab(sheet, [headers])
+
+    def combo(self, dialog: CatalogSettingsDialog) -> QComboBox:
+        """欄位語言選單"""
+        return dialog.findChild(QComboBox)
+
+    def open_and_read(self) -> CatalogSettingsDialog:
+        """開啟並等到選單寫出標題語言（或提示列出現）"""
+        dialog = self.open_with_folder()
+        wait_until(lambda: self.combo(dialog).isEnabled() or not self.bar(dialog).isHidden())
+        return dialog
+
+    def choose(self, dialog: CatalogSettingsDialog, locale: str) -> None:
+        """在選單選一種語言"""
+        combo = self.combo(dialog)
+        index = combo.findData(locale)
+        combo.setCurrentIndex(index)
+        combo.activated.emit(index)
+
+    def test_disabled_until_a_catalog_is_linked(self):
+        self.google.drive.trash(self.sheet)
+        dialog = self.open_dialog()
+        self.assertFalse(self.combo(dialog).isEnabled())
+
+    def test_shows_the_language_of_the_linked_catalog(self):
+        dialog = self.open_and_read()
+        self.assertEqual(self.combo(dialog).currentData(), LOCALE_EN)
+        self.assertEqual(self.combo(dialog).currentText(), "English")
+
+    def test_choosing_another_language_rewrites_every_header_row(self):
+        dialog = self.open_and_read()
+        self.choose(dialog, LOCALE_ZH_TW)
+        wait_until(lambda: self.google.sheets.rows(SHEET_PARTS)[0] == header_row(SHEET_PARTS, LOCALE_ZH_TW))
+        wait_until(lambda: self.combo(dialog).isEnabled())
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0], header_row(SHEET_PIECES, LOCALE_ZH_TW))
+        self.assertEqual(self.combo(dialog).currentData(), LOCALE_ZH_TW)
+
+    def test_a_failed_rewrite_shows_the_bar_and_keeps_the_language(self):
+        dialog = self.open_and_read()
+        self.google.fail_next(CatalogErrorKind.OFFLINE)
+        self.choose(dialog, LOCALE_ZH_TW)
+        wait_until(lambda: not self.bar(dialog).isHidden())
+        self.assertTrue(self.bar_text(dialog).startswith("寫不進譜庫｜連不上網路："))
+        self.assertEqual(self.combo(dialog).currentData(), LOCALE_EN)
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0], SHEET_HEADERS[SHEET_PIECES])
+        next(b for b in self.bar(dialog).findChildren(QPushButton) if b.text() == "重試").click()
+        wait_until(lambda: self.combo(dialog).currentData() == LOCALE_ZH_TW)
+        self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0], header_row(SHEET_PIECES, LOCALE_ZH_TW))
+
+    def test_a_new_catalog_shows_the_language_it_was_created_in(self):
+        self.google.drive.trash(self.sheet)
+        with mock.patch.object(QInputDialog, "getText", return_value=("社團譜庫", True)):
+            dialog = self.open_with_folder()
+        wait_until(lambda: self.combo(dialog).isEnabled())
+        self.assertEqual(self.combo(dialog).currentData(), get_locale())
+
+
 class TestMyDriveTypedAsRoot(CatalogFolderTestCase):
     """資料夾欄位寫的是 Drive 根資料夾的別名 root 時，存成根資料夾真正的 ID，譜庫的其他地方才比對得到"""
 
     def test_alias_and_the_my_drive_url_are_saved_as_the_real_id(self):
-        sheet = self.google.drive.add_file("譜庫試算表", mime_type=DRIVE_SPREADSHEET_MIME)
+        sheet = self.google.drive.add_file("譜庫總表", mime_type=DRIVE_SPREADSHEET_MIME)
         for typed in ("root", "https://drive.google.com/drive/my-drive"):
             with self.subTest(typed=typed):
                 self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, typed)
@@ -403,7 +514,7 @@ class TestMyDriveTypedAsRoot(CatalogFolderTestCase):
 
 
 class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
-    """換了譜庫試算表時，記住的發譜平台改成新譜庫的社團設定"""
+    """換了譜庫總表時，記住的發譜平台改成新譜庫的社團設定"""
 
     def remember_huaxia(self):
         """這台電腦記著上一個譜庫啟用 HuaXia"""
@@ -414,7 +525,7 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
 
     def test_a_new_catalog_without_the_platform_hides_publishing(self):
         self.remember_huaxia()
-        self.add_spreadsheet("譜庫試算表")
+        self.add_spreadsheet("譜庫總表")
         self.google.sheets.create_tab("曲目", [SHEET_HEADERS["曲目"]])
         self.save(self.open_with_folder())
         self.assertIsNone(ClubSettingsService(self.preferences).remembered())
@@ -423,7 +534,7 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
 
     def test_a_new_catalog_with_the_platform_keeps_publishing(self):
         self.remember_huaxia()
-        sheet = self.add_spreadsheet("譜庫試算表")
+        sheet = self.add_spreadsheet("譜庫總表")
         self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
         self.save(self.open_with_folder())
         wait_until(lambda: ClubSettingsService(self.saved()).remembered() is PublishingPlatform.HUAXIA)
@@ -432,17 +543,58 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
     def test_cancelling_after_picking_a_catalog_changes_nothing(self):
         self.remember_huaxia()
         self.preferences.save()
-        self.add_spreadsheet("譜庫試算表")
+        self.add_spreadsheet("譜庫總表")
         dialog = self.open_with_folder()
         dialog.reject()
         self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), "old-sheet")
         self.assertEqual(self.saved().get(CATALOG_SPREADSHEET_ID_KEY), "old-sheet")
         self.assertIs(ClubSettingsService(self.saved()).remembered(), PublishingPlatform.HUAXIA)
-        self.assertEqual(self.connected_to, [""])
+
+    def test_the_same_catalog_is_read_again_without_forgetting_first(self):
+        self.remember_huaxia()
+        sheet = self.add_spreadsheet("譜庫總表")
+        self.preferences.set(CATALOG_SPREADSHEET_ID_KEY, sheet)
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        notified = []
+        self.club.subscribe(lambda: notified.append(self.club.remembered()))
+        self.save(self.open_with_folder())
+        wait_until(lambda: notified)
+        self.assertEqual(notified, [PublishingPlatform.HUAXIA])
+
+    def test_the_same_catalog_picks_up_a_platform_added_to_club_settings(self):
+        sheet = self.add_spreadsheet("譜庫總表")
+        self.preferences.set(CATALOG_SPREADSHEET_ID_KEY, sheet)
+        dialog = self.open_with_folder()
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        self.save(dialog)
+        wait_until(lambda: ClubSettingsService(self.saved()).remembered() is PublishingPlatform.HUAXIA)
+
+    def test_the_platform_line_follows_a_read_finished_while_open(self):
+        dialog = self.open_dialog()
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        read_in_background(lambda: self.club.read(self.catalog("")))
+        wait_until(lambda: self.shows(dialog, "發譜平台：華夏國樂社（在譜庫總表的「社團設定」工作表設定）"))
+
+    def test_a_read_after_the_dialog_is_gone_still_finishes(self):
+        dialog = CatalogSettingsDialog(self.auth, self.preferences, catalog_factory=self.catalog, club_settings=self.club)
+        dialog.reject()
+        dialog.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        self.assertIs(self.club.read(self.catalog("")), PublishingPlatform.HUAXIA)
+
+    def test_a_dialog_deleted_without_being_closed_is_no_longer_notified(self):
+        dialog = CatalogSettingsDialog(
+            self.auth, self.preferences, catalog_factory=self.catalog, log=self.log, club_settings=self.club,
+        )
+        dialog.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.club.forget()
+        self.assertEqual(self.log_text(), "")
 
     def test_unreadable_club_settings_of_the_new_catalog_are_written_to_the_log(self):
         self.remember_huaxia()
-        self.add_spreadsheet("譜庫試算表")
+        self.add_spreadsheet("譜庫總表")
         dialog = self.open_with_folder()
         self.google.fail_next(CatalogErrorKind.OFFLINE)
         self.save(dialog)
@@ -452,7 +604,7 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
 
 
 class TestBrowseFolders(CatalogFolderTestCase):
-    """瀏覽 Drive 資料夾：子資料夾經譜庫服務列出，選了就找裡面的譜庫試算表；讀不到時瀏覽視窗出現提示列"""
+    """瀏覽 Drive 資料夾：子資料夾經譜庫服務列出，選了就找裡面的譜庫總表；讀不到時瀏覽視窗出現提示列"""
 
     def browse(self, dialog: CatalogSettingsDialog, pick: str = ""):
         """按「瀏覽」；瀏覽視窗列出資料夾後選 pick 並按確定（pick 為空時只回傳瀏覽視窗，不選）"""
@@ -474,7 +626,7 @@ class TestBrowseFolders(CatalogFolderTestCase):
         return seen[0]
 
     def test_picking_a_folder_finds_its_catalog(self):
-        sheet = self.add_spreadsheet("譜庫試算表")
+        sheet = self.add_spreadsheet("譜庫總表")
         dialog = self.open_dialog()
         self.browse(dialog, "譜庫")
         wait_until(lambda: self.settled(dialog))
@@ -482,7 +634,7 @@ class TestBrowseFolders(CatalogFolderTestCase):
         self.assertEqual(self.preferences.get(CATALOG_SPREADSHEET_ID_KEY), sheet)
 
     def test_my_drive_itself_can_be_picked_and_is_saved_under_its_real_id(self):
-        sheet = self.google.drive.add_file("譜庫試算表", mime_type=DRIVE_SPREADSHEET_MIME)
+        sheet = self.google.drive.add_file("譜庫總表", mime_type=DRIVE_SPREADSHEET_MIME)
         dialog = self.open_dialog()
         self.browse(dialog, t("catalog.settings.my_drive"))
         wait_until(lambda: self.settled(dialog))

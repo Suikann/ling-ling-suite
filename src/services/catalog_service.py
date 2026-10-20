@@ -7,7 +7,7 @@
 
 所有讀寫共用的規則都在這裡：遇到 429（達到用量上限）以指數退避自動重試；以名稱搜尋 Drive 時先跳脫反斜線、
 再跳脫單引號（drive_literal）；新增列時抽的 8 碼 ID 跟同一張工作表既有的撞號就重抽，同一批列重送前先以它們的 ID
-檢查哪些已經寫進去，不產生重複列（new_rows、add_rows）；建譜庫試算表時建好就記下 ID，搬進資料夾失敗後重送不建第二份（PendingCatalog）。試算表的值一律以 RAW 寫入由通事負責。
+檢查哪些已經寫進去，不產生重複列（new_rows、add_rows）；建譜庫總表時建好就記下 ID，搬進資料夾失敗後重送不建第二份（PendingCatalog）。試算表的值一律以 RAW 寫入由通事負責。
 
 網路請求會卡住呼叫的執行緒，UI 要在背景執行緒呼叫。
 
@@ -46,7 +46,8 @@ from core.catalog_constants import (
     SHEET_PIECES, SHEET_PUBLISH_LOG, SHEET_SECTIONS, PublishingPlatform,
 )
 from core.catalog_errors import CatalogError, CatalogErrorKind
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, OrchestraType
+from core.catalog_headers import catalog_header_locale, header_locale, header_row, localized_sheets
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, LOCALE_EN, OrchestraType
 from core.voice_suggestions import ranked_by_usage
 from core.catalog_models import (
     CatalogOverview, CatalogPlace, Composer, DepositLogEntry, DriveFile, DriveRevision, Edition, EditionFiles,
@@ -263,21 +264,34 @@ def _place_sheets(titles: Sequence[str]) -> List[str]:
     ]
 
 
+def _tables_locale(tables: Mapping[str, List[List[str]]]) -> Optional[str]:
+    """讀到的各工作表裡第一張認得出語言的標題列的語言；都認不出時為 None"""
+    found = (header_locale(sheet, rows[0]) for sheet, rows in tables.items() if rows)
+    return next((locale for locale in found if locale), None)
+
+
 class _Batch:
     """一次寫回要送出的全部格子：改既有列的格子、接在各工作表最後的新列與缺的標題，最後以一個請求送出
+
+    缺的標題沿用那張工作表已有標題的語言；還沒有標題列的工作表用 locale（譜庫已有的語言），不混用。
 
     只新增的紀錄表（發譜紀錄、存入紀錄、編制寫入紀錄）以 append 新增：新列由 Google 接在寫入那一刻的最後一列之後
     （SheetsPort.write_cells 的 appends），讀與寫之間別台電腦或背景工作新增的列不會被蓋掉。其他工作表的新列以 add
     寫在讀到的最後一列之後。
     """
 
-    def __init__(self, tables: Dict[str, List[List[str]]], draw: Callable[[Set[str], int], List[str]]):
+    def __init__(
+        self, tables: Dict[str, List[List[str]]], draw: Callable[[Set[str], int], List[str]],
+        locale: Optional[str] = None,
+    ):
         """
         Args:
             tables: 寫入前一刻讀到的各工作表（含標題列；沒有的工作表不在裡面）
             draw: 抽新 ID 的函式，參數為不可用的 ID 與要抽幾個
+            locale: 還沒有標題列的工作表用的標題語言；省略時照 tables 裡已有的標題列，都認不出時為英文
         """
         self._tables = tables
+        self._locale = locale or _tables_locale(tables) or LOCALE_EN
         self._draw = draw
         self._next_row = {sheet: max(len(rows), 1) + 1 for sheet, rows in tables.items()}
         self._taken = {sheet: {row[0] for row in rows[1:] if row} for sheet, rows in tables.items()}
@@ -320,9 +334,9 @@ class _Batch:
         if sheet in self.touched:
             return
         self.touched.add(sheet)
-        headers = SHEET_HEADERS[sheet]
         existing = self._tables.get(sheet, [])
         present = existing[0] if existing else []
+        headers = header_row(sheet, header_locale(sheet, present) or self._locale)
         if len(present) < len(headers):
             start = len(present)
             self.cells.append((sheet_range(sheet, f"{_column_letter(start)}1"), [headers[start:]]))
@@ -589,16 +603,18 @@ class PendingRows:
 
 
 class PendingCatalog:
-    """要建立的譜庫試算表：建好後記下 ID，CatalogService.create_catalog 重送時沿用，不建第二份"""
+    """要建立的譜庫總表：建好後記下 ID，CatalogService.create_catalog 重送時沿用，不建第二份"""
 
-    def __init__(self, name: str, folder_id: str):
+    def __init__(self, name: str, folder_id: str, locale: str):
         """
         Args:
             name: 試算表名稱
             folder_id: 譜庫資料夾的 Drive ID
+            locale: 標題列的語言（建立時的介面語言）
         """
         self.name = name
         self.folder_id = folder_id
+        self.locale = locale
         self.spreadsheet_id = ""
 
 
@@ -1076,7 +1092,7 @@ class CatalogService:
             decisions: 衝突的選擇：PlaceWrite.group_id → （SyncItem.key → Decision）
             review_only: 只比對、不寫
         """
-        titles, tables, _ = self._read_with_log(_place_sheets, SHEET_INSTRUMENTATION_LOG, "A:A")
+        titles, tables, _, locale = self._read_with_log(_place_sheets, SHEET_INSTRUMENTATION_LOG, "A:A")
         catalogs = {orchestra: _PlaceTables(tables, orchestra) for orchestra in {o for _, o in writes}}
         places = []
         for write, orchestra in writes:
@@ -1094,7 +1110,7 @@ class CatalogService:
         outcome = SyncOutcome(places, written=False)
         if outcome.conflicts or review_only:
             return outcome
-        batch = _Batch(tables, self._draw_ids)
+        batch = _Batch(tables, self._draw_ids, locale)
         stamp = now_text()
         written_sections: Dict[OrchestraType, Set[str]] = {orchestra: set() for orchestra in catalogs}
         for place, (_, orchestra) in zip(places, writes):
@@ -1175,8 +1191,8 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到或寫不進去（沒有任何一列被寫入）；這時還沒動 Drive
         """
-        titles, tables, log = self._read_with_log(lambda _: [], SHEET_DEPOSIT_LOG, "A:B")
-        batch = _Batch(tables, self._draw_ids)
+        titles, tables, log, locale = self._read_with_log(lambda _: [], SHEET_DEPOSIT_LOG, "A:B")
+        batch = _Batch(tables, self._draw_ids, locale)
         deposit_id = self._draw_ids({row[1] for row in log if len(row) > 1}, 1)[0]
         stamp = now_text()
         for record in planned:
@@ -1200,8 +1216,8 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到或寫不進去（沒有任何一格被寫入）
         """
-        titles, tables, _ = self._read_with_log(lambda _: [SHEET_PARTS], SHEET_DEPOSIT_LOG, "A:A")
-        batch = _Batch(tables, self._draw_ids)
+        titles, tables, _, locale = self._read_with_log(lambda _: [SHEET_PARTS], SHEET_DEPOSIT_LOG, "A:A")
+        batch = _Batch(tables, self._draw_ids, locale)
         parts = _numbered(tables[SHEET_PARTS], SHEET_PARTS, Part)
         stamp = now_text()
         added_scores: Set[Tuple[str, str]] = set()
@@ -1341,9 +1357,9 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到或寫不進去（沒有任何一列被寫入）
         """
-        titles, tables, log = self._read_with_log(lambda _: [], SHEET_PUBLISH_LOG, "A:B")
+        titles, tables, log, locale = self._read_with_log(lambda _: [], SHEET_PUBLISH_LOG, "A:B")
         publish_id = self._draw_ids({row[1] for row in log if len(row) > 1}, 1)[0]
-        self._append_publish(titles, tables, publish_id, records, operator)
+        self._append_publish(titles, tables, locale, publish_id, records, operator)
         return publish_id
 
     def record_publish(self, publish_id: str, records: Sequence[PublishRecord], operator: str) -> None:
@@ -1353,8 +1369,8 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到或寫不進去（沒有任何一列被寫入）
         """
-        titles, tables, _ = self._read_with_log(lambda _: [], SHEET_PUBLISH_LOG, "A:A")
-        self._append_publish(titles, tables, publish_id, records, operator)
+        titles, tables, _, locale = self._read_with_log(lambda _: [], SHEET_PUBLISH_LOG, "A:A")
+        self._append_publish(titles, tables, locale, publish_id, records, operator)
 
     def publish_log(self) -> List[PublishRecord]:
         """讀發譜紀錄的全部列，依紀錄的順序（列出工作表名稱、讀取各一次請求）；動作不認得的列略過
@@ -1372,11 +1388,11 @@ class CatalogService:
         return [record for record in records if record is not None]
 
     def _append_publish(
-        self, titles: Set[str], tables: Dict[str, List[List[str]]], publish_id: str, records: Sequence[PublishRecord],
-        operator: str,
+        self, titles: Set[str], tables: Dict[str, List[List[str]]], locale: Optional[str], publish_id: str,
+        records: Sequence[PublishRecord], operator: str,
     ) -> None:
-        """在發譜紀錄最後新增各群組的一列，以一個請求送出"""
-        batch = _Batch(tables, self._draw_ids)
+        """在發譜紀錄最後新增各群組的一列，以一個請求送出；locale 是新建發譜紀錄時的標題語言"""
+        batch = _Batch(tables, self._draw_ids, locale)
         stamp = now_text()
         for record in records:
             batch.append(SHEET_PUBLISH_LOG, {
@@ -1481,8 +1497,8 @@ class CatalogService:
         Raises:
             CatalogError: 讀不到或寫不進去（沒有任何一格被寫入）
         """
-        titles, tables, log = self._read_with_log(lambda _: [SHEET_PARTS], SHEET_DEPOSIT_LOG, "A:B")
-        batch = _Batch(tables, self._draw_ids)
+        titles, tables, log, locale = self._read_with_log(lambda _: [SHEET_PARTS], SHEET_DEPOSIT_LOG, "A:B")
+        batch = _Batch(tables, self._draw_ids, locale)
         parts = _numbered(tables[SHEET_PARTS], SHEET_PARTS, Part)
         revert_id = self._draw_ids({row[1] for row in log if len(row) > 1}, 1)[0]
         stamp = now_text()
@@ -1520,7 +1536,7 @@ class CatalogService:
         return self._children(folder_id, f"mimeType = {drive_literal(DRIVE_FOLDER_MIME)}")
 
     def spreadsheets_in(self, folder_id: str) -> List[DriveFile]:
-        """列出 Drive 資料夾裡的 Google 試算表（依名稱排序，不含垃圾桶裡的），譜庫設定以此找譜庫試算表
+        """列出 Drive 資料夾裡的 Google 試算表（依名稱排序，不含垃圾桶裡的），譜庫設定以此找譜庫總表
 
         Raises:
             CatalogError: 讀不到
@@ -1663,12 +1679,12 @@ class CatalogService:
         self._call(send)
 
     def create_catalog(self, pending: PendingCatalog) -> str:
-        """建立新的譜庫試算表（每張工作表有標題列並凍結）並搬進譜庫資料夾
+        """建立新的譜庫總表（每張工作表有 pending.locale 語言的標題列並凍結）並搬進譜庫資料夾
 
         試算表建好就記在 pending：之後搬不進資料夾時，以同一個 pending 再呼叫一次只補搬，不再建第二份。
 
         Args:
-            pending: 要建立的譜庫試算表；上一次失敗時傳入同一個
+            pending: 要建立的譜庫總表；上一次失敗時傳入同一個
 
         Returns:
             新試算表的 ID
@@ -1677,11 +1693,43 @@ class CatalogService:
             CatalogError: 建不起來或搬不進資料夾；以同一個 pending 再呼叫一次即可補齊
         """
         if not pending.spreadsheet_id:
-            pending.spreadsheet_id = self._call(
-                lambda: self._sheets.create_spreadsheet(pending.name, SHEET_HEADERS),
-            )
+            sheets = {sheet: header_row(sheet, pending.locale) for sheet in SHEET_HEADERS}
+            pending.spreadsheet_id = self._call(lambda: self._sheets.create_spreadsheet(pending.name, sheets))
         self.move_file(self._call(lambda: self._drive.get_file(pending.spreadsheet_id)), pending.folder_id)
         return pending.spreadsheet_id
+
+    def header_locale(self) -> Optional[str]:
+        """譜庫總表標題列的語言（列出工作表名稱、讀各表第一列各一次請求）
+
+        Returns:
+            語言代碼；各工作表不一致或都認不出時為 None（見 core/catalog_headers.py）
+
+        Raises:
+            CatalogError: 讀不到
+        """
+        sheets = self._present_localized_sheets()
+        if not sheets:
+            return None
+        rows = self._call(lambda: self._sheets.read_ranges([sheet_range(sheet, "1:1") for sheet in sheets]))
+        return catalog_header_locale({sheet: (row[0] if row else []) for sheet, row in zip(sheets, rows)})
+
+    def set_header_locale(self, locale: str) -> None:
+        """把已經建立的各工作表的標題列整列改寫成 locale 的語言（列出工作表名稱、寫入各一次請求）
+
+        標題列較短的舊工作表一併補上缺的欄；還沒建立的工作表不建，之後建立時沿用譜庫已有的語言。
+
+        Raises:
+            CatalogError: 讀不到或寫不進去（寫入全成或全不成）
+        """
+        sheets = self._present_localized_sheets()
+        if sheets:
+            data = [(sheet_range(sheet, "A1"), [header_row(sheet, locale)]) for sheet in sheets]
+            self._call(lambda: self._sheets.write_cells(data))
+
+    def _present_localized_sheets(self) -> List[str]:
+        """已經建立、標題列分中英文的工作表（列出工作表名稱一次請求）"""
+        titles = set(self._call(self._sheets.sheet_titles))
+        return [sheet for sheet in localized_sheets() if sheet in titles]
 
     def create_place(self, pending: PendingPlace, orchestra_type: OrchestraType) -> CatalogPlace:
         """在譜庫新建群組要連的一處：建出還沒有的曲目、版本（連同根資料夾下的 Drive 資料夾）與樂章，再讀出那處
@@ -1915,10 +1963,11 @@ class CatalogService:
 
     def _read_with_log(
         self, sheets_for: Callable[[Set[str]], List[str]], log_sheet: str, log_columns: str,
-    ) -> Tuple[Set[str], Dict[str, List[List[str]]], List[List[str]]]:
+    ) -> Tuple[Set[str], Dict[str, List[List[str]]], List[List[str]], Optional[str]]:
         """寫紀錄前一刻讀：列出工作表名稱一次，再以一次請求讀要的工作表與紀錄表
 
         紀錄只會越來越長：紀錄表只讀標題列與 log_columns 那幾欄（從 A 欄起；A 欄是 ID，找下一列、抽不撞號的 ID）。
+        紀錄表還沒建立、要讀的工作表也認不出標題語言時，同一個請求多讀曲目工作表的標題列，新建的紀錄表沿用它的語言。
 
         Args:
             sheets_for: 依已有的工作表名稱決定要整張讀的工作表
@@ -1927,7 +1976,7 @@ class CatalogService:
 
         Returns:
             （已有的工作表名稱，各工作表的列（紀錄表是標題列接上讀到的那幾欄；還沒建立時不在裡面），
-            紀錄表讀到那幾欄的資料列（不含標題；還沒建立時為空））
+            紀錄表讀到那幾欄的資料列（不含標題；還沒建立時為空），譜庫的標題語言（認不出時為 None），交給 _Batch）
         """
         titles = set(self._call(self._sheets.sheet_titles))
         sheets = sheets_for(titles)
@@ -1935,13 +1984,17 @@ class CatalogService:
         has_log = log_sheet in titles
         if has_log:
             ranges += [sheet_range(log_sheet, "1:1"), sheet_range(log_sheet, log_columns)]
+        elif SHEET_PIECES in titles and SHEET_PIECES not in sheets:
+            ranges.append(sheet_range(SHEET_PIECES, "1:1"))
         values = self._call(lambda: self._sheets.read_ranges(ranges))
         tables = dict(zip(sheets, values))
         if not has_log:
-            return titles, tables, []
+            pieces = values[len(sheets):]
+            reference = {SHEET_PIECES: pieces[0]} if pieces else {}
+            return titles, tables, [], _tables_locale(tables) or _tables_locale(reference)
         header, columns = values[-2:]
         tables[log_sheet] = header[:1] + columns[1:]
-        return titles, tables, columns[1:]
+        return titles, tables, columns[1:], _tables_locale(tables)
 
     def _send(self, batch: "_Batch", titles: Set[str]) -> None:
         """送出一次寫入的全部格子與紀錄表的新列（一個請求）；寫到還沒建立的工作表時先各建一次。沒有要寫的時不送"""

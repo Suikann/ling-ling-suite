@@ -2,7 +2,7 @@
 """
 群組連到譜庫的接線測試（offscreen）
 
-連線對話框經譜庫服務、對假 Google：依群組的曲名與樂章編號預選、挑到的那處或新建的曲目寫進群組，兩邊都有編制時先出現合併差異表，
+連線對話框經譜庫服務、對假 Google：依群組的曲名與樂章編號預選、選到新建項時顯示新建說明、挑到的那處或新建的曲目寫進群組，兩邊都有編制時先出現合併差異表，
 讀不到時頂端出現提示列；
 主視窗按編制表上方的「連到譜庫…」開啟對話框，連上後編制表上方顯示連線。不測畫面。
 """
@@ -119,6 +119,38 @@ class TestPickingAPlace(LinkDialogTestCase):
         self.assertIn("將軍令", titles)
         self.assertEqual(self.group.catalog_link.piece_title, "將軍令")
         self.assertEqual(self.group.catalog_link.movement_name, "江樓鐘鼓")
+
+
+class TestNewHint(LinkDialogTestCase):
+    """選到任一「新建」項時，選單下方說明新建的資料取自群組資訊"""
+
+    @staticmethod
+    def hint(dialog: CatalogLinkDialog) -> QLabel:
+        """新建說明那一行"""
+        return next(label for label in dialog.findChildren(QLabel) if label.text() == t("catalog.link.new_hint"))
+
+    def test_hidden_when_nothing_new_is_picked(self):
+        dialog = self.open_dialog()
+        self.assertTrue(self.hint(dialog).isHidden())
+
+    def test_shown_when_a_new_piece_is_preselected(self):
+        self.project.update_group(self.group, piece_name="將軍令")
+        dialog = self.open_dialog()
+        self.assertFalse(self.hint(dialog).isHidden())
+
+    def test_follows_picking_a_new_edition_or_movement_and_back(self):
+        dialog = self.open_dialog()
+        editions, movements = self.combo(dialog, 1), self.combo(dialog, 2)
+        editions.setCurrentIndex(editions.count() - 1)
+        self.assertFalse(self.hint(dialog).isHidden())
+        editions.setCurrentIndex(0)
+        self.assertTrue(self.hint(dialog).isHidden())
+        movements.setCurrentIndex(movements.count() - 1)
+        self.assertFalse(self.hint(dialog).isHidden())
+
+    def test_wraps_instead_of_widening_the_dialog(self):
+        dialog = self.open_dialog()
+        self.assertTrue(self.hint(dialog).wordWrap())
 
 
 class TestMergeTable(LinkDialogTestCase):

@@ -119,7 +119,7 @@ class UngroupedTab(QWidget):
             return
         menu = QMenu(self)
         for group in self.project.groups:
-            action = menu.addAction(group.name or group.id[:8])
+            action = menu.addAction(group.display_name())
             action.triggered.connect(
                 lambda checked=False, g=group: self._do_batch_move(g),
             )
@@ -271,6 +271,7 @@ class GroupTab(QWidget):
         self._small_template_cb = QCheckBox(t("group.use_small_template"))
         bottom_row.addWidget(self._small_template_cb)
         self._small_template_entry = QLineEdit()
+        self._small_template_entry.setToolTip(t("panel.template_segment_tip"))
         self._small_template_cb.toggled.connect(self._small_template_entry.setEnabled)
         bottom_row.addWidget(self._small_template_entry, stretch=1)
         layout.addLayout(bottom_row)

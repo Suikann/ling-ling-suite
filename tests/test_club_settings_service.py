@@ -27,16 +27,27 @@ from test_catalog_service import empty_catalog
 
 
 class ClubSettingsTestCase(unittest.TestCase):
-    """假 Google 裡有一份譜庫試算表；偏好設定在臨時目錄"""
+    """假 Google 裡有一份譜庫總表；偏好設定與紀錄檔在臨時目錄"""
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.temp_dir, True)
         self.path = os.path.join(self.temp_dir, "preferences.json")
+        self.log_dir = os.path.join(self.temp_dir, "logs")
         self.google = FakeGoogle()
         empty_catalog(self.google)
         self.catalog = CatalogService(self.google.sheets, self.google.drive, sleep=lambda seconds: None)
-        self.club = ClubSettingsService(PreferencesService(self.path))
+        self.club = ClubSettingsService(PreferencesService(self.path), ActivityLog(FileService(), self.log_dir))
+
+    def log_text(self) -> str:
+        """紀錄檔資料夾裡所有檔的內容"""
+        if not os.path.isdir(self.log_dir):
+            return ""
+        texts = []
+        for name in sorted(os.listdir(self.log_dir)):
+            with open(os.path.join(self.log_dir, name), encoding="utf-8") as f:
+                texts.append(f.read())
+        return "".join(texts)
 
     def club_settings(self, *rows):
         """社團設定工作表寫成標題列加 rows"""
@@ -128,21 +139,6 @@ if __name__ == '__main__':
 class TestRefresh(ClubSettingsTestCase):
     """連上譜庫時重讀：讀不到不丟出例外，記住的不變，失敗寫進紀錄檔"""
 
-    def setUp(self):
-        super().setUp()
-        self.log_dir = os.path.join(self.temp_dir, "logs")
-        self.club = ClubSettingsService(PreferencesService(self.path), ActivityLog(FileService(), self.log_dir))
-
-    def log_text(self) -> str:
-        """紀錄檔資料夾裡所有檔的內容"""
-        if not os.path.isdir(self.log_dir):
-            return ""
-        texts = []
-        for name in sorted(os.listdir(self.log_dir)):
-            with open(os.path.join(self.log_dir, name), encoding="utf-8") as f:
-                texts.append(f.read())
-        return "".join(texts)
-
     def test_remembers_what_it_read_and_writes_nothing_to_the_log(self):
         self.club_settings(["發譜平台", "華夏國樂社"])
         self.club.refresh(lambda: self.catalog)
@@ -173,3 +169,46 @@ class TestRefresh(ClubSettingsTestCase):
         self.club.refresh(connect)
         self.assertIn("ValueError: bad value", self.log_text())
         self.assertIn("譜庫讀寫失敗", self.log_text())
+
+
+class TestSubscribe(ClubSettingsTestCase):
+    """記住的結果寫入後通知訂閱者（重讀完成、忘掉時）；讀不到時記住的不變，不通知"""
+
+    def setUp(self):
+        super().setUp()
+        self.notified = []
+        self.listener = lambda: self.notified.append(self.club.remembered())
+        self.club.subscribe(self.listener)
+
+    def test_reading_notifies_with_the_new_result_remembered(self):
+        self.club_settings(["發譜平台", "華夏國樂社"])
+        self.club.refresh(lambda: self.catalog)
+        self.club_settings()
+        self.club.read(self.catalog)
+        self.assertEqual(self.notified, [PublishingPlatform.HUAXIA, None])
+
+    def test_forgetting_notifies(self):
+        self.club.forget()
+        self.assertEqual(self.notified, [None])
+
+    def test_unreadable_does_not_notify(self):
+        self.google.fail_next(CatalogErrorKind.OFFLINE)
+        self.club.refresh(lambda: self.catalog)
+        self.assertEqual(self.notified, [])
+
+    def test_no_longer_notified_after_unsubscribing(self):
+        self.club.unsubscribe(self.listener)
+        self.club.forget()
+        self.assertEqual(self.notified, [])
+
+    def test_a_failing_listener_is_written_to_the_log_and_the_others_are_still_notified(self):
+        def deleted_dialog():
+            """訂閱著卻已刪掉的對話框"""
+            raise RuntimeError("Internal C++ object already deleted.")
+        later = []
+        self.club.subscribe(deleted_dialog)
+        self.club.subscribe(lambda: later.append(self.club.remembered()))
+        self.club.forget()
+        self.assertEqual(self.notified, [None])
+        self.assertEqual(later, [None])
+        self.assertIn("RuntimeError: Internal C++ object already deleted.", self.log_text())

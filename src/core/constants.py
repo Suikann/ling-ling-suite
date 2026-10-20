@@ -82,7 +82,7 @@ CLUB_PUBLISHING_PLATFORM_KEY = "club_publishing_platform"
 # 收回提醒的摘要：已發譜、還沒收回也沒標不收回的曲目與它們掛的公演結束時間（core/publish_log.py 的 reminder_summary）；
 # 每次讀寫發譜紀錄時重算，開泠靈時只讀它判斷要不要提醒
 RECALL_REMINDER_KEY = "recall_reminder"
-# 譜庫設定：譜庫試算表的 ID 與譜庫根資料夾的 Drive ID；按下譜庫設定的「儲存設定」才寫入
+# 譜庫設定：譜庫總表的 ID 與譜庫根資料夾的 Drive ID；按下譜庫設定的「儲存設定」才寫入
 CATALOG_SPREADSHEET_ID_KEY = "catalog_spreadsheet_id"
 CATALOG_ROOT_FOLDER_ID_KEY = "catalog_root_folder_id"
 DEFAULT_PREFERENCES = {
