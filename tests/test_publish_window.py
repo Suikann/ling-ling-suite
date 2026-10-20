@@ -81,19 +81,35 @@ def blocked_reason(dialog: PublishPreviewDialog, name: str) -> str:
     return label.text() if label is not None else ""
 
 
+def piece_combo(dialog: PublishPreviewDialog, name: str) -> QComboBox:
+    """這個群組的現有曲目選單"""
+    return group_cell(dialog, name).findChild(QComboBox, "existing_pieces")
+
+
 def piece_choices(dialog: PublishPreviewDialog, name: str) -> list:
-    """這個群組可以挑的現有曲目"""
-    combo = group_cell(dialog, name).findChild(QComboBox, "existing_pieces")
-    return [combo.itemText(i) for i in range(combo.count())]
+    """這個群組可以挑的現有曲目（選單裡挑得到的各項，不含「請挑選」）"""
+    combo = piece_combo(dialog, name)
+    return [combo.itemText(i) for i in range(combo.count()) if combo.model().item(i).isEnabled()]
+
+
+def piece_option(dialog: PublishPreviewDialog, name: str, option: str) -> QRadioButton:
+    """這個群組的「挑選現有」（option 為 existing）或「新建」（new）"""
+    return next(
+        b for b in group_cell(dialog, name).findChildren(QRadioButton) if b.text() == t(f"publish.piece.{option}")
+    )
+
+
+def pick_piece(dialog: PublishPreviewDialog, name: str, text: str):
+    """這個群組在現有曲目選單裡挑寫著 text 的那一首（不先按「挑選現有」）"""
+    combo = piece_combo(dialog, name)
+    combo.setCurrentIndex(combo.findText(text))
 
 
 def choose(dialog: PublishPreviewDialog, name: str, option: str, piece: int = 0):
     """這個群組按「挑選現有」並挑第 piece 首，或按「新建」"""
-    cell = group_cell(dialog, name)
     if option == "existing":
-        cell.findChild(QComboBox, "existing_pieces").setCurrentIndex(piece)
-    button = next(b for b in cell.findChildren(QRadioButton) if b.text() == t(f"publish.piece.{option}"))
-    button.click()
+        pick_piece(dialog, name, piece_choices(dialog, name)[piece])
+    piece_option(dialog, name, option).click()
 
 
 def button(dialog: PublishPreviewDialog, key: str) -> QPushButton:
@@ -297,6 +313,56 @@ class TestPieceStep(PublishWindowTestCase):
         def operate(dialog):
             self.assertEqual(piece_choices(dialog, "烽火操"), ["長城隨想－烽火操（劉文金）"])
         self.publish(operate=operate)
+
+    def test_the_piece_menu_sits_between_existing_and_new_and_the_new_fields_go_below(self):
+        def operate(dialog):
+            dialog.show()
+            combo = piece_combo(dialog, "烽火操")
+            existing, new = piece_option(dialog, "烽火操", "existing"), piece_option(dialog, "烽火操", "new")
+            x = lambda widget: widget.mapTo(dialog, widget.rect().topLeft()).x()
+            self.assertLess(x(existing), x(combo))
+            self.assertLess(x(combo), x(new))
+            title = group_cell(dialog, "烽火操").findChildren(QLineEdit)[0]
+            self.assertFalse(title.isVisible())
+            new.click()
+            self.assertTrue(title.isVisible())
+            y = lambda widget: widget.mapTo(dialog, widget.rect().topLeft()).y()
+            self.assertGreaterEqual(y(title), y(combo) + combo.height())
+        self.publish(operate=operate)
+
+    def test_the_row_grows_to_show_the_new_fields(self):
+        def operate(dialog):
+            dialog.show()
+            table = dialog.findChild(QTableWidget, "piece_step")
+            row = next(r for r in range(table.rowCount()) if table.item(r, 0).text() == "烽火操")
+            before = table.rowHeight(row)
+            choose(dialog, "烽火操", "new")
+            self.assertGreater(table.rowHeight(row), before)
+            self.assertGreaterEqual(table.rowHeight(row), table.cellWidget(row, 1).sizeHint().height())
+        self.publish(operate=operate)
+
+    def test_the_piece_menu_starts_on_a_placeholder(self):
+        def operate(dialog):
+            self.assertEqual(piece_combo(dialog, "烽火操").currentText(), t("publish.piece.pick"))
+        self.publish(operate=operate)
+
+    def test_picking_from_the_menu_alone_chooses_the_existing_piece(self):
+        def operate(dialog):
+            pick_piece(dialog, "烽火操", "長城隨想－烽火操（劉文金）")
+            self.assertTrue(piece_option(dialog, "烽火操", "existing").isChecked())
+            self.assertTrue(button(dialog, "publish.next").isEnabled())
+        self.publish(operate=operate)
+        group = self.window.project.groups[0]
+        self.assertEqual(group.huaxia_link, HuaXiaLink(piece_id=self.fenghuo, piece_title="長城隨想－烽火操"))
+
+    def test_back_to_existing_with_nothing_picked_clears_the_new_piece(self):
+        def operate(dialog):
+            choose(dialog, "烽火操", "new")
+            self.assertTrue(button(dialog, "publish.next").isEnabled())
+            piece_option(dialog, "烽火操", "existing").click()
+            self.assertFalse(button(dialog, "publish.next").isEnabled())
+        self.publish(operate=operate)
+        self.assertIsNone(self.window.project.groups[0].huaxia_link)
 
     def test_choosing_an_existing_piece_writes_the_link(self):
         self.publish(operate=lambda dialog: choose(dialog, "烽火操", "existing"))
