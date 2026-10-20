@@ -22,26 +22,38 @@
     <h1>Privacy Policy</h1>
     <p class="meta">Effective date: October 20, 2026</p>
 
-    <p>Ling Ling Suite ("Ling Ling") is an open-source desktop program maintained by Suikann that runs on your own computer. This policy explains what data Ling Ling touches, where it sends it, where it keeps it, and how to delete it. The <a href="../privacy.html" lang="zh-Hant-TW" hreflang="zh-Hant-TW">Traditional Chinese version</a> is the primary text; if the two differ, the Chinese version prevails.</p>
+    <p>Ling Ling Suite ("Ling Ling") is an open-source desktop program that club music librarians use to manage sheet music. It is maintained by Suikann and runs on your own computer. This policy explains what data Ling Ling uses, where it sends it, where it keeps it, and how to delete it. The <a href="../privacy.html" lang="zh-Hant-TW" hreflang="zh-Hant-TW">Traditional Chinese version</a> is the primary text; if the two differ, the Chinese version prevails.</p>
 
     <div class="summary">
       <h2 id="summary">At a glance</h2>
       <ul>
-        <li>Ling Ling has no server. The maintainer receives none of your data, and the program contains no ads, tracking or usage statistics.</li>
-        <li>Google data travels only between your computer and the Google account you sign in with (Drive and Sheets), except when an officer works with HuaXia (see "Sharing and limited use" below).</li>
-        <li>Sign-in tokens are kept in the operating system's secure storage and are never shared with anyone.</li>
-        <li>For HuaXia you sign in with your own Discord account. Only when an officer distributes, retracts or recalls does Ling Ling write or delete pieces, voices and scores on the club's HuaXia, directly from your computer.</li>
-        <li>Log files stay on your computer and contain no tokens, passwords or personal data of HuaXia members.</li>
+        <li>Ling Ling has no server. The maintainer receives none of your data, and the program has no ads, tracking or usage statistics.</li>
+        <li>Ling Ling goes online only when you use a feature that needs it, and only to two places: Google, and the club's HuaXia website.</li>
+        <li>Data from Google travels only between your computer and Google. The one exception is distribution: once a club officer confirms it, sheet music and instrumentation are sent from your computer to HuaXia.</li>
+        <li>Sign-in credentials are kept in the operating system's secure storage, never in an ordinary file, and are never handed to anyone.</li>
+        <li>Log files stay on your computer and contain no sign-in credentials, passwords or personal data of HuaXia members.</li>
       </ul>
     </div>
 
-    <h2 id="connections">What Ling Ling connects to</h2>
-    <p>Ling Ling connects to only two places, and only when you use the related features:</p>
+    <h2 id="terms">Terms used in this policy</h2>
     <ul>
-      <li><strong>Google</strong>: to sign in, and to read and write the club's catalog (a Google spreadsheet plus Drive).</li>
-      <li><strong>The club's HuaXia</strong> (the website of the HuaXia Chinese Orchestra Club, with its data on Supabase): to sign in with Discord, and to distribute, retract and recall parts.</li>
+      <li><strong>Catalog</strong>: where the club keeps its sheet music. It consists of folders in Google Drive (holding the music files) and a Google spreadsheet, the <strong>catalog spreadsheet</strong>, that records pieces, instrumentation and so on. Both belong to a Google account the club shares, the <strong>catalog account</strong>.</li>
+      <li><strong>Group</strong>: one piece, or one movement of it, in Ling Ling, together with its score and parts.</li>
+      <li><strong>Instrumentation</strong>: which voices a piece needs and how many players each. A <strong>section</strong> is a family of voices, such as winds or bowed strings.</li>
+      <li><strong>Archiving</strong>: sending sorted sheet music to the catalog. <strong>Reverting an archive</strong>: undoing one archive. <strong>Writing back instrumentation</strong>: writing the instrumentation in Ling Ling to the catalog spreadsheet.</li>
+      <li><strong>Distributing</strong>: putting sheet music and instrumentation on the club's HuaXia for members to use. After a file is uploaded it must be <strong>registered</strong> to a voice before members can see it.</li>
+      <li><strong>Retracting</strong>: taking down the sheet music one distribution put up. <strong>Recalling</strong>: taking down all sheet music of a piece after its concert is over; pieces the club wants to leave up can be <strong>marked to keep</strong>.</li>
+      <li><strong>Officer</strong>: a club member with administrative rights on HuaXia. Only officers can distribute, retract and recall.</li>
     </ul>
-    <p>When you only use local features such as splitting, rotating, renaming and compressing, Ling Ling does not use the network. Ling Ling never connects to a server run by the maintainer or any other third party. During sign-in, Ling Ling opens a local port on <code>127.0.0.1</code> that accepts a single callback; other computers cannot reach it.</p>
+
+    <h2 id="connections">Where Ling Ling connects</h2>
+    <p>Ling Ling connects only to these two places, and only when you use the related features:</p>
+    <ul>
+      <li><strong>Google</strong>: to sign in, and to read and write the catalog.</li>
+      <li><strong>The club's HuaXia</strong>: the website of the HuaXia Chinese Orchestra Club, with its data on Supabase. Ling Ling signs in there with Discord to distribute, retract and recall.</li>
+    </ul>
+    <p>When you only split, rotate, rename or compress PDFs, Ling Ling does not go online at all, and it never connects to a server run by the maintainer or any other third party.</p>
+    <p>During sign-in, Ling Ling opens a port on your computer for local use only (<code>127.0.0.1</code>) and waits for the browser to send back the sign-in result once; other computers cannot reach this port.</p>
 
     <h2 id="google">Google data</h2>
 
@@ -50,85 +62,115 @@
       <li><code>https://www.googleapis.com/auth/drive</code>: see, edit, create and delete files in your Google Drive.</li>
       <li><code>https://www.googleapis.com/auth/spreadsheets</code>: see, edit, create and delete your Google Sheets spreadsheets.</li>
     </ul>
-    <p>Most of the catalog's folders and parts are created and uploaded by hand in the Drive web interface, and Ling Ling needs to list, rename, move and download those files, so it needs the <code>drive</code> permission. If either permission is left unchecked on the consent screen, Ling Ling does not keep the sign-in. Ling Ling recommends signing in with the club's catalog account rather than a personal account.</p>
+    <p>Most music in the catalog is uploaded by music librarians directly in the Drive website, and Ling Ling needs to organize those files, so it needs a permission covering the whole Drive; it only reads and writes the items listed in the next section.</p>
+    <p>Every permission on the consent screen must be checked; if any is left unchecked, Ling Ling does not keep the sign-in. We recommend signing in with the catalog account rather than a personal account.</p>
 
-    <h3>What Ling Ling uses these permissions for</h3>
+    <h3>What the permissions are used for</h3>
     <ul>
-      <li>Reading and writing the catalog spreadsheet chosen in Catalog Settings: composers, pieces, editions, movements, parts (including instrumentation and headcounts), performance history, durations, section mappings, club settings, and the instrumentation write log, archive log and distribution log; creating a new catalog spreadsheet in Catalog Settings, and adding or deleting records such as pieces and movements in the catalog window.</li>
-      <li>Creating folders, and listing, uploading, downloading, renaming and moving scores and parts in the catalog's folders; when a file is replaced or an archive is reverted, the old file is moved to the Drive trash.</li>
-      <li>Restoring a file to its pre-archive content when an archive is reverted: listing the versions Drive keeps of that file, temporarily marking the old version to keep forever, downloading it, uploading it back to the same file, then clearing the keep-forever mark.</li>
-      <li>Listing the folder names in your Drive while you choose the catalog folder in Catalog Settings.</li>
-      <li>Reading the signed-in account's email address from Drive's account information, to show it in Catalog Settings and pre-fill it at the next sign-in.</li>
+      <li><strong>Catalog spreadsheet</strong>: reading and writing composers, pieces, editions, movements, parts, instrumentation, performance history, durations, section mappings and club settings, plus the records described below; creating a new catalog spreadsheet; adding or deleting pieces, movements and similar entries.</li>
+      <li><strong>Catalog folders</strong>: creating folders; listing, uploading, downloading, renaming and moving music files. When a file is replaced or an archive is reverted, the old file is moved to the Drive trash.</li>
+      <li><strong>Reverting an archive</strong>: restoring a file to its pre-archive content from the old versions Drive keeps automatically. During the restore, that old version is temporarily set to be kept forever; the setting is cleared afterwards.</li>
+      <li><strong>Choosing the catalog folder</strong>: starting from "My Drive", listing the names of the folders in each level you expand.</li>
+      <li><strong>Account email</strong>: reading the signed-in account's email address, to show it in Catalog Settings and pre-fill it at the next sign-in.</li>
     </ul>
-    <p>Although the <code>drive</code> permission covers your whole Drive, Ling Ling only reads and writes the items listed above.</p>
 
-    <h3>Records written to the catalog</h3>
-    <p>When it writes instrumentation back, archives files to the catalog or reverts an archive, Ling Ling records it in the "編制寫入紀錄" (instrumentation write log) and "存入紀錄" (archive log) sheets of the catalog spreadsheet, with the time, the signed-in account's email address and what changed; the archive log also records the file's full path on your computer, which includes your computer's user name and folder names. When you distribute, retract, recall or mark pieces to keep, Ling Ling records it in the "發譜紀錄" (distribution log) sheet (contents described under "HuaXia and Discord"). Anyone who can open the spreadsheet can see these records.</p>
-
-    <h3>Catalog and HuaXia data kept on your computer</h3>
+    <h3>Records written to the catalog spreadsheet</h3>
+    <p>Ling Ling keeps records of its actions in the catalog spreadsheet. Anyone who can open the catalog spreadsheet can see them.</p>
     <ul>
-      <li>Preferences: the email address of the last sign-in, the IDs of the catalog spreadsheet and catalog folder, the distribution platform read from the club settings, and the recall reminder summary (computed from the distribution log: titles of pieces not yet recalled, their HuaXia piece IDs, and the end times of the concerts they are attached to).</li>
-      <li>Project files (<code>.llproj</code>, saved where you choose): which piece, edition and movement each group is linked to, and a copy of that place's instrumentation; which HuaXia piece each group is matched to (piece ID and title, plus the title, composer and duration when it is to be created) and the HuaXia voice IDs picked by hand. Project files contain no sign-in information.</li>
-      <li>Files downloaded from the catalog: put back where they were before clearing, or in a folder you choose. Temporary files used during a download are kept in the user data folder and deleted when the download ends.</li>
+      <li>Writing back instrumentation, archiving and reverting an archive: the time, the signed-in account's email address, and what changed.</li>
+      <li>Archive records also include the file's full path on your computer. The path may contain your computer's user name and folder names, for example <code>C:\Users\your-name\Desktop\…</code>.</li>
+      <li>Distributing, retracting, recalling and marking to keep: see <a href="#publish-log">Distribution log</a> below.</li>
+    </ul>
+
+    <h3>Data kept on your computer</h3>
+    <ul>
+      <li><strong>Preferences</strong>: the email address of the last sign-in, the IDs of the catalog spreadsheet and catalog folder, the distribution platform from the club settings, and a summary that reminds you which pieces to recall (titles, HuaXia piece IDs and concert end times).</li>
+      <li><strong>Project files</strong> (<code>.llproj</code>, saved where you choose): which catalog piece and HuaXia piece each group matches, a copy of its instrumentation, the title, composer and duration for a HuaXia piece to be created, and the HuaXia voices you picked by hand. Project files contain no sign-in information.</li>
+      <li><strong>Files downloaded from the catalog</strong>: saved back to their original location, or to a folder you choose. Temporary files used during a download are deleted when it ends.</li>
     </ul>
 
     <h3>Sharing and limited use</h3>
     <ul>
-      <li>Ling Ling does not send Google data anywhere outside Google, except when an officer works with HuaXia (see the next section):
+      <li>Data from Google is never sent outside Google, with one exception, HuaXia:
         <ul>
-          <li>Distributing: when an officer presses "Distribute..." in Ling Ling and confirms with "Publish" in the preview, Ling Ling writes the group's instrumentation (voices, headcounts, sections), the title, composer and duration of a piece being created, and the selected score and parts from your computer to the club's HuaXia. This data may come from the catalog.</li>
-          <li>Retracting and recalling: Ling Ling uses the HuaXia IDs and file paths recorded in the catalog's distribution log to decide which score registrations, voices and files to delete on HuaXia.</li>
+          <li>Distributing: after an officer confirms with "Publish" in Ling Ling's distribution preview, Ling Ling sends the group's instrumentation (voices, headcounts, sections), the title, composer and duration of a piece being created, and the selected score and parts from your computer to the club's HuaXia. This data may originally come from the catalog.</li>
+          <li>Retracting and recalling: Ling Ling uses the distribution log in the catalog spreadsheet to decide what to delete on HuaXia.</li>
         </ul>
       </li>
-      <li>Ling Ling does not sell or rent Google data, does not use it for advertising, and does not use it to train artificial intelligence or machine learning models. The maintainer cannot see this data.</li>
+      <li>Ling Ling does not sell or rent data from Google, does not use it for advertising, and does not use it to train artificial intelligence or machine learning models. The maintainer cannot see this data.</li>
       <li>Ling Ling's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a> and the <a href="https://developers.google.com/workspace/workspace-api-user-data-developer-policy">Google Workspace API User Data and Developer Policy</a>, including the Limited Use requirements.</li>
     </ul>
 
-    <h2 id="tokens">Tokens and secure storage</h2>
+    <h2 id="tokens">Sign-in credentials and secure storage</h2>
+    <p>After you sign in, Ling Ling uses <strong>tokens</strong> to act on your account; it never needs your password.</p>
     <ul>
-      <li>After you sign in to Google, Ling Ling keeps only the refresh token, in the operating system's secure storage: Credential Manager on Windows, and the Secret Service (for example GNOME Keyring or KWallet) on Linux. The entry is named <code>LingLingSuite Google</code>; the HuaXia entry is <code>LingLingSuite HuaXia</code> and is stored only when an officer signs in.</li>
-      <li>Access tokens stay only in the running program and are never written to a file.</li>
-      <li>If the computer has no secure storage or it cannot be written to, Ling Ling does not keep the sign-in, shows the reason in Catalog Settings, and asks you to sign in again next time. Ling Ling never falls back to a plain-text file.</li>
-      <li>Tokens are sent only back to the service that issued them (Google or HuaXia) to renew or use them. They are never shared with anyone and never written to the log files.</li>
-      <li>Older versions of Ling Ling stored the Google token in plain text as <code>google_token.json</code>; the current version deletes that file at every startup without reading it.</li>
+      <li>After you sign in to Google, Ling Ling keeps only the refresh token, in the operating system's secure storage: Credential Manager on Windows, or the Secret Service (for example GNOME Keyring or KWallet) on Linux. The entry is named <code>LingLingSuite Google</code>.</li>
+      <li>After an officer signs in to HuaXia, the HuaXia token is kept in the same place, in an entry named <code>LingLingSuite HuaXia</code>.</li>
+      <li>Access tokens, which are what actually reach the data, exist only in the running program and are never written to a file.</li>
+      <li>If the computer has no secure storage or writing to it fails, Ling Ling does not keep the sign-in, explains why in Catalog Settings, and you sign in again at the next start. Ling Ling never falls back to an ordinary file.</li>
+      <li>Tokens are sent only back to the service that issued them (Google or HuaXia). They are never handed to anyone and never written to the log files.</li>
+      <li>Older versions of Ling Ling stored the Google token in an ordinary file, <code>google_token.json</code>. The current version deletes that file at every start without reading it.</li>
     </ul>
 
     <h2 id="huaxia">HuaXia and Discord</h2>
+    <p>Ling Ling uses HuaXia only when an officer distributes, retracts or recalls.</p>
+
+    <h3>Signing in</h3>
     <ul>
-      <li>To distribute to HuaXia, you sign in with your own Discord account. Ling Ling opens the Discord sign-in page in your browser through HuaXia's sign-in service; your Discord password is entered only on Discord's website, and Ling Ling never sees it.</li>
-      <li>After sign-in, Ling Ling receives HuaXia sign-in tokens and your Discord account name. The name is used to show who is signed in and is written to the distribution log (see below); Ling Ling does not store it on your computer.</li>
+      <li>You sign in with your own Discord account. Ling Ling opens the Discord sign-in page in your browser through HuaXia's sign-in service; your password is entered only on Discord's website, and Ling Ling never sees it.</li>
+      <li>After sign-in, Ling Ling receives a HuaXia token and your Discord account name. The name is used to show who is signed in and is written to the distribution log; Ling Ling does not store it on your computer.</li>
       <li>Ling Ling then asks HuaXia whether you are an officer. If you are not, Ling Ling reads the status of your own account (for example awaiting approval or disabled) to explain why, then signs out and keeps no token.</li>
-      <li>Ling Ling reads pieces, voices, scores, the list of files Ling Ling has uploaded, concerts, and which concerts each piece is attached to from HuaXia for matching and previews: this semester's concerts when distributing, and the concerts a piece is attached to, of any semester, when recalling. Before retracting it only checks whether a voice has anyone assigned, not who. Ling Ling does not read the member list or other members' data.</li>
-      <li>After you confirm a distribution, Ling Ling writes directly from your computer to the club's HuaXia: new pieces (title, composer, duration), new or overwritten voices (name, headcount, section), the uploaded and registered score and part PDFs, and the concerts to attach. Scores that Ling Ling distributed earlier and that this distribution replaces are unregistered and their files deleted.</li>
-      <li>Ling Ling deletes data on HuaXia only when an officer acts:
-        <ul>
-          <li>Retract: when an officer picks a distribution from the distribution log and retracts it, Ling Ling unregisters the score and parts that distribution registered, deletes the voices it created that have no one assigned and no scores placed by others, then deletes the files it uploaded that no registration points to any more. Old files that distribution replaced do not come back, and headcounts, sections and concerts are not reverted.</li>
-          <li>Recall: when an officer recalls pieces whose concerts are over, Ling Ling unregisters every score of that piece on HuaXia, including ones others placed through the HuaXia website, then deletes the files that no registration points to any more. Voices, pieces, concerts and assignments are kept.</li>
-          <li>Orphan cleanup: before distributing and recalling, Ling Ling deletes files it uploaded earlier that no registration points to (for example ones left by an interrupted distribution). Files uploaded through the HuaXia website are never touched.</li>
-        </ul>
-      </li>
-      <li>Writes and deletions go directly from your computer to HuaXia without passing through any other server; they are made as you and follow HuaXia's own permission rules, so non-officers cannot make them.</li>
-      <li>Distributing, retracting, recalling and marking pieces to keep are all recorded in the "發譜紀錄" (distribution log) sheet of the catalog spreadsheet: the time, the operator's Discord account name, the group, the IDs of the matched HuaXia piece and voices, the piece title, the pieces and voices created, the old and new headcounts and sections, which files were uploaded, registered, unregistered or deleted (their file paths on HuaXia), which concerts were attached (name and end time), and why anything failed. Retracting and recalling decide what to delete from this log.</li>
-      <li>Data on HuaXia is managed by HuaXia's maintainers under HuaXia's own rules; Discord sign-in is covered by Discord's privacy policy.</li>
     </ul>
 
-    <h2 id="local">Log files and other local files</h2>
-    <p>Ling Ling keeps its local data in the user data folder: <code>%APPDATA%\LingLingSuite\</code> on Windows, and <code>~/.config/LingLingSuite/</code> (or <code>$XDG_CONFIG_HOME/LingLingSuite/</code>) on Linux. These files are never uploaded.</p>
+    <h3>Reading</h3>
     <ul>
-      <li><strong>Log files</strong> (<code>logs/</code>, one file per day, kept for 30 days): catalog read and write failures and important actions (archiving, reverting an archive, clearing local copies, downloading, distributing, retracting, recalling, orphan cleanup). Each entry contains only the time, action, piece title, file or group name, path (a local path, or a file path on HuaXia), error category and raw error message; anything in the raw message that looks like a token or password is replaced with <code>***</code>. Log files contain no tokens, passwords or personal data of HuaXia members. Help &gt; Open Log Folder opens the folder.</li>
-      <li>Preferences, undo and redo history, the workspace (split output), PDF rotation backups, the temporary folder (compressed files and copies of the files a distribution uploads, deleted when done) and the single-instance lock file.</li>
+      <li>Ling Ling reads pieces, voices, scores, concerts, which concerts each piece is attached to, and the list of files Ling Ling has uploaded, for matching and previews. When distributing it reads only this semester's concerts; when recalling it reads all concerts a piece is attached to, of any semester.</li>
+      <li>Before retracting, Ling Ling only checks whether a voice has anyone assigned, not who. Ling Ling does not read the member list or other members' data.</li>
+    </ul>
+
+    <h3>Writing and deleting</h3>
+    <ul>
+      <li><strong>Distributing</strong>: once an officer confirms, Ling Ling creates pieces on HuaXia (title, composer, duration), creates or updates voices (name, headcount, section), uploads the score and part PDFs and registers them to voices, then attaches concerts. Scores Ling Ling distributed earlier that this distribution replaces are unregistered and their files deleted.</li>
+      <li><strong>Retracting</strong>: unregisters the score and parts one distribution registered. Voices that distribution created that have no one assigned and no scores placed by others are deleted too, as are files it uploaded that no registration uses any more. Old files that distribution replaced do not come back, and headcounts, sections and concerts are not reverted.</li>
+      <li><strong>Recalling</strong>: unregisters every score of the piece on HuaXia, including ones others placed through the HuaXia website, then deletes files no registration uses any more. Voices, pieces, concerts and assignments are kept.</li>
+      <li><strong>Cleaning up leftover files</strong>: before distributing and recalling, deletes files Ling Ling uploaded earlier that no registration uses, such as ones left by an interrupted distribution. Files uploaded through the HuaXia website are not affected.</li>
+    </ul>
+    <p>These writes and deletions go directly from your computer to HuaXia without passing through any other server. They are made as you and follow HuaXia's own permission rules, so non-officers cannot make them.</p>
+
+    <h3 id="publish-log">Distribution log</h3>
+    <p>Every distribution, retraction, recall and marking to keep adds a record to the "發譜紀錄" (distribution log) sheet of the catalog spreadsheet; retracting and recalling decide what to delete from this log. Each record contains:</p>
+    <ul>
+      <li>the time, and the operator's Discord account name</li>
+      <li>the group, the matched HuaXia piece and voice IDs, and the piece title</li>
+      <li>the pieces and voices created, and the headcounts and sections before and after the change</li>
+      <li>which files were uploaded, registered, unregistered or deleted (recorded as file paths on HuaXia)</li>
+      <li>the concerts attached (name and end time)</li>
+      <li>why anything did not complete</li>
+    </ul>
+    <p>Data on HuaXia is managed by HuaXia's maintainers under HuaXia's own rules; Discord sign-in is covered by Discord's privacy policy.</p>
+
+    <h2 id="local">Log files and other local files</h2>
+    <p>Ling Ling keeps its local data in the user data folder, and never uploads it:</p>
+    <ul>
+      <li>Windows: <code>%APPDATA%\LingLingSuite\</code></li>
+      <li>Linux: <code>~/.config/LingLingSuite/</code> (or <code>$XDG_CONFIG_HOME/LingLingSuite/</code>)</li>
+    </ul>
+    <p>The folder holds:</p>
+    <ul>
+      <li><strong>Log files</strong> (<code>logs/</code>): one file per day, kept for 30 days, recording catalog read and write failures and actions such as archiving, reverting an archive, clearing local copies, downloading, distributing, retracting, recalling and cleaning up leftover files. Each entry contains only the time, action, piece title, file or group name, path (a local path or a file path on HuaXia), error category and raw error message; anything in the error message that looks like a token or password is replaced with <code>***</code>. Help &gt; Open Log Folder opens it.</li>
+      <li><strong>Other files</strong>: preferences, undo and redo history, the workspace (split output), backups made before rotating PDFs, the temporary folder (compressed files and copies of the files a distribution uploads, deleted when done), and a lock file that prevents two copies of Ling Ling from running at once.</li>
     </ul>
 
     <h2 id="delete">Deleting data and revoking access</h2>
     <ul>
-      <li>Press "Sign Out" in Catalog Settings to delete the Google token from this computer's secure storage. To make Google revoke Ling Ling's access as well, remove Ling Ling Suite under <a href="https://myaccount.google.com/connections">Third-party apps &amp; services</a> in your Google Account.</li>
-      <li>Press "Sign Out of HuaXia" to end this computer's HuaXia session and delete the HuaXia token from secure storage.</li>
-      <li>Sign out first, then delete the user data folder above to remove all data Ling Ling keeps on this computer (except project files and files saved in locations you chose).</li>
-      <li>The catalog spreadsheet, the files in Drive and the data on HuaXia belong to the club's accounts; manage and delete them in Google Drive or HuaXia. Officers can also delete scores Ling Ling distributed to HuaXia with Ling Ling's Retract or Recall.</li>
+      <li><strong>Signing out of Google</strong>: press "Sign Out" in Catalog Settings to delete the Google token kept on this computer. To make Google revoke Ling Ling's access as well, remove Ling Ling Suite under <a href="https://myaccount.google.com/connections">Third-party apps &amp; services</a> in your Google Account.</li>
+      <li><strong>Signing out of HuaXia</strong>: press "Sign Out of HuaXia" to end this computer's HuaXia session and delete the HuaXia token kept on it.</li>
+      <li><strong>Deleting local data</strong>: sign out first, then delete the user data folder above to remove all data Ling Ling keeps on this computer, except project files and files saved in locations you chose.</li>
+      <li><strong>Data in the catalog and on HuaXia</strong>: the catalog spreadsheet and the files in Drive belong to the catalog account; manage and delete them in Google Drive. Manage data on HuaXia in HuaXia. Officers can also delete sheet music Ling Ling distributed to HuaXia with Ling Ling's Retract or Recall.</li>
     </ul>
 
     <h2 id="changes">Changes to this policy</h2>
-    <p>When this policy changes, this page and the effective date above are updated; every revision can be found in the <a href="https://github.com/Suikann/ling-ling-suite/commits/HEAD/website/en/privacy.html">change history on GitHub</a>.</p>
+    <p>When this policy changes, this page and the effective date above are updated together; every revision can be found in the <a href="https://github.com/Suikann/ling-ling-suite/commits/HEAD/website/en/privacy.html">change history on GitHub</a>.</p>
 
     <h2 id="contact">Contact</h2>
     <p>For questions about this policy or how Ling Ling handles data, please open an issue on <a href="https://github.com/Suikann/ling-ling-suite/issues">GitHub Issues</a>; for questions you would rather not post publicly, email <a href="mailto:bozu950622@gmail.com">bozu950622@gmail.com</a>.</p>
