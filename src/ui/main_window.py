@@ -142,6 +142,8 @@ class MainWindow(QMainWindow):
     # 登入在背景執行緒進行：「沒存進安全儲存」的通知經這個訊號轉回主執行緒才提示
     _login_not_saved = Signal()
     _huaxia_login_not_saved = Signal()
+    # 重讀社團設定多在背景執行緒完成（譜庫視窗、譜庫設定的「儲存設定」）：經這個訊號轉回主執行緒更新「發譜」
+    _club_settings_read = Signal()
 
     def __init__(
         self, preferences: PreferencesService, parent=None, history: Optional[MoveHistory] = None,
@@ -194,8 +196,11 @@ class MainWindow(QMainWindow):
         self._clear_service = ClearLocalService(self.file_service, self._log, standard_folders=_standard_folders())
         self._download_service = DownloadService(self.file_service, self._log)
         self._revert_service = DepositRevertService(self.file_service, self._download_service, self._log)
-        # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀
+        # 發譜按鈕依這台電腦記住的社團設定顯示（不連網、不讀安全儲存）；按下時重讀。
+        # 社團設定服務全程式一份，傳給譜庫視窗與譜庫設定：哪裡重讀完成都通知這裡更新按鈕
         self._club_settings = ClubSettingsService(preferences, self._log)
+        self._club_settings_read.connect(self._show_publish_button)
+        self._club_settings.subscribe(self._club_settings_read.emit)
         self._publisher = PublishService(self._huaxia_auth)
         # 收回提醒依這台電腦記下的發譜紀錄摘要判斷（不連網、不讀安全儲存）；發譜寫完發譜紀錄後更新摘要
         self._recall_reminder = RecallReminder(preferences, self._log)
@@ -486,12 +491,10 @@ class MainWindow(QMainWindow):
             tab.show_undeposited()
 
     def changeEvent(self, event):
-        """切回這個視窗時：目前的群組分頁重新比對未存入的檔（本機的檔可能在別的程式裡改過），
-        「發譜」依記住的社團設定顯示或隱藏（例如關掉讀過社團設定的譜庫視窗）"""
+        """切回這個視窗時：目前的群組分頁重新比對未存入的檔（本機的檔可能在別的程式裡改過）"""
         super().changeEvent(event)
         if event.type() == QEvent.ActivationChange and self.isActiveWindow():
             self._show_undeposited()
-            self._show_publish_button()
 
     # --- 編制表回呼 ---
 
@@ -1300,6 +1303,7 @@ class MainWindow(QMainWindow):
             self._auth_service, self._preferences, catalog_factory=self._catalog_factory, log=self._log,
             huaxia_auth=self._huaxia_auth, voice_candidates=self._voice_candidates, reverter=self,
             downloads=self._download_service, orchestra_type=self.project.orchestra_type,
+            club_settings=self._club_settings,
         )
         self._catalog_window.show()
         return True
@@ -1626,6 +1630,7 @@ class MainWindow(QMainWindow):
         from ui.catalog_settings_dialog import CatalogSettingsDialog
         dialog = CatalogSettingsDialog(
             self._auth_service, self._preferences, self, log=self._log, huaxia_auth=self._huaxia_auth,
+            club_settings=self._club_settings,
         )
         accepted = dialog.exec() == CatalogSettingsDialog.Accepted
         self._show_publish_button()

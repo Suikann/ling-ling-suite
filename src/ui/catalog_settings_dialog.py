@@ -4,12 +4,13 @@
 
 引導使用者完成：登入 Google → 選擇譜庫資料夾 → 自動偵測或建立譜庫試算表。
 登入區顯示登入的帳號 email 與帳號提醒；登入時在背景等瀏覽器回來，期間顯示可取消的等待視窗。
-選資料夾的步驟下方寫出這台電腦記住的發譜平台（照社團設定裡的寫法，沒有時寫未設定）與到譜庫試算表的社團設定工作表設定。
+選資料夾的步驟下方寫出這台電腦記住的發譜平台（照社團設定裡的寫法，沒有時寫未設定）與到譜庫試算表的社團設定工作表設定；
+開著的時候重讀社團設定完成（例如譜庫視窗連上譜庫），經 Qt 訊號回到主執行緒改寫這一行，HuaXia 登入區跟著出現或藏起。
 瀏覽 Drive 資料夾（最上層是我的雲端硬碟，它本身也能選）、找資料夾裡的試算表與建立譜庫試算表都經譜庫服務
 （services/catalog_service.py）在背景執行；根資料夾一律存成它真正的 ID，不存別名 root。
 失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。找到或建好的譜庫試算表先記在對話框裡，
-按「儲存設定」才寫進偏好設定，取消時偏好設定不變；存的是另一份譜庫試算表時，忘掉記住的發譜平台，
-在背景改讀新譜庫的社團設定（services/club_settings_service.py）。
+按「儲存設定」才寫進偏好設定，取消時偏好設定不變；存了就在背景重讀社團設定（services/club_settings_service.py），
+存的是另一份譜庫試算表時先忘掉記住的發譜平台。重讀完成時由社團設定服務通知主視窗，不經這個（可能已關閉的）對話框。
 這台電腦記住的社團設定啟用 HuaXia 發譜時，另有 HuaXia 登入區（services/huaxia_auth_service.py）：
 登入前寫出連結 Discord 的提醒，以 Discord 登入時顯示可取消的等待視窗，不是幹部時說明原因；登出在背景進行。
 """
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton, QMessageBox, QGroupBox,
     QTreeWidget, QTreeWidgetItem, QDialogButtonBox, QWidget,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from core.catalog_constants import (
     DRIVE_ROOT_ALIAS, PUBLISHING_PLATFORM_NAMES, SHEET_CLUB_SETTINGS, PublishingPlatform,
 )
@@ -107,12 +108,16 @@ def sign_in_google(parent: QWidget, auth: GoogleAuthService) -> bool:
 class CatalogSettingsDialog(QDialog):
     """譜庫設定對話框"""
 
+    # 社團設定服務寫入記住的結果（可能在背景執行緒），轉回主執行緒改寫發譜平台那一行
+    _club_settings_read = Signal()
+
     def __init__(
         self, auth_service: GoogleAuthService,
         preferences: PreferencesService, parent=None,
         catalog_factory: Optional[Callable[[str], CatalogService]] = None,
         log: Optional[ActivityLog] = None,
         huaxia_auth: Optional[HuaXiaAuthService] = None,
+        club_settings: Optional[ClubSettingsService] = None,
     ):
         """
         Args:
@@ -123,6 +128,7 @@ class CatalogSettingsDialog(QDialog):
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
             log: 紀錄檔，讀寫失敗時寫進去；省略時以使用者資料目錄下的紀錄檔資料夾建立
             huaxia_auth: HuaXia 登入服務（全程式一份）；省略時沒有 HuaXia 登入區
+            club_settings: 社團設定服務（全程式一份，主視窗訂閱它的通知）；省略時以偏好設定與紀錄檔建立
         """
         super().__init__(parent)
         self._huaxia = huaxia_auth
@@ -131,16 +137,21 @@ class CatalogSettingsDialog(QDialog):
         self._prefs = preferences
         self._catalog_factory = catalog_factory or self._open_google
         self._log = log or ActivityLog()
-        self._club_settings = ClubSettingsService(preferences, self._log)
+        self._club_settings = club_settings or ClubSettingsService(preferences, self._log)
+        self._huaxia_area: Optional[QGroupBox] = None
         self._tasks = CatalogTasks(self)
         # 找到或建好的譜庫試算表；按「儲存設定」才寫進偏好設定
         self._spreadsheet_id = self._prefs.get(CATALOG_SPREADSHEET_ID_KEY) or ""
         self.setWindowTitle(t("catalog.settings.title"))
         self.setMinimumWidth(560)
         self._build_ui()
+        self._club_settings_read.connect(self._show_publishing_platform)
+        self._club_settings.subscribe(self._club_settings_read.emit)
 
     def done(self, result: int):
-        """關閉對話框：放棄還在跑的背景工作，之後它們不再碰這個對話框（HuaXia 登出照常在背景跑完）"""
+        """關閉對話框：不再收社團設定的通知，放棄還在跑的背景工作，之後它們不再碰這個對話框
+        （重讀社團設定與 HuaXia 登出照常在背景跑完）"""
+        self._club_settings.unsubscribe(self._club_settings_read.emit)
         self._tasks.abandon_all()
         if self._huaxia_task is not None:
             self._huaxia_task.abandon()
@@ -194,11 +205,10 @@ class CatalogSettingsDialog(QDialog):
         self._folder_status.setWordWrap(True)
         step2_layout.addWidget(self._folder_status)
         layout.addWidget(step2)
-        platform_hint = QLabel(self._publishing_platform_text())
-        platform_hint.setWordWrap(True)
-        layout.addWidget(platform_hint)
-        if self._huaxia is not None and self._club_settings.remembered() is PublishingPlatform.HUAXIA:
-            layout.addWidget(self._build_huaxia_area())
+        self._platform_hint = QLabel()
+        self._platform_hint.setWordWrap(True)
+        layout.addWidget(self._platform_hint)
+        self._show_publishing_platform()
         # --- 底部按鈕 ---
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -214,12 +224,24 @@ class CatalogSettingsDialog(QDialog):
         if self._folder_entry.text().strip() and self._auth.status().signed_in:
             self._check_catalog_in_folder()
 
-    def _publishing_platform_text(self) -> str:
-        """這台電腦記住的發譜平台（照社團設定裡的寫法）與到哪裡設定"""
+    def _show_publishing_platform(self):
+        """寫出這台電腦記住的發譜平台（照社團設定裡的寫法）與到哪裡設定；啟用 HuaXia 時顯示 HuaXia 登入區
+
+        登入區第一次要顯示時才建（建立時讀安全儲存），之後拿掉 HuaXia 只藏起來。
+        """
         platform = self._club_settings.remembered()
         names = [name for name, value in PUBLISHING_PLATFORM_NAMES.items() if value is platform]
         name = names[0] if names else t("catalog.settings.publishing_platform_unset")
-        return t("catalog.settings.publishing_platform", platform=name, sheet=SHEET_CLUB_SETTINGS)
+        self._platform_hint.setText(t("catalog.settings.publishing_platform", platform=name, sheet=SHEET_CLUB_SETTINGS))
+        if self._huaxia is None:
+            return
+        huaxia = platform is PublishingPlatform.HUAXIA
+        if huaxia and self._huaxia_area is None:
+            self._huaxia_area = self._build_huaxia_area()
+            layout = self.layout()
+            layout.insertWidget(layout.indexOf(self._platform_hint) + 1, self._huaxia_area)
+        if self._huaxia_area is not None:
+            self._huaxia_area.setVisible(huaxia)
 
     def _build_huaxia_area(self) -> QGroupBox:
         """排出 HuaXia 登入區：登入狀態、登入或登出、連結 Discord 的提醒與狀態旁的原因"""
@@ -428,7 +450,10 @@ class CatalogSettingsDialog(QDialog):
         create()
 
     def _save_settings(self):
-        """儲存設定；換了譜庫試算表時忘掉記住的發譜平台，在背景改讀新譜庫的社團設定（讀不到時就是沒有，寫進紀錄檔）"""
+        """儲存設定，在背景重讀譜庫的社團設定；換了譜庫試算表時先忘掉記住的發譜平台
+
+        讀不到時記住的不變（換了試算表時就是沒有），寫進紀錄檔；讀完由社團設定服務通知主視窗。
+        """
         spreadsheet_id = self._spreadsheet_id
         changed = spreadsheet_id != (self._prefs.get(CATALOG_SPREADSHEET_ID_KEY) or "")
         self._prefs.set(CATALOG_ROOT_FOLDER_ID_KEY, _extract_folder_id(self._folder_entry.text()))
@@ -436,7 +461,7 @@ class CatalogSettingsDialog(QDialog):
         if changed:
             self._club_settings.forget()
         self._prefs.save()
-        if changed:
+        if spreadsheet_id:
             # 對話框關閉後背景工作照常跑完（只是不再交回）；refresh 不丟出例外，讀不到時自己寫進紀錄檔
             club, connect = self._club_settings, self._catalog_factory
             self._tasks.run(lambda: club.refresh(lambda: connect(spreadsheet_id)), lambda _: None, lambda _: None)

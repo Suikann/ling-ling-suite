@@ -6,19 +6,21 @@
 選資料夾、找與建立譜庫試算表經譜庫服務、對假 Google：結果寫進偏好設定與假 Google，失敗時提示列出現。不測畫面。
 登入服務的安全儲存、Google 權杖端點與開瀏覽器都換成替身。
 HuaXia 登入區只在社團設定啟用 HuaXia 發譜時出現，對假 HuaXia 測登入、不是幹部的說明與登出的接線。
-記住的發譜平台照社團設定裡的寫法寫出，沒有時寫未設定。
+記住的發譜平台照社團設定裡的寫法寫出，沒有時寫未設定；開著時重讀完成（在背景執行緒）就改寫，HuaXia 登入區跟著出現或藏起。
+「儲存設定」不論試算表換了沒都在背景重讀社團設定；對話框關掉、刪掉之後重讀照樣完成。
 """
 import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QInputDialog, QLabel, QPushButton, QTreeWidget
 
 from core.catalog_constants import DRIVE_SPREADSHEET_MIME, SHEET_HEADERS, PublishingPlatform
@@ -42,6 +44,13 @@ from tests.memory_keyring import MemoryKeyring
 from tests.test_main_window import answering_prompts, wait_until
 from ui.catalog_error_bar import CatalogErrorBar
 from ui.catalog_settings_dialog import CatalogSettingsDialog
+
+
+def read_in_background(read) -> None:
+    """在背景執行緒讀社團設定（像譜庫視窗連上譜庫時那樣），讀完才返回"""
+    thread = threading.Thread(target=read)
+    thread.start()
+    thread.join()
 
 
 class LoginAreaTestCase(unittest.TestCase):
@@ -204,6 +213,24 @@ class TestHuaXiaLoginArea(LoginAreaTestCase):
         self.assertFalse(any(b.text() == t("huaxia.auth.connect") for b in dialog.findChildren(QPushButton)))
         self.assertEqual(self.huaxia_keyring.calls, [])
 
+    def test_appears_and_disappears_with_a_read_finished_while_open(self):
+        google = FakeGoogle()
+        catalog = CatalogService(google.sheets, google.drive, sleep=lambda seconds: None)
+        club = ClubSettingsService(self.preferences)
+        dialog = CatalogSettingsDialog(self.auth, self.preferences, huaxia_auth=self.huaxia_auth, club_settings=club)
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.reject)
+        google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        read_in_background(lambda: club.read(catalog))
+        wait_until(lambda: self.visible(dialog, t("huaxia.auth.not_connected")))
+        google.sheets.create_tab("社團設定", [["鍵", "值"]])
+        read_in_background(lambda: club.read(catalog))
+        wait_until(lambda: not self.visible(dialog, t("huaxia.auth.not_connected")))
+
+    def visible(self, dialog: CatalogSettingsDialog, text: str) -> bool:
+        """對話框裡是否有一段沒被藏起來、文字等於 text 的標籤"""
+        return any(label.text() == text and label.isVisibleTo(dialog) for label in dialog.findChildren(QLabel))
+
     def test_shown_with_the_reminder_before_signing_in(self):
         self.enable_huaxia()
         dialog = self.open_dialog()
@@ -276,6 +303,9 @@ class CatalogFolderTestCase(LoginAreaTestCase):
         self.folder = self.google.drive.add_folder("譜庫")
         self.connected_to = []
         self.log_dir = os.path.join(self.temp_dir, "logs")
+        self.log = ActivityLog(FileService(), self.log_dir)
+        # 全程式一份的社團設定服務（主視窗建立後傳進來）
+        self.club = ClubSettingsService(self.preferences, self.log)
 
     def catalog(self, spreadsheet_id: str) -> CatalogService:
         """接假 Google 的譜庫服務"""
@@ -285,7 +315,7 @@ class CatalogFolderTestCase(LoginAreaTestCase):
     def open_dialog(self) -> CatalogSettingsDialog:
         """開啟譜庫設定，譜庫服務接假 Google"""
         dialog = CatalogSettingsDialog(
-            self.auth, self.preferences, catalog_factory=self.catalog, log=ActivityLog(FileService(), self.log_dir),
+            self.auth, self.preferences, catalog_factory=self.catalog, log=self.log, club_settings=self.club,
         )
         self.addCleanup(dialog.deleteLater)
         self.addCleanup(dialog.reject)
@@ -439,6 +469,39 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
         self.assertEqual(self.saved().get(CATALOG_SPREADSHEET_ID_KEY), "old-sheet")
         self.assertIs(ClubSettingsService(self.saved()).remembered(), PublishingPlatform.HUAXIA)
         self.assertEqual(self.connected_to, [""])
+
+    def test_the_same_catalog_is_read_again_without_forgetting_first(self):
+        self.remember_huaxia()
+        sheet = self.add_spreadsheet("譜庫試算表")
+        self.preferences.set(CATALOG_SPREADSHEET_ID_KEY, sheet)
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        notified = []
+        self.club.subscribe(lambda: notified.append(self.club.remembered()))
+        self.save(self.open_with_folder())
+        wait_until(lambda: notified)
+        self.assertEqual(notified, [PublishingPlatform.HUAXIA])
+
+    def test_the_same_catalog_picks_up_a_platform_added_to_club_settings(self):
+        sheet = self.add_spreadsheet("譜庫試算表")
+        self.preferences.set(CATALOG_SPREADSHEET_ID_KEY, sheet)
+        dialog = self.open_with_folder()
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        self.save(dialog)
+        wait_until(lambda: ClubSettingsService(self.saved()).remembered() is PublishingPlatform.HUAXIA)
+
+    def test_the_platform_line_follows_a_read_finished_while_open(self):
+        dialog = self.open_dialog()
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        read_in_background(lambda: self.club.read(self.catalog("")))
+        wait_until(lambda: self.shows(dialog, "發譜平台：華夏國樂社（在譜庫試算表的「社團設定」工作表設定）"))
+
+    def test_a_read_after_the_dialog_is_gone_still_finishes(self):
+        dialog = CatalogSettingsDialog(self.auth, self.preferences, catalog_factory=self.catalog, club_settings=self.club)
+        dialog.reject()
+        dialog.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        self.assertIs(self.club.read(self.catalog("")), PublishingPlatform.HUAXIA)
 
     def test_unreadable_club_settings_of_the_new_catalog_are_written_to_the_log(self):
         self.remember_huaxia()

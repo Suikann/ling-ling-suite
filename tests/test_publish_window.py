@@ -2,7 +2,7 @@
 """
 發譜按鈕與發譜預覽「曲目」步的接線測試（offscreen）
 
-社團設定（這台電腦記住的）啟用 HuaXia 時主視窗才有「發譜」；按下時重讀社團設定、重查幹部身分（沒登入先登入），
+社團設定（這台電腦記住的）啟用 HuaXia 時主視窗才有「發譜」，譜庫視窗重讀完成時跟著出現或消失；按下時重讀社團設定、重查幹部身分（沒登入先登入），
 擋下時寫出原因、不開預覽。預覽每個群組一列：擋下的群組寫出原因，其餘挑 HuaXia 的現有曲目或新建，
 選擇經編輯操作寫進專案；編制表上方顯示群組對到的 HuaXia 曲目。主視窗接假 Google 與假 HuaXia，不測畫面。
 """
@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QWidget,
 )
 
-from core.constants import CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, HuaXiaEnsemble, OrchestraType
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, HuaXiaEnsemble, OrchestraType
 from core.locale import t
 from core.models import FileInfo, Headcount, HuaXiaLink, NewHuaXiaPiece, Project
 from fake_google_catalog import FakeGoogle
@@ -36,7 +36,7 @@ from test_catalog_service import empty_catalog
 from tests.fake_browser import CallbackBrowser
 from tests.fake_huaxia import FakeHuaXia
 from tests.memory_keyring import MemoryKeyring
-from tests.test_main_window import MainWindowTestCase, answering_prompts
+from tests.test_main_window import MainWindowTestCase, answering_prompts, wait_until
 from ui.huaxia_prompts import not_officer_text
 from ui.instrumentation_table import InstrumentationTable
 from services.publish_service import GroupCheck, PublishService
@@ -241,6 +241,17 @@ class TestPublishButton(PublishWindowTestCase):
         self.preferences.set(CLUB_PUBLISHING_PLATFORM_KEY, "")
         self.window = self.new_window()
         self.assertTrue(self.publish_button().isHidden())
+
+    def test_follows_club_settings_read_by_the_catalog_window(self):
+        self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, self.google.drive.add_folder("譜庫"))
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"]])
+        self.trigger_menu(t("menu.catalog.open"))
+        self.addCleanup(self.window._catalog_window.close)
+        wait_until(lambda: self.publish_button().isHidden())
+        self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
+        self.window._catalog_window.close()
+        self.trigger_menu(t("menu.catalog.open"))
+        wait_until(lambda: not self.publish_button().isHidden())
 
 
 class TestPressingPublish(PublishWindowTestCase):
