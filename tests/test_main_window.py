@@ -1074,6 +1074,17 @@ class TestMainWindowPreviewNaming(MainWindowTestCase):
         self.assertIn(t("preview.unsafe_folder_warning", name=".."), seen["warnings"])
         self.assertFalse(seen["enabled"])
 
+    def test_subfolder_template_field_explains_segments(self):
+        self._open_group(use_subfolders=True, subfolder_template="{曲名}")
+        seen = {}
+
+        def read_tip(dialog):
+            seen["tip"] = field_in(dialog, "{曲名}").toolTip()
+
+        with previewing(read_tip):
+            self.click_button(t("panel.preview_rename"))
+        self.assertEqual(seen["tip"], t("panel.template_segment_tip"))
+
 
 class TestMainWindowPreviewVerdict(MainWindowTestCase):
     """預覽顯示搬移歷程的預檢判定，按下執行用的就是同一份判定"""
