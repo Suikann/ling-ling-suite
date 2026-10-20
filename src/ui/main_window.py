@@ -17,7 +17,7 @@ from PySide6.QtGui import QAction, QKeySequence
 from core.constants import (
     CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN,
     DEFAULT_SUBFOLDER_TEMPLATE, DEFAULT_SUBFOLDER_TEMPLATE_EN,
-    LOCALE_EN, LOCALE_ZH_TW, PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
+    PROJECT_EXTENSION, TEMPLATE_VARIABLES, OperationKind, OrchestraType,
 )
 from core.catalog_constants import PublishingPlatform
 from core.catalog_errors import CatalogError, CatalogErrorKind, CatalogFailure
@@ -25,7 +25,7 @@ from core.catalog_sync import PlaceWrite, SyncOutcome, WriteSource, place_writes
 from core.clear_local import ClearPlan
 from core.deposit_revert import LocalProject, RevertChoice, RevertPreview
 from core.launch_env import app_version, current_build
-from core.locale import t, get_locale, localized, set_locale
+from core.locale import t, get_locale, language_names, localized, set_locale
 from core.models import Project, Group, SplitResult, UndoMapping
 from core.paths import same_path
 from core.voice_names import duplicate_rows
@@ -282,8 +282,8 @@ class MainWindow(QMainWindow):
         self._add_action(tools_menu, t("menu.tools.cleanup_workspace"), self._open_workspace_cleanup)
         view_menu = mb.addMenu(t("menu.view"))
         lang_menu = view_menu.addMenu(t("menu.view.language"))
-        for code, label_key in [(LOCALE_ZH_TW, "menu.view.language.zh_TW"), (LOCALE_EN, "menu.view.language.en")]:
-            action = QAction(t(label_key), self)
+        for code, name in language_names():
+            action = QAction(name, self)
             action.triggered.connect(lambda checked=False, c=code: self._set_language(c))
             lang_menu.addAction(action)
         help_menu = mb.addMenu(t("menu.help"))

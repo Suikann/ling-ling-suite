@@ -15,7 +15,7 @@
     template = localized(DEFAULT_MASTER_TEMPLATE, DEFAULT_MASTER_TEMPLATE_EN)
 """
 import os
-from typing import Dict, FrozenSet, Optional, TypeVar
+from typing import Dict, FrozenSet, List, Optional, Tuple, TypeVar
 from core.constants import LOCALE_EN, LOCALE_ZH_TW
 
 _T = TypeVar("_T")
@@ -24,6 +24,12 @@ _T = TypeVar("_T")
 _TRASH_NAMES = {
     LOCALE_ZH_TW: ("資源回收桶", "垃圾桶"),
     LOCALE_EN: ("recycle bin", "trash"),
+}
+
+# 可選的介面語言（依顯示順序）與它們名稱的字串鍵
+_LANGUAGE_NAME_KEYS = {
+    LOCALE_ZH_TW: "menu.view.language.zh_TW",
+    LOCALE_EN: "menu.view.language.en",
 }
 
 _current_locale = LOCALE_ZH_TW
@@ -2517,6 +2523,11 @@ def set_locale(locale_code: str):
 def get_available_locales():
     """取得所有可用語言代碼"""
     return list(_STRINGS.keys())
+
+
+def language_names() -> List[Tuple[str, str]]:
+    """可選的介面語言，依顯示順序列出（語言代碼，名稱）；語言選單與譜庫的欄位語言選單共用"""
+    return [(code, t(key)) for code, key in _LANGUAGE_NAME_KEYS.items()]
 
 
 def get_keys(locale_code: str) -> FrozenSet[str]:

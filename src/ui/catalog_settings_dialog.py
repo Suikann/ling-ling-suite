@@ -30,8 +30,8 @@ from core.catalog_constants import (
 )
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import DriveFile
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, LOCALE_EN, LOCALE_ZH_TW
-from core.locale import get_locale, t
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
+from core.locale import get_locale, language_names, t
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingCatalog
 from services.club_settings_service import ClubSettingsService
@@ -60,11 +60,6 @@ _LOGIN_FAILURE_KEYS = {
     LoginFailure.TIMED_OUT: "catalog.auth.timed_out",
     LoginFailure.DENIED: "catalog.auth.denied",
     LoginFailure.SCOPES_MISSING: "catalog.auth.scopes_missing",
-}
-# 欄位語言選單的選項：語言代碼與顯示的名稱
-_HEADER_LANGUAGE_KEYS = {
-    LOCALE_ZH_TW: "menu.view.language.zh_TW",
-    LOCALE_EN: "menu.view.language.en",
 }
 # HuaXia 登入狀態旁的原因對應的介面字串（安全儲存的三種與 Google 共用）
 _HUAXIA_REASON_KEYS = {
@@ -216,8 +211,8 @@ class CatalogSettingsDialog(QDialog):
         language_row = QHBoxLayout()
         language_row.addWidget(QLabel(t("catalog.settings.header_language")))
         self._header_language = QComboBox()
-        for locale, key in _HEADER_LANGUAGE_KEYS.items():
-            self._header_language.addItem(t(key), locale)
+        for locale, name in language_names():
+            self._header_language.addItem(name, locale)
         self._header_language.activated.connect(lambda _: self._rewrite_headers(self._header_language.currentData()))
         language_row.addWidget(self._header_language)
         language_row.addStretch()
