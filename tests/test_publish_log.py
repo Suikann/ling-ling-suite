@@ -39,7 +39,7 @@ def start(group: str, piece: str = "hx-1") -> PublishRecord:
 
 
 class PublishLogTestCase(unittest.TestCase):
-    """假 Google 上只有標題列的譜庫試算表"""
+    """假 Google 上只有標題列的譜庫總表"""
 
     def setUp(self):
         self.google = FakeGoogle()

@@ -102,7 +102,7 @@ class CatalogWindow(QMainWindow):
         """
         Args:
             auth_service: Google 登入服務
-            preferences: 偏好設定（譜庫試算表 ID、根資料夾 ID；連上譜庫時記下社團設定的發譜平台）
+            preferences: 偏好設定（譜庫總表 ID、根資料夾 ID；連上譜庫時記下社團設定的發譜平台）
             parent: 父元件
             catalog_factory: 在背景執行緒建立譜庫服務的函式，拿不到時丟出 CatalogError；
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）

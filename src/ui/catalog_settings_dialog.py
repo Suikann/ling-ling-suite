@@ -6,13 +6,13 @@
 新建的譜庫總表標題列用當下的介面語言；選資料夾的步驟下方的「欄位語言」選單寫出連到的譜庫總表現在的標題語言
 （各工作表不一致時不選），換語言時在背景把各工作表的標題列整列改寫（core/catalog_headers.py）。
 登入區顯示登入的帳號 email 與帳號提醒；登入時在背景等瀏覽器回來，期間顯示可取消的等待視窗。
-選資料夾的步驟下方寫出這台電腦記住的發譜平台（照社團設定裡的寫法，沒有時寫未設定）與到譜庫試算表的社團設定工作表設定；
+選資料夾的步驟下方寫出這台電腦記住的發譜平台（照社團設定裡的寫法，沒有時寫未設定）與到譜庫總表的社團設定工作表設定；
 開著的時候重讀社團設定完成（例如譜庫視窗連上譜庫），經 Qt 訊號回到主執行緒改寫這一行，HuaXia 登入區跟著出現或藏起。
-瀏覽 Drive 資料夾（最上層是我的雲端硬碟，它本身也能選）、找資料夾裡的試算表與建立譜庫試算表都經譜庫服務
+瀏覽 Drive 資料夾（最上層是我的雲端硬碟，它本身也能選）、找資料夾裡的試算表與建立譜庫總表都經譜庫服務
 （services/catalog_service.py）在背景執行；根資料夾一律存成它真正的 ID，不存別名 root。
-失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。找到或建好的譜庫試算表先記在對話框裡，
+失敗時在失敗的那個視窗頂端顯示錯誤提示列（ui/catalog_error_bar.py）。找到或建好的譜庫總表先記在對話框裡，
 按「儲存設定」才寫進偏好設定，取消時偏好設定不變；存了就在背景重讀社團設定（services/club_settings_service.py），
-存的是另一份譜庫試算表時先忘掉記住的發譜平台。重讀完成時由社團設定服務通知主視窗，不經這個（可能已關閉的）對話框。
+存的是另一份譜庫總表時先忘掉記住的發譜平台。重讀完成時由社團設定服務通知主視窗，不經這個（可能已關閉的）對話框。
 這台電腦記住的社團設定啟用 HuaXia 發譜時，另有 HuaXia 登入區（services/huaxia_auth_service.py）：
 登入前寫出連結 Discord 的提醒，以 Discord 登入時顯示可取消的等待視窗，不是幹部時說明原因；登出在背景進行。
 """
@@ -129,7 +129,7 @@ class CatalogSettingsDialog(QDialog):
         """
         Args:
             auth_service: Google 登入服務
-            preferences: 偏好設定（譜庫試算表 ID、根資料夾 ID、記住的發譜平台）
+            preferences: 偏好設定（譜庫總表 ID、根資料夾 ID、記住的發譜平台）
             parent: 父元件
             catalog_factory: 在背景執行緒以試算表 ID（還沒有時為空字串）建立譜庫服務的函式，拿不到時丟出 CatalogError；
                 省略時以登入服務的憑證接 Google（測試傳入接假 Google 的）
@@ -147,7 +147,7 @@ class CatalogSettingsDialog(QDialog):
         self._club_settings = club_settings or ClubSettingsService(preferences, self._log)
         self._huaxia_area: Optional[QGroupBox] = None
         self._tasks = CatalogTasks(self)
-        # 找到或建好的譜庫試算表；按「儲存設定」才寫進偏好設定
+        # 找到或建好的譜庫總表；按「儲存設定」才寫進偏好設定
         self._spreadsheet_id = self._prefs.get(CATALOG_SPREADSHEET_ID_KEY) or ""
         # 連到的譜庫總表現在的標題語言；還沒讀到或各工作表不一致時為 None
         self._header_locale: Optional[str] = None
@@ -239,7 +239,7 @@ class CatalogSettingsDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
         self._update_auth_display()
-        # 開啟時只在已登入時自動找譜庫試算表：安全儲存沒解鎖時不為此再跳一次解鎖視窗
+        # 開啟時只在已登入時自動找譜庫總表：安全儲存沒解鎖時不為此再跳一次解鎖視窗
         if self._folder_entry.text().strip() and self._auth.status().signed_in:
             self._check_catalog_in_folder()
 
@@ -381,7 +381,7 @@ class CatalogSettingsDialog(QDialog):
         return False
 
     def _browse_folder(self):
-        """以階層式樹狀結構瀏覽 Drive 資料夾，選了就找裡面的譜庫試算表"""
+        """以階層式樹狀結構瀏覽 Drive 資料夾，選了就找裡面的譜庫總表"""
         dialog = _DriveFolderBrowser(lambda: self._catalog_factory(""), self._sign_in_again, self._log, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_id:
             self._folder_entry.setText(dialog.selected_id)
@@ -496,7 +496,7 @@ class CatalogSettingsDialog(QDialog):
             self._show_header_language(pending.locale)
 
         def create():
-            """建立譜庫試算表（重試時再呼叫一次）"""
+            """建立譜庫總表（重試時再呼叫一次）"""
             self._show_folder_status(t("catalog.loading"), "gray")
             self._run(
                 lambda: self._catalog_factory("").create_catalog(pending), created,
@@ -505,7 +505,7 @@ class CatalogSettingsDialog(QDialog):
         create()
 
     def _save_settings(self):
-        """儲存設定，在背景重讀譜庫的社團設定；換了譜庫試算表時先忘掉記住的發譜平台
+        """儲存設定，在背景重讀譜庫的社團設定；換了譜庫總表時先忘掉記住的發譜平台
 
         讀不到時記住的不變（換了試算表時就是沒有），寫進紀錄檔；讀完由社團設定服務通知主視窗。
         """

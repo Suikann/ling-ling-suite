@@ -17,7 +17,7 @@
     show_publish = club.remembered() is not None      # 啟動時：只看偏好設定
     club.refresh(lambda: catalog)                     # 連上譜庫時；讀不到時寫進紀錄檔，不丟出例外
     platform = club.read(catalog)                     # 連上譜庫或按下發譜時；讀不到時丟出 CatalogError
-    club.forget()                                     # 譜庫設定存了另一份譜庫試算表時
+    club.forget()                                     # 譜庫設定存了另一份譜庫總表時
     club.subscribe(changed.emit)                      # 記住的結果寫入後通知（在寫入的執行緒呼叫）
 """
 from typing import Callable, List, Optional
@@ -94,7 +94,7 @@ class ClubSettingsService:
             self._log.record(failure.log_entry())
 
     def forget(self) -> None:
-        """忘掉記住的結果（換了譜庫試算表時）：發譜功能隱藏，直到讀到新譜庫的社團設定"""
+        """忘掉記住的結果（換了譜庫總表時）：發譜功能隱藏，直到讀到新譜庫的社團設定"""
         self._remember("")
 
     def _remember(self, value: str) -> None:

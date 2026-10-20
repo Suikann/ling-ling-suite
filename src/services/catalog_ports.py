@@ -39,7 +39,7 @@ def sheet_range(sheet: str, cells: str) -> str:
 
 
 class SheetsPort(Protocol):
-    """試算表關口：一份譜庫試算表的讀寫，一次呼叫一次請求"""
+    """試算表關口：一份譜庫總表的讀寫，一次呼叫一次請求"""
 
     def read_ranges(self, ranges: Sequence[str]) -> List[List[List[str]]]:
         """讀多個範圍（values.batchGet）

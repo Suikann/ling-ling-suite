@@ -27,7 +27,7 @@ from test_catalog_service import empty_catalog
 
 
 class ClubSettingsTestCase(unittest.TestCase):
-    """假 Google 裡有一份譜庫試算表；偏好設定在臨時目錄"""
+    """假 Google 裡有一份譜庫總表；偏好設定在臨時目錄"""
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()

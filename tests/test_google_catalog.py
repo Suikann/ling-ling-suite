@@ -206,11 +206,11 @@ class TestSheetsRequests(unittest.TestCase):
 
     def test_creates_a_spreadsheet_with_header_rows_frozen_in_one_request(self):
         http = HttpMockSequence([ok({"spreadsheetId": "new-1"})])
-        new_id = GoogleSheets("", http=http).create_spreadsheet("譜庫試算表", {"曲目": ["id", "title"], "版本": ["id"]})
+        new_id = GoogleSheets("", http=http).create_spreadsheet("譜庫總表", {"曲目": ["id", "title"], "版本": ["id"]})
         self.assertEqual(new_id, "new-1")
         self.assertEqual(len(http.request_sequence), 1)
         body = sent_body(http, 0)
-        self.assertEqual(body["properties"]["title"], "譜庫試算表")
+        self.assertEqual(body["properties"]["title"], "譜庫總表")
         sheets = [
             (s["properties"]["title"], s["properties"]["gridProperties"]["frozenRowCount"],
              [v["userEnteredValue"]["stringValue"] for v in s["data"][0]["rowData"][0]["values"]])

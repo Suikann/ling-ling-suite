@@ -7,7 +7,7 @@
 
 所有讀寫共用的規則都在這裡：遇到 429（達到用量上限）以指數退避自動重試；以名稱搜尋 Drive 時先跳脫反斜線、
 再跳脫單引號（drive_literal）；新增列時抽的 8 碼 ID 跟同一張工作表既有的撞號就重抽，同一批列重送前先以它們的 ID
-檢查哪些已經寫進去，不產生重複列（new_rows、add_rows）；建譜庫試算表時建好就記下 ID，搬進資料夾失敗後重送不建第二份（PendingCatalog）。試算表的值一律以 RAW 寫入由通事負責。
+檢查哪些已經寫進去，不產生重複列（new_rows、add_rows）；建譜庫總表時建好就記下 ID，搬進資料夾失敗後重送不建第二份（PendingCatalog）。試算表的值一律以 RAW 寫入由通事負責。
 
 網路請求會卡住呼叫的執行緒，UI 要在背景執行緒呼叫。
 
@@ -1536,7 +1536,7 @@ class CatalogService:
         return self._children(folder_id, f"mimeType = {drive_literal(DRIVE_FOLDER_MIME)}")
 
     def spreadsheets_in(self, folder_id: str) -> List[DriveFile]:
-        """列出 Drive 資料夾裡的 Google 試算表（依名稱排序，不含垃圾桶裡的），譜庫設定以此找譜庫試算表
+        """列出 Drive 資料夾裡的 Google 試算表（依名稱排序，不含垃圾桶裡的），譜庫設定以此找譜庫總表
 
         Raises:
             CatalogError: 讀不到

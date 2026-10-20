@@ -22,7 +22,7 @@ from services.catalog_service import CatalogService, PendingCatalog
 
 
 def empty_catalog(google: FakeGoogle) -> None:
-    """在假 Google 建出只有標題列的譜庫試算表"""
+    """在假 Google 建出只有標題列的譜庫總表"""
     for title, headers in SHEET_HEADERS.items():
         google.sheets.create_tab(title, [headers])
 
@@ -471,7 +471,7 @@ class TestDriveWrites(CatalogTestCase):
 
 
 class TestCreateCatalog(unittest.TestCase):
-    """譜庫設定：找資料夾裡的試算表、在資料夾裡建立新的譜庫試算表"""
+    """譜庫設定：找資料夾裡的試算表、在資料夾裡建立新的譜庫總表"""
 
     def setUp(self):
         self.google = FakeGoogle()
@@ -479,16 +479,16 @@ class TestCreateCatalog(unittest.TestCase):
         self.folder = self.google.drive.add_folder("譜庫")
 
     def test_lists_spreadsheets_in_the_folder(self):
-        sheet = self.google.drive.add_file("譜庫試算表", self.folder, mime_type=DRIVE_SPREADSHEET_MIME)
+        sheet = self.google.drive.add_file("譜庫總表", self.folder, mime_type=DRIVE_SPREADSHEET_MIME)
         self.google.drive.add_file("說明.pdf", self.folder)
         self.google.drive.add_file("別的", mime_type=DRIVE_SPREADSHEET_MIME)
         self.assertEqual([f.id for f in self.catalog.spreadsheets_in(self.folder)], [sheet])
 
     def test_creates_a_spreadsheet_with_every_sheet_and_a_frozen_header_row_in_the_folder(self):
-        spreadsheet_id = self.catalog.create_catalog(PendingCatalog("譜庫試算表", self.folder, LOCALE_EN))
+        spreadsheet_id = self.catalog.create_catalog(PendingCatalog("譜庫總表", self.folder, LOCALE_EN))
         self.assertEqual([f.id for f in self.catalog.spreadsheets_in(self.folder)], [spreadsheet_id])
         self.assertEqual(self.google.drive.file(spreadsheet_id).parents, (self.folder,))
-        self.assertEqual(self.google.drive.file(spreadsheet_id).name, "譜庫試算表")
+        self.assertEqual(self.google.drive.file(spreadsheet_id).name, "譜庫總表")
         self.assertEqual(self.google.sheets.tabs(), list(SHEET_HEADERS))
         for title, headers in SHEET_HEADERS.items():
             self.assertEqual(self.google.sheets.rows(title), [headers])
@@ -496,7 +496,7 @@ class TestCreateCatalog(unittest.TestCase):
         self.assertNotIn(ROOT, self.google.drive.file(spreadsheet_id).parents)
 
     def test_header_rows_are_written_in_the_language_given(self):
-        self.catalog.create_catalog(PendingCatalog("譜庫試算表", self.folder, LOCALE_ZH_TW))
+        self.catalog.create_catalog(PendingCatalog("譜庫總表", self.folder, LOCALE_ZH_TW))
         self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0][:3], ["編號", "作曲家編號", "曲名"])
         for title in SHEET_HEADERS:
             self.assertEqual(self.google.sheets.rows(title), [header_row(title, LOCALE_ZH_TW)])
@@ -508,7 +508,7 @@ class TestCreateCatalog(unittest.TestCase):
         self.assertEqual(root.mime_type, DRIVE_FOLDER_MIME)
 
     def test_creating_again_after_a_failed_move_reuses_the_created_spreadsheet(self):
-        pending = PendingCatalog("譜庫試算表", self.folder, LOCALE_ZH_TW)
+        pending = PendingCatalog("譜庫總表", self.folder, LOCALE_ZH_TW)
         # 第 1 次請求建試算表、第 2 次取它的中繼資料、第 3 次搬進資料夾
         self.google.fail_at(3, CatalogErrorKind.OFFLINE)
         with self.assertRaises(CatalogError):

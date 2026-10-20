@@ -1288,7 +1288,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, t("huaxia.auth.title"), t("catalog.auth.reason.not_saved"))
 
     def _catalog_ready(self) -> bool:
-        """譜庫已設定（登入 Google、有譜庫試算表）；還沒有時先引導設定，回傳設定完成與否"""
+        """譜庫已設定（登入 Google、有譜庫總表）；還沒有時先引導設定，回傳設定完成與否"""
         spreadsheet_id = self._preferences.get(CATALOG_SPREADSHEET_ID_KEY)
         if self._auth_service.get_credentials() is None or not spreadsheet_id:
             return self._open_catalog_settings()
