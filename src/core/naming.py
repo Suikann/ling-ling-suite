@@ -311,7 +311,7 @@ def _variables(group: Group, number: str, voice: str) -> Dict[str, str]:
 
 
 def _substitute(template: str, variables: Dict[str, str]) -> str:
-    """把命名格式中的 {變數} 換成值；空的變數連同左邊緊鄰的一串分隔符號省略，左邊沒有東西時改省略右邊那一串
+    """把命名格式中的 {變數} 換成值；空的變數連同左邊緊鄰的一串分隔符號省略，左邊沒有東西（含左邊的都已省略）時改省略右邊那一串
 
     不是模板變數的 {…} 視同空的變數；有變數為空的條件片段 […] 整段視同一個空的變數。
     只掃描命名格式一次，代入的值不再被替換、不被當成語法，也不會被省略。
@@ -324,14 +324,15 @@ def _substitute(template: str, variables: Dict[str, str]) -> str:
         if text:
             parts.append((text, is_literal))
             trim_right = False
-        elif is_literal:
             continue
-        elif not parts:
-            trim_right = True
-        elif parts[-1][1]:
+        if is_literal:
+            continue
+        if parts and parts[-1][1]:
             kept = parts.pop()[0].rstrip(_SEPARATORS)
             if kept:
                 parts.append((kept, True))
+        # 左邊沒有東西（在開頭，或左邊的都已省略）時改省略右邊那一串
+        trim_right = not parts
     return "".join(text for text, _ in parts)
 
 

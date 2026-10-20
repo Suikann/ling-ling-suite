@@ -190,6 +190,10 @@ class TestEmptyVariables(unittest.TestCase):
     def test_empty_variable_at_the_start_drops_the_separators_on_its_right(self):
         self.assertEqual(self._name("{樂章名稱}-{樂器}.pdf"), "Flute.pdf")
 
+    def test_empty_variable_after_leading_separators_drops_the_separators_on_both_sides(self):
+        name = self._name("-{樂章名稱}-{曲名}.pdf", piece_name="泰芙努特")
+        self.assertEqual(name, "泰芙努特.pdf")
+
     def test_consecutive_empty_variables_drop_every_separator_between_them(self):
         self.assertEqual(self._name("{樂章編號} - {樂章名稱}_{樂器}.pdf"), "Flute.pdf")
         self.assertEqual(self._name("{序號}-{樂章編號}-{樂章名稱}-{樂器}.pdf"), "01-Flute.pdf")
