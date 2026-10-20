@@ -358,6 +358,23 @@ class TestNextStep(PublishWindowTestCase):
         self.assertTrue(group_cell(dialog, "烽火操").findChild(QLabel, "shared_piece").isHidden())
         self.assertTrue(button(dialog, "publish.next").isEnabled())
 
+    def test_no_group_to_publish_says_so_and_next_stays_off(self):
+        self.window.project.set_headcount(self.window.project.groups[0], 1, Headcount())
+        self.save()
+
+        def operate(dialog):
+            label = dialog.findChild(QLabel, "nothing_to_publish")
+            self.assertFalse(label.isHidden())
+            self.assertEqual(label.text(), t("publish.piece.nothing_to_publish"))
+            self.assertFalse(button(dialog, "publish.next").isEnabled())
+        _, opened = self.publish(operate=operate)
+        self.assertEqual(len(opened), 1)
+
+    def test_the_nothing_to_publish_line_is_hidden_when_a_group_can_be_published(self):
+        def operate(dialog):
+            self.assertTrue(dialog.findChild(QLabel, "nothing_to_publish").isHidden())
+        self.publish(operate=operate)
+
     def test_a_new_piece_without_a_title_is_not_enough(self):
         def operate(dialog):
             choose(dialog, "烽火操", "new")

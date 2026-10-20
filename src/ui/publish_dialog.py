@@ -8,7 +8,8 @@
 
 - 「曲目」：每個群組挑一首 HuaXia 的現有曲目（已封存的不列）或新建一首，新建的曲名、作曲家、時長（分鐘）與
   合奏／絲竹帶入預設值（NewHuaXiaPiece.for_group）、都能改；每次選擇經 Project.set_huaxia_link 立即寫進專案。
-  有未同步值的群組標出哪些值還沒進譜庫。每個沒擋下的群組都對到曲目（新建的要有曲名）才能按「下一步」。
+  有未同步值的群組標出哪些值還沒進譜庫。每個沒擋下的群組都對到曲目（新建的要有曲名）才能按「下一步」；
+  全部群組都擋下時頂端寫一行沒有可以發譜的群組，「下一步」按不下去。
 - 「聲部」：每個群組列出樂器表每一列對到 HuaXia 的哪個聲部（publish_service.plan_voices）、HuaXia 現在的值、
   變動與發譜後的值，以及只在 HuaXia 的聲部（不動）。本專案有的聲部可以改選新建或還沒被配對的 HuaXia 聲部
   （名稱規則對到多個時只列那幾個），挑了就經 Project.choose_huaxia_part 記進專案；人數或聲部組不同時「覆寫」
@@ -452,10 +453,16 @@ class PublishPreviewDialog(QDialog):
             label.setVisible(bool(others))
 
     def _build_piece_step(self) -> QWidget:
-        """「曲目」步：每個群組一列，擋下的寫出原因，其餘挑選現有或新建；有未同步的值時標出"""
+        """「曲目」步：每個群組一列，擋下的寫出原因，其餘挑選現有或新建；有未同步的值時標出。
+        全部群組都擋下時頂端寫一行沒有可以發譜的群組"""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
+        nothing = QLabel(t("publish.piece.nothing_to_publish"))
+        nothing.setObjectName("nothing_to_publish")
+        nothing.setStyleSheet(f"color: {_BLOCKED_COLOR};")
+        nothing.setVisible(not self._preview.groups)
+        layout.addWidget(nothing)
         table = QTableWidget(len(self._checks), 2)
         table.setObjectName("piece_step")
         table.setHorizontalHeaderLabels([t("publish.piece.group"), t("publish.piece.huaxia")])
