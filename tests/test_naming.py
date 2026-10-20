@@ -177,6 +177,52 @@ class TestSubstitution(unittest.TestCase):
         self.assertEqual(unknown_variables("{序號}-{Instrument}.pdf"), [])
 
 
+class TestEmptyVariables(unittest.TestCase):
+    """空變數連同左邊緊鄰的一串分隔符號省略，在開頭時改省略右邊那一串"""
+
+    def _name(self, template, **fields):
+        return name_slot(_group(["Flute"], **fields), 1, NamingSettings(template)).file_name
+
+    def test_empty_variable_drops_the_separators_on_its_left(self):
+        name = self._name("{序號}-{曲名}-{樂章名稱}-{樂器}.pdf", piece_name="泰芙努特")
+        self.assertEqual(name, "01-泰芙努特-Flute.pdf")
+
+    def test_empty_variable_at_the_start_drops_the_separators_on_its_right(self):
+        self.assertEqual(self._name("{樂章名稱}-{樂器}.pdf"), "Flute.pdf")
+
+    def test_consecutive_empty_variables_drop_every_separator_between_them(self):
+        self.assertEqual(self._name("{樂章編號} - {樂章名稱}_{樂器}.pdf"), "Flute.pdf")
+        self.assertEqual(self._name("{序號}-{樂章編號}-{樂章名稱}-{樂器}.pdf"), "01-Flute.pdf")
+
+    def test_hyphen_underscore_and_half_and_full_width_spaces_are_separators(self):
+        for separator in ("-", "_", " ", "\u3000", " -\u3000_"):
+            with self.subTest(separator=separator):
+                self.assertEqual(self._name(f"{{序號}}{separator}{{樂章名稱}}.pdf"), "01.pdf")
+
+    def test_other_text_beside_an_empty_variable_is_kept(self):
+        self.assertEqual(self._name("第{樂章編號}章-{樂器}.pdf"), "第章-Flute.pdf")
+        self.assertEqual(self._name("{樂器}.{樂章名稱}.pdf"), "Flute..pdf")
+        self.assertEqual(self._name("{樂器}（{樂章名稱}）.pdf"), "Flute（）.pdf")
+        self.assertEqual(self._name("{樂器}、{樂章名稱}.pdf"), "Flute、.pdf")
+
+    def test_unknown_variable_counts_as_empty(self):
+        self.assertEqual(self._name("{序號}-{foo}-{樂器}.pdf"), "01-Flute.pdf")
+        self.assertEqual(self._name("{foo}_{樂器}.pdf"), "Flute.pdf")
+
+    def test_separators_inside_values_are_kept(self):
+        name = self._name("{曲名}-{樂章名稱}-{樂器}.pdf", piece_name="A--B-")
+        self.assertEqual(name, "A--B--Flute.pdf")
+
+    def test_names_without_empty_variables_are_unchanged(self):
+        name = self._name("{序號}--{曲名}_ {樂器}.pdf", piece_name="Sym")
+        self.assertEqual(name, "01--Sym_ Flute.pdf")
+
+    def test_subfolder_template_follows_the_same_rule(self):
+        group = _group(["Flute"], piece_name="Sym")
+        settings = NamingSettings("{樂器}.pdf", subfolder_template="{樂章編號}-{曲名}-{樂章名稱}")
+        self.assertEqual(name_slot(group, 1, settings).folders, ("Sym",))
+
+
 class TestFolders(unittest.TestCase):
     """相對資料夾：子資料夾模板（總譜與分譜共用）之下，分譜可再依分譜存放模式分放"""
 

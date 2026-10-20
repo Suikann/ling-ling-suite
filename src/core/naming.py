@@ -15,7 +15,7 @@
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 from core.constants import (
     MIN_NUMBER_WIDTH, RELATIVE_DIR_NAMES, SCORE_NUMBER, TEMPLATE_SLOT_SOURCES, TEMPLATE_VARIABLES, OrchestraType,
     PartsOutputMode, TemplateVariable, VariableLevel,
@@ -30,6 +30,8 @@ from core.voice_names import instrument_key
 SCORE_SLOT = 0
 # 命名格式中的 {變數}
 _VARIABLE_PATTERN = re.compile(r"\{([^{}]+)\}")
+# 分隔符號：空的變數連同相鄰的一串分隔符號省略
+_SEPARATORS = "-_ \u3000"
 # 中英文變數名稱到模板變數的對應
 _VARIABLES_BY_NAME: Dict[str, TemplateVariable] = {
     name: var for var in TEMPLATE_VARIABLES for name in (var.name, var.name_en)
@@ -307,5 +309,36 @@ def _variables(group: Group, number: str, voice: str) -> Dict[str, str]:
 
 
 def _substitute(template: str, variables: Dict[str, str]) -> str:
-    """把命名格式中的 {變數} 換成值、不是模板變數的 {…} 拿掉；只掃描命名格式一次，代入的值不再被替換"""
-    return _VARIABLE_PATTERN.sub(lambda m: variables.get(m.group(1), ""), template)
+    """把命名格式中的 {變數} 換成值；空的變數連同左邊緊鄰的一串分隔符號省略，左邊沒有東西時改省略右邊那一串
+
+    不是模板變數的 {…} 視同空的變數。只掃描命名格式一次，代入的值不再被替換，也不會被省略。
+    """
+    parts: List[Tuple[str, bool]] = []
+    trim_right = False
+    for text, is_literal in _template_parts(template, variables):
+        if is_literal and trim_right:
+            text = text.lstrip(_SEPARATORS)
+        if text:
+            parts.append((text, is_literal))
+            trim_right = False
+        elif is_literal:
+            continue
+        elif not parts:
+            trim_right = True
+        elif parts[-1][1]:
+            kept = parts.pop()[0].rstrip(_SEPARATORS)
+            if kept:
+                parts.append((kept, True))
+    return "".join(text for text, _ in parts)
+
+
+def _template_parts(template: str, variables: Dict[str, str]) -> Iterator[Tuple[str, bool]]:
+    """依序列出命名格式的字面文字與變數的值，各附上是否為字面文字；不是模板變數的 {…} 的值為空字串"""
+    position = 0
+    for match in _VARIABLE_PATTERN.finditer(template):
+        if match.start() > position:
+            yield template[position:match.start()], True
+        yield variables.get(match.group(1), ""), False
+        position = match.end()
+    if position < len(template):
+        yield template[position:], True

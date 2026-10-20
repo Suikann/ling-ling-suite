@@ -15,6 +15,7 @@
 ### Template-Driven Renaming
 Define filename structures using dynamic variables:
 - **Example:** `{Number}-{PieceName}-{Instrument}.pdf` produces `01-Beethoven Sym.5-Flute.pdf`
+- **Empty variables:** An empty variable is left out together with the `-`, `_` or spaces before it; without a movement name, `{PieceName}-{MovementName}-{Instrument}.pdf` produces `Beethoven Sym.5-Flute.pdf`.
 - **Per-group override:** Each group can use a custom template that completely replaces the master template.
 
 ### Visual PDF Splitting
