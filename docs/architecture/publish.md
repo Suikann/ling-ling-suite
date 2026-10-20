@@ -1,6 +1,6 @@
 # Publish
 
-發譜把群組的編制、分譜與總譜寫進 HuaXia（spec #82）。泠靈以幹部自己的 Discord 帳號直接寫入 HuaXia 的 Supabase，所有請求經 `services/huaxia_client.py` 的 `HuaXiaClient`（[ADR 0003](../adr/0003-lingling-writes-huaxia-directly.md)）；泠靈依賴 HuaXia 的資料表、欄位、發譜函式與 Storage 路徑格式以依賴說明文件為準，複本在 [docs/huaxia/LINGLING.md](../huaxia/LINGLING.md)。按下「發譜」前的檢查與預覽各步的規則在 `services/publish_service.py`（入口見 [modules.md](modules.md)），本文件記預覽按下「發譜」之後的事。
+發譜把群組的編制、分譜與總譜寫進 HuaXia（spec #82）。泠靈以幹部自己的 Discord 帳號直接寫入 HuaXia 的 Supabase，所有請求經 `services/huaxia_client.py` 的 `HuaXiaClient`（[ADR 0003](../adr/0003-lingling-writes-huaxia-directly.md)）；泠靈依賴 HuaXia 的資料表、欄位、發譜函式與 Storage 路徑格式以依賴說明文件為準，複本在 [docs/huaxia/LINGLING.md](../huaxia/LINGLING.md)。按下「發譜」前的檢查與預覽各步的規則在 `services/publish_service.py`（入口見 [modules.md](modules.md)），各步的行為（曲目的對應、全部群組都被擋下時「曲目」步按不下「下一步」、聲部的配對）寫在 [project.md](project.md) 的對到 HuaXia 曲目；本文件記預覽按下「發譜」之後的事。
 
 ## 開始前
 
