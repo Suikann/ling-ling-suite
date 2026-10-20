@@ -155,7 +155,7 @@ class RotatePdfDialog(QDialog):
         sel_idx = 0
         if self._project:
             for i, g in enumerate(self._project.groups):
-                self._group_filter.addItem(g.name or g.id[:8], g)
+                self._group_filter.addItem(g.display_name(), g)
                 if g is self._filter_group:
                     sel_idx = i + 1
         self._group_filter.setCurrentIndex(sel_idx)

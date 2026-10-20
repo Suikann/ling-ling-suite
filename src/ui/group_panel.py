@@ -119,7 +119,7 @@ class UngroupedTab(QWidget):
             return
         menu = QMenu(self)
         for group in self.project.groups:
-            action = menu.addAction(group.name or group.id[:8])
+            action = menu.addAction(group.display_name())
             action.triggered.connect(
                 lambda checked=False, g=group: self._do_batch_move(g),
             )

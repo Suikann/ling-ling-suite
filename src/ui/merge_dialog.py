@@ -31,7 +31,7 @@ class LinkMovementsDialog(QDialog):
         container = QWidget()
         cl = QVBoxLayout(container)
         for group in self._groups:
-            cb = QCheckBox(group.name or group.id[:8])
+            cb = QCheckBox(group.display_name())
             cl.addWidget(cb)
             self._checks.append((group, cb))
         cl.addStretch()
