@@ -23,10 +23,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QInputDialog, QLabel, QPushButton, QTreeWidget
 
-from core.catalog_constants import DRIVE_SPREADSHEET_MIME, SHEET_HEADERS, PublishingPlatform
+from core.catalog_constants import DRIVE_SPREADSHEET_MIME, SHEET_HEADERS, SHEET_PIECES, PublishingPlatform
+from core.catalog_headers import header_row
 from core.catalog_errors import CatalogErrorKind
-from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY
-from core.locale import t
+from core.constants import (
+    CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, LOCALE_EN, LOCALE_ZH_TW,
+)
+from core.locale import get_locale, set_locale, t
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.club_settings_service import ClubSettingsService
@@ -390,6 +393,18 @@ class TestFindCatalog(CatalogFolderTestCase):
         self.assertEqual(self.google.drive.file(sheet).name, "社團譜庫")
         self.assertEqual(self.google.sheets.tabs(), list(SHEET_HEADERS))
         self.assertTrue(self.shows(dialog, t("catalog.settings.catalog_created")))
+
+    def test_a_new_catalog_has_headers_in_the_interface_language(self):
+        self.addCleanup(set_locale, get_locale())
+        for locale in (LOCALE_ZH_TW, LOCALE_EN):
+            with self.subTest(locale=locale):
+                set_locale(locale)
+                self.google = FakeGoogle()
+                self.folder = self.google.drive.add_folder("譜庫")
+                with mock.patch.object(QInputDialog, "getText", return_value=("社團譜庫", True)):
+                    dialog = self.open_with_folder()
+                wait_until(lambda: self.shows(dialog, t("catalog.settings.catalog_created")))
+                self.assertEqual(self.google.sheets.rows(SHEET_PIECES)[0], header_row(SHEET_PIECES, locale))
 
     def test_cancelling_the_name_prompt_says_how_to_create_one(self):
         with mock.patch.object(QInputDialog, "getText", return_value=("", False)):

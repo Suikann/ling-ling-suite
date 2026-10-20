@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.catalog_constants import SHEET_HEADERS, SHEET_PUBLISH_LOG
 from core.catalog_errors import CatalogError, CatalogErrorKind
+from core.catalog_headers import header_row
+from core.constants import LOCALE_ZH_TW
 from core.publish_log import (
     PublishAction, PublishRecord, due_reminders, publish_entries, published_pieces, reminder_summary,
 )
@@ -89,6 +91,13 @@ class TestStartAndResult(PublishLogTestCase):
         self.assertEqual(self.catalog.publish_log(), [])
         self.catalog.begin_publish([start("烽火操")], "officer_amy")
         self.assertEqual(self.google.sheets.rows(SHEET_PUBLISH_LOG)[0], SHEET_HEADERS[SHEET_PUBLISH_LOG])
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_a_missing_sheet_takes_the_language_of_the_catalog(self):
+        self.catalog.set_header_locale(LOCALE_ZH_TW)
+        self.google.sheets.delete_tab(SHEET_PUBLISH_LOG)
+        self.catalog.begin_publish([start("烽火操")], "officer_amy")
+        self.assertEqual(self.google.sheets.rows(SHEET_PUBLISH_LOG)[0], header_row(SHEET_PUBLISH_LOG, LOCALE_ZH_TW))
         self.assertEqual(len(self.rows()), 1)
 
 

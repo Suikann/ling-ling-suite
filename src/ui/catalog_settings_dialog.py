@@ -29,7 +29,7 @@ from core.catalog_constants import (
 from core.catalog_errors import CatalogError, CatalogFailure
 from core.catalog_models import DriveFile
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY
-from core.locale import t
+from core.locale import get_locale, t
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService, PendingCatalog
 from services.club_settings_service import ClubSettingsService
@@ -433,7 +433,7 @@ class CatalogSettingsDialog(QDialog):
         if not ok or not name.strip():
             self._show_folder_status(t("catalog.settings.catalog_not_found"), "#f39c12")
             return
-        pending = PendingCatalog(name.strip(), folder_id)
+        pending = PendingCatalog(name.strip(), folder_id, get_locale())
 
         def created(spreadsheet_id: str):
             """建好了（按「儲存設定」才寫進偏好設定）"""

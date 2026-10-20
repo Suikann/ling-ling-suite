@@ -101,6 +101,60 @@ SHEET_HEADERS = {
     ],
 }
 
+# 標題列的中文欄名（英文標題列就是 SHEET_HEADERS 的欄位鍵）；程式照欄位位置讀寫，不看標題文字。
+# 不在這裡的工作表（社團設定）兩種語言的標題列相同。見 core/catalog_headers.py
+SHEET_HEADER_NAMES_ZH = {
+    SHEET_COMPOSERS: {
+        "id": "編號", "name": "全名", "name_short": "簡稱", "nationality": "國籍", "era": "時期", "notes": "備註",
+    },
+    SHEET_PIECES: {
+        "id": "編號", "composer_id": "作曲家編號", "title": "曲名", "title_short": "簡稱", "opus": "作品號",
+        "catalog_number": "目錄號", "genre": "曲種", "instrumentation": "編制",
+        "duration_minutes": "時長（分鐘）", "difficulty_level": "難度", "notes": "備註",
+        "active_edition_id": "使用中的版本編號",
+    },
+    SHEET_EDITIONS: {
+        "id": "編號", "piece_id": "曲目編號", "publisher": "出版社", "edition_label": "版本標籤",
+        "catalog_number": "出版目錄號", "year": "年份", "drive_folder_id": "Drive 資料夾 ID", "notes": "備註",
+    },
+    SHEET_MOVEMENTS: {
+        "id": "編號", "piece_id": "曲目編號", "movement_number": "樂章序號", "name": "樂章名稱",
+        "tempo_marking": "速度標記", "key_signature": "調性", "sort_order": "排序", "notes": "備註",
+    },
+    SHEET_PARTS: {
+        "id": "編號", "edition_id": "版本編號", "movement_id": "樂章編號", "instrument_name": "聲部",
+        "sort_order": "排序", "status": "狀態", "drive_file_id": "Drive 檔案 ID", "file_name": "檔名", "notes": "備註",
+        "headcount_min": "最少人數", "headcount_max": "最多人數", "headcount_open_ended": "人數以上",
+        "is_score": "總譜",
+    },
+    SHEET_PERFORMANCES: {
+        "id": "編號", "piece_id": "曲目編號", "edition_id": "版本編號", "performance_date": "演出日期",
+        "venue": "場地", "conductor": "指揮", "ensemble": "演出團體", "status": "狀態",
+        "program_order": "節目序", "notes": "備註",
+    },
+    SHEET_DURATIONS: {"id": "編號", "edition_id": "版本編號", "movement_id": "樂章編號", "seconds": "秒數"},
+    SHEET_SECTIONS: {"id": "編號", "orchestra_type": "樂團類型", "instrument": "樂器", "section": "聲部組"},
+    SHEET_INSTRUMENTATION_LOG: {
+        "id": "編號", "time": "時間", "operator": "操作者", "source": "來源", "edition_id": "版本編號",
+        "movement_id": "樂章編號", "voice": "聲部", "field": "項目", "old_value": "原值", "new_value": "新值",
+        "group": "群組", "group_id": "群組編號",
+    },
+    SHEET_DEPOSIT_LOG: {
+        "id": "編號", "deposit_id": "存入編號", "time": "時間", "operator": "操作者", "edition_id": "版本編號",
+        "movement_id": "樂章編號", "group": "群組", "voice": "聲部", "local_path": "本機路徑",
+        "drive_file_id": "Drive 檔案 ID", "action": "動作", "revision_after": "寫入後的 Drive 版本 ID",
+        "revision_before": "寫入前的 Drive 版本 ID", "reverts": "撤銷的存入編號", "group_id": "群組編號",
+        "state": "狀態",
+    },
+    SHEET_PUBLISH_LOG: {
+        "id": "編號", "publish_id": "發譜編號", "time": "時間", "operator": "操作者", "action": "動作",
+        "group_id": "群組編號", "group": "群組", "piece_id": "HuaXia 曲目編號", "piece_title": "曲名",
+        "new_piece": "新建的曲目", "parts_created": "新建的聲部", "parts_updated": "覆寫的聲部",
+        "files_uploaded": "上傳的檔案", "scores_added": "登記的樂譜", "scores_removed": "撤掉登記的樂譜",
+        "files_deleted": "刪掉的檔案", "events": "掛上的公演", "failure": "失敗原因", "parts_deleted": "刪掉的聲部",
+    },
+}
+
 # 存入紀錄的狀態欄：動 Drive 之前先寫一列「要做」，做完再另寫一列（只新增、不修改）。
 # 只有「要做」、沒有做完那列的檔，是中途停下或登記寫不進去的：撤銷時照 Drive 現況判斷那次做到了沒有
 DEPOSIT_PENDING = "pending"
