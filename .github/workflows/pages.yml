@@ -1,0 +1,48 @@
+# 把 website/（首頁與隱私權政策）發布到 GitHub Pages。只在預設分支 develop 上跑：
+# github-pages 環境預設只接受預設分支的部署。repo 的 Pages 來源要設成「GitHub Actions」。
+# 網址預設為 https://suikann.github.io/ling-ling-suite/；子網域在 repo 的 Settings > Pages > Custom domain 設定，
+# 以 Actions 發布時 Pages 不讀 CNAME 檔，website/ 不必放。
+name: Pages
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "website/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+# 同一時間只有一次部署；進行中的部署不取消，讓它做完
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: website/
+
+  deploy:
+    needs: build
+    # 從其他分支手動執行時只建置、不發布
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

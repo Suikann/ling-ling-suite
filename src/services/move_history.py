@@ -287,8 +287,8 @@ class MoveHistory:
     def check_plan(self, planned: RenamePlan) -> RenameVerdict:
         """重新命名預檢：判定一份依命名設定產生的計畫
 
-        來源已不在的項目從計畫丟掉，重複的目標自動加後綴（只加一次），
-        再以執行前驗證的規則檢查加後綴後的計畫；遺失來源、加後綴、多出的檔以外的問題一律阻擋。
+        來源已不在的項目從計畫丟掉（只在譜庫的另列一種，見 RenamePlan.catalog_copies），重複的目標自動加後綴（只加一次），
+        再以執行前驗證的規則檢查加後綴後的計畫；遺失來源、只在譜庫、加後綴、多出的檔以外的問題一律阻擋。
 
         Args:
             planned: 還沒對照磁碟的計畫
@@ -298,10 +298,12 @@ class MoveHistory:
         """
         missing = self._engine.find_missing_sources(self._moves(planned.entries))
         missing_keys = {path_key(source) for source in missing}
+        stored = {path_key(source) for source in planned.catalog_copies}
         present = [e for e in planned.entries if path_key(e.original_path) not in missing_keys]
         plan = apply_auto_suffix(present)
         found: Dict[RenameProblem, List[str]] = {
-            RenameProblem.MISSING_SOURCE: missing,
+            RenameProblem.MISSING_SOURCE: [source for source in missing if path_key(source) not in stored],
+            RenameProblem.CATALOG_ONLY: [source for source in missing if path_key(source) in stored],
             RenameProblem.SUFFIXED: [e.original_path for e, s in zip(present, plan) if e.new_path != s.new_path],
             RenameProblem.EXTRA_FILE: list(planned.extra_files),
         }

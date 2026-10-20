@@ -36,6 +36,14 @@ class TestFileServiceAtomicWrite(unittest.TestCase):
             self.assertEqual(json.load(f), {"曲名": "貝五", "n": [1, 2]})
         self.assertEqual(self._leftovers(), [])
 
+    def test_text_lines_end_with_the_platform_newline(self):
+        """以 \\n 分行的文字寫成這個平台的換行：Windows 是 \\r\\n，Linux 是 \\n"""
+        path = os.path.join(self.temp_dir, "list.txt")
+        self.file_service.write_text_atomic(path, "長笛\nOboe")
+        with open(path, "rb") as f:
+            expected = {"nt": b"\r\n", "posix": b"\n"}[os.name]
+            self.assertEqual(f.read(), "長笛".encode("utf-8") + expected + b"Oboe")
+
     def test_creates_missing_parent_directory(self):
         path = os.path.join(self.temp_dir, "undo", "undo_x.json")
         self.file_service.write_json_atomic(path, {"ok": True})
@@ -114,6 +122,20 @@ class TestFileServiceRename(unittest.TestCase):
         src = self._create("same.pdf", "S")
         self.file_service.rename_file(src, src)
         self.assertEqual(self._read(src), "S")
+
+
+class TestFileServiceWriteBytes(unittest.TestCase):
+    """FileService.write_bytes：把位元組寫進新的檔案，父目錄不存在時先建立"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
+
+    def test_writes_the_bytes_and_creates_missing_folders(self):
+        path = os.path.join(self.temp_dir, "a", "b", "part.pdf")
+        FileService().write_bytes(path, b"%PDF \x00\xff")
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"%PDF \x00\xff")
 
 
 class TestFileServiceExists(unittest.TestCase):

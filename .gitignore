@@ -31,6 +31,8 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# 唯一一份打包定義，要進 git
+!LingLingSuite.spec
 
 # Installer logs
 pip-log.txt
@@ -209,6 +211,9 @@ __marimo__/
 # Google API credentials
 client_secret.json
 google_token.json
+
+# 版號檔：CD 由 git tag 寫入，LingLingSuite.spec 收進打包版
+version.txt
 
 # lingling 的 vendored git hooks（lib/ 被上方打包規則排除，需反向納入）
 !.githooks/lib/

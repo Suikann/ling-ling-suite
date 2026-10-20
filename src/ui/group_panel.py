@@ -4,8 +4,13 @@
 
 提供群組標籤管理與檔案清單。分頁只表達使用者的意圖，修改一律透過專案的編輯操作立即寫入；
 影響其他分頁的修改（群組新增或刪除、檔案在群組與未分組之間搬動）以 groups_changed 通知主視窗重建分頁。
+群組分頁標出未存入的檔（存入譜庫後本機又改過，推算在存入服務）與只在譜庫的檔（本機沒有、譜庫裡有一份，見
+DepositService.catalog_only），主視窗切回分頁或視窗時以 show_undeposited 照磁碟現況重新比對。
+有只在譜庫的檔時旁邊出現「從譜庫下載回來」，按下以 download_requested 交給主視窗在背景下載回原位。
+分譜清單依樂器表順序列出每份分譜配到的聲部，本專案有而沒有分譜的聲部列成一個空格（_PartList）：
+分譜拖到空格上就配給那個聲部（Project.pair_part），拖到其他位置照舊只排分譜的順序（Project.reorder_files）。
 """
-from typing import List, Optional
+from typing import Dict, List, Optional, Set
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QCheckBox, QListWidget, QListWidgetItem,
@@ -13,11 +18,40 @@ from PySide6.QtWidgets import (
 )
 from ui.widgets import DragListWidget
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
+from core.constants import MUTED_COLORS, UNSYNCED_COLOR
 from core.locale import t
 from core.models import FileInfo, Group, Project
+from core.paths import path_key
+from services.deposit_service import DepositService
 from services.file_service import FileService
 from services.import_service import ImportService
+
+
+# 分譜清單的空格記著它是樂器表的第幾列（分譜的列在 Qt.UserRole 記它在群組分譜中的位置）
+_VOICE_ROW_ROLE = Qt.UserRole + 1
+
+
+class _PartList(DragListWidget):
+    """群組的分譜清單：分譜放到沒有分譜的聲部的空格上時不自己搬動，改發出 part_dropped，由分頁經編輯操作配對"""
+
+    # 分譜在群組分譜中的位置、空格的聲部在樂器表的列（從 0 起算）
+    part_dropped = Signal(int, int)
+
+    def dropEvent(self, event):
+        """放下一份分譜：落在空格上時發出 part_dropped，其餘照清單原本的拖拉排序"""
+        target = self.itemAt(event.position().toPoint())
+        dragged = self.selectedItems()
+        if (
+            event.source() is self and target is not None and target.data(_VOICE_ROW_ROLE) is not None
+            and self.dropIndicatorPosition() == QAbstractItemView.OnItem and len(dragged) == 1
+            and dragged[0].data(Qt.UserRole) is not None
+        ):
+            event.setDropAction(Qt.IgnoreAction)
+            event.accept()
+            self.part_dropped.emit(dragged[0].data(Qt.UserRole), target.data(_VOICE_ROW_ROLE))
+            return
+        super().dropEvent(event)
 
 
 class UngroupedTab(QWidget):
@@ -110,9 +144,12 @@ class GroupTab(QWidget):
     """群組標籤"""
 
     groups_changed = Signal()
+    # 按了「從譜庫下載回來」：群組 ID（下載經主視窗在背景執行）
+    download_requested = Signal(str)
 
     def __init__(
-        self, group: Group, project: Project, file_service: FileService, import_service: ImportService, parent=None,
+        self, group: Group, project: Project, file_service: FileService, import_service: ImportService,
+        deposit_service: DepositService, parent=None,
     ):
         """
         Args:
@@ -120,6 +157,7 @@ class GroupTab(QWidget):
             project: 群組所屬的專案（修改一律透過它的編輯操作）
             file_service: 檔案服務（從磁碟刪除分譜）
             import_service: 匯入服務（加入檔案）
+            deposit_service: 存入服務（找出未存入的檔）
             parent: 父元件
         """
         super().__init__(parent)
@@ -127,6 +165,7 @@ class GroupTab(QWidget):
         self.project = project
         self._file_service = file_service
         self._import_service = import_service
+        self._deposit_service = deposit_service
         self._build_ui()
 
     def _build_ui(self):
@@ -190,10 +229,28 @@ class GroupTab(QWidget):
         self._mismatch_label.setWordWrap(True)
         self._mismatch_label.setStyleSheet("font-size: 12px;")
         layout.addWidget(self._mismatch_label)
+        self._undeposited_bar = QLabel()
+        self._undeposited_bar.setObjectName("undeposited_bar")
+        self._undeposited_bar.setWordWrap(True)
+        self._undeposited_bar.setStyleSheet(f"color: {UNSYNCED_COLOR};")
+        self._undeposited_bar.hide()
+        layout.addWidget(self._undeposited_bar)
+        catalog_only_row = QHBoxLayout()
+        self._catalog_only_label = QLabel("")
+        self._catalog_only_label.setWordWrap(True)
+        self._catalog_only_label.setStyleSheet(f"color: {MUTED_COLORS[0]}; font-size: 12px;")
+        self._catalog_only_label.setVisible(False)
+        catalog_only_row.addWidget(self._catalog_only_label, stretch=1)
+        self._download_back_btn = QPushButton(t("download.back"))
+        self._download_back_btn.clicked.connect(lambda: self.download_requested.emit(self.group.id))
+        self._download_back_btn.setVisible(False)
+        catalog_only_row.addWidget(self._download_back_btn)
+        layout.addLayout(catalog_only_row)
         layout.addWidget(QLabel(t("group.file_list")))
-        self._file_list = DragListWidget()
+        self._file_list = _PartList()
         self._file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._file_list.model().rowsMoved.connect(self._on_files_reordered)
+        self._file_list.part_dropped.connect(self._on_part_dropped)
         QShortcut(QKeySequence("Delete"), self._file_list, self._delete_selected_files)
         QShortcut(QKeySequence("Ctrl+A"), self._file_list, self._file_list.selectAll)
         layout.addWidget(self._file_list, stretch=1)
@@ -255,13 +312,55 @@ class GroupTab(QWidget):
         )
 
     def refresh(self):
-        """依群組重新顯示分譜清單、總譜與檔案數是否符合樂器表"""
+        """依群組重新顯示分譜清單、總譜、檔案數是否符合樂器表，以及未存入與只在譜庫的檔"""
         self._refresh_file_list()
-        self._update_score_display()
         self._check_mismatch()
+        self.show_undeposited()
+
+    def show_undeposited(self):
+        """照磁碟現況重新比對群組的檔：未存入的分譜與總譜改用橘字、只在譜庫的加上標示，清單上方寫出是哪幾份
+
+        有只在譜庫的檔時才顯示「從譜庫下載回來」。
+        """
+        stale = [ref.file for ref in self._deposit_service.undeposited(self.project) if ref.group is self.group]
+        ids = {id(file) for file in stale}
+        catalog_only = self._catalog_only()
+        voices = self._voices_by_file()
+        for row in range(self._file_list.count()):
+            item = self._file_list.item(row)
+            index = item.data(Qt.UserRole)
+            if index is None or index >= len(self.group.files):
+                continue
+            file = self.group.files[index]
+            inst = f"{voices[id(file)]}  |  " if id(file) in voices else ""
+            item.setText(f"{inst}{self._file_text(file, catalog_only)}")
+            item.setForeground(QColor(UNSYNCED_COLOR) if id(file) in ids else self._file_list.palette().text())
+        self._update_score_display(catalog_only)
+        if self.group.score_file is not None and id(self.group.score_file) in ids:
+            self._score_label.setStyleSheet(f"color: {UNSYNCED_COLOR};")
+        self._undeposited_bar.setText(
+            t("deposit.undeposited.bar", files="、".join(file.display_name for file in stale)) if stale else "",
+        )
+        self._undeposited_bar.setVisible(bool(stale))
+        self._catalog_only_label.setText(t("catalog_only.group", count=len(catalog_only)))
+        self._catalog_only_label.setVisible(bool(catalog_only))
+        self._download_back_btn.setVisible(bool(catalog_only))
+
+    def _catalog_only(self) -> Set[str]:
+        """群組裡只在譜庫的檔（本機找不到、譜庫裡有一份）的路徑比對鍵"""
+        files = ([self.group.score_file] if self.group.score_file else []) + self.group.files
+        paths = [f.original_path for f in files]
+        return {path_key(path) for path in self._deposit_service.catalog_only(self.project, paths)}
+
+    def _file_text(self, file: FileInfo, catalog_only: Set[str]) -> str:
+        """檔案的顯示名稱；只在譜庫的加上標示"""
+        if path_key(file.original_path) in catalog_only:
+            return t("catalog_only.file", name=file.display_name)
+        return file.display_name
 
     def _check_mismatch(self):
-        n_inst = len(self.group.instruments)
+        """本專案有的聲部數與分譜數是否相同"""
+        n_inst = len(self.group.pairing())
         n_files = len(self.group.files)
         if n_files == 0 and n_inst == 0:
             self._mismatch_label.setText("")
@@ -275,25 +374,51 @@ class GroupTab(QWidget):
             self._mismatch_label.setStyleSheet("color: #2ecc71; font-size: 12px;")
 
     def _refresh_file_list(self):
-        """列出分譜；每列記住它在群組中的位置，拖拉排序後依此還原新順序"""
+        """依樂器表順序列出分譜與各自配到的聲部，本專案有而沒有分譜的聲部列成空格，多出的分譜在最後
+
+        分譜的列記住它在群組中的位置，拖拉排序後依此還原新順序；空格記住聲部的列，不能拖、不能選。
+        """
         self._file_list.clear()
-        instruments = self.group.instruments
-        for i, f in enumerate(self.group.files):
-            inst = f"{instruments[i]}  |  " if i < len(instruments) else ""
-            item = QListWidgetItem(f"{inst}{f.display_name}")
-            item.setData(Qt.UserRole, i)
+        position = {id(f): i for i, f in enumerate(self.group.files)}
+        for pair in self.group.pairing():
+            if pair.file is None:
+                item = QListWidgetItem(f"{pair.voice}  |  {t('group.no_part')}")
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsDropEnabled)
+                item.setForeground(QColor("gray"))
+                item.setData(_VOICE_ROW_ROLE, pair.index)
+            else:
+                item = QListWidgetItem(f"{pair.voice}  |  {pair.file.display_name}")
+                item.setData(Qt.UserRole, position[id(pair.file)])
             self._file_list.addItem(item)
+        for f in self.group.extra_files():
+            item = QListWidgetItem(f.display_name)
+            item.setData(Qt.UserRole, position[id(f)])
+            self._file_list.addItem(item)
+
+    def _voices_by_file(self) -> Dict[int, str]:
+        """每份配到聲部的分譜（以物件 id 為鍵）配到的聲部"""
+        return {id(pair.file): pair.voice for pair in self.group.pairing() if pair.file is not None}
 
     def _selected_files(self) -> List[FileInfo]:
         """清單中選取的分譜（依群組順序）"""
-        rows = sorted(self._file_list.row(item) for item in self._file_list.selectedItems())
-        return [self.group.files[i] for i in rows if 0 <= i < len(self.group.files)]
+        positions = sorted(
+            i for i in (item.data(Qt.UserRole) for item in self._file_list.selectedItems()) if i is not None
+        )
+        return [self.group.files[i] for i in positions if 0 <= i < len(self.group.files)]
 
     def _on_files_reordered(self):
+        """拖拉排序後依清單的新順序排分譜（空格不算）"""
         order = [self._file_list.item(i).data(Qt.UserRole) for i in range(self._file_list.count())]
-        if sorted(i for i in order if i is not None) != list(range(len(self.group.files))):
+        order = [i for i in order if i is not None]
+        if sorted(order) != list(range(len(self.group.files))):
             return
         self.project.reorder_files(self.group, [self.group.files[i] for i in order])
+        self.refresh()
+
+    def _on_part_dropped(self, position: int, row: int):
+        """分譜放到沒有分譜的聲部的空格上：配給那個聲部"""
+        if 0 <= position < len(self.group.files):
+            self.project.pair_part(self.group, self.group.files[position], row)
         self.refresh()
 
     def _add_files(self):
@@ -332,9 +457,10 @@ class GroupTab(QWidget):
         self.project.remove_paths([f.original_path for f in files])
         self.refresh()
 
-    def _update_score_display(self):
+    def _update_score_display(self, catalog_only: Set[str]):
+        """顯示總譜的名稱；只在譜庫的加上標示"""
         if self.group.score_file:
-            self._score_label.setText(self.group.score_file.display_name)
+            self._score_label.setText(self._file_text(self.group.score_file, catalog_only))
             self._score_label.setStyleSheet("")
         else:
             self._score_label.setText(t("group.score_file.none"))

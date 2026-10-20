@@ -4,6 +4,7 @@
 
 把群組中的一格（總譜，或第 N 份分譜）依命名設定轉成檔名與相對資料夾。
 純函式：不碰磁碟、不讀介面語言；本機重新命名、預覽與 Drive 重新命名都經過這裡。
+群組是否已重新命名（is_renamed，存入譜庫與發譜都只收已重新命名的群組）也以命名結果判定。
 
 使用範例：
     from core.naming import NamingSettings, name_group
@@ -16,11 +17,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 from core.constants import (
-    MIN_NUMBER_WIDTH, RELATIVE_DIR_NAMES, SCORE_NUMBER, TEMPLATE_SLOT_SOURCES, TEMPLATE_VARIABLES, PartsOutputMode,
-    TemplateVariable, VariableLevel, detect_instrument_section,
+    MIN_NUMBER_WIDTH, RELATIVE_DIR_NAMES, SCORE_NUMBER, TEMPLATE_SLOT_SOURCES, TEMPLATE_VARIABLES, OrchestraType,
+    PartsOutputMode, TemplateVariable, VariableLevel,
 )
 from core.filename import ensure_pdf_extension, sanitize_filename
+from core.paths import name_key, same_path
 from core.models import FileInfo, Group, Project
+from core.sections import section_for, stored_section
+from core.voice_names import instrument_key
 
 # 總譜所在的格；分譜依序為第 1、2…格
 SCORE_SLOT = 0
@@ -53,7 +57,8 @@ class NamingSettings:
         subfolder_template: 子資料夾模板，總譜與分譜都放進它的結果；空字串表示不放子資料夾
         parts_mode: 分譜存放模式；分譜資料夾與聲部組資料夾只放分譜，總譜不進去
         parts_folder: 分譜存放模式為分譜資料夾時的資料夾名稱；空字串表示不另放
-        sections: 聲部名稱到聲部組名稱；分譜存放模式為聲部組資料夾時，每個要命名的聲部都必須有
+        sections: 以樂器為鍵的聲部組對照（core/sections.py）；分譜存放模式為聲部組資料夾時，
+            每個要命名的聲部的樂器都必須有
     """
     template: str
     subfolder_template: str = ""
@@ -123,24 +128,25 @@ def name_slot(
         group: 群組
         slot: 0（SCORE_SLOT）為總譜，N 為第 N 份分譜
         settings: 命名設定
-        voices: 明確指定的樂器表，優先於群組的樂器表；未提供或為空時用群組的樂器表
+        voices: 明確指定的樂器表（每個聲部都有分譜），優先於群組的樂器表；未提供或為空時用群組的樂器表，
+            本專案沒有、沒有分譜的聲部跳過
 
     Returns:
         這一格的檔名與相對資料夾
 
     Raises:
         ValueError: slot 超出聲部數
-        KeyError: 聲部組資料夾模式下，這一格的聲部沒有聲部組
+        KeyError: 聲部組資料夾模式下，這一格的聲部的樂器沒有聲部組
         UnsafeFolderNameError: 某一層資料夾名稱清理後是 . 或 ..
     """
-    voices = _effective_voices(group, voices)
+    slots, count = _voice_slots(group, voices)
     if slot == SCORE_SLOT:
         number, voice = SCORE_NUMBER, group.score_label
-    elif 1 <= slot <= len(voices):
-        number = str(slot).zfill(max(MIN_NUMBER_WIDTH, len(str(len(voices)))))
-        voice = voices[slot - 1]
+    elif 1 <= slot <= len(slots):
+        position, voice = slots[slot - 1]
+        number = str(position).zfill(max(MIN_NUMBER_WIDTH, len(str(count))))
     else:
-        raise ValueError(f"第 {slot} 格超出聲部數 {len(voices)}")
+        raise ValueError(f"第 {slot} 格超出聲部數 {len(slots)}")
     variables = _variables(group, number, voice)
     folders = []
     if settings.subfolder_template:
@@ -149,13 +155,13 @@ def name_slot(
         if settings.parts_mode == PartsOutputMode.PARTS and settings.parts_folder:
             folders.append(settings.parts_folder)
         elif settings.parts_mode == PartsOutputMode.SECTION:
-            folders.append(settings.sections[voice])
+            folders.append(_section_folder(voice, settings.sections))
     file_name = ensure_pdf_extension(sanitize_filename(_substitute(settings.template, variables)))
     return SlotName(file_name, tuple(name for name in map(_folder_name, folders) if name))
 
 
 def name_group(group: Group, settings: NamingSettings, voices: Optional[Sequence[str]] = None) -> GroupNaming:
-    """為群組的總譜與分譜命名；第 N 份分譜對應第 N 個聲部，多於聲部數的分譜不改名
+    """為群組的總譜與分譜命名；每份分譜用它配到的聲部（Group.pairing），多於聲部數的分譜不改名
 
     Args:
         group: 群組
@@ -169,55 +175,88 @@ def name_group(group: Group, settings: NamingSettings, voices: Optional[Sequence
         KeyError: 聲部組資料夾模式下，有聲部沒有聲部組
         UnsafeFolderNameError: 某一層資料夾名稱清理後是 . 或 ..
     """
-    voices = _effective_voices(group, voices)
+    paired = len(_voice_slots(group, voices)[0])
     slots = [(SCORE_SLOT, group.score_file)] if group.score_file else []
-    slots += list(enumerate(group.files[:len(voices)], start=1))
+    slots += list(enumerate(group.files[:paired], start=1))
     return GroupNaming(
         files=[NamedFile(file, slot, name_slot(group, slot, settings, voices)) for slot, file in slots],
-        extra_files=group.files[len(voices):],
+        extra_files=group.files[paired:],
+    )
+
+
+def is_named_at(path: str, name: SlotName, output_directory: str) -> bool:
+    """本機的檔是不是在命名結果的位置：有輸出位置時比整條路徑，沒有（就地改名）時比檔名與上層資料夾（不分大小寫）"""
+    if output_directory:
+        return same_path(path, os.path.join(output_directory, name.relative_path()))
+    wanted = [name_key(part) for part in (*name.folders, name.file_name)]
+    parts = [name_key(part) for part in os.path.normpath(os.path.abspath(path)).split(os.sep)]
+    return parts[-len(wanted):] == wanted
+
+
+def is_renamed(project: Project, group: Group) -> bool:
+    """群組是否已重新命名：總譜與每份配到聲部的分譜都在命名結果的位置（is_named_at）
+
+    沒有要命名的檔、或命名不出來（聲部組資料夾缺聲部組、資料夾名稱不安全）時為否；多於聲部數的分譜不算。
+    """
+    try:
+        naming = name_group(group, settings_for(project, group))
+    except (KeyError, UnsafeFolderNameError):
+        return False
+    return bool(naming.files) and all(
+        is_named_at(named.file.original_path, named.name, project.output_directory) for named in naming.files
     )
 
 
 def named_voices(group: Group, voices: Optional[Sequence[str]] = None) -> List[str]:
     """有分譜對應、會被命名的聲部（依序）；參數同 name_group"""
-    return _effective_voices(group, voices)[:len(group.files)]
+    return [voice for _, voice in _voice_slots(group, voices)[0][:len(group.files)]]
 
 
-def section_for(voice: str, sections: Mapping[str, str], english: bool) -> str:
-    """聲部的聲部組：專案已設定（不是空白）就用設定的，否則是依指定語言偵測的預設值
-
-    Args:
-        voice: 聲部名稱
-        sections: 專案的聲部名稱到聲部組名稱
-        english: 預設值用英文名稱
-
-    Returns:
-        聲部組名稱
-    """
-    stored = sections.get(voice, "")
-    return stored if stored.strip() else detect_instrument_section(voice, english)
-
-
-def default_sections(groups: Iterable[Group], sections: Mapping[str, str], english: bool) -> Dict[str, str]:
-    """這些群組會被命名的聲部中，還沒有聲部組（或留空）的聲部到它的預設聲部組
+def default_sections(
+    groups: Iterable[Group], sections: Mapping[str, str], orchestra_type: OrchestraType,
+) -> Dict[str, str]:
+    """這些群組會被命名的聲部中，樂器還沒有聲部組（或留空）的，各樂器第一個聲部到它的預設聲部組
 
     Args:
         groups: 群組
-        sections: 專案的聲部名稱到聲部組名稱
-        english: 預設值用英文名稱
+        sections: 以樂器為鍵的聲部組對照
+        orchestra_type: 樂團類型，預設值依它偵測
 
     Returns:
-        聲部名稱到依指定語言偵測的聲部組；都已設定時為空
+        聲部名稱（同一樂器只列第一次出現的寫法）到偵測的聲部組；都已設定時為空
     """
-    return {
-        voice: section_for(voice, sections, english)
-        for group in groups for voice in named_voices(group) if not sections.get(voice, "").strip()
-    }
+    missing: Dict[str, str] = {}
+    seen = set()
+    for group in groups:
+        for voice in named_voices(group):
+            key = instrument_key(voice)
+            if key not in seen and not stored_section(voice, sections):
+                missing[voice] = section_for(voice, sections, orchestra_type)
+            seen.add(key)
+    return missing
 
 
-def _effective_voices(group: Group, voices: Optional[Sequence[str]]) -> List[str]:
-    """命名用的樂器表：明確指定且不為空時用它，否則用群組的樂器表"""
-    return list(voices) if voices else list(group.instruments)
+def _section_folder(voice: str, sections: Mapping[str, str]) -> str:
+    """聲部組資料夾模式下這個聲部的資料夾：它的樂器存的聲部組
+
+    Raises:
+        KeyError: 它的樂器沒有聲部組（或留空）
+    """
+    section = stored_section(voice, sections)
+    if not section:
+        raise KeyError(voice)
+    return section
+
+
+def _voice_slots(group: Group, voices: Optional[Sequence[str]]) -> Tuple[List[Tuple[int, str]], int]:
+    """依序配給分譜的聲部與它們的序號，以及樂器表的列數（決定序號位數）
+
+    明確指定且不為空的樂器表每個聲部都配；否則用群組的樂器表，只配接分譜的聲部（Group.part_voices：
+    本專案有、沒標沒有分譜的），序號是聲部在樂器表中的位置（從 1 起算）。
+    """
+    if voices:
+        return list(enumerate(voices, start=1)), len(voices)
+    return [(index + 1, voice) for index, voice in group.part_voices()], len(group.instruments)
 
 
 def variable_level(name: str) -> Optional[VariableLevel]:

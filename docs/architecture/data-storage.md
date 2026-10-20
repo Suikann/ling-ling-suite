@@ -4,15 +4,20 @@
 
 | 項目 | 位置（`<使用者資料目錄>/` 之下） | 說明 |
 |------|------|------|
-| 偏好設定 | `preferences.json`（`PREFERENCES_FILE`） | 語言、最近專案清單、譜庫設定等；鍵與預設值見 `DEFAULT_PREFERENCES` |
+| 偏好設定 | `preferences.json`（`PREFERENCES_FILE`） | 語言、最近專案清單、譜庫設定、上次登入的 Google 帳號 email（`GOOGLE_ACCOUNT_EMAIL_KEY`，不是祕密，不放安全儲存）等；鍵與預設值見 `DEFAULT_PREFERENCES`。另記住譜庫的社團設定裡啟用的發譜平台（`CLUB_PUBLISHING_PLATFORM_KEY`，`PublishingPlatform` 的值；沒有或從沒讀到過為空字串，發譜功能隱藏）：連上譜庫時在背景讀社團設定並寫入，讀不到時沿用原值、失敗寫進紀錄檔；譜庫設定按「儲存設定」存了另一份譜庫試算表時先清成空字串，再讀新譜庫的（找到或建好譜庫試算表後取消時，偏好設定不變）；啟動時只看這個鍵，不連網、不讀安全儲存。另記收回提醒的摘要（`RECALL_REMINDER_KEY`）：已發譜、還沒收回也沒標不收回的曲目（曲目編號、曲名）與它們掛的公演結束時間，每次讀寫譜庫的發譜紀錄時以整份紀錄重算（`RecallReminder`，見 [publish.md](publish.md) 的收回提醒），開泠靈時只看這個鍵決定要不要提醒；寫不進去時這次執行期間仍記得。登入在背景執行緒記下 email，`PreferencesService` 的讀、改、存經同一把鎖，與主執行緒同時存檔不會蓋掉彼此的改動 |
 | 復原／重做紀錄 | `undo/`、`redo/`（`UNDO_DIR`、`REDO_DIR`） | 每筆紀錄一個 JSON 檔，檔名規則見 [move-history.md](move-history.md) |
 | 批次搬移的進行中紀錄 | `pending_move.json`（`MOVE_JOURNAL_FILE`） | 重新命名、復原、重做或中斷還原進行中存在；整批搬完但正式紀錄寫不進去時也留著。啟動時仍在就提示（內容見 [move-history.md](move-history.md)） |
 | 單一實例鎖 | `instance.lock`（`INSTANCE_LOCK_FILE`） | 執行期間由作業系統鎖住，結束或當機時自動解除，檔案留著不刪 |
 | 工作區 | `workspace/<hash8>/`（`WORKSPACE_DIR`） | 分割輸出與 `meta.json`（見 [workspace.md](workspace.md)） |
 | PDF 旋轉備份 | `backups/`（`BACKUP_DIR`） | |
-| Google 授權權杖 | `google_token.json`（`TOKEN_FILE`，在 `core/catalog_constants.py`） | |
+| 暫存資料夾 | `temp/`（`TEMP_DIR`） | 壓縮檔先寫在這裡，每份一個子資料夾；一批壓完、交到輸出位置後一起刪，取消時已壓好的也當場刪。獨立壓縮與發譜預覽共用：發譜預覽「檔案」步壓縮超過上限的檔也寫在這裡，取消預覽時刪掉；按下「發譜」時要傳的留著交給發譜（發譜結束時刪），其餘的刪掉。發譜的快照（按下「發譜」時要傳的本機檔的複本）也寫在這裡，每次發譜一個子資料夾，發譜結束（成功、失敗、取消）時刪掉（見 [publish.md](publish.md)）。沒刪到的殘檔下次啟動時清掉（`CompressionService.clear_leftovers`）。從譜庫下載的檔也先寫在這裡（每次下載一個子資料夾），核對 MD5 一致才搬到要放的位置，下載結束時整個子資料夾刪掉 |
+| 紀錄檔 | `logs/<年-月-日>.log`（`LOG_DIR`） | 譜庫的讀寫失敗與重要動作，一天一個檔，經 `ActivityLog` 附加；一筆記時間、動作、曲名、檔名、路徑、錯誤類別與原始訊息，與提示列的「詳細資料」相同。不記權杖、密碼與 HuaXia 傳回的團員資料，原始訊息裡像權杖或密碼的部分換成 `***`。保留 30 天（`LOG_RETENTION_DAYS`），寫不進去時略過、不影響操作。「說明」選單的「開啟紀錄檔資料夾」以 `ExternalOpener.open` 打開這個資料夾，還沒建立時提示還沒有紀錄檔 |
 
 專案檔（`.llproj`）放在使用者自選的位置。
 
-- 啟動時先取得單一實例鎖，取不到就提示「已在執行中」後結束，不開主視窗、不檢查進行中紀錄；鎖檔建不起來或開不了（例如使用者資料目錄沒有寫入權限）時同樣不繼續，顯示錯誤原因後結束
+Google 的登入狀態不在使用者資料目錄：只有續期權杖存在系統的安全儲存（Windows 認證管理員、Linux 的 Secret Service），服務名稱為 `GOOGLE_KEYRING_SERVICE`（HuaXia 那筆用 `HUAXIA_KEYRING_SERVICE`：只有幹部的登入才存，HuaXia 每次續期都換新的續期權杖，換到就立刻寫回；登入的 Discord 帳號名稱與 access token 只記在這次執行）。backend 依平台明確指定，不受 `keyrings.alt`、`PYTHON_KEYRING_BACKEND`、`keyringrc.cfg` 影響；啟動時不讀，第一次用到 Google 時才讀；解鎖視窗被取消後，看登入狀態不再讀，等下一次要用到憑證才再讀，一次操作最多跳一次解鎖視窗。這台電腦沒有安全儲存或寫不進去時就不保存，譜庫設定的登入狀態旁寫出原因。內容不備份，遺失就重新登入。舊版以明文存的 `google_token.json`（`LEGACY_TOKEN_FILE`）每次啟動都刪；刪不掉就等下次啟動再刪，任何情況都不讀它，也不搬進安全儲存。
+
+- 啟動時先取得單一實例鎖，取不到就提示「已在執行中」後結束，不開主視窗、不檢查進行中紀錄、不清暫存資料夾與紀錄檔；鎖檔建不起來或開不了（例如使用者資料目錄沒有寫入權限）時同樣不繼續，顯示錯誤原因後結束
+- 取得鎖後清空暫存資料夾：裡面只會是上次當機、壓縮或下載中關閉程式留下的殘檔。暫存資料夾的位置在建構 `CompressionService`、`DownloadService` 時注入
+- 取得鎖後刪掉過期的紀錄檔（`ActivityLog.remove_expired`）：沒取得鎖時另一個程式可能正在寫。紀錄檔資料夾的位置在建構 `ActivityLog` 時注入
 - 復原、重做、進行中紀錄與旋轉備份的位置在建構 `MoveHistory` 時注入，預設為上表的常數

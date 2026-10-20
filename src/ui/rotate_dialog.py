@@ -14,11 +14,11 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt
-from core.constants import SECTION_COLORS
+from core.constants import PDF_EXTENSION, SECTION_COLORS
 from core.locale import t
 from services.file_service import FileService
 from services.pdf_service import get_page_count, render_page_thumbnails
-from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
+from ui.widgets import ThumbnailLoader, ask_save_path, ensure_file_exists, pdf_file_choices
 
 ROTATION_ANGLES = [0, 90, 180, 270]
 ROTATION_LABELS = ["0\u00B0", "90\u00B0", "180\u00B0", "270\u00B0"]
@@ -38,7 +38,7 @@ class RotatePdfDialog(QDialog):
             history: 搬移歷程（覆蓋原檔前的備份與復原紀錄）；None 時不備份也不記錄
             initial_group: 選檔清單預設篩選的群組
             parent: 父元件
-            file_service: 檔案服務（確認選的檔案還在）；None 時自建
+            file_service: 檔案服務（確認選的檔案還在、另存的檔名是否已有檔案）；None 時自建
         """
         super().__init__(parent)
         self.setWindowTitle(t("rotate.title"))
@@ -415,6 +415,7 @@ class RotatePdfDialog(QDialog):
             self._dir_label.setStyleSheet("font-size: 11px;")
 
     def _execute(self):
+        """依各區段的旋轉角度旋轉 PDF；覆蓋原檔時先備份，並記下這次旋轉"""
         if not self._pdf_path:
             return
         sections = self._get_sections()
@@ -429,9 +430,9 @@ class RotatePdfDialog(QDialog):
         if self._overwrite_cb.isChecked():
             output_path = self._pdf_path
         else:
-            output_path, _ = QFileDialog.getSaveFileName(
-                self, t("rotate.save_as"), os.path.basename(self._pdf_path),
-                f"{t('filedialog.pdf_files')} (*.pdf)",
+            output_path = ask_save_path(
+                self, t("rotate.save_as"), os.path.basename(self._pdf_path), t("filedialog.pdf_files"),
+                PDF_EXTENSION, self._file_service,
             )
             if not output_path:
                 return

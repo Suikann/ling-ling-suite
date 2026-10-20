@@ -12,7 +12,7 @@ import unittest
 SRC_DIR = os.path.join(os.path.dirname(__file__), '..', 'src')
 sys.path.insert(0, SRC_DIR)
 
-from core.locale import get_available_locales, get_keys
+from core.locale import get_available_locales, get_keys, get_locale, set_locale, t, trash_name
 
 REFERENCE_LOCALE = "zh_TW"
 
@@ -74,6 +74,44 @@ class TestStringKeys(unittest.TestCase):
             with self.subTest(locale=locale_code):
                 self.assertEqual([], sorted(reference - keys), f"{locale_code} 缺少的鍵")
                 self.assertEqual([], sorted(keys - reference), f"{locale_code} 多出的鍵")
+
+
+class TestTrashName(unittest.TestCase):
+    """系統回收處的稱呼：Windows 是資源回收桶，Linux 是垃圾桶"""
+
+    def setUp(self):
+        self._locale = get_locale()
+        self.addCleanup(set_locale, self._locale)
+
+    def test_windows_calls_it_the_recycle_bin(self):
+        set_locale("zh_TW")
+        self.assertEqual(trash_name("nt"), "資源回收桶")
+        set_locale("en")
+        self.assertEqual(trash_name("nt"), "recycle bin")
+
+    def test_linux_calls_it_the_trash(self):
+        set_locale("zh_TW")
+        self.assertEqual(trash_name("posix"), "垃圾桶")
+        set_locale("en")
+        self.assertEqual(trash_name("posix"), "trash")
+
+    def test_interface_strings_use_the_name_of_this_platform(self):
+        set_locale("zh_TW")
+        self.assertEqual(t("file.deleted"), f"已移至{trash_name()}")
+        set_locale("en")
+        self.assertEqual(t("file.deleted"), f"Moved to the {trash_name()}")
+
+    def test_no_interface_string_shows_a_placeholder_or_the_other_platform_name(self):
+        """系統回收處只用這個平台的稱呼；Google Drive 自己的垃圾桶（「Drive 垃圾桶」）在每個平台都叫垃圾桶，不算"""
+        for locale_code in get_available_locales():
+            set_locale(locale_code)
+            other = trash_name("posix" if os.name == "nt" else "nt")
+            drive_trash = f"drive {trash_name('posix')}".lower()
+            for key in get_keys(locale_code):
+                with self.subTest(locale=locale_code, key=key):
+                    text = t(key).lower()
+                    self.assertNotIn("{trash}", text)
+                    self.assertNotIn(other.lower(), text.replace(drive_trash, ""))
 
 
 if __name__ == "__main__":

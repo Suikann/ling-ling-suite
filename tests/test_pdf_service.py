@@ -11,7 +11,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from PyPDF2 import PdfWriter
-from services.pdf_service import extract_pages, get_page_count
+from services.pdf_service import extract_pages, get_page_count, render_page_gray
+from tests.synthetic_pdfs import SIDE_INCHES, scanned_pdf
 
 
 class TestExtractPages(unittest.TestCase):
@@ -49,3 +50,22 @@ class TestExtractPages(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestRenderPageGray(unittest.TestCase):
+    """render_page_gray：比較畫面用的灰階頁面，帶回頁數"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, True)
+        self.source = scanned_pdf(os.path.join(self.temp_dir, "Flute.pdf"), dpi=300, pages=3)
+
+    def test_renders_the_page_in_grayscale_at_the_dpi_with_the_page_count(self):
+        rendered = render_page_gray(self.source, 2, dpi=150)
+        self.assertEqual(rendered.image.mode, "L")
+        self.assertEqual(rendered.image.size, (SIDE_INCHES * 150, SIDE_INCHES * 150))
+        self.assertEqual(rendered.page_count, 3)
+
+    def test_large_pages_are_scaled_down_to_the_pixel_limit(self):
+        rendered = render_page_gray(self.source, 0, dpi=600, max_pixels=(SIDE_INCHES * 100) ** 2)
+        self.assertEqual(rendered.image.size, (SIDE_INCHES * 100, SIDE_INCHES * 100))

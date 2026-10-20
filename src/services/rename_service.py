@@ -8,7 +8,7 @@
 
 使用範例：
     from services.rename_service import assign_default_sections, generate_rename_plan
-    assign_default_sections(project, english=False)
+    assign_default_sections(project)
     planned = generate_rename_plan(project)
     for entry in planned.entries:
         print(entry.original_path, entry.new_path)
@@ -18,6 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from typing import Collection, Iterable, List, Optional
 from core.constants import PartsOutputMode, VariableLevel
+from core.filename import numbered
 from core.models import Group, Project, RenameEntry
 from core.naming import default_sections, name_group, settings_for, unknown_variables, variable_level, variables_in
 from core.paths import path_key
@@ -32,31 +33,33 @@ class RenamePlan:
         extra_files: 多於聲部數、不改名的分譜（來源路徑，各群組依序）
         folder_variables: 子資料夾模板裡的逐檔變數（不重複，依出現順序）；子資料夾只依群組區分，用了就不能執行
         unknown_variables: 命名格式與子資料夾模板裡不是模板變數的名稱（不重複，依出現順序）；產出時已拿掉
+        catalog_copies: 要改名的項目裡，群組記著在譜庫裡有一份的來源（Group.has_catalog_copy）；
+            本機找不到時是只在譜庫，預檢另列一種
     """
     entries: List[RenameEntry] = field(default_factory=list)
     extra_files: List[str] = field(default_factory=list)
     folder_variables: List[str] = field(default_factory=list)
     unknown_variables: List[str] = field(default_factory=list)
+    catalog_copies: List[str] = field(default_factory=list)
 
 
-def assign_default_sections(
-    project: Project, english: bool, group_ids: Optional[Collection[str]] = None,
-) -> None:
-    """分譜依聲部組分放時，把這些群組會被命名、還沒有聲部組（或留空）的聲部寫進專案的編制設定
+def assign_default_sections(project: Project, group_ids: Optional[Collection[str]] = None) -> None:
+    """分譜依聲部組分放時，把這些群組會被命名、樂器還沒有聲部組（或留空）的聲部寫進以樂器為鍵的對照
 
-    預設值依指定語言偵測；寫進專案後就定下，之後切換介面語言不會改變。其他分譜存放模式不寫。
+    預設值依專案的樂團類型偵測；寫進專案後就定下，之後改樂團類型不會改變。其他分譜存放模式不寫。
     產生重新命名計畫（重新命名預檢）前呼叫。
 
     Args:
         project: 專案資料
-        english: 預設值用英文名稱（通常依目前介面語言）
         group_ids: 只處理這些群組；None 表示全部群組
     """
     if project.parts_output_mode != PartsOutputMode.SECTION:
         return
-    missing = default_sections(_chosen_groups(project, group_ids), project.instrument_sections, english)
+    missing = default_sections(
+        _chosen_groups(project, group_ids), project.instrument_sections, project.orchestra_type,
+    )
     if missing:
-        project.update_ensemble(sections=missing)
+        project.update_sections(missing)
 
 
 def generate_rename_plan(project: Project, group_ids: Optional[Collection[str]] = None) -> RenamePlan:
@@ -83,6 +86,8 @@ def generate_rename_plan(project: Project, group_ids: Optional[Collection[str]] 
             entry = RenameEntry(named.file.original_path, "", group.id, project.output_directory)
             entry.new_path = os.path.join(entry.output_location(), named.name.relative_path())
             plan.entries.append(entry)
+            if group.has_catalog_copy(named.file):
+                plan.catalog_copies.append(entry.original_path)
         plan.extra_files.extend(f.original_path for f in naming.extra_files)
         _add_new(plan.folder_variables, (
             name for name in variables_in(settings.subfolder_template) if variable_level(name) == VariableLevel.FILE
@@ -108,8 +113,7 @@ def apply_auto_suffix(entries: List[RenameEntry]) -> List[RenameEntry]:
         count = seen[key]
         seen[key] += 1
         if count > 0:
-            base, ext = os.path.splitext(entry.new_path)
-            entry = replace(entry, new_path=f"{base} ({count}){ext}")
+            entry = replace(entry, new_path=numbered(entry.new_path, count))
         result.append(entry)
     return result
 

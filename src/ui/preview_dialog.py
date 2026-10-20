@@ -4,8 +4,9 @@
 
 提供輸出設定（輸出位置、子資料夾）與重新命名預覽。設定一經修改即透過專案的編輯操作寫入。
 顯示的是搬移歷程的預檢判定（RenameVerdict）；按下執行時交出的就是這份判定。
+說明跳過只在譜庫的檔時，旁邊有「從譜庫下載回來」（關掉預覽，交給主視窗下載回原位）。
 """
-from typing import Callable, List
+from typing import Callable, List, Optional
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QCheckBox, QLineEdit, QScrollArea, QWidget, QFileDialog,
@@ -30,6 +31,7 @@ class PreviewDialog(QDialog):
     def __init__(
         self, project: Project, check: Callable[[], RenameVerdict],
         on_execute: Callable[[RenameVerdict], None], parent=None,
+        download_back: Optional[Callable[[], None]] = None,
     ):
         """
         Args:
@@ -37,6 +39,8 @@ class PreviewDialog(QDialog):
             check: 依專案目前的設定做重新命名預檢，回傳判定
             on_execute: 按下執行時呼叫，參數為目前顯示的判定
             parent: 父元件
+            download_back: 說明跳過只在譜庫的檔時，旁邊「從譜庫下載回來」按下時呼叫（先關掉預覽）；
+                省略時不顯示這個按鈕
         """
         super().__init__(parent)
         self.setWindowTitle(t("preview.title"))
@@ -44,6 +48,7 @@ class PreviewDialog(QDialog):
         self._project = project
         self._check = check
         self._on_execute = on_execute
+        self._download_back = download_back
         self._verdict = RenameVerdict()
         self._build_ui()
         self._refresh_plan()
@@ -117,6 +122,13 @@ class PreviewDialog(QDialog):
         self._notes_label.setWordWrap(True)
         self._notes_label.setVisible(False)
         layout.addWidget(self._notes_label)
+        download_row = QHBoxLayout()
+        download_row.addStretch()
+        self._download_back_btn = QPushButton(t("download.back"))
+        self._download_back_btn.clicked.connect(self._on_download_back)
+        self._download_back_btn.setVisible(False)
+        download_row.addWidget(self._download_back_btn)
+        layout.addLayout(download_row)
         self._count_label = QLabel("")
         layout.addWidget(self._count_label)
         self._scroll = QScrollArea()
@@ -202,6 +214,9 @@ class PreviewDialog(QDialog):
         notes = self._notes()
         self._notes_label.setText("\n\n".join(notes))
         self._notes_label.setVisible(bool(notes))
+        self._download_back_btn.setVisible(
+            self._download_back is not None and bool(verdict.sources(RenameProblem.CATALOG_ONLY)),
+        )
         blocking = self._blocking_warnings()
         suffixed = verdict.sources(RenameProblem.SUFFIXED)
         if blocking:
@@ -226,6 +241,11 @@ class PreviewDialog(QDialog):
     def _needs_attention(self, source: str) -> bool:
         """這一項有要標紅的問題（阻擋的，或目標加了後綴）"""
         return any(RENAME_PROBLEM_RULES[kind].highlight for kind in self._verdict.problems.get(source, ()))
+
+    def _on_download_back(self):
+        """按了「從譜庫下載回來」：關掉預覽，交給主視窗在背景下載回原位"""
+        self.reject()
+        self._download_back()
 
     def _execute(self):
         self._on_execute(self._verdict)

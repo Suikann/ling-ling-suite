@@ -3,24 +3,25 @@
 Drive 重新命名服務
 
 把譜庫元資料與 Drive 資料夾結構轉成群組，計畫與撞名偵測經過命名模組（與本機重新命名同一套檔名），
-再透過 Drive 服務（adapter）在雲端重新命名。計畫與撞名偵測不需要 Google 用戶端程式庫。
+再經譜庫服務（services/catalog_service.py）在 Drive 上重新命名；讀不到或改不了時丟出帶類別的 CatalogError。
+計畫與撞名偵測不需要 Google 用戶端程式庫。讀 Drive 與改名會卡住呼叫的執行緒，UI 要在背景執行緒呼叫。
 
 使用範例：
-    from services.drive_rename_service import generate_drive_rename_plan
+    from services.drive_rename_service import build_groups_from_drive, generate_drive_rename_plan
+    groups = build_groups_from_drive(catalog, folder_id, detail, detail.composer)
     plan = generate_drive_rename_plan(groups, "{序號}. {樂器}.pdf", ["Flute", "Oboe"])
     if not plan.conflicts:
-        execute_drive_rename(drive, plan.entries)
+        pending = list(plan.entries)
+        execute_drive_rename(catalog, pending)   # 失敗時 pending 留下還沒改的，以它再呼叫一次即補齊
 """
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence
 from core.models import DriveRenameEntry, FileInfo, Group
-from core.catalog_models import Composer, PieceDetail
+from core.catalog_models import Composer, DriveFile, PieceDetail
 from core.naming import NamingSettings, name_group
 from core.paths import name_key
-
-if TYPE_CHECKING:
-    from services.drive_service import DriveService
+from services.catalog_service import CatalogService
 
 
 @dataclass(frozen=True)
@@ -36,76 +37,48 @@ class DriveRenamePlan:
 
 
 def build_groups_from_drive(
-    drive: "DriveService",
+    catalog: CatalogService,
     folder_id: str,
     detail: PieceDetail,
-    composer: Composer = None,
+    composer: Optional[Composer] = None,
 ) -> List[Group]:
-    """從 Drive 資料夾結構建立 Group 清單
+    """經譜庫服務讀版本資料夾，建立 Group 清單
 
-    有子資料夾時，每個子資料夾建立一個 Group。
+    有子資料夾時，每個子資料夾建立一個 Group，資料夾本身的 PDF 另成一個 Group；
     無子資料夾時，所有 PDF 建立一個 Group。
 
     Args:
-        drive: Drive 服務
+        catalog: 譜庫服務
         folder_id: 版本的 Drive 資料夾 ID
         detail: 曲目完整資訊
         composer: 作曲家（可選）
 
     Returns:
         Group 清單，每個 Group 的 files 中 original_path 存放 Drive file ID
+
+    Raises:
+        CatalogError: 讀不到
     """
     piece = detail.piece
-    composer_name = ""
-    if composer:
-        composer_name = composer.name_short or composer.name
-    subfolders = drive.list_subfolders(folder_id)
-    groups = []
-    if subfolders:
-        for i, sf in enumerate(subfolders):
-            pdfs = drive.list_pdfs_in_folder(sf["id"])
-            files = [
-                FileInfo(original_path=p["id"], display_name=p["name"])
-                for p in pdfs
-            ]
-            group = Group(
-                name=sf["name"],
-                files=files,
-                piece_name=piece.title,
-                composer=composer_name,
-                genre=piece.genre,
-                movement_number=str(i + 1),
-                movement_name=sf["name"],
-            )
-            groups.append(group)
-        root_pdfs = drive.list_pdfs_in_folder(folder_id)
-        if root_pdfs:
-            files = [
-                FileInfo(original_path=p["id"], display_name=p["name"])
-                for p in root_pdfs
-            ]
-            group = Group(
-                name=piece.title,
-                files=files,
-                piece_name=piece.title,
-                composer=composer_name,
-                genre=piece.genre,
-            )
-            groups.append(group)
-    else:
-        pdfs = drive.list_pdfs_in_folder(folder_id)
-        files = [
-            FileInfo(original_path=p["id"], display_name=p["name"])
-            for p in pdfs
-        ]
-        group = Group(
-            name=piece.title,
-            files=files,
+    composer_name = (composer.name_short or composer.name) if composer else ""
+    files = catalog.edition_files(folder_id)
+
+    def group(name: str, pdfs: List[DriveFile], movement_number: str = "", movement_name: str = "") -> Group:
+        """一個資料夾的 PDF 成一個群組"""
+        return Group(
+            name=name,
+            files=[FileInfo(original_path=pdf.id, display_name=pdf.name) for pdf in pdfs],
             piece_name=piece.title,
             composer=composer_name,
             genre=piece.genre,
+            movement_number=movement_number,
+            movement_name=movement_name,
         )
-        groups.append(group)
+    groups = [
+        group(folder.name, pdfs, str(i + 1), folder.name) for i, (folder, pdfs) in enumerate(files.subfolders)
+    ]
+    if files.root_pdfs or not files.subfolders:
+        groups.append(group(piece.title, files.root_pdfs))
     return groups
 
 
@@ -166,28 +139,18 @@ def _conflicts_in_folder(entries: List[DriveRenameEntry], unchanged: List[FileIn
     return [ids for ids in by_name.values() if len(ids) > 1]
 
 
-def execute_drive_rename(
-    drive: "DriveService",
-    entries: List[DriveRenameEntry],
-) -> Tuple[int, List[str]]:
-    """執行 Drive 重新命名
+def execute_drive_rename(catalog: CatalogService, pending: List[DriveRenameEntry]) -> None:
+    """依序在 Drive 上重新命名，改好一份就從 pending 拿掉；新舊檔名相同的不送請求
 
     Args:
-        drive: Drive 服務
-        entries: 重新命名計畫中要重新命名的檔案
+        catalog: 譜庫服務
+        pending: 還沒改名的檔案（重新命名計畫的 entries 複本）；呼叫後只剩還沒改的
 
-    Returns:
-        (成功數, 失敗的檔名清單)
+    Raises:
+        CatalogError: 改不了；pending[0] 是失敗的那份，以同一個 pending 再呼叫一次即補齊
     """
-    success = 0
-    errors = []
-    for entry in entries:
-        if entry.original_name == entry.new_name:
-            success += 1
-            continue
-        ok = drive.rename_file(entry.file_id, entry.new_name)
-        if ok:
-            success += 1
-        else:
-            errors.append(entry.original_name)
-    return success, errors
+    while pending:
+        entry = pending[0]
+        if entry.original_name != entry.new_name:
+            catalog.rename_file(entry.file_id, entry.new_name)
+        pending.pop(0)

@@ -2,7 +2,7 @@
 """
 寫不進去的檔案服務
 
-模擬檔案被鎖住或位置唯讀：原子寫入到指定檔案時失敗，其餘照常。
+模擬檔案被鎖住或位置唯讀：原子寫入或附加到指定檔案時失敗，其餘照常。
 注入給要測寫入失敗的服務，不必替換全域常數或私有成員。
 
 使用範例：
@@ -20,7 +20,7 @@ from services.file_service import FileService
 
 
 class FailingWrites(FileService):
-    """原子寫入到指定檔案時拋出 OSError 的檔案服務"""
+    """原子寫入或附加到指定檔案時拋出 OSError 的檔案服務"""
 
     def __init__(self, *blocked: str):
         super().__init__()
@@ -35,3 +35,9 @@ class FailingWrites(FileService):
         if path_key(path) in self._blocked:
             raise OSError(f"read-only: {path}")
         super().write_json_atomic(path, data)
+
+    def append_text(self, path, text) -> None:
+        """附加到被擋下的檔案時拋出 OSError，其餘照常附加"""
+        if path_key(path) in self._blocked:
+            raise OSError(f"read-only: {path}")
+        super().append_text(path, text)

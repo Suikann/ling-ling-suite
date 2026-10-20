@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from core.constants import RENAME_PROBLEM_RULES, PartsOutputMode, RenameProblem
-from core.models import FileInfo, Group, Project, RenameEntry
+from core.models import CatalogLink, FileInfo, Group, Project, RenameEntry
 from services.move_history import RenameVerdict
 from services.rename_service import RenamePlan, assign_default_sections
 from test_move_history import MoveHistoryTestCase
@@ -35,13 +35,13 @@ class PreflightTestCase(MoveHistoryTestCase):
 
 
 class TestProblemRules(unittest.TestCase):
-    """每種問題都有處理方式；不阻擋的只有遺失來源、加後綴與多出的檔"""
+    """每種問題都有處理方式；不阻擋的只有遺失來源、只在譜庫、加後綴與多出的檔"""
 
-    def test_every_kind_has_a_rule_and_only_three_do_not_block(self):
+    def test_every_kind_has_a_rule_and_only_four_do_not_block(self):
         self.assertEqual(set(RENAME_PROBLEM_RULES), set(RenameProblem))
         self.assertEqual(
             {kind for kind, rule in RENAME_PROBLEM_RULES.items() if not rule.blocking},
-            {RenameProblem.MISSING_SOURCE, RenameProblem.SUFFIXED, RenameProblem.EXTRA_FILE},
+            {RenameProblem.MISSING_SOURCE, RenameProblem.CATALOG_ONLY, RenameProblem.SUFFIXED, RenameProblem.EXTRA_FILE},
         )
 
 
@@ -67,6 +67,19 @@ class TestAdjustments(PreflightTestCase):
         verdict = self.history.check_rename(Project(master_template="{樂器}.pdf", groups=[group]))
         self.assertEqual(self.targets(verdict), [("a.pdf", "Fl.pdf")])
         self.assertEqual(verdict.sources(RenameProblem.MISSING_SOURCE), [self.path("b.pdf")])
+        self.assertTrue(verdict.runnable)
+        self.assertIsNone(self.history.rename(verdict).error)
+        self.assertEqual(self.files(), ["Fl.pdf"])
+
+    def test_a_file_only_in_the_catalog_is_skipped_and_listed_apart_from_missing_ones(self):
+        group = self.group("a.pdf", "b.pdf", "c.pdf", voices=["Fl", "Ob", "Cl"], catalog_link=CatalogLink("e1"))
+        group.files[1].deposit_md5 = "d41d8cd98f00b204e9800998ecf8427e"
+        os.remove(self.path("b.pdf"))
+        os.remove(self.path("c.pdf"))
+        verdict = self.history.check_rename(Project(master_template="{樂器}.pdf", groups=[group]))
+        self.assertEqual(self.targets(verdict), [("a.pdf", "Fl.pdf")])
+        self.assertEqual(verdict.sources(RenameProblem.CATALOG_ONLY), [self.path("b.pdf")])
+        self.assertEqual(verdict.sources(RenameProblem.MISSING_SOURCE), [self.path("c.pdf")])
         self.assertTrue(verdict.runnable)
         self.assertIsNone(self.history.rename(verdict).error)
         self.assertEqual(self.files(), ["Fl.pdf"])
@@ -220,7 +233,7 @@ class TestOutputBoundary(PreflightTestCase):
                             use_subfolders=use_subfolders, subfolder_template="{曲名} - {樂章編號}",
                             parts_output_mode=mode, parts_subfolder_name="Parts", groups=[group],
                         )
-                        assign_default_sections(project, english=True)
+                        assign_default_sections(project)
                         verdict = self.history.check_rename(project)
                         self.assertEqual(len(verdict.plan), 3)
                         self.assertEqual(verdict.problems, {})

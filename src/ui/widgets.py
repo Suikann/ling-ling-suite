@@ -2,15 +2,32 @@
 """
 共用增強元件與 UI 輔助函式
 """
+import os
 import threading
 from typing import Callable, List, Optional, Tuple
-from PySide6.QtWidgets import QListWidget, QAbstractItemView, QMessageBox, QWidget
+from PySide6.QtWidgets import QListWidget, QAbstractItemView, QFileDialog, QMessageBox, QWidget
 from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QRect, QObject, Signal
 from core.constants import PDF_EXTENSION
+from core.filename import ensure_extension
 from core.locale import t
 from core.models import Group, Project
+from services.download_service import DownloadOutcome
 from services.file_service import FileService
+
+
+def not_downloaded_text(outcome: DownloadOutcome) -> str:
+    """沒下載好的檔依原因列出；都下載好了時為空字串（下載回原位與一般下載共用）"""
+    reasons = (
+        ("download.reason.occupied", [item.target for item in outcome.occupied]),
+        ("download.reason.mismatched", [item.target for item in outcome.mismatched]),
+        ("download.reason.unavailable", list(outcome.unavailable)),
+        ("download.reason.failed", [f"{item.target}（{reason}）" for item, reason in outcome.failed]),
+    )
+    parts = [t(key, files="\n".join(files)) for key, files in reasons if files]
+    if not parts:
+        return ""
+    return "\n\n".join([t("download.not_done", count=len(outcome.not_done))] + parts)
 
 
 def ensure_file_exists(parent: QWidget, path: str, file_service: FileService) -> bool:
@@ -28,6 +45,36 @@ def ensure_file_exists(parent: QWidget, path: str, file_service: FileService) ->
         return True
     QMessageBox.critical(parent, t("dialog.error"), t("dialog.error.file_not_found", path=path))
     return False
+
+
+def ask_save_path(
+    parent: QWidget, title: str, suggested: str, filter_label: str, extension: str, file_service: FileService,
+) -> str:
+    """以存檔對話框詢問存放位置；沒打副檔名時補上
+
+    對話框只確認過使用者打的檔名，補上副檔名後的檔名已有檔案時另外詢問是否取代。
+
+    Args:
+        parent: 對話框的父元件
+        title: 對話框標題
+        suggested: 預設的位置或檔名
+        filter_label: 檔案類型的名稱，例如「PDF 檔案」
+        extension: 副檔名，含開頭的點，例如 ".pdf"
+        file_service: 檔案服務（確認補上副檔名後的檔名是否已有檔案）
+
+    Returns:
+        要存放的路徑；按取消或不取代已有的檔案時為空字串
+    """
+    typed, _ = QFileDialog.getSaveFileName(parent, title, suggested, f"{filter_label} (*{extension})")
+    if not typed:
+        return ""
+    path = ensure_extension(typed, extension)
+    if path == typed or not file_service.file_exists(path):
+        return path
+    answer = QMessageBox.question(
+        parent, t("dialog.warning"), t("filedialog.replace", name=os.path.basename(path)),
+    )
+    return path if answer == QMessageBox.Yes else ""
 
 
 def pdf_file_choices(
@@ -52,22 +99,23 @@ def pdf_file_choices(
 
 
 class ThumbnailLoader(QObject):
-    """在背景執行緒算繪 PDF 縮圖，完成時回到主執行緒通知
+    """在背景執行緒算繪 PDF 頁面（縮圖、比較畫面的頁面），完成時回到主執行緒通知
 
-    只通知最近一次 load 的結果：換選其他檔案後，前一個檔案晚到的縮圖或錯誤直接捨棄；
-    cancel 之後（對話框關閉時）也不再通知。
+    只通知最近一次 load 的結果：換選其他檔案或頁面後，前一次晚到的結果或錯誤直接捨棄；
+    cancel 之後也不再通知。對話框關閉時呼叫 close：除了不再通知，還等還在算繪的執行緒結束，
+    算繪開著的 PDF 都關上之後才回傳，呼叫端接著刪掉那些檔才刪得掉（Windows 刪不掉開著的檔）。
     """
 
-    _rendered = Signal(int, list)
+    _rendered = Signal(int, object)
     _failed = Signal(int, str)
 
-    def __init__(self, render: Callable[[str], list], on_ready: Callable[[list], None],
+    def __init__(self, render: Callable[..., object], on_ready: Callable[[object], None],
                  on_error: Callable[[str], None]):
         """建立縮圖載入器
 
         Args:
-            render: 在背景執行緒呼叫的算繪函式，接收 PDF 路徑、回傳各頁縮圖
-            on_ready: 縮圖算繪完成時在主執行緒呼叫，參數為各頁縮圖
+            render: 在背景執行緒呼叫的算繪函式，接收 load 的參數（例如 PDF 路徑）、回傳算繪結果（例如各頁縮圖）
+            on_ready: 算繪完成時在主執行緒呼叫，參數為算繪結果
             on_error: 算繪失敗時在主執行緒呼叫，參數為錯誤訊息
         """
         super().__init__()
@@ -75,29 +123,41 @@ class ThumbnailLoader(QObject):
         self._on_ready = on_ready
         self._on_error = on_error
         self._latest = 0
+        self._threads: List[threading.Thread] = []
         self._rendered.connect(self._deliver_ready)
         self._failed.connect(self._deliver_error)
 
-    def load(self, path: str):
-        """開始在背景算繪 path 的縮圖；先前還沒完成的載入作廢"""
+    def load(self, *args):
+        """開始在背景以 args 呼叫算繪函式；先前還沒完成的載入作廢"""
         self._latest += 1
-        threading.Thread(target=self._run, args=(self._latest, path), daemon=True).start()
+        thread = threading.Thread(target=self._run, args=(self._latest, args), daemon=True)
+        self._threads = [running for running in self._threads if running.is_alive()] + [thread]
+        thread.start()
 
     def cancel(self):
         """作廢還沒完成的載入"""
         self._latest += 1
 
-    def _run(self, ticket: int, path: str):
+    def close(self):
+        """作廢還沒完成的載入，並等還在算繪的執行緒都結束才回傳"""
+        self.cancel()
+        for thread in self._threads:
+            thread.join()
+        self._threads = []
+
+    def _run(self, ticket: int, args: tuple):
+        """在背景執行緒算繪，結果或錯誤連同這次載入的序號送回主執行緒"""
         try:
-            images = self._render(path)
+            result = self._render(*args)
         except Exception as e:
             self._failed.emit(ticket, str(e))
             return
-        self._rendered.emit(ticket, images)
+        self._rendered.emit(ticket, result)
 
-    def _deliver_ready(self, ticket: int, images: list):
+    def _deliver_ready(self, ticket: int, result: object):
+        """在主執行緒交回算繪結果；只交最近一次載入的"""
         if ticket == self._latest:
-            self._on_ready(images)
+            self._on_ready(result)
 
     def _deliver_error(self, ticket: int, message: str):
         if ticket == self._latest:

@@ -5,11 +5,14 @@
 只測主視窗與服務層的接線，不測畫面；以 QT_QPA_PLATFORM=offscreen 執行，不需要顯示器。
 提示框、檔案對話框與預覽對話框以替換的方式模擬使用者的操作，不會跳出真的對話框；文字欄位以 QTest 模擬鍵入（QTest 只能輸入 ASCII 字元，中文會讓 Qt 直接中止）。
 """
+import datetime
 import json
 import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import contextmanager
 from typing import Callable, List
@@ -19,27 +22,38 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox,
-    QPushButton, QRadioButton, QTabWidget, QWidget,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox,
+    QPushButton, QRadioButton, QSpinBox, QSplitter, QTabWidget, QTableWidget, QWidget,
 )
 
-from core.constants import PartsOutputMode
+from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CompressionStatus, OrchestraType, PartsOutputMode
 from core.locale import get_locale, set_locale, t
 from core.models import FileInfo, Group, Project, RenameEntry
+from services.activity_log import ActivityLog
+from services.compression_service import CompressionService
 from services.file_service import FileService
-from main import launch
+from services.google_auth_service import GoogleAuthService
+from services.secure_storage import SecureStorage
+from main import launch, prepare_application
 from services.instance_lock import InstanceLock
 from services.move_history import MoveHistory, RenameVerdict
 from services.preferences_service import PreferencesService
 from services.project_service import ProjectService
 from services.workspace_service import WorkspaceService
+from ui.background_task import BackgroundTask
+from ui.compression_compare import CompressionCompareDialog
+from ui.instrumentation_table import InstrumentationTable
 from ui.main_window import MainWindow
 from ui.preview_dialog import PreviewDialog
 from tests.failing_writes import FailingWrites
+from tests.fake_browser import CallbackBrowser
+from tests.fake_google import FakeTokenEndpoint, write_client_secrets
+from tests.memory_keyring import MemoryKeyring
 from tests.other_instance import OtherInstance
+from tests.synthetic_pdfs import file_digest, scanned_pdf
 
 
 @contextmanager
@@ -162,6 +176,64 @@ def executing_preview():
         raise AssertionError("預覽對話框沒有開啟，或執行鈕停用")
 
 
+def keep_every_compressed_file(dialog: QDialog) -> None:
+    """在比較畫面把每份壓縮檔都留下，再按輸出"""
+    files = dialog.findChild(QListWidget)
+    for row in range(files.count()):
+        files.setCurrentRow(row)
+        keep = button_in(dialog, QPushButton, t("compare.keep"))
+        if keep.isVisibleTo(dialog):
+            keep.click()
+    button_in(dialog, QPushButton, t("compare.output")).click()
+
+
+@contextmanager
+def comparing(operate: Callable[[QDialog], None] = keep_every_compressed_file):
+    """模擬使用者在壓縮的比較畫面操作
+
+    替換 CompressionCompareDialog.exec：對話框開啟時呼叫 operate 操作它（按留下、不要、輸出或取消），
+    operate 沒有按輸出時視同取消。operate 拋出的例外（在 Qt 事件裡會被吞掉）在離開區塊時判定失敗。
+
+    Args:
+        operate: 接收對話框、操作它的函式；省略時每份壓縮檔都留下再按輸出
+
+    Yields:
+        開啟過的比較畫面
+    """
+    opened = []
+    errors = []
+
+    def fake_exec(dialog):
+        """取代 exec：記下開啟的對話框並操作它，不真的進入事件迴圈；operate 沒按輸出時按取消，像真的 exec 一樣關上才回傳"""
+        opened.append(dialog)
+        try:
+            operate(dialog)
+        except Exception as e:
+            errors.append(e)
+        if dialog.result() != QDialog.Accepted:
+            dialog.reject()
+        return dialog.result()
+
+    with mock.patch.object(CompressionCompareDialog, "exec", fake_exec):
+        yield opened
+    if errors:
+        raise errors[0]
+
+
+class RecordingOpener:
+    """外部開啟的替身：記下要開啟的網址或路徑，不真的啟動外部程式；opens 為 False 時像外部程式啟動不了"""
+
+    def __init__(self):
+        """建立替身：開得起來、還沒開過任何東西"""
+        self.opens = True
+        self.opened: List[str] = []
+
+    def open(self, target: str) -> bool:
+        """記下要開啟的目標；opens 為 False 時回報開不了"""
+        self.opened.append(target)
+        return self.opens
+
+
 def _settle():
     """處理延後刪除的元件，如同事件迴圈跑過一輪：重建分頁後被換掉的舊分頁不會再被找到"""
     QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -198,7 +270,25 @@ class MainWindowTestCase(unittest.TestCase):
             journal_path=os.path.join(self.temp_dir, "pending_move.json"),
             backup_dir=os.path.join(self.temp_dir, "backups"),
         )
-        self.window = MainWindow(self.preferences, history=self.history)
+        self.opener = RecordingOpener()
+        self.keyring = MemoryKeyring()
+        self.legacy_token = os.path.join(self.temp_dir, "google_token.json")
+        self.auth = GoogleAuthService(
+            storage=SecureStorage("test-google", backend=self.keyring),
+            request=FakeTokenEndpoint(),
+            opener=CallbackBrowser(),
+            client_secrets_path=write_client_secrets(os.path.join(self.temp_dir, "client_secret.json")),
+            legacy_token_path=self.legacy_token,
+        )
+        self.log_dir = os.path.join(self.temp_dir, "logs")
+        self.window = MainWindow(
+            self.preferences, history=self.history, opener=self.opener, auth_service=self.auth,
+            compressor=self.compressor(), log=ActivityLog(FileService(), self.log_dir),
+        )
+
+    def compressor(self) -> CompressionService:
+        """主視窗用的壓縮服務；暫存資料夾在臨時目錄下"""
+        return CompressionService(FileService(), os.path.join(self.temp_dir, "temp"))
 
     def preferences_file_service(self) -> FileService:
         """偏好設定寫入用的檔案服務；要模擬最近清單寫不進去的測試換成寫不進去的"""
@@ -286,6 +376,51 @@ class TestMainWindowRecentListUnwritable(MainWindowTestCase):
         self.assertTrue(self.status_shows(t("status.recent_failed")))
 
 
+class TestMainWindowOpensWorkspaceFolder(MainWindowTestCase):
+    """開啟工作區資料夾經外部開啟；資料夾還不存在或外部程式啟動不了時提示"""
+
+    def setUp(self):
+        super().setUp()
+        self.workspace_dir = self.window.workspace_service.workspace_dir
+        os.makedirs(self.workspace_dir, exist_ok=True)
+
+    def test_opens_workspace_folder_with_external_opener(self):
+        with answering_prompts() as shown:
+            self.trigger_menu(t("menu.tools.open_workspace"))
+        self.assertEqual(shown, [])
+        self.assertEqual(self.opener.opened, [self.workspace_dir])
+
+    def test_tells_user_when_folder_cannot_be_opened(self):
+        self.opener.opens = False
+        with answering_prompts() as shown:
+            self.trigger_menu(t("menu.tools.open_workspace"))
+        self.assertEqual(shown, [(t("dialog.error"), t("dialog.error.external_open_failed", target=self.workspace_dir))])
+
+
+class TestMainWindowOpensLogFolder(MainWindowTestCase):
+    """「說明」選單的「開啟紀錄檔資料夾」經外部開啟打開紀錄檔資料夾；還沒有紀錄檔或開不了時提示"""
+
+    def test_opens_the_log_folder_with_external_opener(self):
+        os.makedirs(self.log_dir)
+        with answering_prompts() as shown:
+            self.trigger_menu(t("menu.help.open_log_folder"))
+        self.assertEqual(shown, [])
+        self.assertEqual(self.opener.opened, [self.log_dir])
+
+    def test_says_there_are_no_logs_yet_when_the_folder_is_missing(self):
+        with answering_prompts() as shown:
+            self.trigger_menu(t("menu.help.open_log_folder"))
+        self.assertEqual(shown, [(t("dialog.info"), t("log.folder_missing"))])
+        self.assertEqual(self.opener.opened, [])
+
+    def test_tells_user_when_folder_cannot_be_opened(self):
+        os.makedirs(self.log_dir)
+        self.opener.opens = False
+        with answering_prompts() as shown:
+            self.trigger_menu(t("menu.help.open_log_folder"))
+        self.assertEqual(shown, [(t("dialog.error"), t("dialog.error.external_open_failed", target=self.log_dir))])
+
+
 class TestMainWindowRecentMenu(MainWindowTestCase):
     """最近專案選單"""
 
@@ -351,6 +486,44 @@ class TestMainWindowUnsavedPrompt(MainWindowTestCase):
             closed = self.window.close()
         self.assertTrue(closed)
         self.assertFalse(self.window.isVisible())
+
+
+class TestMainWindowSaveAddsExtension(MainWindowTestCase):
+    """另存專案時沒打副檔名就補上 .llproj；補上後的檔名已有檔案時，確認取代才寫入"""
+
+    def test_project_saved_without_extension_gets_it(self):
+        typed = os.path.join(self.temp_dir, "winter")
+        with answering_prompts(), saving_as(typed):
+            self.trigger_menu(t("menu.file.save"))
+        self.assertTrue(os.path.isfile(typed + ".llproj"))
+        self.assertFalse(os.path.exists(typed))
+        self.assertIn("winter.llproj", self.window.windowTitle())
+
+    def test_extension_typed_in_another_case_is_kept(self):
+        typed = os.path.join(self.temp_dir, "winter.LLPROJ")
+        with answering_prompts(), saving_as(typed):
+            self.trigger_menu(t("menu.file.save"))
+        self.assertEqual(os.listdir(self.temp_dir).count("winter.LLPROJ"), 1)
+        self.assertNotIn("winter.LLPROJ.llproj", os.listdir(self.temp_dir))
+
+    def test_existing_file_under_the_completed_name_is_kept_when_not_confirmed(self):
+        typed = os.path.join(self.temp_dir, "winter")
+        with open(typed + ".llproj", "w", encoding="utf-8") as f:
+            f.write("old")
+        with answering_prompts(QMessageBox.No) as shown, saving_as(typed):
+            self.trigger_menu(t("menu.file.save"))
+        self.assertEqual(shown, [(t("dialog.warning"), t("filedialog.replace", name="winter.llproj"))])
+        with open(typed + ".llproj", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "old")
+
+    def test_existing_file_under_the_completed_name_is_replaced_when_confirmed(self):
+        typed = os.path.join(self.temp_dir, "winter")
+        with open(typed + ".llproj", "w", encoding="utf-8") as f:
+            f.write("old")
+        self.click_button(t("group.add"))
+        with answering_prompts(QMessageBox.Yes), saving_as(typed):
+            self.trigger_menu(t("menu.file.save"))
+        self.assertEqual(len(ProjectService().load_project(typed + ".llproj").groups), 1)
 
 
 class TestMainWindowMarksUserEdits(MainWindowTestCase):
@@ -491,7 +664,7 @@ class TestMainWindowGuessesOnlyWhenFilesEnterGroup(MainWindowTestCase):
         self.click_button(t("group.add"))
         saved = self.save_from_menu(path).groups[0]
         self.assertIsNone(saved.score_file)
-        self.assertEqual([f.display_name for f in saved.files], ["Full Score.pdf", "Flute.pdf"])
+        self.assertEqual([f.display_name for f in saved.files], ["Flute.pdf", "Full Score.pdf"])
 
     def test_cleared_piece_name_is_not_set_back_when_a_group_is_added(self):
         files = self.create_files("Brahms Symphony - Flute.pdf", "Brahms Symphony - Oboe.pdf")
@@ -550,20 +723,33 @@ class TestMainWindowKeepsTypedInput(MainWindowTestCase):
         self.assertEqual(self._saved_group(path).piece_name, "Brahms Symphony")
 
 
-class TestMainWindowInstrumentListFollowsGroup(MainWindowTestCase):
-    """樂器表跟著目前的群組分頁；目前分頁不是群組時清空並停用，輸入的樂器才不會沒有地方寫入"""
+class InstrumentListTestCase(MainWindowTestCase):
+    """操作主視窗編制表的測試共用的輔助"""
+
+    def _instrumentation_table(self) -> InstrumentationTable:
+        """主視窗左欄的編制表"""
+        return self.window.findChild(InstrumentationTable)
 
     def _instrument_entry(self) -> QLineEdit:
-        """樂器表的輸入欄"""
+        """編制表的輸入欄"""
         return next(
             e for e in self.window.findChildren(QLineEdit)
             if e.placeholderText() == t("instrument.placeholder")
         )
 
+    def _voice_cell(self, row: int):
+        """編制表第 row 列的聲部名稱儲存格"""
+        editor = self._instrumentation_table()
+        return editor.findChild(QTableWidget).item(row, editor.column("voice"))
+
     def _shown_instruments(self) -> List[str]:
-        """樂器表目前列出的樂器"""
-        listing = self._instrument_entry().parentWidget().findChild(QListWidget)
-        return [listing.item(i).text() for i in range(listing.count())]
+        """編制表目前列出的聲部"""
+        table = self._instrumentation_table().findChild(QTableWidget)
+        return [self._voice_cell(row).text() for row in range(table.rowCount())]
+
+
+class TestMainWindowInstrumentListFollowsGroup(InstrumentListTestCase):
+    """樂器表跟著目前的群組分頁；目前分頁不是群組時清空並停用，輸入的樂器才不會沒有地方寫入"""
 
     def test_instrument_list_is_disabled_before_any_group_exists(self):
         self.assertFalse(self._instrument_entry().isEnabled())
@@ -573,6 +759,26 @@ class TestMainWindowInstrumentListFollowsGroup(MainWindowTestCase):
         self.window.findChild(QTabWidget).setCurrentIndex(0)
         self.assertFalse(self._instrument_entry().isEnabled())
         self.assertEqual(self._shown_instruments(), [])
+
+    def test_exported_list_gets_the_extension_and_platform_newlines(self):
+        """匯出樂器表：沒打副檔名就補上 .txt，每行以這個平台的換行結尾、不會多出空行；寫出人數與時長"""
+        self.click_button(t("group.add"))
+        for name in ("Flute", "Oboe"):
+            QTest.keyClicks(self._instrument_entry(), name)
+            QTest.keyClick(self._instrument_entry(), Qt.Key_Return)
+        editor = self._instrumentation_table()
+        editor.findChild(QTableWidget).cellWidget(0, editor.column("minimum")).setValue(2)
+        editor.findChild(QSpinBox, "duration_minutes").setValue(7)
+        typed = os.path.join(self.temp_dir, "ensemble")
+        with answering_prompts(), saving_as(typed):
+            self.click_button(t("instrument.export"))
+        with open(typed + ".txt", "rb") as f:
+            lines = f.read().decode("utf-8").split(os.linesep)
+        self.assertEqual([line for line in lines if "\r" in line or "\n" in line], [])
+        self.assertIn("  Flute                          x 2", lines)
+        self.assertIn("  Oboe", lines)
+        self.assertIn(f"{t('instrumentation.duration')}：7:00", lines)
+        self.assertEqual(lines[-1], "共 2 個聲部、2 人")
 
     def test_instruments_entered_after_adding_a_group_are_saved(self):
         self.click_button(t("group.add"))
@@ -584,8 +790,212 @@ class TestMainWindowInstrumentListFollowsGroup(MainWindowTestCase):
         self.assertEqual(ProjectService().load_project(path).groups[0].instruments, ["Flute"])
 
 
+class TestMainWindowInstrumentationTable(InstrumentListTestCase):
+    """左欄就是編制表（舊的樂器表清單不在了），分隔線可以拖寬；編制表的改動反映在分頁的分譜配對與未分組"""
+
+    def setUp(self):
+        super().setUp()
+        files = self.create_files("fl.pdf", "ob.pdf", "hn.pdf")
+        self.open_from_menu(Project(groups=[Group(name="g", instruments=["Flute", "Oboe", "Horn"], files=files)]))
+
+    def _tab_rows(self, index: int) -> List[str]:
+        """第 index 個分頁的檔案清單"""
+        _settle()
+        listing = self.window.findChild(QTabWidget).widget(index).findChild(QListWidget)
+        return [listing.item(i).text() for i in range(listing.count())]
+
+    def test_the_left_column_is_the_instrumentation_table_and_its_width_is_adjustable(self):
+        editor = self._instrumentation_table()
+        self.assertIsInstance(editor.parentWidget(), QSplitter)
+        self.assertLess(editor.minimumWidth(), editor.maximumWidth())
+        voices = ["Flute", "Oboe", "Horn"]
+        lists = [[w.item(i).text() for i in range(w.count())] for w in self.window.findChildren(QListWidget)]
+        self.assertNotIn(voices, lists)
+        self.assertEqual(self._shown_instruments(), voices)
+
+    def test_unchecking_a_voice_moves_its_part_to_the_ungrouped_tab_and_the_rest_keep_their_voices(self):
+        editor = self._instrumentation_table()
+        editor.findChild(QTableWidget).item(1, editor.column("present")).setCheckState(Qt.Unchecked)
+        self.assertEqual(self._tab_rows(1), ["Flute  |  fl.pdf", "Horn  |  hn.pdf"])
+        self.assertEqual(self._tab_rows(0), ["ob.pdf"])
+        self.assertTrue(self.is_marked_unsaved())
+
+    def _recheck_oboe(self):
+        """「Oboe」取消勾選再勾回來：它沒有分譜"""
+        editor = self._instrumentation_table()
+        editor.findChild(QTableWidget).item(1, editor.column("present")).setCheckState(Qt.Unchecked)
+        editor.findChild(QTableWidget).item(1, editor.column("present")).setCheckState(Qt.Checked)
+
+    def test_rechecking_a_voice_leaves_the_other_parts_with_their_voices(self):
+        self._recheck_oboe()
+        no_part = t("group.no_part")
+        self.assertEqual(self._tab_rows(1), ["Flute  |  fl.pdf", f"Oboe  |  {no_part}", "Horn  |  hn.pdf"])
+
+    def test_dropping_a_part_onto_a_voice_without_a_part_pairs_only_them(self):
+        self._recheck_oboe()
+        _settle()
+        listing = self.window.findChild(QTabWidget).widget(1).findChild(QListWidget)
+        listing.part_dropped.emit(1, 1)
+        no_part = t("group.no_part")
+        self.assertEqual(self._tab_rows(1), ["Flute  |  fl.pdf", "Oboe  |  hn.pdf", f"Horn  |  {no_part}"])
+        self.assertTrue(self.is_marked_unsaved())
+
+    def test_dragging_a_voice_moves_its_part_in_the_group_tab(self):
+        self._instrumentation_table().findChild(QTableWidget).rows_dropped.emit([2], 0)
+        self.assertEqual(self._tab_rows(1), ["Horn  |  hn.pdf", "Flute  |  fl.pdf", "Oboe  |  ob.pdf"])
+
+
+class TestMainWindowInstrumentListRefusesDuplicateVoices(InstrumentListTestCase):
+    """在樂器表輸入與其他列同一聲部的名稱時顯示說明，名稱不變"""
+
+    def setUp(self):
+        super().setUp()
+        self.path = self.open_from_menu(Project(groups=[Group(name="g", instruments=["Violin I", "Violin II"])]))
+
+    def test_adding_another_spelling_of_an_existing_voice_shows_why_and_keeps_the_list(self):
+        with answering_prompts() as shown:
+            QTest.keyClicks(self._instrument_entry(), "violin 1")
+            QTest.keyClick(self._instrument_entry(), Qt.Key_Return)
+        self.assertEqual(shown, [(t("dialog.warning"), t("instrument.duplicate", name="violin 1", existing="Violin I"))])
+        self.assertEqual(self._shown_instruments(), ["Violin I", "Violin II"])
+        self.assertEqual(self._saved_instruments(), ["Violin I", "Violin II"])
+
+    def test_renaming_to_another_row_s_voice_shows_why_and_restores_the_name(self):
+        with answering_prompts() as shown:
+            self._voice_cell(0).setText("Violin 2")
+        self.assertEqual(shown, [(t("dialog.warning"), t("instrument.duplicate", name="Violin 2", existing="Violin II"))])
+        self.assertEqual(self._shown_instruments(), ["Violin I", "Violin II"])
+        self.assertEqual(self._saved_instruments(), ["Violin I", "Violin II"])
+
+    def test_renaming_to_another_spelling_of_itself_is_kept(self):
+        with answering_prompts() as shown:
+            self._voice_cell(0).setText("Violin 1")
+        self.assertEqual(shown, [])
+        self.assertEqual(self._saved_instruments(), ["Violin 1", "Violin II"])
+
+    def _saved_instruments(self) -> List[str]:
+        """存檔後讀回的群組樂器表"""
+        return self.save_from_menu(self.path).groups[0].instruments
+
+
+
+
+class TestMainWindowNewerProjectFile(MainWindowTestCase):
+    """較新版本的泠靈建立的專案檔唯讀開啟：寫明原因，存檔、另存與所有會改專案或磁碟上檔案的操作都不能用"""
+
+    def setUp(self):
+        super().setUp()
+        self.path = os.path.join(self.temp_dir, "newer.llproj")
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump({"version": 99, "master_template": "{樂器}.pdf", "groups": [{"name": "g"}]}, f)
+
+    def _save_actions(self) -> List[QAction]:
+        texts = (t("menu.file.save"), t("menu.file.save_as"))
+        return [a for a in self.window.findChildren(QAction) if a.text() in texts]
+
+    def _open_newer(self) -> list:
+        with answering_prompts() as shown, opening(self.path):
+            self.trigger_menu(t("menu.file.open"))
+        return shown
+
+    def test_opening_says_why_and_disables_save_and_save_as(self):
+        self.assertEqual(self._open_newer(), [(t("dialog.info"), t("project.newer_format"))])
+        self.assertEqual([a.isEnabled() for a in self._save_actions()], [False, False])
+
+    def test_opening_another_project_enables_saving_again(self):
+        self._open_newer()
+        self.open_from_menu(Project())
+        self.assertEqual([a.isEnabled() for a in self._save_actions()], [True, True])
+
+    def _edit_controls(self) -> List[QWidget]:
+        """會改專案或它引用的檔案的選單動作、按鈕、欄位與編制表，以及目前群組分頁的內容"""
+        action_texts = (
+            t("menu.import.files"), t("menu.import.folder"), t("menu.edit.undo"), t("menu.edit.redo"),
+            t("menu.tools.split_pdf"),
+        )
+        actions = [a for a in self.window.findChildren(QAction) if a.text() in action_texts]
+        self.assertEqual(len(actions), len(action_texts))
+        buttons = [
+            button_in(self.window, QPushButton, text)
+            for text in (t("panel.preview_rename"), t("group.add"), t("group.link_movements"), t("panel.insert_variable"))
+        ]
+        orchestra = next(c for c in self.window.findChildren(QComboBox) if c.findText(t("orchestra.western")) >= 0)
+        tabs = self.window.findChild(QTabWidget)
+        return actions + buttons + [
+            field_in(self.window, "{樂器}.pdf"), orchestra, self.window.findChild(InstrumentationTable),
+            tabs.widget(0), tabs.widget(1),
+        ]
+
+    def test_everything_that_changes_the_project_or_its_files_is_disabled(self):
+        self._open_newer()
+        self.assertEqual(self.window.findChild(QTabWidget).currentIndex(), 1)
+        self.assertEqual([c.isEnabled() for c in self._edit_controls()], [False] * len(self._edit_controls()))
+
+    def test_tabs_can_still_be_switched_and_stay_disabled(self):
+        self._open_newer()
+        tabs = self.window.findChild(QTabWidget)
+        tabs.setCurrentIndex(0)
+        tabs.setCurrentIndex(1)
+        self.assertEqual(tabs.currentIndex(), 1)
+        self.assertFalse(self.window.findChild(InstrumentationTable).isEnabled())
+
+    def test_opening_another_project_enables_editing_again(self):
+        self._open_newer()
+        self.open_from_menu(Project(master_template="{樂器}.pdf", groups=[Group(name="g")]))
+        self.assertEqual([c.isEnabled() for c in self._edit_controls()], [True] * len(self._edit_controls()))
+
+    def test_closing_does_not_offer_to_save(self):
+        self._open_newer()
+        with answering_prompts() as shown:
+            closed = self.window.close()
+        self.assertTrue(closed)
+        self.assertEqual(shown, [])
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["version"], 99)
+
+
+class TestMainWindowOrchestraTypeAndSections(InstrumentListTestCase):
+    """專案設定可改樂團類型，編制表的聲部組選項跟著換；改一列時同一樂器的其他編號跟著改"""
+
+    def setUp(self):
+        super().setUp()
+        self.open_from_menu(Project(groups=[Group(name="g", instruments=["二胡 I", "二胡 II", "中胡"])]))
+
+    def _orchestra_combo(self) -> QComboBox:
+        return next(
+            c for c in self.window.findChildren(QComboBox)
+            if [c.itemText(i) for i in range(c.count())] == [t("orchestra.chinese"), t("orchestra.western")]
+        )
+
+    def _section_combos(self) -> List[QComboBox]:
+        editor = self._instrumentation_table()
+        table = editor.findChild(QTableWidget)
+        return [table.cellWidget(row, editor.column("section")) for row in range(table.rowCount())]
+
+    def _options_shown(self) -> List[str]:
+        combo = self._section_combos()[0]
+        return [combo.itemData(i) for i in range(combo.count())]
+
+    def test_changing_the_orchestra_type_swaps_the_section_options(self):
+        self.assertEqual(self._orchestra_combo().currentText(), t("orchestra.chinese"))
+        self.assertEqual(self._options_shown(), ["吹管", "拉弦", "彈撥", "打擊", "低音", "其他"])
+        self._orchestra_combo().setCurrentIndex(1)
+        self.assertEqual(self.window.project.orchestra_type, "western")
+        self.assertTrue(self.is_marked_unsaved())
+        self.assertEqual(self._options_shown(), ["木管", "銅管", "打擊", "鍵盤", "弦樂", "其他"])
+
+    def test_changing_one_number_changes_the_others(self):
+        combo = self._section_combos()[0]
+        combo.setCurrentIndex(combo.findData("低音"))
+        self.assertEqual([c.currentData() for c in self._section_combos()], ["低音", "低音", "拉弦"])
+        self.assertEqual(
+            [self.window.project.section_of(v) for v in ("二胡 I", "二胡 II", "中胡")], ["低音", "低音", "拉弦"],
+        )
+        self.assertTrue(self.is_marked_unsaved())
+
+
 class TestMainWindowPreviewNaming(MainWindowTestCase):
-    """預覽的命名：聲部組名稱第一次用到時依當時的介面語言定下；資料夾名稱為 .. 時擋下"""
+    """預覽的命名：聲部組資料夾一律用中文的聲部組名稱，不隨介面語言；資料夾名稱為 .. 時擋下"""
 
     def _switch_language(self, lang_code: str):
         self.trigger_menu(t(f"menu.view.language.{lang_code}"))
@@ -609,9 +1019,9 @@ class TestMainWindowPreviewNaming(MainWindowTestCase):
             self.click_button(t("panel.preview_rename"))
         return shown
 
-    def test_section_folders_named_in_english_stay_after_switching_to_chinese(self):
+    def test_section_folders_use_chinese_section_names_in_either_language(self):
         self.addCleanup(set_locale, get_locale())
-        self._open_group()
+        self._open_group(orchestra_type=OrchestraType.WESTERN)
         self._switch_language("en")
         in_english = self._preview(
             lambda dialog: button_in(dialog, QRadioButton, t("panel.parts_mode_section")).click(),
@@ -619,7 +1029,7 @@ class TestMainWindowPreviewNaming(MainWindowTestCase):
         self._switch_language("zh_TW")
         in_chinese = self._preview()
         expected = [
-            os.path.join(self.temp_dir, "Woodwinds", "Flute.pdf"), os.path.join(self.temp_dir, "Brass", "Horn.pdf"),
+            os.path.join(self.temp_dir, "木管", "Flute.pdf"), os.path.join(self.temp_dir, "銅管", "Horn.pdf"),
         ]
         self.assertEqual(in_english, expected)
         self.assertEqual(in_chinese, expected)
@@ -975,6 +1385,521 @@ class TestMainWindowKeepsResultAtStartup(MoveHistoryWindowTestCase):
         self.assertFalse(window.windowTitle().endswith(" *"))
 
 
+class TestMainWindowAbout(MainWindowTestCase):
+    """「說明」選單的「關於泠靈小工具」：版號、GitHub 網址與授權；網址經外部開啟"""
+
+    REPOSITORY_URL = "https://github.com/Suikann/ling-ling-suite"
+
+    def open_about(self) -> QDialog:
+        """從選單開啟「關於」視窗，回傳它（替換 exec，不會卡住測試）"""
+        opened = []
+
+        def fake_exec(dialog):
+            """取代 exec：記下開啟的對話框並操作它，不真的進入事件迴圈"""
+            opened.append(dialog)
+            return QDialog.Accepted
+
+        with mock.patch.object(QDialog, "exec", fake_exec):
+            self.trigger_menu(t("menu.help.about"))
+        self.assertEqual(len(opened), 1)
+        return opened[0]
+
+    def texts_in(self, dialog: QDialog) -> List[str]:
+        """視窗裡各標籤的文字"""
+        return [label.text() for label in dialog.findChildren(QLabel)]
+
+    def test_source_run_shows_development_build(self):
+        texts = self.texts_in(self.open_about())
+        self.assertIn(t("about.version", version=t("about.dev_version")), texts)
+
+    def test_packaged_build_shows_version_from_resource_dir(self):
+        resource_dir = os.path.join(self.temp_dir, "_MEI12345")
+        os.makedirs(resource_dir)
+        with open(os.path.join(resource_dir, "version.txt"), "w") as f:
+            f.write("v1.2.0\n")
+        with answering_prompts(t("dialog.discard_btn")):
+            self.window.close()
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "_MEIPASS", resource_dir, create=True):
+            self.window = MainWindow(
+                self.preferences, history=self.history, opener=self.opener, auth_service=self.auth,
+                compressor=self.compressor(),
+            )
+            texts = self.texts_in(self.open_about())
+        self.assertIn(t("about.version", version="v1.2.0"), texts)
+
+    def test_shows_license(self):
+        self.assertIn(t("about.license"), self.texts_in(self.open_about()))
+
+    def test_repository_link_opens_with_external_opener(self):
+        dialog = self.open_about()
+        link = next(label for label in dialog.findChildren(QLabel) if self.REPOSITORY_URL in label.text())
+        link.linkActivated.emit(self.REPOSITORY_URL)
+        self.assertEqual(self.opener.opened, [self.REPOSITORY_URL])
+
+    def test_link_that_cannot_be_opened_says_so(self):
+        self.opener.opens = False
+        dialog = self.open_about()
+        link = next(label for label in dialog.findChildren(QLabel) if self.REPOSITORY_URL in label.text())
+        with answering_prompts() as shown:
+            link.linkActivated.emit(self.REPOSITORY_URL)
+        self.assertEqual(
+            shown, [(t("dialog.error"), t("dialog.error.external_open_failed", target=self.REPOSITORY_URL))],
+        )
+
+
+class TestPrepareApplication(unittest.TestCase):
+    """啟動前的設定：補上輸入法環境變數，設定應用程式名稱與 desktop file name"""
+
+    def test_sets_input_method_modules_and_application_identity(self):
+        with mock.patch.dict(os.environ, {"QT_IM_MODULE": "fcitx"}, clear=True), \
+                mock.patch.object(sys, "platform", "linux"):
+            prepare_application()
+            self.assertEqual(os.environ.get("QT_IM_MODULES"), "wayland;fcitx;ibus")
+        self.assertEqual(QGuiApplication.desktopFileName(), "lingling-suite")
+        self.assertEqual(QGuiApplication.applicationName(), "lingling-suite")
+
+    def test_keeps_input_method_modules_set_by_user(self):
+        with mock.patch.dict(os.environ, {"QT_IM_MODULES": "ibus"}, clear=True), \
+                mock.patch.object(sys, "platform", "linux"):
+            prepare_application()
+            self.assertEqual(os.environ.get("QT_IM_MODULES"), "ibus")
+
+
+class TestMainWindowGoogleLogin(MainWindowTestCase):
+    """啟動時只刪舊的明文權杖檔、不碰安全儲存；登入沒存進安全儲存時當下提示"""
+
+    def test_startup_deletes_legacy_token_without_touching_secure_storage(self):
+        with open(self.legacy_token, "w", encoding="utf-8") as f:
+            f.write('{"refresh_token": "legacy"}')
+        window = MainWindow(self.preferences, history=self.history, auth_service=self.auth)
+        self.addCleanup(window.deleteLater)
+        self.assertFalse(os.path.exists(self.legacy_token))
+        self.assertEqual(self.keyring.calls, [])
+
+    def test_login_that_cannot_be_saved_warns_to_sign_in_again_next_time(self):
+        self.keyring.failing_writes = True
+        with answering_prompts() as shown:
+            self.auth.authenticate()
+        self.assertIn((t("catalog.auth.title"), t("catalog.auth.reason.not_saved")), shown)
+
+    def test_login_in_background_that_cannot_be_saved_warns_on_main_thread(self):
+        self.keyring.failing_writes = True
+        warned_on = []
+        record = lambda *args, **kwargs: warned_on.append(threading.current_thread())
+        with mock.patch.object(QMessageBox, "warning", side_effect=record):
+            login = threading.Thread(target=self.auth.authenticate)
+            login.start()
+            login.join(10)
+            QApplication.sendPostedEvents()
+        self.assertEqual(warned_on, [threading.main_thread()])
+
+
+class TestMainWindowOpenCatalog(MainWindowTestCase):
+    """開譜庫：安全儲存沒解鎖時，一次操作最多跳一次解鎖視窗；下一次需要時再跳"""
+
+    def setUp(self):
+        super().setUp()
+        self.auth.authenticate()
+        self.auth = GoogleAuthService(
+            storage=SecureStorage("test-google", backend=self.keyring),
+            request=FakeTokenEndpoint(),
+            opener=CallbackBrowser(),
+            client_secrets_path=os.path.join(self.temp_dir, "client_secret.json"),
+            legacy_token_path=self.legacy_token,
+        )
+        self.window.close()
+        self.preferences.set(CATALOG_ROOT_FOLDER_ID_KEY, "folder-id")
+        self.window = MainWindow(self.preferences, history=self.history, opener=self.opener, auth_service=self.auth)
+        self.keyring.locked = True
+        self.keyring.calls.clear()
+
+    def open_catalog(self) -> List[str]:
+        """從選單開譜庫；設定對話框一開就按取消，回傳過程中跳出的解鎖視窗（讀安全儲存的次數）"""
+        from ui.catalog_settings_dialog import CatalogSettingsDialog
+        with mock.patch.object(CatalogSettingsDialog, "exec", return_value=QDialog.Rejected):
+            self.trigger_menu(t("menu.catalog.open"))
+        return [call for call in self.keyring.calls if call == "get"]
+
+    def test_cancelled_unlock_is_asked_only_once_per_open(self):
+        self.assertEqual(len(self.open_catalog()), 1)
+
+    def test_next_open_asks_to_unlock_again(self):
+        self.open_catalog()
+        self.keyring.calls.clear()
+        self.assertEqual(len(self.open_catalog()), 1)
+
+
+def wait_until(condition: Callable[[], bool], timeout: float = 20) -> None:
+    """處理事件直到 condition 成立（背景工作的結果經事件迴圈回到主執行緒）；逾時判定失敗"""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError("等待逾時")
+        QApplication.processEvents()
+        time.sleep(0.01)
+
+
+class GatedCompressor(CompressionService):
+    """測試放行（或要求取消）才開始壓縮的壓縮服務，讓測試在壓縮進行中操作主視窗"""
+
+    def __init__(self, *args, **kwargs):
+        """建立壓縮服務，閘門先關著"""
+        super().__init__(*args, **kwargs)
+        self.gate = threading.Event()
+        self.results = []
+
+    def compress(self, source, should_cancel=lambda: False, on_progress=lambda progress: None):
+        """等測試放行（或要求取消、逾時）才照常壓縮，記下結果"""
+        deadline = time.monotonic() + 20
+        while not self.gate.wait(0.01) and not should_cancel() and time.monotonic() < deadline:
+            pass
+        result = super().compress(source, should_cancel, on_progress)
+        self.results.append(result)
+        return result
+
+
+class MainWindowCompressTestCase(MainWindowTestCase):
+    """壓縮 PDF 測試的共用骨架：原檔在臨時目錄的 Symphony 資料夾，另存到旁邊的「Symphony（壓縮）」"""
+
+    size_limit = 10 ** 9
+
+    def compressor(self) -> CompressionService:
+        """會等測試放行的壓縮服務"""
+        self.scratch_dir = os.path.join(self.temp_dir, "temp")
+        self.gated = GatedCompressor(FileService(), self.scratch_dir, size_limit=self.size_limit)
+        return self.gated
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.gated.gate.set)
+        parts = os.path.join(self.temp_dir, "Symphony")
+        os.makedirs(parts)
+        self.source = scanned_pdf(os.path.join(parts, "Flute.pdf"), dpi=300)
+        self.target = os.path.join(self.temp_dir, "Symphony（壓縮）", "Flute.pdf")
+
+    def start_compressing(self, *targets: str) -> mock.MagicMock:
+        """從工具選單只選一份原檔，另存對話框依序回答 targets，回傳另存對話框的替身"""
+        answers = [(target, "") for target in targets]
+        with mock.patch.object(QFileDialog, "getOpenFileNames", return_value=([self.source], "")), \
+                mock.patch.object(QFileDialog, "getSaveFileName", side_effect=answers) as save:
+            self.trigger_menu(t("menu.tools.compress_pdf"))
+        return save
+
+    def finish(self, operate: Callable[[QDialog], None] = keep_every_compressed_file) -> List[QDialog]:
+        """放行壓縮並等結果回到主視窗；比較畫面開啟時以 operate 操作它（預設每份都留下再輸出）
+
+        Returns:
+            開啟過的比較畫面
+        """
+        with comparing(operate) as opened:
+            self.gated.gate.set()
+            wait_until(lambda: self.compress_action().isEnabled())
+        return opened
+
+    def action(self, text: str) -> QAction:
+        """主視窗裡文字相符的選單項目"""
+        return next(a for a in self.window.findChildren(QAction) if a.text() == text)
+
+    def compress_action(self) -> QAction:
+        """工具選單的「壓縮 PDF」"""
+        return self.action(t("menu.tools.compress_pdf"))
+
+    def file_operations_enabled(self) -> List[bool]:
+        """重新命名、分割、旋轉、復原、重做是否可用"""
+        rename = button_in(self.window, QPushButton, t("panel.preview_rename"))
+        actions = [self.action(t(key)) for key in (
+            "menu.tools.split_pdf", "menu.tools.rotate_pdf", "menu.edit.undo", "menu.edit.redo",
+        )]
+        return [rename.isEnabled()] + [a.isEnabled() for a in actions]
+
+    def scratch_files(self) -> List[str]:
+        """暫存資料夾裡留下的檔案"""
+        return [name for _, _, names in os.walk(self.scratch_dir) for name in names]
+
+
+class TestMainWindowCompressPdf(MainWindowCompressTestCase):
+    """工具選單的壓縮 PDF：選檔、另存位置、背景執行時鎖住會動到檔案的操作"""
+
+    def test_file_operations_are_locked_while_compressing_and_unlocked_after(self):
+        self.start_compressing(self.target)
+        self.assertEqual(self.file_operations_enabled(), [False] * 5)
+        self.assertFalse(self.compress_action().isEnabled())
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(self.file_operations_enabled(), [True] * 5)
+
+    def test_file_operations_stay_locked_after_switching_language_while_compressing(self):
+        self.addCleanup(set_locale, get_locale())
+        self.start_compressing(self.target)
+        self.trigger_menu(t("menu.view.language.en"))
+        self.assertEqual(self.file_operations_enabled(), [False] * 5)
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(self.file_operations_enabled(), [True] * 5)
+
+    def test_suggests_the_folder_beside_the_original_and_saves_the_result_there(self):
+        save = self.start_compressing(self.target)
+        with answering_prompts() as shown:
+            self.finish()
+        self.assertEqual(save.call_args.args[2], self.target)
+        self.assertEqual(self.gated.results[0].status, CompressionStatus.SMALL_ENOUGH)
+        self.assertEqual(file_digest(self.target), file_digest(self.source))
+        self.assertEqual(len(shown), 1)
+        self.assertIn(self.target, shown[0][1])
+
+    def test_target_typed_without_extension_is_saved_with_pdf_added(self):
+        typed = os.path.join(self.temp_dir, "out", "Flute small")
+        self.start_compressing(typed)
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(file_digest(typed + ".pdf"), file_digest(self.source))
+
+    def test_choosing_the_original_file_is_refused_and_asked_again(self):
+        digest = file_digest(self.source)
+        with answering_prompts() as shown:
+            save = self.start_compressing(self.source, "")
+        self.assertEqual(save.call_count, 2)
+        self.assertEqual(shown, [(t("dialog.warning"), t("compress.target_blocked"))])
+        self.assertTrue(self.compress_action().isEnabled())
+        self.assertEqual(file_digest(self.source), digest)
+
+    def test_another_name_in_the_original_folder_is_saved_there(self):
+        beside = os.path.join(os.path.dirname(self.source), "Flute small.pdf")
+        self.start_compressing(beside)
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(file_digest(beside), file_digest(self.source))
+
+    def test_finished_compression_leaves_no_background_task_behind(self):
+        for _ in range(2):
+            self.start_compressing(self.target)
+            with answering_prompts():
+                self.finish()
+        _settle()
+        self.assertEqual(self.window.findChildren(BackgroundTask), [])
+
+    def test_closing_while_compressing_asks_and_staying_keeps_it_running(self):
+        self.start_compressing(self.target)
+        with answering_prompts(QMessageBox.No) as shown:
+            self.assertFalse(self.window.close())
+        self.assertEqual(shown, [(t("dialog.close"), t("compress.close.message"))])
+        self.assertFalse(self.compress_action().isEnabled())
+        with answering_prompts():
+            self.finish()
+        self.assertTrue(os.path.isfile(self.target))
+
+
+class TestMainWindowCompressPdfCancel(MainWindowCompressTestCase):
+    """取消壓縮：在頁與頁之間停下，什麼都不輸出"""
+
+    size_limit = 1000
+
+    def test_cancel_button_stops_compressing_without_output(self):
+        self.start_compressing(self.target)
+        self.click_button(t("compress.cancel"))
+        with answering_prompts():
+            self.finish()
+        self.assertTrue(all(r.status is CompressionStatus.CANCELLED for r in self.gated.results))
+        self.assertFalse(os.path.exists(self.target))
+        self.assertEqual(self.scratch_files(), [])
+        self.assertTrue(self.status_shows(t("compress.cancelled")))
+
+    def test_closing_and_choosing_to_cancel_stops_compressing_without_output(self):
+        self.start_compressing(self.target)
+        with answering_prompts(QMessageBox.Yes):
+            self.assertTrue(self.window.close())
+        self.assertTrue(all(r.status is CompressionStatus.CANCELLED for r in self.gated.results))
+        self.assertFalse(os.path.exists(self.target))
+        self.assertEqual(self.scratch_files(), [])
+
+
+class MainWindowCompressBatchTestCase(MainWindowCompressTestCase):
+    """一整批壓縮的共用骨架：Symphony 資料夾裡有 Flute.pdf 與 Strings/Violin.pdf，預設輸出到旁邊的「Symphony（壓縮）」"""
+
+    def setUp(self):
+        super().setUp()
+        self.root = os.path.dirname(self.source)
+        os.makedirs(os.path.join(self.root, "Strings"))
+        self.violin = scanned_pdf(os.path.join(self.root, "Strings", "Violin.pdf"), dpi=300)
+        self.output_dir = os.path.join(self.temp_dir, "Symphony（壓縮）")
+
+    def start_folder(self, *answers, folders=()) -> list:
+        """從工具選單選整個 Symphony 資料夾；提示框依序回答 answers，選輸出位置的對話框依序回答 folders
+
+        Returns:
+            跳出過的提示框（標題，訊息）
+        """
+        with mock.patch.object(QFileDialog, "getExistingDirectory", side_effect=[self.root, *folders]), \
+                answering_prompts(*answers) as shown:
+            self.trigger_menu(t("menu.tools.compress_folder"))
+        return shown
+
+    def output_files(self) -> List[str]:
+        """預設輸出位置裡的檔案（相對路徑）"""
+        return sorted(
+            os.path.relpath(os.path.join(folder, name), self.output_dir)
+            for folder, _, names in os.walk(self.output_dir) for name in names
+        )
+
+
+class TestMainWindowCompressBatch(MainWindowCompressBatchTestCase):
+    """壓縮一整批：整個資料夾或多選檔，輸出照原本的子資料夾結構"""
+
+    def test_folder_is_compressed_into_the_folder_beside_it_keeping_subfolders(self):
+        shown = self.start_folder(t("compress.output.start"))
+        self.assertEqual(shown, [(t("compress.title"), t("compress.output.message", path=self.output_dir))])
+        with answering_prompts() as shown:
+            self.finish()
+        self.assertEqual(self.output_files(), ["Flute.pdf", os.path.join("Strings", "Violin.pdf")])
+        self.assertEqual(file_digest(os.path.join(self.output_dir, "Strings", "Violin.pdf")), file_digest(self.violin))
+        self.assertEqual(len(shown), 1)
+        self.assertIn(os.path.join("Strings", "Violin.pdf"), shown[0][1])
+
+    def test_multiselected_files_go_into_the_folder_beside_them(self):
+        oboe = scanned_pdf(os.path.join(self.root, "Oboe.pdf"), dpi=300)
+        with mock.patch.object(QFileDialog, "getOpenFileNames", return_value=([self.source, oboe], "")), \
+                answering_prompts(t("compress.output.start")):
+            self.trigger_menu(t("menu.tools.compress_pdf"))
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(self.output_files(), ["Flute.pdf", "Oboe.pdf"])
+
+    def test_progress_shows_which_file_of_how_many(self):
+        self.start_folder(t("compress.output.start"))
+        wait_until(lambda: self.status_shows(t("compress.progress.starting", index=1, total=2, name="Flute.pdf")))
+        with answering_prompts():
+            self.finish()
+
+    def test_output_inside_the_input_folder_is_refused(self):
+        inside = os.path.join(self.root, "Strings")
+        shown = self.start_folder(t("compress.output.change"), t("compress.output.cancel"), folders=[inside])
+        self.assertIn((t("dialog.warning"), t("compress.output.blocked")), shown)
+        self.assertTrue(self.compress_action().isEnabled())
+        self.assertEqual(self.gated.results, [])
+
+    def test_changed_output_location_is_used(self):
+        elsewhere = os.path.join(self.temp_dir, "elsewhere")
+        os.makedirs(elsewhere)
+        self.start_folder(t("compress.output.change"), folders=[elsewhere])
+        with answering_prompts():
+            self.finish()
+        self.assertTrue(os.path.isfile(os.path.join(elsewhere, "Strings", "Violin.pdf")))
+
+    def test_files_that_would_be_overwritten_are_listed_and_confirmed_once(self):
+        earlier = os.path.join(self.output_dir, "Strings", "Violin.pdf")
+        os.makedirs(os.path.dirname(earlier))
+        with open(earlier, "wb") as f:
+            f.write(b"earlier output")
+        shown = self.start_folder(t("compress.output.start"), QMessageBox.Yes)
+        self.assertEqual(shown[1][1], t("compress.overwrite.message", names=os.path.join("Strings", "Violin.pdf")))
+        with answering_prompts():
+            self.finish()
+        self.assertEqual(file_digest(earlier), file_digest(self.violin))
+
+    def test_declining_to_overwrite_starts_nothing(self):
+        earlier = os.path.join(self.output_dir, "Flute.pdf")
+        os.makedirs(self.output_dir)
+        with open(earlier, "wb") as f:
+            f.write(b"earlier output")
+        self.start_folder(t("compress.output.start"), QMessageBox.No)
+        self.assertTrue(self.compress_action().isEnabled())
+        self.assertEqual(self.output_files(), ["Flute.pdf"])
+
+    def test_folder_without_pdfs_is_reported(self):
+        empty = os.path.join(self.temp_dir, "Empty")
+        os.makedirs(empty)
+        with mock.patch.object(QFileDialog, "getExistingDirectory", return_value=empty), \
+                answering_prompts() as shown:
+            self.trigger_menu(t("menu.tools.compress_folder"))
+        self.assertEqual(shown, [(t("dialog.info"), t("compress.no_pdfs"))])
+
+
+class TestMainWindowCompressCompare(MainWindowCompressBatchTestCase):
+    """比較畫面：壓完先逐份確認，確認後才一次輸出；取消時什麼都不輸出"""
+
+    size_limit = 100 * 1000
+
+    def test_nothing_is_output_before_confirming_and_a_discarded_file_is_left_out(self):
+        seen_before_confirming = []
+
+        def keep_flute_discard_violin(dialog: QDialog):
+            """記下確認前輸出位置有沒有東西，留下 Flute、不要 Violin 再輸出"""
+            seen_before_confirming.append(os.path.exists(self.output_dir))
+            files = dialog.findChild(QListWidget)
+            self.assertEqual(
+                [files.item(row).text().splitlines()[0] for row in range(files.count())],
+                ["Flute.pdf", os.path.join("Strings", "Violin.pdf")],
+            )
+            files.setCurrentRow(0)
+            button_in(dialog, QPushButton, t("compare.keep")).click()
+            files.setCurrentRow(1)
+            button_in(dialog, QPushButton, t("compare.drop")).click()
+            button_in(dialog, QPushButton, t("compare.output")).click()
+
+        self.start_folder(t("compress.output.start"))
+        with answering_prompts():
+            opened = self.finish(keep_flute_discard_violin)
+        self.assertEqual(len(opened), 1)
+        self.assertEqual(seen_before_confirming, [False])
+        self.assertTrue(all(r.status is CompressionStatus.COMPRESSED for r in self.gated.results))
+        self.assertEqual(self.output_files(), ["Flute.pdf"])
+        self.assertEqual(self.scratch_files(), [])
+
+    def test_cancelling_the_comparison_outputs_nothing_and_clears_the_compressed_files(self):
+        self.start_folder(t("compress.output.start"))
+        cancel = lambda dialog: button_in(dialog, QPushButton, t("compare.cancel")).click()
+        with answering_prompts() as shown:
+            self.finish(cancel)
+        self.assertEqual(shown, [])
+        self.assertFalse(os.path.exists(self.output_dir))
+        self.assertEqual(self.scratch_files(), [])
+        self.assertTrue(self.status_shows(t("compress.cancelled")))
+
+    def test_discarding_every_file_outputs_nothing_and_says_so(self):
+        def discard_all(dialog: QDialog):
+            """兩份都選「不要這份」再輸出"""
+            for _ in range(2):
+                button_in(dialog, QPushButton, t("compare.drop")).click()
+            button_in(dialog, QPushButton, t("compare.output")).click()
+
+        self.start_folder(t("compress.output.start"))
+        with answering_prompts() as shown:
+            self.finish(discard_all)
+        self.assertEqual(shown, [])
+        self.assertFalse(os.path.exists(self.output_dir))
+        self.assertEqual(self.scratch_files(), [])
+        self.assertTrue(self.status_shows(t("compress.status.nothing")))
+
+    def test_compare_view_opens_compressed_files_with_the_shared_opener(self):
+        def open_first(dialog: QDialog):
+            """選第一份並按「開啟」"""
+            dialog.findChild(QListWidget).setCurrentRow(0)
+            button_in(dialog, QPushButton, t("compare.open")).click()
+
+        self.start_folder(t("compress.output.start"))
+        with answering_prompts():
+            self.finish(open_first)
+        self.assertEqual(len(self.opener.opened), 1)
+        self.assertEqual(os.path.basename(self.opener.opened[0]), "Flute.pdf")
+        self.assertTrue(self.opener.opened[0].startswith(self.scratch_dir))
+
+
+class TestMainWindowCompressBatchCancel(MainWindowCompressBatchTestCase):
+    """取消整批：已壓好的也丟掉，輸出位置沒有任何新檔"""
+
+    size_limit = 1000
+
+    def test_cancelling_a_batch_delivers_nothing(self):
+        self.start_folder(t("compress.output.start"))
+        self.click_button(t("compress.cancel"))
+        with answering_prompts():
+            self.finish()
+        self.assertFalse(os.path.exists(self.output_dir))
+        self.assertEqual(self.scratch_files(), [])
+        self.assertTrue(self.status_shows(t("compress.cancelled")))
+
+
 class TestSingleInstanceLaunch(unittest.TestCase):
     """啟動：第一個程式執行中時，第二個只提示已在執行中，不開主視窗、不檢查進行中紀錄"""
 
@@ -986,8 +1911,20 @@ class TestSingleInstanceLaunch(unittest.TestCase):
         temp_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, temp_dir, True)
         self.preferences_path = os.path.join(temp_dir, "preferences.json")
+        self.scratch_dir = os.path.join(temp_dir, "temp")
+        self.leftover = os.path.join(self.scratch_dir, "0123abcd", "Flute.pdf")
+        os.makedirs(os.path.dirname(self.leftover))
+        with open(self.leftover, "wb") as f:
+            f.write(b"left by a crash")
         self.lock = InstanceLock(os.path.join(temp_dir, "instance.lock"))
         self.addCleanup(self.lock.release)
+        self.log_dir = os.path.join(temp_dir, "logs")
+        os.makedirs(self.log_dir)
+        self.expired_log = os.path.join(self.log_dir, "2000-01-01.log")
+        self.todays_log = os.path.join(self.log_dir, datetime.date.today().isoformat() + ".log")
+        for path in (self.expired_log, self.todays_log):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("x")
 
     def _main_windows(self) -> set:
         return {w for w in QApplication.topLevelWidgets() if isinstance(w, MainWindow)}
@@ -996,7 +1933,7 @@ class TestSingleInstanceLaunch(unittest.TestCase):
         """啟動並處理完排定的事件，回傳（主視窗或 None，跳出過的提示框，新開的主視窗）"""
         before = self._main_windows()
         with answering_prompts() as shown:
-            window = launch(PreferencesService(self.preferences_path), self.lock)
+            window = launch(PreferencesService(self.preferences_path), self.lock, self.scratch_dir, self.log_dir)
             QApplication.processEvents()
         if window is not None:
             self.addCleanup(window.close)
@@ -1009,6 +1946,29 @@ class TestSingleInstanceLaunch(unittest.TestCase):
         self.assertIsNone(window)
         self.assertEqual(shown, [(t("app.title"), t("app.already_running"))])
         self.assertEqual(opened, set())
+
+    def test_second_instance_leaves_the_temp_folder_of_the_first_alone(self):
+        first = OtherInstance(self.lock.lock_path)
+        self.addCleanup(first.kill)
+        self._launch()
+        self.assertTrue(os.path.isfile(self.leftover))
+
+    def test_leftovers_in_the_temp_folder_are_cleared_at_startup(self):
+        window, shown, opened = self._launch()
+        self.assertIsNotNone(window)
+        self.assertFalse(os.path.exists(self.leftover))
+
+    def test_expired_logs_are_removed_at_startup(self):
+        window, shown, opened = self._launch()
+        self.assertIsNotNone(window)
+        self.assertFalse(os.path.exists(self.expired_log))
+        self.assertTrue(os.path.exists(self.todays_log))
+
+    def test_second_instance_leaves_the_logs_alone(self):
+        first = OtherInstance(self.lock.lock_path)
+        self.addCleanup(first.kill)
+        self._launch()
+        self.assertTrue(os.path.exists(self.expired_log))
 
     def test_opens_main_window_after_first_instance_exits(self):
         OtherInstance(self.lock.lock_path).exit()

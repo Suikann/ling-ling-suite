@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0"
 echo Installing build dependencies...
 pip install pyinstaller
 
@@ -10,14 +11,11 @@ if errorlevel 1 (
 )
 
 echo Building portable EXE...
-pyinstaller --noconfirm --onedir --windowed ^
-    --name "LingLingSuite" ^
-    --add-data "src\assets;assets" ^
-    --hidden-import PySide6.QtSvg ^
-    --hidden-import PIL ^
-    --hidden-import PIL.Image ^
-    --icon NONE ^
-    src\main.py
+pyinstaller --noconfirm LingLingSuite.spec
+if errorlevel 1 (
+    echo Build failed.
+    exit /b 1
+)
 
 echo.
 echo Build complete: dist\LingLingSuite\

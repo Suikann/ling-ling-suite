@@ -2,7 +2,7 @@
 """
 泠靈小工具 - 應用程式進入點
 
-啟動 PySide6 主視窗；同一時間只允許一個程式執行。
+啟動前補上輸入法環境變數、設定應用程式識別名，再啟動 PySide6 主視窗；同一時間只允許一個程式執行。
 """
 import sys
 import os
@@ -12,9 +12,14 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QProxyStyle, QStyleFactory
 from PySide6.QtCore import Qt, QTimer
-from core.constants import INSTANCE_LOCK_FILE, LOCALE_ZH_TW, PREFERENCES_FILE
+from PySide6.QtGui import QGuiApplication
+from core.constants import APP_ID, INSTANCE_LOCK_FILE, LOCALE_ZH_TW, LOG_DIR, PREFERENCES_FILE, TEMP_DIR
+from core.launch_env import qt_environment_defaults
 from core.locale import t, set_locale
 from core.models import Project
+from services.activity_log import ActivityLog
+from services.compression_service import CompressionService
+from services.file_service import FileService
 from services.instance_lock import InstanceLock
 from services.preferences_service import PreferencesService
 
@@ -33,6 +38,8 @@ class _AppStyle(QProxyStyle):
 
 
 def main():
+    """啟動程式：載入偏好與語言、建立 QApplication，取得單一實例鎖後開主視窗並進入事件迴圈"""
+    prepare_application()
     prefs = PreferencesService(PREFERENCES_FILE)
     prefs.load()
     language = prefs.get("language") or LOCALE_ZH_TW
@@ -51,15 +58,29 @@ def main():
     sys.exit(code)
 
 
-def launch(prefs: PreferencesService, lock: InstanceLock) -> Optional[QMainWindow]:
-    """取得單一實例鎖後開啟主視窗，並排定檢查上次中斷的重新命名
+def prepare_application() -> None:
+    """建立 QApplication 前的設定：補上缺的 Qt 環境變數，設定應用程式名稱與 desktop file name
 
-    鎖要在檢查進行中紀錄之前取得：另一個程式執行中時，它的進行中紀錄不是上次中斷留下的。
-    所以鎖檔建不起來或開不了時也不繼續，顯示錯誤後結束。
+    環境變數要在 QApplication 建立前設好，Qt 才會依它挑輸入法外掛。
+    """
+    os.environ.update(qt_environment_defaults(os.environ, sys.platform))
+    QGuiApplication.setApplicationName(APP_ID)
+    QGuiApplication.setDesktopFileName(APP_ID)
+
+
+def launch(
+    prefs: PreferencesService, lock: InstanceLock, temp_dir: str = TEMP_DIR, log_dir: str = LOG_DIR,
+) -> Optional[QMainWindow]:
+    """取得單一實例鎖後清掉暫存資料夾的殘檔與過期的紀錄檔、開啟主視窗，並排定檢查上次中斷的重新命名
+
+    鎖要在檢查進行中紀錄、清暫存資料夾與紀錄檔之前取得：另一個程式執行中時，它的進行中紀錄不是上次中斷留下的，
+    暫存資料夾裡的檔也還在用，紀錄檔也還在寫。所以鎖檔建不起來或開不了時也不繼續，顯示錯誤後結束。
 
     Args:
         prefs: 已載入的使用者偏好
         lock: 單一實例鎖
+        temp_dir: 暫存資料夾
+        log_dir: 紀錄檔資料夾
 
     Returns:
         主視窗；已有另一個程式在執行，或鎖檔建不起來、開不了時，提示後回傳 None
@@ -73,7 +94,11 @@ def launch(prefs: PreferencesService, lock: InstanceLock) -> Optional[QMainWindo
         QMessageBox.information(None, t("app.title"), t("app.already_running"))
         return None
     from ui.main_window import MainWindow
-    window = MainWindow(prefs)
+    compressor = CompressionService(FileService(), temp_dir)
+    compressor.clear_leftovers()
+    log = ActivityLog(FileService(), log_dir)
+    log.remove_expired()
+    window = MainWindow(prefs, compressor=compressor, log=log)
     window.setWindowTitle(t("app.title"))
     window.resize(1200, 800)
     window.setMinimumSize(900, 600)

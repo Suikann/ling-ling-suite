@@ -5,15 +5,19 @@
 提供檔案系統操作：列出、重新命名、建立目錄、原子寫入等。
 """
 import errno
+import hashlib
 import json
 import os
 import shutil
 import time
-from typing import Any, List
+from typing import Any, List, Tuple
 
 from core.constants import (
     ATOMIC_WRITE_RETRIES, ATOMIC_WRITE_RETRY_INTERVAL, ATOMIC_WRITE_TEMP_SUFFIX, PDF_EXTENSION,
 )
+
+# 算 MD5、SHA-256 時一次讀多少位元組
+_DIGEST_CHUNK_SIZE = 1024 * 1024
 
 
 class FileService:
@@ -83,6 +87,55 @@ class FileService:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    def read_text(self, path: str) -> str:
+        """讀取文字檔（UTF-8）
+
+        Args:
+            path: 檔案路徑
+
+        Returns:
+            檔案內容
+
+        Raises:
+            OSError: 檔案讀不到
+            UnicodeDecodeError: 內容不是 UTF-8
+        """
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def read_bytes(self, path: str) -> bytes:
+        """讀取整個檔案的內容
+
+        Raises:
+            OSError: 檔案讀不到
+        """
+        with open(path, "rb") as f:
+            return f.read()
+
+    def md5(self, path: str) -> str:
+        """檔案內容的 MD5（十六進位，跟 Drive 的 md5Checksum 同一種寫法），分段讀取
+
+        Raises:
+            OSError: 檔案讀不到
+        """
+        return self._digest(path, hashlib.md5())
+
+    def sha256(self, path: str) -> str:
+        """檔案內容的 SHA-256（十六進位小寫），分段讀取
+
+        Raises:
+            OSError: 檔案讀不到
+        """
+        return self._digest(path, hashlib.sha256())
+
+    @staticmethod
+    def _digest(path: str, digest) -> str:
+        """分段讀完檔案餵給 digest（hashlib 的雜湊物件），回傳十六進位的結果"""
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(_DIGEST_CHUNK_SIZE), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
     def write_json_atomic(self, path: str, data: Any) -> None:
         """將資料序列化為 JSON 並原子寫入
 
@@ -115,6 +168,40 @@ class FileService:
         except BaseException:
             self._remove_quietly(temp_path)
             raise
+
+    def write_bytes(self, path: str, content: bytes) -> None:
+        """把位元組寫進檔案並 fsync；父目錄不存在時先建立，已有檔案時覆蓋。只用於程式自己的暫存檔
+
+        Args:
+            path: 檔案路徑
+            content: 內容
+
+        Raises:
+            OSError: 寫不進去
+        """
+        parent = os.path.dirname(path)
+        if parent:
+            self.create_directory(parent)
+        with open(path, "wb") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+
+    def append_text(self, path: str, text: str) -> None:
+        """在文字檔結尾附加文字；檔案或父目錄不存在時先建立
+
+        Args:
+            path: 目標檔案路徑
+            text: 要附加的文字（UTF-8，\n 寫成這個平台的換行）
+
+        Raises:
+            OSError: 寫不進去
+        """
+        parent = os.path.dirname(path)
+        if parent:
+            self.create_directory(parent)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(text)
 
     def remove_atomic_residue(self, path: str) -> None:
         """清除原子寫入在目標旁留下的暫名（寫到一半當機的殘留）
@@ -173,6 +260,23 @@ class FileService:
             是否存在
         """
         return os.path.isfile(path)
+
+    def file_size(self, path: str) -> int:
+        """檔案大小（位元組）
+
+        Raises:
+            OSError: 讀不到檔案資訊（例如檔案不存在）
+        """
+        return os.path.getsize(path)
+
+    def stamp(self, path: str) -> Tuple[int, int]:
+        """檔案的大小（位元組）與修改時間（奈秒）；內容沒改過時兩者都不變，拿來判斷要不要重算 MD5
+
+        Raises:
+            OSError: 讀不到檔案資訊（例如檔案不存在）
+        """
+        info = os.stat(path)
+        return info.st_size, info.st_mtime_ns
 
     def file_exists_exact(self, path: str) -> bool:
         """檢查檔案是否存在且檔名大小寫完全相同
@@ -268,6 +372,19 @@ class FileService:
 
     def remove_file(self, path: str) -> None:
         """直接刪除檔案，不進資源回收桶；只用於程式自己產生的檔案（紀錄、備份、寫到一半的輸出）
+
+        Args:
+            path: 檔案路徑
+
+        Raises:
+            OSError: 刪不掉（檔案不存在時為 FileNotFoundError）
+        """
+        os.remove(path)
+
+    def delete_permanently(self, path: str) -> None:
+        """永久刪除使用者的檔案，不進資源回收桶；只有清除本機檔案（確認譜庫裡有內容相同的一份之後）使用
+
+        其他刪除使用者檔案的操作一律走資源回收桶（delete_file）。
 
         Args:
             path: 檔案路徑

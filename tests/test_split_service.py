@@ -184,6 +184,19 @@ class TestDuplicateSegmentNames(SplitServiceTestCase):
     def test_blank_names_falling_back_to_the_same_name(self):
         self.assert_blocked([(0, 0, ""), (1, 1, "Oboe"), (2, 3, "  ")], "Part.pdf", [1, 3])
 
+    def test_names_of_the_same_voice_are_blocked_too(self):
+        """分段名稱會成為樂器表：「二胡 I」與「二胡1」是同一聲部，同一份樂器表不能重名"""
+        check = self.splitter.check(self.request((0, 0, "二胡 I"), (1, 1, "二胡 II"), (2, 3, "二胡1")))
+        self.assertTrue(check.blocked)
+        self.assertEqual(check.duplicates, [])
+        self.assertEqual([(d.voice, d.segments) for d in check.duplicate_voices], [("二胡 I", [1, 3])])
+        with self.assertRaises(ValueError):
+            self.splitter.execute(check)
+
+    def test_same_file_name_is_not_reported_again_as_the_same_voice(self):
+        check = self.splitter.check(self.request((0, 1, "Flute"), (2, 3, "FLUTE")))
+        self.assertEqual(check.duplicate_voices, [])
+
     def test_numbers_count_segments_whose_pages_were_all_deleted(self):
         check = self.splitter.check(self.request(
             (0, 0, "Flute"), (1, 1, "Oboe"), (2, 3, "Flute"), deleted_pages={1},
@@ -441,9 +454,11 @@ class TestUndoSplit(SplitServiceTestCase):
 
     def test_merged_score_among_a_groups_parts_returns_to_the_same_place(self):
         loose, horn = FileInfo(self.path("Loose.pdf"), "Loose.pdf"), FileInfo(self.path("Horn.pdf"), "Horn.pdf")
-        group = Group(name="g", files=[loose, FileInfo(self.source, "合併譜.pdf"), horn], score_label="總譜")
+        group = Group(
+            name="g", files=[loose, FileInfo(self.source, "合併譜.pdf"), horn], instruments=["Piano", "Horn"],
+            selected_instruments=[0, 1], score_label="總譜",
+        )
         project = Project(groups=[group])
-        project.set_instruments(group, ["Piano", "Horn"])
         before = project.to_data()
         new_parts = self.split(project, (0, 1, "Flute"), (2, 3, "Oboe"))
         self.undo(project)

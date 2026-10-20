@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from core.template_engine import detect_piece_name
+from core.template_engine import detect_piece_name, extract_instruments_from_filenames
 
 
 class TestDetectPieceName(unittest.TestCase):
@@ -71,6 +71,19 @@ class TestDetectPieceName(unittest.TestCase):
         ]
         result = detect_piece_name(filenames)
         self.assertEqual(result, "Mozart PC21 Mvt1")
+
+
+
+class TestExtractInstrumentsFromFilenames(unittest.TestCase):
+    """從檔名擷取聲部：去掉各檔共同的前段與後段（例如曲名），留下聲部名稱"""
+
+    def test_drops_the_common_piece_title(self):
+        filenames = ["苗嶺春早-竹笛I 兼口笛.pdf", "苗嶺春早-新笛.pdf", "苗嶺春早-揚琴.pdf"]
+        self.assertEqual(extract_instruments_from_filenames(filenames), ["竹笛I 兼口笛", "新笛", "揚琴"])
+
+    def test_numbered_files_still_drop_the_piece_title(self):
+        filenames = ["01-苗嶺春早-竹笛I 兼口笛.pdf", "02-苗嶺春早-新笛.pdf", "10-苗嶺春早-揚琴.pdf"]
+        self.assertEqual(extract_instruments_from_filenames(filenames), ["竹笛I 兼口笛", "新笛", "揚琴"])
 
 
 if __name__ == '__main__':

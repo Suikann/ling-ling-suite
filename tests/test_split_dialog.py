@@ -33,6 +33,7 @@ from services.split_service import SplitRequest, SplitSegment, SplitService
 from ui import split_dialog
 from ui.split_dialog import SplitPdfDialog
 from tests.test_main_window import MainWindowTestCase, _settle, answering_prompts, button_in
+from tests.test_voice_completer import catalog_candidates, marked, suggestions, type_into
 
 
 class TestResplitMessage(unittest.TestCase):
@@ -208,10 +209,11 @@ class TestSplitFromMainWindow(MainWindowTestCase):
         return [e.text() for e in dialog.findChildren(QLineEdit)]
 
     def shown_parts(self) -> List[str]:
-        """目前分頁的分譜清單列出的檔名"""
+        """目前分頁的分譜清單列出的檔名（沒有分譜的聲部的空格不算）"""
         _settle()
         listing = self.window.findChild(QTabWidget).currentWidget().findChild(QListWidget)
-        return [listing.item(i).text().rsplit("  |  ", 1)[-1] for i in range(listing.count())]
+        names = [listing.item(i).text().rsplit("  |  ", 1)[-1] for i in range(listing.count())]
+        return [name for name in names if name != t("group.no_part")]
 
     def tab_names(self) -> List[str]:
         """主視窗各分頁的標題"""
@@ -255,6 +257,49 @@ class TestSplitFromMainWindow(MainWindowTestCase):
         with splitting(operate):
             self.trigger_menu(t("menu.tools.split_pdf"))
         self.assertEqual(seen["names"], ["Flute", "Oboe"])
+
+    def segment_suggestions(self, typed: str) -> List[List[str]]:
+        """從主視窗開分割對話框、標記兩段，在每段的名稱打 typed，回傳各段的自動完成候選"""
+        seen = {}
+
+        def operate(dialog):
+            self.load(dialog)
+            self.mark_split_before_page(dialog, 3)
+            _settle()
+            seen["listed"] = []
+            for entry in dialog.findChildren(QLineEdit):
+                type_into(entry, typed)
+                seen["listed"].append(suggestions(entry))
+
+        with splitting(operate):
+            self.trigger_menu(t("menu.tools.split_pdf"))
+        return seen["listed"]
+
+    def test_segment_names_list_catalog_names_and_mark_the_same_voice(self):
+        catalog_candidates(self).remember_catalog(["二胡 II", "柳琴"])
+        self.assertEqual(self.segment_suggestions("二胡2"), [[marked("二胡 II")]] * 2)
+
+    def test_without_the_catalog_segment_names_list_the_presets(self):
+        listed = self.segment_suggestions("阮")
+        self.assertEqual(len(listed), 2)
+        self.assertTrue(all("中阮" in names for names in listed))
+
+    def test_stepping_from_another_spelling_of_a_voice_goes_to_the_next_voice(self):
+        """分段名稱是樂器表某個聲部的另一種寫法（「violin 1」是「Violin I」）時，▶ 換到下一個聲部，後面的分段接著帶入"""
+        self.type_voices("Violin I", "Violin II", "Viola")
+        seen = {}
+
+        def operate(dialog):
+            self.load(dialog)
+            self.mark_split_before_page(dialog, 3)
+            _settle()
+            dialog.findChildren(QLineEdit)[0].setText("violin 1")
+            button_in(dialog, QPushButton, "\u25B6").click()
+            seen["names"] = self.segment_names(dialog)
+
+        with splitting(operate):
+            self.trigger_menu(t("menu.tools.split_pdf"))
+        self.assertEqual(seen["names"], ["Violin II", "Viola"])
 
     def test_thumbnails_of_a_file_no_longer_selected_do_not_replace_the_selected_ones(self):
         # 另一份的頁面高度只有一半：它的縮圖寬 150、高 75，合併譜的縮圖寬高都是 150
@@ -341,6 +386,26 @@ class TestSplitFromMainWindow(MainWindowTestCase):
         self.assertEqual(shown, [(t("dialog.error"), error)])
         workspace_folder = SplitService(FileService(), self.window.workspace_service).output_folder(self.merged)
         self.assertFalse(os.path.exists(workspace_folder))
+        self.assertFalse(self.is_marked_unsaved())
+
+    def test_segments_named_as_the_same_voice_are_named_in_the_error(self):
+        shown = []
+
+        def operate(dialog):
+            self.load(dialog)
+            self.mark_split_before_page(dialog, 3)
+            _settle()
+            for entry, name in zip(dialog.findChildren(QLineEdit), ("二胡 I", "二胡1")):
+                entry.setText(name)
+            with answering_prompts() as prompts:
+                button_in(dialog, QPushButton, t("split.execute")).click()
+            shown.extend(prompts)
+
+        with splitting(operate):
+            self.trigger_menu(t("menu.tools.split_pdf"))
+        segments = t("split.segment_separator").join(["1", "2"])
+        error = t("split.error.duplicate_voices", segments=segments, name="二胡 I")
+        self.assertEqual(shown, [(t("dialog.error"), error)])
         self.assertFalse(self.is_marked_unsaved())
 
     def test_resplitting_another_projects_parts_names_that_project_and_asks_yes_or_no(self):

@@ -2,8 +2,8 @@
 """
 PDF 分割對話框（PySide6）
 
-提供頁面縮圖預覽，讓使用者標記分割點、為各段命名；檢查、確認與執行交給分割模組（services/split_service.py），
-對話框只負責詢問與顯示。
+提供頁面縮圖預覽，讓使用者標記分割點、為各段命名（分段名稱有聲部名稱的自動完成）；檢查、確認與執行交給
+分割模組（services/split_service.py），對話框只負責詢問與顯示。
 """
 import os
 from functools import partial
@@ -18,8 +18,11 @@ from PySide6.QtCore import Qt
 from core.constants import SECTION_COLORS
 from core.locale import t
 from core.models import WorkspaceOwner
+from core.voice_names import voice_index, voice_key
+from core.voice_suggestions import VoiceCandidates
 from services.pdf_service import get_page_count, render_page_thumbnails
 from services.split_service import SplitCheck, SplitRequest, SplitSegment, SplitService
+from ui.voice_completer import attach_voice_completer
 from ui.widgets import ThumbnailLoader, ensure_file_exists, pdf_file_choices
 
 _THUMB_WIDTH = 150
@@ -30,7 +33,8 @@ class SplitPdfDialog(QDialog):
     """PDF 分割對話框"""
 
     def __init__(self, project, on_split_complete=None, initial_group=None, parent=None,
-                 splitter: SplitService = None, project_path: str = ""):
+                 splitter: SplitService = None, project_path: str = "",
+                 voice_candidates: Optional[VoiceCandidates] = None):
         """建立分割對話框
 
         Args:
@@ -40,10 +44,12 @@ class SplitPdfDialog(QDialog):
             parent: 父視窗
             splitter: 分割模組
             project_path: 目前專案檔路徑，尚未存檔時為空字串（記為工作區子資料夾的所屬專案）
+            voice_candidates: 分段名稱自動完成的候選來源；None 時自建（沒有譜庫的名稱）
         """
         super().__init__(parent)
         self._splitter = splitter
         self._project_path = project_path or ""
+        self._voice_candidates = voice_candidates or VoiceCandidates()
         self.setWindowTitle(t("split.title"))
         self.resize(1100, 720)
         self.setMinimumSize(900, 520)
@@ -353,10 +359,20 @@ class SplitPdfDialog(QDialog):
         """分段自動帶入的聲部名稱：要分割的合併譜所在群組的樂器表；合併譜在未分組時沒有"""
         return list(self._source_group.instruments) if self._source_group else []
 
+    def _candidates(self) -> List[str]:
+        """分段名稱自動完成的候選：在要分割的合併譜所在群組輸入聲部名稱時的候選"""
+        return self._voice_candidates.for_group(self._project, self._source_group)
+
+    def _voice_index(self, name: str) -> Optional[int]:
+        """名稱在樂器表裡是第幾個聲部（同一聲部的另一種寫法也算）；不在樂器表時為 None"""
+        return voice_index(self._voices(), name)
+
     def _next_unused(self, used, start_after=-1):
+        """樂器表裡 start_after 之後第一個還沒用過的聲部（used 為已用的名稱，同一聲部的另一種寫法也算用過）"""
         instruments = self._voices()
+        used_keys = {voice_key(name) for name in used}
         for i in range(start_after + 1, len(instruments)):
-            if instruments[i] not in used:
+            if voice_key(instruments[i]) not in used_keys:
                 return instruments[i]
         return t("split.part_default", index=len(used) + 1)
 
@@ -392,10 +408,9 @@ class SplitPdfDialog(QDialog):
             else:
                 name = t("split.part_default", index=sec_idx + 1)
             used.add(name)
-            try:
-                last_idx = instruments.index(name)
-            except (ValueError, AttributeError):
-                pass
+            index = self._voice_index(name)
+            if index is not None:
+                last_idx = index
             _arrow_style = (
                 "QPushButton { padding: 0; min-height: 0; font-size: 14px; "
                 "border-radius: 14px; }"
@@ -410,6 +425,7 @@ class SplitPdfDialog(QDialog):
                 row.addWidget(prev_btn)
             entry = QLineEdit(name)
             entry.setFixedHeight(_h)
+            attach_voice_completer(entry, self._candidates)
             row.addWidget(entry, stretch=1)
             self._section_name_entries[sec_idx] = entry
             if instruments:
@@ -441,10 +457,8 @@ class SplitPdfDialog(QDialog):
         instruments = self._voices()
         if not instruments:
             return
-        current = entry.text()
-        try:
-            idx = instruments.index(current)
-        except ValueError:
+        idx = self._voice_index(entry.text())
+        if idx is None:
             idx = -1 if direction > 0 else len(instruments)
         new_idx = (idx + direction) % len(instruments)
         entry.setText(instruments[new_idx])
@@ -462,10 +476,8 @@ class SplitPdfDialog(QDialog):
             name = self._next_unused(used, start_after=search_from)
             e.setText(name)
             used.add(name)
-            try:
-                search_from = instruments.index(name)
-            except ValueError:
-                search_from = len(instruments)
+            index = self._voice_index(name)
+            search_from = index if index is not None else len(instruments)
 
     # --- Output ---
 
@@ -540,11 +552,15 @@ class SplitPdfDialog(QDialog):
 
     @staticmethod
     def _blocked_message(check: SplitCheck) -> str:
-        """組出擋下分割的原因：檔名相同的分段、會蓋掉合併譜的分譜"""
+        """組出擋下分割的原因：檔名相同的分段、名稱是同一聲部的分段、會蓋掉合併譜的分譜"""
         separator = t("split.segment_separator")
         lines = [
             t("split.error.duplicate_names", segments=separator.join(map(str, d.segments)), name=d.file_name)
             for d in check.duplicates
+        ]
+        lines += [
+            t("split.error.duplicate_voices", segments=separator.join(map(str, d.segments)), name=d.voice)
+            for d in check.duplicate_voices
         ]
         lines += [t("split.error.overwrite_source", name=name) for name in check.source_conflicts]
         return "\n\n".join(lines)

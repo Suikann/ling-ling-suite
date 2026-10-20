@@ -1,0 +1,430 @@
+# -*- coding: utf-8 -*-
+"""
+譜庫的通事：接 Google 的試算表與 Drive
+
+很薄，只做兩件事：把關口（services/catalog_ports.py）的呼叫轉成 Google API 請求，
+把 Google 丟出的例外轉成六種錯誤類別（CatalogError）。全程式只有這裡匯入 googleapiclient，
+而且是在第一次用到時才匯入：只匯入譜庫服務與關口的模組不會載入 Google 程式庫。
+
+同一個通事物件可能被幾個背景執行緒同時使用，而 httplib2 不能多執行緒共用，所以每個通事一次只送一個請求。
+
+使用範例：
+    from services.google_catalog import open_google_catalog, catalog_error_from
+    catalog = open_google_catalog(auth, spreadsheet_id)   # 拿不到憑證時丟出 CatalogError（要在背景執行緒呼叫）
+    setup = open_google_drive(auth)                       # 還沒有譜庫試算表時（譜庫設定）
+    error = catalog_error_from(exception)                 # CatalogError，kind 為六種類別之一
+"""
+import io
+import json
+import re
+import threading
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Tuple
+
+from core.catalog_constants import DRIVE_FOLDER_MIME, DRIVE_PDF_MIME
+from core.catalog_errors import CatalogError, CatalogErrorKind, exception_message
+from core.constants import CATALOG_SPREADSHEET_ID_KEY
+from core.catalog_models import DriveFile, DriveListing, DriveRevision
+from services.catalog_ports import CellWrite, RowAppend, sheet_range
+from services.catalog_service import CatalogService
+from services.google_auth_service import GoogleAuthService, LoginReason
+
+if TYPE_CHECKING:
+    from google.oauth2.credentials import Credentials
+
+# 403 裡算「達到用量上限」的 reason（去掉底線、轉小寫後比對；Sheets 寫成 RATE_LIMIT_EXCEEDED）
+_USAGE_LIMIT_REASONS = {"ratelimitexceeded", "userratelimitexceeded", "quotaexceeded", "dailylimitexceeded"}
+# HTTP 狀態碼對應的類別；403 另看 reason，其餘狀態碼為其他
+_STATUS_KINDS = {
+    401: CatalogErrorKind.SIGN_IN,
+    403: CatalogErrorKind.NO_PERMISSION,
+    404: CatalogErrorKind.NOT_FOUND,
+    409: CatalogErrorKind.EXISTS,
+    429: CatalogErrorKind.RATE_LIMITED,
+}
+# Drive 列出檔案時一頁最多幾筆（API 上限 1000）
+_DRIVE_PAGE_SIZE = 1000
+_DRIVE_ONE_FILE_FIELDS = "id, name, mimeType, parents, md5Checksum, headRevisionId, trashed"
+# 比這大的檔改用 resumable 上傳（分段送出，斷線時不必整份重送）；一段的大小要是 256 KB 的倍數
+_RESUMABLE_THRESHOLD = 5 * 1024 * 1024
+_RESUMABLE_CHUNK_SIZE = 5 * 1024 * 1024
+_DRIVE_FILE_FIELDS = f"nextPageToken, files({_DRIVE_ONE_FILE_FIELDS})"
+# 列出版本時一頁最多幾個（API 上限 1000；Drive 最多留最近 100 個版本，一頁就列完）
+_REVISION_PAGE_SIZE = 1000
+# 譜庫服務寫入的一格範圍：「'工作表'!欄列」（工作表名裡的單引號寫成兩個）
+_CELL_RANGE = re.compile(r"'((?:[^']|'')*)'!([A-Z]+)([0-9]+)")
+
+
+def open_google_catalog(auth: GoogleAuthService, spreadsheet_id: str) -> CatalogService:
+    """以登入服務的憑證建立接 Google 的譜庫服務（會續期憑證，要在背景執行緒呼叫）
+
+    Args:
+        auth: Google 登入服務
+        spreadsheet_id: 譜庫試算表的 ID
+
+    Returns:
+        接上 Google 試算表與 Drive 的譜庫服務
+
+    Raises:
+        CatalogError: 沒設定試算表 ID 時為找不到；拿不到憑證時，連不上 Google 為斷網，其餘（沒登入、
+            安全儲存沒解鎖、Google 不認這個權杖）為要重新登入
+    """
+    if not spreadsheet_id:
+        raise CatalogError(CatalogErrorKind.NOT_FOUND, f"{CATALOG_SPREADSHEET_ID_KEY} is empty")
+    credentials = _credentials(auth)
+    return CatalogService(GoogleSheets(spreadsheet_id, credentials), GoogleDrive(credentials))
+
+
+def open_google_drive(auth: GoogleAuthService) -> CatalogService:
+    """還沒有譜庫試算表時，以登入服務的憑證建立接 Google 的譜庫服務（要在背景執行緒呼叫）
+
+    譜庫設定以它瀏覽 Drive 資料夾、找資料夾裡的試算表、建立新的譜庫試算表；讀寫譜庫試算表的方法都丟出找不到。
+
+    Args:
+        auth: Google 登入服務
+
+    Returns:
+        接上 Google Drive、還沒有連著譜庫試算表的譜庫服務
+
+    Raises:
+        CatalogError: 拿不到憑證時，連不上 Google 為斷網，其餘為要重新登入
+    """
+    credentials = _credentials(auth)
+    return CatalogService(GoogleSheets("", credentials), GoogleDrive(credentials))
+
+
+def _credentials(auth: GoogleAuthService) -> "Credentials":
+    """登入服務的憑證；拿不到時依原因丟出斷網或要重新登入"""
+    credentials = auth.get_credentials()
+    if credentials is None:
+        reason = auth.status().reason
+        kind = CatalogErrorKind.OFFLINE if reason is LoginReason.UNREACHABLE else CatalogErrorKind.SIGN_IN
+        raise CatalogError(kind, f"no Google credentials: {reason.value if reason else 'not signed in'}")
+    return credentials
+
+
+class _Gateway:
+    """通事的共用部分：建出 Google API 的用戶端，一次送一個請求，例外轉成 CatalogError"""
+
+    def __init__(self, api: str, version: str, credentials: Optional["Credentials"], http: Any):
+        """
+        Args:
+            api: API 名稱（"sheets"、"drive"）
+            version: API 版本
+            credentials: Google 憑證；給 http 時省略
+            http: 代替網路的 httplib2.Http（測試用）；省略時以 credentials 建立
+        """
+        from googleapiclient.discovery import build
+        options = {"http": http} if http is not None else {"credentials": credentials}
+        self._api = build(api, version, cache_discovery=False, static_discovery=True, **options)
+        self._lock = threading.Lock()
+
+    def _execute(self, request) -> dict:
+        """送出一個請求，回傳回應的 JSON 內容；失敗時丟出 CatalogError"""
+        return self._send(request) or {}
+
+    def _send(self, request) -> Any:
+        """送出一個請求，回傳回應本身（JSON 內容，或下載的原始位元組）；失敗時丟出 CatalogError"""
+        with self._lock:
+            try:
+                return request.execute()
+            except Exception as e:
+                raise catalog_error_from(e) from e
+
+
+class GoogleSheets(_Gateway):
+    """試算表關口的通事：一份 Google 試算表"""
+
+    def __init__(self, spreadsheet_id: str, credentials: Optional["Credentials"] = None, http: Any = None):
+        """
+        Args:
+            spreadsheet_id: 譜庫試算表的 ID；還沒有譜庫試算表時為空字串，只能建立新的試算表
+            credentials: Google 憑證
+            http: 代替網路的 httplib2.Http（測試用）
+        """
+        super().__init__("sheets", "v4", credentials, http)
+        self._spreadsheet_id = spreadsheet_id
+        # 讀到或建立工作表時記下的 sheetId（新增列與改格子的 batchUpdate 以它指定工作表）
+        self._sheet_ids: Dict[str, int] = {}
+
+    def _bound_id(self) -> str:
+        """連著的試算表 ID；沒有時不送請求，丟出找不到"""
+        if not self._spreadsheet_id:
+            raise CatalogError(CatalogErrorKind.NOT_FOUND, f"{CATALOG_SPREADSHEET_ID_KEY} is empty")
+        return self._spreadsheet_id
+
+    def read_ranges(self, ranges: Sequence[str]) -> List[List[List[str]]]:
+        """讀多個範圍（values.batchGet）"""
+        response = self._execute(self._api.spreadsheets().values().batchGet(
+            spreadsheetId=self._bound_id(), ranges=list(ranges),
+        ))
+        return [
+            [[str(value) for value in row] for row in value_range.get("values", [])]
+            for value_range in response.get("valueRanges", [])
+        ]
+
+    def write_cells(self, data: Sequence[CellWrite], appends: Sequence[RowAppend] = ()) -> None:
+        """一次寫入多個範圍並新增列：沒有新增列時是 values.batchUpdate（RAW）；有時是一個 spreadsheets.batchUpdate，
+        格子以 updateCells、新列以 appendCells（接在最後一列有內容的列之後），值都是 stringValue（不解讀成公式或數字）
+
+        sheetId 取自之前讀到或建立的工作表；有沒見過的工作表時先以 sheet_ids 讀一次。
+        """
+        if not appends:
+            self._execute(self._api.spreadsheets().values().batchUpdate(
+                spreadsheetId=self._bound_id(),
+                body={"valueInputOption": "RAW", "data": [{"range": r, "values": v} for r, v in data]},
+            ))
+            return
+        cells = [(_CELL_RANGE.fullmatch(text), values) for text, values in data]
+        names = {match.group(1).replace("''", "'") for match, _ in cells} | {sheet for sheet, _ in appends}
+        if not names <= set(self._sheet_ids):
+            self.sheet_ids()
+        requests = [
+            {"updateCells": {
+                "start": {
+                    "sheetId": self._sheet_ids[match.group(1).replace("''", "'")],
+                    "rowIndex": int(match.group(3)) - 1, "columnIndex": _column_index(match.group(2)),
+                },
+                "rows": _row_data(values), "fields": "userEnteredValue",
+            }}
+            for match, values in cells
+        ] + [
+            {"appendCells": {"sheetId": self._sheet_ids[sheet], "rows": _row_data(rows), "fields": "userEnteredValue"}}
+            for sheet, rows in appends
+        ]
+        self._execute(self._api.spreadsheets().batchUpdate(spreadsheetId=self._bound_id(), body={"requests": requests}))
+
+    def append_rows(self, sheet: str, rows: Sequence[List[str]]) -> None:
+        """在工作表最後一列之後新增多列（values.append），值以 RAW 寫入"""
+        self._execute(self._api.spreadsheets().values().append(
+            spreadsheetId=self._bound_id(), range=sheet_range(sheet, "A:A"),
+            valueInputOption="RAW", insertDataOption="INSERT_ROWS", body={"values": [list(row) for row in rows]},
+        ))
+
+    def add_sheet(self, title: str) -> None:
+        """建立一張空的工作表，記下它的 sheetId"""
+        response = self._execute(self._api.spreadsheets().batchUpdate(
+            spreadsheetId=self._bound_id(),
+            body={"requests": [{"addSheet": {"properties": {"title": title}}}]},
+        ))
+        for reply in response.get("replies", []):
+            properties = reply.get("addSheet", {}).get("properties", {})
+            if "sheetId" in properties:
+                self._sheet_ids[properties.get("title", title)] = properties["sheetId"]
+
+    def sheet_titles(self) -> List[str]:
+        """列出所有工作表的名稱（spreadsheets.get，取名稱與 sheetId，記下 sheetId）"""
+        response = self._execute(self._api.spreadsheets().get(
+            spreadsheetId=self._bound_id(), fields="sheets.properties(sheetId,title)",
+        ))
+        properties = [sheet.get("properties", {}) for sheet in response.get("sheets", [])]
+        self._sheet_ids.update({p["title"]: p["sheetId"] for p in properties if "title" in p and "sheetId" in p})
+        return [p.get("title", "") for p in properties]
+
+    def sheet_ids(self) -> Dict[str, int]:
+        """每張工作表的名稱與 sheetId（spreadsheets.get），一併記下"""
+        response = self._execute(self._api.spreadsheets().get(
+            spreadsheetId=self._bound_id(), fields="sheets.properties(sheetId,title)",
+        ))
+        ids = {sheet["properties"]["title"]: sheet["properties"]["sheetId"] for sheet in response.get("sheets", [])}
+        self._sheet_ids.update(ids)
+        return ids
+
+    def delete_rows(self, rows: Sequence[Tuple[int, int]]) -> None:
+        """一次刪掉多列（batchUpdate）：由下往上刪，列號都以刪除之前的為準"""
+        self._execute(self._api.spreadsheets().batchUpdate(
+            spreadsheetId=self._bound_id(),
+            body={"requests": [
+                {"deleteDimension": {"range": {
+                    "sheetId": sheet_id, "dimension": "ROWS", "startIndex": row, "endIndex": row + 1,
+                }}}
+                for sheet_id, row in sorted(set(rows), key=lambda target: -target[1])
+            ]},
+        ))
+
+
+    def create_spreadsheet(self, title: str, sheets: Mapping[str, Sequence[str]]) -> str:
+        """建立一份新的試算表（spreadsheets.create）：每張工作表寫好標題列並凍結"""
+        response = self._execute(self._api.spreadsheets().create(fields="spreadsheetId", body={
+            "properties": {"title": title},
+            "sheets": [
+                {
+                    "properties": {"title": name, "gridProperties": {"frozenRowCount": 1}},
+                    "data": [{"startRow": 0, "startColumn": 0, "rowData": [
+                        {"values": [{"userEnteredValue": {"stringValue": str(h)}} for h in headers]},
+                    ]}],
+                }
+                for name, headers in sheets.items()
+            ],
+        }))
+        return response["spreadsheetId"]
+
+
+class GoogleDrive(_Gateway):
+    """Drive 關口的通事"""
+
+    def __init__(self, credentials: Optional["Credentials"] = None, http: Any = None):
+        """
+        Args:
+            credentials: Google 憑證
+            http: 代替網路的 httplib2.Http（測試用）
+        """
+        super().__init__("drive", "v3", credentials, http)
+
+    def list_files(self, query: str, page_token: str = "") -> DriveListing:
+        """以查詢字串列出檔案的一頁（files.list，依名稱排序）"""
+        response = self._execute(self._api.files().list(
+            q=query, fields=_DRIVE_FILE_FIELDS, orderBy="name", pageSize=_DRIVE_PAGE_SIZE,
+            pageToken=page_token or None,
+        ))
+        files = [_drive_file(item) for item in response.get("files", [])]
+        return DriveListing(files, response.get("nextPageToken", ""))
+
+    def get_file(self, file_id: str) -> DriveFile:
+        """取一個檔案的中繼資料（files.get）"""
+        return _drive_file(self._execute(self._api.files().get(fileId=file_id, fields=_DRIVE_ONE_FILE_FIELDS)))
+
+    def create_folder(self, name: str, parent: str, file_id: str = "") -> DriveFile:
+        """在 parent 裡建立資料夾（files.create）；給了 file_id 時以它為 ID"""
+        body = {"name": name, "mimeType": DRIVE_FOLDER_MIME, "parents": [parent]}
+        if file_id:
+            body["id"] = file_id
+        return _drive_file(self._execute(self._api.files().create(body=body, fields=_DRIVE_ONE_FILE_FIELDS)))
+
+    def generate_ids(self, count: int) -> List[str]:
+        """預先要 count 個檔案 ID（files.generateIds）"""
+        response = self._execute(self._api.files().generateIds(count=count, space="drive", type="files"))
+        return list(response.get("ids", []))
+
+    def upload(self, file_id: str, name: str, parent: str, content: bytes) -> DriveFile:
+        """以指定 ID 上傳 PDF（files.create）；大檔用 resumable 上傳"""
+        return _drive_file(self._execute(self._api.files().create(
+            body={"id": file_id, "name": name, "parents": [parent]}, media_body=_media(content),
+            fields=_DRIVE_ONE_FILE_FIELDS,
+        )))
+
+    def update_content(
+        self, file_id: str, content: bytes, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = (),
+    ) -> DriveFile:
+        """換掉內容並改名、搬移（files.update）；大檔用 resumable 上傳"""
+        return _drive_file(self._execute(self._api.files().update(
+            fileId=file_id, body={"name": name} if name else {}, media_body=_media(content),
+            addParents=add_parent or None, removeParents=",".join(remove_parents) or None,
+            fields=_DRIVE_ONE_FILE_FIELDS,
+        )))
+
+    def rename_or_move(self, file_id: str, name: str = "", add_parent: str = "", remove_parents: Sequence[str] = ()) -> None:
+        """改名與搬移（files.update）"""
+        self._execute(self._api.files().update(
+            fileId=file_id, body={"name": name} if name else {}, fields="id",
+            addParents=add_parent or None, removeParents=",".join(remove_parents) or None,
+        ))
+
+    def move_to_trash(self, file_id: str) -> None:
+        """丟進垃圾桶（files.update）"""
+        self._execute(self._api.files().update(fileId=file_id, body={"trashed": True}, fields="id"))
+
+    def download(self, file_id: str) -> bytes:
+        """下載內容（files.get，alt=media），回傳原始位元組"""
+        return self._send(self._api.files().get_media(fileId=file_id)) or b""
+
+    def list_revisions(self, file_id: str) -> List[DriveRevision]:
+        """列出 Drive 還留著的版本（revisions.list），由舊到新"""
+        response = self._execute(self._api.revisions().list(
+            fileId=file_id, fields="revisions(id,md5Checksum,keepForever)", pageSize=_REVISION_PAGE_SIZE,
+        ))
+        return [
+            DriveRevision(item["id"], item.get("md5Checksum", ""), bool(item.get("keepForever", False)))
+            for item in response.get("revisions", [])
+        ]
+
+    def keep_revision(self, file_id: str, revision_id: str, keep: bool) -> None:
+        """設定版本的 keepForever（revisions.update）"""
+        self._execute(self._api.revisions().update(
+            fileId=file_id, revisionId=revision_id, body={"keepForever": keep}, fields="id",
+        ))
+
+    def download_revision(self, file_id: str, revision_id: str) -> bytes:
+        """下載一個版本的內容（revisions.get，alt=media），回傳原始位元組"""
+        return self._send(self._api.revisions().get_media(fileId=file_id, revisionId=revision_id)) or b""
+
+
+def _column_index(letters: str) -> int:
+    """A1 表示法的欄字母轉成從 0 起算的欄號（A 為 0、Z 為 25、AA 為 26）"""
+    index = 0
+    for letter in letters:
+        index = index * 26 + ord(letter) - ord("A") + 1
+    return index - 1
+
+
+def _row_data(rows: Sequence[Sequence[str]]) -> List[dict]:
+    """spreadsheets.batchUpdate 的列：每格是純文字的 stringValue，空字串是空的格子（清掉原值）"""
+    return [
+        {"values": [{"userEnteredValue": {"stringValue": str(value)}} if str(value) else {} for value in row]}
+        for row in rows
+    ]
+
+
+def _drive_file(item: dict) -> DriveFile:
+    """Drive 回應裡的一個檔案"""
+    return DriveFile(
+        id=item["id"], name=item.get("name", ""), mime_type=item.get("mimeType", ""),
+        parents=tuple(item.get("parents", [])), md5=item.get("md5Checksum", ""),
+        head_revision=item.get("headRevisionId", ""), trashed=bool(item.get("trashed", False)),
+    )
+
+
+def _media(content: bytes):
+    """要上傳的 PDF 內容；大於 _RESUMABLE_THRESHOLD 時用 resumable 上傳"""
+    from googleapiclient.http import MediaIoBaseUpload
+    return MediaIoBaseUpload(
+        io.BytesIO(content), mimetype=DRIVE_PDF_MIME, chunksize=_RESUMABLE_CHUNK_SIZE,
+        resumable=len(content) > _RESUMABLE_THRESHOLD,
+    )
+
+
+def catalog_error_from(error: BaseException) -> CatalogError:
+    """把 Google 程式庫或傳輸層丟出的例外轉成譜庫錯誤
+
+    401、續期被拒（invalid_grant）為要重新登入；403 為沒有權限，用量類的 403 與 429 為達到用量上限；
+    404 為找不到；409 為已經存在（以預先要的 ID 建檔重送時）；連不上、逾時為斷網；其餘為其他。
+
+    Args:
+        error: 呼叫 Google 時丟出的例外
+
+    Returns:
+        帶類別與原始訊息的譜庫錯誤
+    """
+    if isinstance(error, CatalogError):
+        return error
+    return CatalogError(_kind_of(error), exception_message(error))
+
+
+def _kind_of(error: BaseException) -> CatalogErrorKind:
+    """例外的錯誤類別"""
+    from google.auth import exceptions as auth_exceptions
+    from googleapiclient.errors import HttpError
+    import httplib2
+    if isinstance(error, HttpError):
+        status = error.resp.status
+        if status == 403 and _reasons(error.content) & _USAGE_LIMIT_REASONS:
+            return CatalogErrorKind.RATE_LIMITED
+        return _STATUS_KINDS.get(status, CatalogErrorKind.OTHER)
+    if isinstance(error, auth_exceptions.RefreshError):
+        # 可重試的續期失敗是權杖端點暫時出錯，不是權杖被拒
+        return CatalogErrorKind.OTHER if error.retryable else CatalogErrorKind.SIGN_IN
+    if isinstance(error, (auth_exceptions.TransportError, httplib2.ServerNotFoundError, OSError)):
+        return CatalogErrorKind.OFFLINE
+    return CatalogErrorKind.OTHER
+
+
+def _reasons(content: bytes) -> set:
+    """Google 錯誤回應裡所有的 reason（去掉底線、轉小寫）；不是 JSON 時為空集合"""
+    try:
+        error = json.loads(content.decode("utf-8"))["error"]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return set()
+    entries = list(error.get("errors") or []) + list(error.get("details") or [])
+    return {
+        str(entry.get("reason", "")).replace("_", "").lower()
+        for entry in entries if isinstance(entry, dict)
+    }

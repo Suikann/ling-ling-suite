@@ -3,7 +3,7 @@
 分割
 
 把合併譜依分段抽頁成分譜，分兩段：check 回報需要使用者確認的事（取代上次的分譜、
-那些分譜屬於其他專案、指定資料夾已有同名檔案）與擋下的問題（分段同名、輸出會蓋掉合併譜）；
+那些分譜屬於其他專案、指定資料夾已有同名檔案）與擋下的問題（分段同名或同一聲部、輸出會蓋掉合併譜）；
 execute 依確認過的檢查結果一次執行，中途失敗整批撤回，成功時交回新分譜、被取代的路徑與分割紀錄。
 
 分譜預設放進工作區：每份合併譜對應一個子資料夾，以來源路徑比對鍵的雜湊命名、跨專案共用
@@ -29,6 +29,7 @@ from core.constants import (
 from core.filename import ensure_pdf_extension, sanitize_filename
 from core.models import FileInfo, SplitEntry, SplitResult, WorkspaceOwner
 from core.paths import path_key, same_path
+from core.voice_names import VoiceKey, voice_key
 from services.file_service import FileService
 from services.pdf_service import extract_pages
 from services.workspace_service import WorkspaceService
@@ -76,6 +77,18 @@ class DuplicateName:
 
 
 @dataclass
+class DuplicateVoice:
+    """名稱是同一聲部（core.voice_names 的規則）、檔名卻不同的分段（擋下：分段名稱會成為樂器表，樂器表不能重名）
+
+    Attributes:
+        voice: 第一個分段的名稱
+        segments: 分段編號（從 1 起算）
+    """
+    voice: str
+    segments: List[int]
+
+
+@dataclass
 class SplitCheck:
     """執行前的檢查結果：要產生的分譜、需要使用者確認的事與擋下的問題
 
@@ -84,6 +97,7 @@ class SplitCheck:
         folder: 分譜會寫到的資料夾
         plan: 要產生的分譜（略過頁面全被刪掉的分段）
         duplicates: 檔名相同（含清理非法字元後相同、空名回退成同一個名字、只差大小寫）的分段（擋下）
+        duplicate_voices: 名稱是同一聲部的分段（擋下）；全都寫到同一個檔的已列在 duplicates，不再列
         source_conflicts: 輸出路徑就是合併譜本身的分譜檔名（擋下）
         previous_outputs: 工作區子資料夾裡上次分割的分譜；執行後移到資源回收桶（需確認）
         owner: 上次的分譜所屬的另一個專案（確認時點名）；就是目前專案、未記錄或沒有上次的分譜時為 None
@@ -93,6 +107,7 @@ class SplitCheck:
     folder: str
     plan: List[SplitEntry]
     duplicates: List[DuplicateName] = field(default_factory=list)
+    duplicate_voices: List[DuplicateVoice] = field(default_factory=list)
     source_conflicts: List[str] = field(default_factory=list)
     previous_outputs: List[str] = field(default_factory=list)
     owner: Optional[WorkspaceOwner] = None
@@ -101,7 +116,7 @@ class SplitCheck:
     @property
     def blocked(self) -> bool:
         """是否不能執行：沒有可輸出的分段，或有擋下的問題"""
-        return not self.plan or bool(self.duplicates) or bool(self.source_conflicts)
+        return not self.plan or bool(self.duplicates) or bool(self.duplicate_voices) or bool(self.source_conflicts)
 
     @property
     def replaced(self) -> List[str]:
@@ -160,6 +175,7 @@ class SplitService:
         check = SplitCheck(
             request, folder, plan,
             duplicates=self._duplicates(numbered),
+            duplicate_voices=self._duplicate_voices(numbered),
             source_conflicts=[
                 os.path.basename(e.output_path) for e in plan if same_path(e.output_path, request.source_path)
             ],
@@ -266,6 +282,18 @@ class SplitService:
         return [
             DuplicateName(os.path.basename(same[0][1].output_path), [number for number, _ in same])
             for same in by_path.values() if len(same) > 1
+        ]
+
+    @staticmethod
+    def _duplicate_voices(numbered: List[Tuple[int, SplitEntry]]) -> List[DuplicateVoice]:
+        """名稱是同一聲部的分段，依第一次出現的順序；全都寫到同一個檔的不列（_duplicates 已列）"""
+        by_voice: Dict[VoiceKey, List[Tuple[int, SplitEntry]]] = {}
+        for number, entry in numbered:
+            by_voice.setdefault(voice_key(entry.display_name), []).append((number, entry))
+        return [
+            DuplicateVoice(same[0][1].display_name, [number for number, _ in same])
+            for same in by_voice.values()
+            if len(same) > 1 and len({path_key(entry.output_path) for _, entry in same}) > 1
         ]
 
     def _roll_back(
