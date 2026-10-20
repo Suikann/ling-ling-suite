@@ -150,12 +150,16 @@ class CatalogSettingsDialog(QDialog):
         self.setMinimumWidth(560)
         self._build_ui()
         self._club_settings_read.connect(self._show_publishing_platform)
-        self._club_settings.subscribe(self._club_settings_read.emit)
+        self._club_listener = self._club_settings_read.emit
+        self._club_settings.subscribe(self._club_listener)
+        # 沒經過 done() 就刪掉（例如隨父視窗刪掉）時也不再收通知；不引用 self，刪掉時仍能呼叫
+        club_settings, listener = self._club_settings, self._club_listener
+        self.destroyed.connect(lambda: club_settings.unsubscribe(listener))
 
     def done(self, result: int):
         """關閉對話框：不再收社團設定的通知，放棄還在跑的背景工作，之後它們不再碰這個對話框
         （重讀社團設定與 HuaXia 登出照常在背景跑完）"""
-        self._club_settings.unsubscribe(self._club_settings_read.emit)
+        self._club_settings.unsubscribe(self._club_listener)
         self._tasks.abandon_all()
         if self._huaxia_task is not None:
             self._huaxia_task.abandon()

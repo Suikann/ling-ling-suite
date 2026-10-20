@@ -583,6 +583,15 @@ class TestClubSettingsFollowTheCatalog(CatalogFolderTestCase):
         self.google.sheets.create_tab("社團設定", [["鍵", "值"], ["發譜平台", "華夏國樂社"]])
         self.assertIs(self.club.read(self.catalog("")), PublishingPlatform.HUAXIA)
 
+    def test_a_dialog_deleted_without_being_closed_is_no_longer_notified(self):
+        dialog = CatalogSettingsDialog(
+            self.auth, self.preferences, catalog_factory=self.catalog, log=self.log, club_settings=self.club,
+        )
+        dialog.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.club.forget()
+        self.assertEqual(self.log_text(), "")
+
     def test_unreadable_club_settings_of_the_new_catalog_are_written_to_the_log(self):
         self.remember_huaxia()
         self.add_spreadsheet("譜庫總表")

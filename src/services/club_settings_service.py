@@ -7,6 +7,7 @@
 讀不到時丟出帶類別的 CatalogError，記住的結果不變（沿用上次的）。連上譜庫時以 refresh 重讀：讀不到不顯示提示列，
 只把失敗寫進紀錄檔。按下發譜時再讀一次：讀不到看錯誤類別，回傳 None 表示社團設定已拿掉發譜平台。
 記住的結果寫入後（讀到了、忘掉時）通知訂閱者，主視窗與譜庫設定據以更新畫面；讀不到時不通知。
+訂閱者丟出例外時寫進紀錄檔，其餘的訂閱者照常通知。
 
 讀譜庫要經網路，read、refresh 要在背景執行緒呼叫；偏好設定與紀錄檔都可以從背景執行緒寫。
 訂閱者在寫入的那個執行緒被呼叫（多半是背景執行緒），要碰畫面的訂閱者以 Qt 訊號轉回主執行緒。
@@ -23,9 +24,10 @@
 from typing import Callable, List, Optional
 
 from core.catalog_constants import PublishingPlatform
-from core.catalog_errors import CatalogFailure, as_catalog_error
+from core.catalog_errors import CatalogFailure, as_catalog_error, exception_message
 from core.constants import CLUB_PUBLISHING_PLATFORM_KEY
 from core.locale import t
+from core.log_entry import LogEntry
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.preferences_service import PreferencesService
@@ -45,7 +47,7 @@ class ClubSettingsService:
         self._listeners: List[Callable[[], None]] = []
 
     def subscribe(self, listener: Callable[[], None]) -> None:
-        """記住的結果寫入後呼叫 listener（在寫入的執行緒，多半是背景執行緒）"""
+        """記住的結果寫入後呼叫 listener（在寫入的執行緒，多半是背景執行緒）；它丟出的例外寫進紀錄檔"""
         self._listeners.append(listener)
 
     def unsubscribe(self, listener: Callable[[], None]) -> None:
@@ -106,4 +108,8 @@ class ClubSettingsService:
             pass
         # 複製一份再逐一呼叫：主執行緒同時增減訂閱者也不影響這一輪
         for listener in list(self._listeners):
-            listener()
+            try:
+                listener()
+            except Exception as error:
+                # 一個訂閱者出錯（例如已刪掉的對話框）不影響其他訂閱者，錯誤寫進紀錄檔
+                self._log.record(LogEntry(t("catalog.action.read_club_settings"), message=exception_message(error)))
