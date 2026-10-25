@@ -528,7 +528,7 @@ class InstrumentationTable(QWidget):
         catalog_now = ""
         if unsynced:
             old = self._unsynced_headcounts[voice_key(voice)]
-            catalog_now = t("catalog.unsynced.catalog_now", value=_catalog_value(old.text() if old else ""))
+            catalog_now = t("catalog.unsynced.catalog_now", value=_catalog_value(old.stored_text() if old else ""))
             if not duplicate:
                 name.setForeground(QBrush(QColor(UNSYNCED_COLOR)))
                 name.setToolTip(catalog_now)
@@ -915,9 +915,13 @@ def _show_maximum(spin: QSpinBox, headcount: Headcount):
 
 
 class _MinimumSpin(QSpinBox):
-    """最少欄：留空與 0 是兩個值；-1 是留空（顯示空白），清空文字也是留空；打完（按 Enter 或離開欄位）才發出 valueChanged"""
+    """最少欄：分得出留空與 0 的數字欄
+
+    值 _BLANK_MINIMUM 是留空（顯示空白），清空文字也是留空；打完（按 Enter 或離開欄位）才發出 valueChanged。
+    """
 
     def __init__(self):
+        """建立留空的最少欄"""
         super().__init__()
         self.setRange(_BLANK_MINIMUM, _MAX_HEADCOUNT)
         # 空字串會被 Qt 當成沒有特殊值，所以用一個空格

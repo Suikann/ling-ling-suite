@@ -886,6 +886,11 @@ class TestHeadcountRanges(unittest.TestCase):
         self.assertFalse(Headcount.from_text("0").filled)
         self.assertEqual(Headcount.from_text(""), Headcount())
 
+    def test_stored_text_keeps_a_lone_zero_apart_from_blank(self):
+        self.assertEqual([h.stored_text() for h in (Headcount(0), Headcount(), Headcount(0, 1))], ["0", "", "0-1"])
+        for headcount in (Headcount(0), Headcount(), Headcount(0, 1), Headcount(2, open_ended=True)):
+            self.assertEqual(Headcount.from_text(headcount.stored_text()), headcount)
+
     def test_saved_data_round_trips_a_minimum_of_zero(self):
         for headcount in (Headcount(0, 1), Headcount(0), Headcount()):
             self.assertEqual(Headcount.from_data(headcount.to_data()), headcount)

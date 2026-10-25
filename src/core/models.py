@@ -161,6 +161,10 @@ class Headcount(NamedTuple):
             return f"{self.minimum}-{self.maximum}"
         return str(self.minimum)
 
+    def stored_text(self) -> str:
+        """照存的寫法（編制寫入紀錄與顯示譜庫的值）：同 text，但單獨的 0 寫「0」，from_text 還原得回來"""
+        return self.text() or ("" if self.minimum is None else str(self.minimum))
+
     @classmethod
     def from_text(cls, text: str) -> "Headcount":
         """由 HuaXia 的人數記法（text 的寫法，例如編制寫入紀錄裡的值）還原；空白或認不得的寫法為留空，「0」為單獨的 0"""
