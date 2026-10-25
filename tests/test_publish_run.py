@@ -201,6 +201,13 @@ class TestPublishing(RunTestCase):
         self.assertIn({"event_id": self.concert, "piece_id": self.fenghuo}, self.huaxia.tables["event_pieces"])
         self.assertEqual(self.leftovers(), [])
 
+    def test_an_optional_voice_overwrites_huaxia_with_minimum_zero(self):
+        self.project.set_headcount(self.group, 1, Headcount(0, 1))
+        outcome = self.run_publish(self.press_publish(events=[self.concert]))
+        self.assertEqual(outcome.failed, [])
+        part = next(row for row in self.huaxia.tables["piece_parts"] if row["id"] == self.pipa)
+        self.assertEqual((part["needed"], part["needed_min"]), ("0-1", 0))
+
     def test_the_publish_log_has_a_start_and_a_result_row_with_the_same_id(self):
         outcome = self.run_publish(self.press_publish(events=[self.concert]))
         [started], [result] = self.log(PublishAction.START), self.log(PublishAction.RESULT)

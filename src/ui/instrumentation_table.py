@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QMenu, QTableWidget, QTableWidgetItem, QSpinBox, QHeaderView,
 )
 from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QBrush, QColor, QKeySequence, QPalette, QShortcut
+from PySide6.QtGui import QBrush, QColor, QKeySequence, QPalette, QShortcut, QValidator
 from core.constants import INSTRUMENT_PRESETS, MAX_DURATION_MINUTES, TEXT_EXTENSION, UNSYNCED_COLOR
 from core.instrument_list import instrument_list_text
 from core.locale import localized, t
@@ -70,6 +70,8 @@ _HEADERS = {
 }
 # 人數欄的上限（超過的樂譜要求不實際）
 _MAX_HEADCOUNT = 999
+# 最少欄表示留空的值（0 是可有可無的聲部的最少，所以留空另用一個值）
+_BLANK_MINIMUM = -1
 # 列高比編輯欄多留的空間（格線與上下的間隙）
 _ROW_PADDING = 4
 # 重名的列與本專案沒有的列的文字顏色
@@ -532,7 +534,7 @@ class InstrumentationTable(QWidget):
                 name.setToolTip(catalog_now)
         self._table.setItem(row, self.column("voice"), name)
         for column, tip in (("minimum", "instrumentation.minimum_tip"), ("maximum", "instrumentation.maximum_tip")):
-            spin = _count_spin(_MAX_HEADCOUNT)
+            spin = _MinimumSpin() if column == "minimum" else _count_spin(_MAX_HEADCOUNT)
             spin.setToolTip(t(tip) + (f"\n{catalog_now}" if unsynced else ""))
             spin.valueChanged.connect(lambda _value, r=row: self._on_headcount_edited(r))
             self._table.setCellWidget(row, self.column(column), spin)
@@ -617,7 +619,7 @@ class InstrumentationTable(QWidget):
         """把群組裡那一列的人數填進最少、最多、以上三欄（見 _show_maximum）"""
         headcount = self._group.headcounts[row]
         filling, self._filling = self._filling, True
-        self._table.cellWidget(row, self.column("minimum")).setValue(headcount.minimum or 0)
+        self._table.cellWidget(row, self.column("minimum")).set_minimum(headcount.minimum)
         _show_maximum(self._table.cellWidget(row, self.column("maximum")), headcount)
         self._table.item(row, self.column("open_ended")).setCheckState(
             Qt.Checked if headcount.open_ended else Qt.Unchecked,
@@ -712,13 +714,13 @@ class InstrumentationTable(QWidget):
     def _on_headcount_edited(self, row: int):
         """改了最少、最多或以上：整列寫進人數範圍，再顯示整理後的值（不重畫整張表，輸入中的欄位才不會被換掉）
 
-        最多停在它的下限（等於最少）時算留空。
+        最多停在它的下限（等於最少）時算留空；最少的 0 照寫（見 _MinimumSpin）。
         """
         if self._filling or self._group is None:
             return
         maximum = self._table.cellWidget(row, self.column("maximum"))
         self._project.set_headcount(self._group, row, Headcount(
-            self._table.cellWidget(row, self.column("minimum")).value(),
+            self._table.cellWidget(row, self.column("minimum")).minimum_value(),
             maximum.value() if maximum.value() > maximum.minimum() else None,
             self._table.item(row, self.column("open_ended")).checkState() == Qt.Checked,
         ))
@@ -900,7 +902,7 @@ def _show_maximum(spin: QSpinBox, headcount: Headcount):
     """最多欄顯示人數範圍的最多
 
     「以上」時空白並停用。其餘以最少為下限：留空（等於最少）時顯示最少、字變灰，往上調從最少加一開始；
-    最少也沒填時空白。
+    最少為 0 或也沒填時空白，往上調從 1 開始。
     """
     floor = 0 if headcount.open_ended else headcount.minimum or 0
     spin.setMinimum(floor)
@@ -910,6 +912,35 @@ def _show_maximum(spin: QSpinBox, headcount: Headcount):
     grey = spin.palette().color(QPalette.Disabled, QPalette.Text).name()
     # 文字顏色可能由程式的樣式表指定，所以灰字也以樣式表指定才蓋得過
     spin.setStyleSheet(f"QSpinBox {{ color: {grey}; }}" if floor and spin.value() == floor else "")
+
+
+class _MinimumSpin(QSpinBox):
+    """最少欄：留空與 0 是兩個值；-1 是留空（顯示空白），清空文字也是留空；打完（按 Enter 或離開欄位）才發出 valueChanged"""
+
+    def __init__(self):
+        super().__init__()
+        self.setRange(_BLANK_MINIMUM, _MAX_HEADCOUNT)
+        # 空字串會被 Qt 當成沒有特殊值，所以用一個空格
+        self.setSpecialValueText(" ")
+        self.setKeyboardTracking(False)
+
+    def minimum_value(self) -> Optional[int]:
+        """欄裡的最少人數；留空為 None"""
+        return None if self.value() == _BLANK_MINIMUM else self.value()
+
+    def set_minimum(self, minimum: Optional[int]):
+        """顯示最少人數；None 為留空"""
+        self.setValue(_BLANK_MINIMUM if minimum is None else minimum)
+
+    def validate(self, text: str, pos: int):
+        """清空的文字算有效（留空），Qt 預設會把它退回原本的值"""
+        if not text.strip():
+            return QValidator.Acceptable, text, pos
+        return super().validate(text, pos)
+
+    def valueFromText(self, text: str) -> int:
+        """清空的文字是留空"""
+        return _BLANK_MINIMUM if not text.strip() else super().valueFromText(text)
 
 
 def _count_spin(maximum: int, blank_zero: bool = True) -> QSpinBox:

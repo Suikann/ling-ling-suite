@@ -124,11 +124,11 @@ class VoicePart(NamedTuple):
 class Headcount(NamedTuple):
     """一個聲部的人數範圍（樂譜的要求，不是這次排了幾個人）
 
-    寫入群組前經 normalized 整理，所以群組裡存的一律是：0 當成留空；最多不大於最少時留空（等於最少）；
-    「以上」沒有最多。
+    寫入群組前經 normalized 整理，所以群組裡存的一律是：最多為 0 或不大於最少時留空（等於最少）；「以上」沒有最多。
+    最少 0 是可有可無的聲部，要配最多或「以上」才算填了；單獨的 0 照存但算未填。
 
     Attributes:
-        minimum: 最少人數；None 為未填
+        minimum: 最少人數；None 為留空
         maximum: 最多人數；None 為等於最少
         open_ended: 是否為「最少人數以上」
     """
@@ -138,20 +138,22 @@ class Headcount(NamedTuple):
 
     @property
     def filled(self) -> bool:
-        """是否已填最少人數（發譜時必填）"""
-        return self.minimum is not None
+        """是否已填人數（發譜時必填）：最少不是留空，也不是沒有最多、沒有「以上」的單獨 0"""
+        if self.minimum is None:
+            return False
+        return self.minimum > 0 or self.maximum is not None or self.open_ended
 
     def normalized(self) -> "Headcount":
-        """整理成群組裡存的形式：0 為留空，最多不大於最少或為「以上」時留空"""
-        minimum = self.minimum or None
+        """整理成群組裡存的形式：最多為 0、不大於最少或為「以上」時留空；最少 0 照留"""
+        minimum = self.minimum
         maximum = self.maximum or None
         if self.open_ended or (minimum is not None and maximum is not None and maximum <= minimum):
             maximum = None
         return Headcount(minimum, maximum, bool(self.open_ended))
 
     def text(self) -> str:
-        """HuaXia 的人數記法：「6」「6-8」「2↑」；未填為空字串"""
-        if self.minimum is None:
+        """HuaXia 的人數記法：「6」「6-8」「2↑」「0-1」；未填（含單獨的 0）為空字串"""
+        if not self.filled:
             return ""
         if self.open_ended:
             return f"{self.minimum}↑"
@@ -161,7 +163,7 @@ class Headcount(NamedTuple):
 
     @classmethod
     def from_text(cls, text: str) -> "Headcount":
-        """由 HuaXia 的人數記法（text 的寫法，例如編制寫入紀錄裡的值）還原；空白或認不得的寫法為未填"""
+        """由 HuaXia 的人數記法（text 的寫法，例如編制寫入紀錄裡的值）還原；空白或認不得的寫法為留空，「0」為單獨的 0"""
         text = text.strip()
         open_ended = text.endswith("↑")
         low, _, high = text.rstrip("↑").partition("-")

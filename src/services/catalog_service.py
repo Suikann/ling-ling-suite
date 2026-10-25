@@ -223,16 +223,17 @@ def _relocation(file: DriveFile, folder_id: str) -> Tuple[str, List[str]]:
 
 
 def _headcount(part: Part) -> Headcount:
-    """分譜列記的人數（整理過）"""
+    """分譜列記的人數（整理過）；最少欄的「0」是 0，空白是留空"""
+    minimum = part.headcount_min.strip()
     return Headcount(
-        _count(part.headcount_min), _count(part.headcount_max), _is_true(part.headcount_open_ended),
+        int(minimum) if minimum.isdigit() else None, _count(part.headcount_max), _is_true(part.headcount_open_ended),
     ).normalized()
 
 
 def _headcount_cells(headcount: Headcount) -> Dict[str, str]:
-    """人數寫進分譜列的三欄：最少、最多（留空＝未填或等於最少）、是否「以上」"""
+    """人數寫進分譜列的三欄：最少（留空時空白，0 寫「0」）、最多（留空＝未填或等於最少）、是否「以上」"""
     return {
-        "headcount_min": str(headcount.minimum) if headcount.minimum else "",
+        "headcount_min": "" if headcount.minimum is None else str(headcount.minimum),
         "headcount_max": str(headcount.maximum) if headcount.maximum else "",
         "headcount_open_ended": CATALOG_TRUE if headcount.open_ended else "",
     }

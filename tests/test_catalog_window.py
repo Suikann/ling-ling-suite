@@ -725,7 +725,7 @@ class TestEditionPage(WritesTestCase):
         wait_until(lambda: editor.isEnabled())
         self.idle()
         table = next(t_ for t_ in editor.findChildren(QTableWidget) if t_.objectName() != "score_row")
-        self.assertEqual(table.cellWidget(1, editor.column("minimum")).value(), 0)
+        self.assertEqual(table.cellWidget(1, editor.column("minimum")).text().strip(), "")
 
     def test_switching_the_movement_with_unsaved_edits_asks_and_can_stay(self):
         add_row(self.google, SHEET_MOVEMENTS, id="m1", piece_id="p1", movement_number="1")

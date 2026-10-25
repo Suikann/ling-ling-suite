@@ -79,6 +79,15 @@ class TestReadPlace(LinkTestCase):
         self.assertEqual(place.sections, {"二胡": "拉弦"})
         self.assertEqual((place.piece_title, place.edition_label, place.movement_name), ("春江花月夜", "彭修文編", "江樓鐘鼓"))
 
+    def test_a_minimum_of_zero_is_read_apart_from_a_blank_one(self):
+        self.part("二胡 I", "1", headcount_min="0", headcount_max="1")
+        self.part("二胡 II", "2", headcount_min="0", headcount_open_ended="TRUE")
+        self.part("琵琶", "3", headcount_min="", headcount_max="")
+        place = self.catalog.read_place("e1", "m1", OrchestraType.CHINESE)
+        self.assertEqual(place.voices, [
+            ("二胡 I", Headcount(0, 1)), ("二胡 II", Headcount(0, open_ended=True)), ("琵琶", Headcount()),
+        ])
+
     def test_whole_piece_is_its_own_place(self):
         self.part("二胡 I", "1")
         self.part("琵琶", "1", movement="")
