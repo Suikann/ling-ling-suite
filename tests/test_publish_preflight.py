@@ -189,6 +189,12 @@ class TestGroupChecks(unittest.TestCase):
         self.assertEqual(check.unfilled, ["琵琶"])
         self.assertTrue(check.blocked)
 
+    def test_an_optional_voice_is_filled_but_a_lone_zero_is_not(self):
+        self.project.set_headcount(self.group, 1, Headcount(0, 1))
+        self.assertEqual(self.check().unfilled, [])
+        self.project.set_headcount(self.group, 1, Headcount(0))
+        self.assertEqual(self.check().unfilled, ["琵琶"])
+
     def test_absent_voices_need_no_headcount(self):
         self.project.add_instrument(self.group, "古箏")
         self.project.set_present(self.group, 2, False)

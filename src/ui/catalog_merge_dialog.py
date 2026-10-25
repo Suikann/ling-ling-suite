@@ -118,7 +118,7 @@ def _voice_text(row: MergeRow) -> str:
 
 def _headcount_text(headcount: Optional[Headcount]) -> str:
     """人數欄：這一邊沒有這個聲部時為破折號"""
-    return _NONE_TEXT if headcount is None else headcount.text()
+    return _NONE_TEXT if headcount is None else headcount.stored_text()
 
 
 def _section_text(row: MergeRow) -> str:

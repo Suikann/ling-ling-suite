@@ -73,6 +73,14 @@ class TestRevertRows(RelinkTestCase):
         )
         self.assertEqual((dizi.outcome, dizi.added, dizi.written), (RevertOutcome.REMOVE, True, Headcount(2)))
 
+    def test_a_written_lone_zero_is_logged_as_zero_and_can_be_restored(self):
+        self.project.set_headcount(self.group, 2, Headcount(0))
+        self.assertTrue(self.sync().written)
+        log = [r for r in records(self.google, SHEET_INSTRUMENTATION_LOG) if r["voice"] == "琵琶"]
+        self.assertEqual(log[-1]["new_value"], "0")
+        pipa = self.revert_rows()[0]
+        self.assertEqual((pipa.outcome, pipa.written, pipa.current), (RevertOutcome.RESTORE, Headcount(0), Headcount(0)))
+
     def test_value_changed_on_the_sheet_without_a_log_entry_is_kept(self):
         self.google.sheets.set_cell(SHEET_PARTS, f"J{self.sheet_row('琵琶')}", "5")
         pipa = self.revert_rows()[0]

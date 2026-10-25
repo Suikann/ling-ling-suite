@@ -867,15 +867,43 @@ class TestHeadcountRanges(unittest.TestCase):
         self.project.set_headcount(self.group, 0, Headcount(2, 4, open_ended=True))
         self.assertEqual(self.group.headcounts[0], Headcount(2, open_ended=True))
 
-    def test_zero_is_blank(self):
+    def test_a_lone_zero_is_kept_but_unfilled(self):
         self.project.set_headcount(self.group, 0, Headcount(0, 0))
-        self.assertEqual(self.group.headcounts[0], Headcount())
+        self.assertEqual(self.group.headcounts[0], Headcount(0))
         self.assertFalse(self.group.headcounts[0].filled)
+        self.assertEqual(self.group.headcounts[0].text(), "")
+
+    def test_a_range_from_zero_is_an_optional_voice(self):
+        optional, open_ended = Headcount(0, 1).normalized(), Headcount(0, None, True).normalized()
+        self.assertEqual(optional, Headcount(0, 1))
+        self.assertEqual((optional.filled, optional.text()), (True, "0-1"))
+        self.assertEqual((open_ended.filled, open_ended.text()), (True, "0↑"))
+
+    def test_text_round_trips_a_minimum_of_zero(self):
+        self.assertEqual(Headcount.from_text("0-1"), Headcount(0, 1))
+        self.assertEqual(Headcount.from_text("0↑"), Headcount(0, open_ended=True))
+        self.assertEqual(Headcount.from_text("0"), Headcount(0))
+        self.assertFalse(Headcount.from_text("0").filled)
+        self.assertEqual(Headcount.from_text(""), Headcount())
+
+    def test_stored_text_keeps_a_lone_zero_apart_from_blank(self):
+        self.assertEqual([h.stored_text() for h in (Headcount(0), Headcount(), Headcount(0, 1))], ["0", "", "0-1"])
+        for headcount in (Headcount(0), Headcount(), Headcount(0, 1), Headcount(2, open_ended=True)):
+            self.assertEqual(Headcount.from_text(headcount.stored_text()), headcount)
+
+    def test_saved_data_round_trips_a_minimum_of_zero(self):
+        for headcount in (Headcount(0, 1), Headcount(0), Headcount()):
+            self.assertEqual(Headcount.from_data(headcount.to_data()), headcount)
 
     def test_totals_add_the_minimums_and_maximums(self):
         self.assertEqual(sum_headcounts([Headcount(6, 8), Headcount(4), Headcount()]).text(), "10-12")
         self.assertEqual(sum_headcounts([Headcount(6, 8), Headcount(2, open_ended=True)]).text(), "8↑")
         self.assertEqual(sum_headcounts([Headcount()]).text(), "")
+
+    def test_totals_count_optional_voices_but_not_a_lone_zero(self):
+        self.assertEqual(sum_headcounts([Headcount(0, 1), Headcount(2)]).text(), "2-3")
+        self.assertEqual(sum_headcounts([Headcount(0), Headcount(2)]).text(), "2")
+        self.assertEqual(sum_headcounts([Headcount(0, 1)]).text(), "0-1")
 
     def test_a_maximum_without_a_minimum_is_kept_but_unfilled(self):
         self.project.set_headcount(self.group, 0, Headcount(None, 8))

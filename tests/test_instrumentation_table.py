@@ -221,6 +221,40 @@ class TestHeadcountColumns(InstrumentationTableTestCase):
         self.assertEqual(self.group.headcounts[0], Headcount(2))
         self.assertEqual(self.spin(0, "maximum").text(), "2")
 
+    def type_minimum(self, row: int, text: str):
+        """在最少欄打 text 後離開欄位"""
+        spin = self.spin(row, "minimum")
+        spin.lineEdit().setText(text)
+        spin.interpretText()
+
+    def test_a_typed_zero_stays_and_raising_the_maximum_makes_an_optional_voice(self):
+        self.type_minimum(0, "0")
+        self.assertEqual(self.group.headcounts[0], Headcount(0))
+        self.assertEqual(self.spin(0, "minimum").text(), "0")
+        self.spin(0, "maximum").stepUp()
+        self.assertEqual(self.group.headcounts[0], Headcount(0, 1))
+        self.assertEqual((self.spin(0, "minimum").text(), self.spin(0, "maximum").text()), ("0", "1"))
+
+    def test_the_maximum_can_come_before_a_zero_minimum(self):
+        self.spin(0, "maximum").stepUp()
+        self.type_minimum(0, "0")
+        self.assertEqual(self.group.headcounts[0], Headcount(0, 1))
+
+    def test_clearing_the_minimum_leaves_it_blank_again(self):
+        self.type_minimum(0, "0")
+        self.type_minimum(0, "")
+        self.assertEqual(self.group.headcounts[0], Headcount())
+        self.assertEqual(self.spin(0, "minimum").text().strip(), "")
+        self.spin(0, "minimum").setValue(2)
+        self.type_minimum(0, "")
+        self.assertEqual(self.group.headcounts[0], Headcount())
+
+    def test_shows_a_stored_zero_apart_from_blank(self):
+        self.project.set_headcount(self.group, 1, Headcount(0, 1))
+        self.editor.show_group(self.group)
+        self.assertEqual((self.spin(1, "minimum").text(), self.spin(1, "maximum").text()), ("0", "1"))
+        self.assertEqual(self.spin(0, "minimum").text().strip(), "")
+
     def test_shows_the_stored_headcounts_and_blank_for_unfilled(self):
         self.project.set_headcount(self.group, 2, Headcount(4, 6))
         self.editor.show_group(self.group)

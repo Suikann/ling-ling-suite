@@ -89,13 +89,13 @@ def revert_table(rows: Sequence[RevertRow]) -> QTableWidget:
 
 def _headcount_text(headcount: Headcount) -> str:
     """人數的寫法；未填時寫出未填"""
-    return headcount.text() or t("catalog.revert.blank")
+    return headcount.stored_text() or t("catalog.revert.blank")
 
 
 def _written_text(row: RevertRow) -> str:
     """那次寫的：新增的聲部寫新增（連同人數），否則是寫的人數"""
-    if row.added and row.written.filled:
-        return t("catalog.revert.added", headcount=row.written.text())
+    if row.added and row.written.stored_text():
+        return t("catalog.revert.added", headcount=row.written.stored_text())
     if row.added:
         return t("catalog.revert.added_blank")
     return _headcount_text(row.written)

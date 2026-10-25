@@ -273,6 +273,26 @@ class TestWrites(PlanTestCase):
         ])
         self.assertEqual(plan.creates, [])
 
+    def test_an_optional_voice_differs_from_a_huaxia_zero_and_is_written_with_minimum_zero(self):
+        self.voices(("二胡 I", Headcount(0, 1)))
+        plan = self.plan([part("p1", "二胡1", "0", 0, "拉弦")])
+        row = self.row(plan, "二胡 I")
+        self.assertTrue(row.headcount_differs)
+        self.assertTrue(row.overwrite)
+        self.assertEqual(plan.updates, [PartUpdate("p1", "二胡1", "0-1", 0, None)])
+
+    def test_an_optional_voice_already_on_huaxia_is_the_same(self):
+        self.voices(("二胡 I", Headcount(0, 1)))
+        plan = self.plan([part("p1", "二胡1", "0-1", 0, "拉弦")])
+        self.assertFalse(self.row(plan, "二胡 I").headcount_differs)
+        self.assertEqual(plan.updates, [])
+
+    def test_a_new_optional_voice_is_created_with_minimum_zero(self):
+        self.voices(("二胡 I", Headcount(0, 1)))
+        plan = self.plan([])
+        self.assertEqual(plan.creates, [PartCreate("二胡 I", "0-1", 0, "拉弦", 1)])
+        self.assertEqual(plan.unfilled, [])
+
     def test_unchecking_overwrite_keeps_huaxia(self):
         self.voices(("二胡 I", Headcount(5, 8)))
         plan = self.plan([part("p1", "二胡1", "6-8", 6, "拉弦")], VoiceDecisions(keep={0}))

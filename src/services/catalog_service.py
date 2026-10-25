@@ -146,10 +146,18 @@ def _is_true(value: str) -> bool:
     return value.strip().upper() in CATALOG_TRUE_VALUES
 
 
-def _count(value: str) -> Optional[int]:
-    """人數或秒數欄的值；空白或不是正整數時為 None"""
+def _count(value: str, allow_zero: bool = False) -> Optional[int]:
+    """人數或秒數欄的值；空白或不是正整數時為 None
+
+    Args:
+        value: 欄裡的文字
+        allow_zero: 0 是否也算一個值（最少人數欄）
+
+    Returns:
+        欄裡的數；空白或認不得時為 None
+    """
     value = value.strip()
-    return int(value) if value.isdigit() and int(value) > 0 else None
+    return int(value) if value.isdigit() and (allow_zero or int(value) > 0) else None
 
 
 def _voice_parts(parts: List[Tuple[int, Part]]) -> List[Tuple[int, Part]]:
@@ -223,16 +231,16 @@ def _relocation(file: DriveFile, folder_id: str) -> Tuple[str, List[str]]:
 
 
 def _headcount(part: Part) -> Headcount:
-    """分譜列記的人數（整理過）"""
+    """分譜列記的人數（整理過）；最少欄的「0」是 0，空白是留空"""
     return Headcount(
-        _count(part.headcount_min), _count(part.headcount_max), _is_true(part.headcount_open_ended),
+        _count(part.headcount_min, allow_zero=True), _count(part.headcount_max), _is_true(part.headcount_open_ended),
     ).normalized()
 
 
 def _headcount_cells(headcount: Headcount) -> Dict[str, str]:
-    """人數寫進分譜列的三欄：最少、最多（留空＝未填或等於最少）、是否「以上」"""
+    """人數寫進分譜列的三欄：最少（留空時空白，0 寫「0」）、最多（留空＝未填或等於最少）、是否「以上」"""
     return {
-        "headcount_min": str(headcount.minimum) if headcount.minimum else "",
+        "headcount_min": "" if headcount.minimum is None else str(headcount.minimum),
         "headcount_max": str(headcount.maximum) if headcount.maximum else "",
         "headcount_open_ended": CATALOG_TRUE if headcount.open_ended else "",
     }

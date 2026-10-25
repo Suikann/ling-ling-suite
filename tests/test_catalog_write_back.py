@@ -68,6 +68,15 @@ class TestOnlyChangedCells(WriteBackTestCase):
         self.assertEqual(len(self.google.sheets.writes), 1)
         self.assertEqual(self.project.catalog_changes(self.group), [])
 
+    def test_a_minimum_of_zero_is_written_as_zero(self):
+        self.project.set_headcount(self.group, 2, Headcount(0, 1))
+        self.sync()
+        self.assertEqual((self.row("琵琶")["headcount_min"], self.row("琵琶")["headcount_max"]), ("0", "1"))
+        self.assertEqual(self.project.catalog_changes(self.group), [])
+        self.project.set_headcount(self.group, 2, Headcount())
+        self.sync()
+        self.assertEqual((self.row("琵琶")["headcount_min"], self.row("琵琶")["headcount_max"]), ("", ""))
+
 
 class TestComparison(WriteBackTestCase):
     """寫入前重讀譜庫：等於新值為已完成、等於原值就寫、兩者都不是為衝突"""

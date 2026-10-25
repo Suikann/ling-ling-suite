@@ -335,13 +335,13 @@ def _decided(decision: Decision) -> Verdict:
 
 
 def value_text(sync_field: SyncField, value: Any) -> str:
-    """一格的值寫成文字（編制寫入紀錄與衝突畫面）：人數用 HuaXia 的記法，時長為秒數，順序以「、」連接"""
+    """一格的值寫成文字（編制寫入紀錄與衝突畫面）：人數用照存的寫法（stored_text），時長為秒數，順序以「、」連接"""
     if sync_field is SyncField.VOICE:
         return "" if not value else str(value)
     if sync_field is SyncField.ORDER:
         return "、".join(value or ())
     if sync_field is SyncField.HEADCOUNT:
-        return value.text() if value is not None else ""
+        return value.stored_text() if value is not None else ""
     if sync_field is SyncField.DURATION:
         return str(value) if value else ""
     return value or ""
