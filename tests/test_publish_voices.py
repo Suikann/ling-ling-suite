@@ -5,7 +5,8 @@
 對專案模型與假 HuaXia 測：按下發譜時讀出可以挑的曲目的聲部；每個泠靈聲部依序以記住的配對、
 泠靈的「同一聲部」規則對到 HuaXia 聲部，對不上的預設新建；名稱規則對出多個時不自動選；
 兩個泠靈聲部指到同一個時擋下；手動挑的配對記進專案；算出要寫的內容（人數記法、聲部組、覆寫、
-「本專案沒有」的聲部預設不建），永遠不刪 HuaXia 的聲部。
+「本專案沒有」的聲部預設不建），永遠不刪 HuaXia 的聲部。HuaXia 上分好分部的聲部：配對只在聲部之間，分部列在
+所屬聲部底下、不算沒對到的聲部，泠靈聲部的名稱對到分部時提示、不配對，人數與聲部組只寫聲部。
 """
 import os
 import shutil
@@ -386,6 +387,92 @@ class TestAbsentVoicesDoNotTakeParts(PlanTestCase):
         plan = self.plan([self.erhu], VoiceDecisions(create_absent={0}))
         self.assertEqual(self.row(plan, "二胡").part, self.erhu)
         self.assertNotIn(self.erhu, self.row(plan, "二胡 I").options)
+
+
+class TestDivisi(PrepareTestCase):
+    """HuaXia 上分好分部的曲目：泠靈只對到聲部本身，分部列在聲部底下；名稱對到分部時提示、不配對
+
+    「長城隨想－烽火操」有「二胡」（分部「二胡1」「二胡2」）、「擊樂2」（分部「風鈴」）與「琵琶」。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.erhu = self.huaxia.add_part(self.fenghuo, "二胡", needed="8", needed_min=8, section="拉弦", sort=1)
+        self.erhu_one = self.huaxia.add_part(self.fenghuo, "二胡1", needed="4", needed_min=4, sort=2, parent_id=self.erhu)
+        self.erhu_two = self.huaxia.add_part(self.fenghuo, "二胡2", needed="4", needed_min=4, sort=3, parent_id=self.erhu)
+        self.percussion = self.huaxia.add_part(self.fenghuo, "擊樂2", needed="3", needed_min=3, section="打擊", sort=4)
+        self.chimes = self.huaxia.add_part(self.fenghuo, "風鈴", sort=5, parent_id=self.percussion)
+        self.pipa = self.huaxia.add_part(self.fenghuo, "琵琶", needed="2", needed_min=2, sort=6)
+        self.project = Project()
+        self.group = self.project.add_group("烽火操", "總譜")
+        self.project.set_huaxia_link(self.group, HuaXiaLink(piece_id=self.fenghuo, piece_title="長城隨想－烽火操"))
+
+    def voices(self, *rows):
+        """樂器表依序為 rows：（聲部，人數）"""
+        self.project.set_instruments(self.group, [voice for voice, _headcount in rows])
+        for index, (_voice, headcount) in enumerate(rows):
+            self.project.set_headcount(self.group, index, headcount)
+
+    def plan(self, decisions=None):
+        """按下發譜讀出 HuaXia 的聲部後，這個群組的配對結果"""
+        parts = self.service.prepare().parts[self.fenghuo]
+        return plan_voices(self.project, self.group, parts, decisions or VoiceDecisions())
+
+    def ids(self, parts):
+        """這幾個 HuaXia 聲部的編號"""
+        return [part.id for part in parts]
+
+    def row(self, plan, voice):
+        """配對結果裡這個聲部那一列"""
+        return next(row for row in plan.rows if row.voice == voice)
+
+    def test_voices_pair_with_voices_and_divisi_are_listed_under_them(self):
+        self.voices(("二胡", Headcount(8)), ("擊樂2", Headcount(3)))
+        plan = self.plan()
+        self.assertEqual([(row.match, row.part.id) for row in plan.rows], [
+            (PartMatch.NAME, self.erhu), (PartMatch.NAME, self.percussion),
+        ])
+        self.assertEqual(self.ids(plan.huaxia_only), [self.pipa])
+        self.assertEqual({voice: self.ids(divisi) for voice, divisi in plan.divisi.items()}, {
+            self.erhu: [self.erhu_one, self.erhu_two], self.percussion: [self.chimes],
+        })
+
+    def test_a_divisi_does_not_make_the_name_rule_match_several(self):
+        erhu_i = self.huaxia.add_part(self.fenghuo, "二胡一", sort=7)
+        self.voices(("二胡 I", Headcount(4)),)
+        plan = self.plan()
+        row = self.row(plan, "二胡 I")
+        self.assertIs(row.match, PartMatch.NAME)
+        self.assertEqual(row.part.id, erhu_i)
+        self.assertIsNone(row.divisi_match)
+        self.assertFalse(plan.blocked)
+
+    def test_only_voices_are_offered_to_choose(self):
+        self.voices(("高胡", Headcount(2)),)
+        self.assertEqual(self.ids(self.row(self.plan(), "高胡").options), [self.erhu, self.percussion, self.pipa])
+
+    def test_a_voice_whose_name_matches_a_divisi_is_hinted_and_not_paired(self):
+        self.voices(("風鈴", Headcount(1)),)
+        plan = self.plan()
+        row = self.row(plan, "風鈴")
+        self.assertIs(row.match, PartMatch.NONE)
+        self.assertIsNone(row.part)
+        self.assertEqual((row.divisi_match.divisi.id, row.divisi_match.voice.id), (self.chimes, self.percussion))
+        self.assertEqual(plan.updates, [])
+
+    def test_a_remembered_part_since_made_a_divisi_is_not_paired(self):
+        self.voices(("擊樂2 風鈴", Headcount(2)),)
+        self.project.choose_huaxia_part(self.group, "擊樂2 風鈴", self.chimes)
+        plan = self.plan()
+        row = self.row(plan, "擊樂2 風鈴")
+        self.assertIsNone(row.part)
+        self.assertNotIn(self.chimes, self.ids(row.options))
+        self.assertEqual(plan.updates, [])
+
+    def test_headcounts_are_written_to_the_voice_only(self):
+        self.voices(("二胡", Headcount(6, 8)),)
+        plan = self.plan()
+        self.assertEqual([update.part_id for update in plan.updates], [self.erhu])
 
 
 if __name__ == "__main__":

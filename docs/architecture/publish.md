@@ -1,6 +1,6 @@
 # Publish
 
-發譜把群組的編制、分譜與總譜寫進 HuaXia（spec #82）。泠靈以幹部自己的 Discord 帳號直接寫入 HuaXia 的 Supabase，所有請求經 `services/huaxia_client.py` 的 `HuaXiaClient`（[ADR 0003](../adr/0003-lingling-writes-huaxia-directly.md)）；泠靈依賴 HuaXia 的資料表、欄位、發譜函式與 Storage 路徑格式以依賴說明文件為準，複本在 [docs/huaxia/LINGLING.md](../huaxia/LINGLING.md)。按下「發譜」前的檢查與預覽各步的規則在 `services/publish_service.py`（入口見 [modules.md](modules.md)），各步的行為（曲目的對應、全部群組都被擋下時「曲目」步按不下「下一步」、聲部的配對）寫在 [project.md](project.md) 的對到 HuaXia 曲目；本文件記預覽按下「發譜」之後的事。
+發譜把群組的編制、分譜與總譜寫進 HuaXia（spec #82）。泠靈以幹部自己的 Discord 帳號直接寫入 HuaXia 的 Supabase，所有請求經 `services/huaxia_client.py` 的 `HuaXiaClient`（[ADR 0003](../adr/0003-lingling-writes-huaxia-directly.md)）；泠靈依賴 HuaXia 的資料表、欄位、發譜函式與 Storage 路徑格式以依賴說明文件為準，複本在 [docs/huaxia/LINGLING.md](../huaxia/LINGLING.md)。按下「發譜」前的檢查與預覽各步的規則在 `services/publish_service.py`（入口見 [modules.md](modules.md)），各步的行為（曲目的對應、全部群組都被擋下時「曲目」步按不下「下一步」、聲部的配對與 HuaXia 上的分部）寫在 [project.md](project.md) 的對到 HuaXia 曲目；本文件記預覽按下「發譜」之後的事。
 
 ## 開始前
 
@@ -34,7 +34,7 @@
 
 0. **開始發譜**：經譜庫服務寫一列列「開始發譜」到譜庫的發譜紀錄（見下節），寫不進去就什麼都不做，HuaXia 上沒有任何變動。接著清掉這次涉及的曲目底下的孤兒檔（見下面的孤兒檔）。
 1. **傳檔**：每首曲目先列出 Storage 裡泠靈資料夾（`lingling/<曲目編號>/`）已有的檔，路徑相同的就是同一個位置、內容相同，跳過；其餘同時傳 3 份（`UPLOAD_WORKERS`），先不登記，團員看不到。Storage 不覆寫，上傳時已有檔也當成傳好了。
-2. **切換**：一個群組呼叫一次 HuaXia 的發譜函式，在一個交易裡完成這個群組的寫入（新建曲目、建聲部、改人數與聲部組、撤掉舊樂譜的登記、登記新樂譜、掛場次），全成或全不成。要撤掉登記的只會是這首曲目上泠靈發的（路徑在這首曲目的泠靈資料夾，`HuaXiaScore.lingling`），別人放的不動；發譜函式也只肯撤這種，指到別的就整次拒絕（`22023`）。有檔沒傳上去的群組不呼叫；某個群組失敗不影響其他群組。預覽到執行之間幹部在網頁上刪了聲部時，那個群組切換失敗、列在沒發成的群組裡。
+2. **切換**：一個群組呼叫一次 HuaXia 的發譜函式，在一個交易裡完成這個群組的寫入（新建曲目、建聲部、改人數與聲部組、撤掉舊樂譜的登記、登記新樂譜、掛場次），全成或全不成。要撤掉登記的只會是這首曲目上泠靈發的（路徑在這首曲目的泠靈資料夾，`HuaXiaScore.lingling`），別人放的不動；發譜函式也只肯撤這種，指到別的就整次拒絕（`22023`）。有檔沒傳上去的群組不呼叫；某個群組失敗不影響其他群組。預覽到執行之間幹部在網頁上刪了聲部，或把對到的聲部收成別的聲部的分部（分部不能登記樂譜，`23514`）時，那個群組切換失敗、列在沒發成的群組裡。
 3. **清舊檔**：切換成功的群組刪掉它被取代的舊檔本體。只考慮發譜預覽算出的 `GroupPublish.deletes`（被取代、這次也沒再用到的），刪之前經 `orphan_cleanup.delete_unregistered` 向 HuaXia 查那一刻的登記：還有任何樂譜登記指著的（不論哪首曲目，含封存的）不刪，逐行紀錄寫「留著」。全程式判斷 Storage 的檔能不能刪只用 `delete_unregistered`，清舊檔、撤回、收回與孤兒檔清理都經過它。Storage 對 RLS 擋下的刪除照樣回成功，所以以回應的清單判斷哪些真的刪了（`HuaXiaClient.delete_files`）：沒刪掉、還在的記成沒刪成（發譜是孤兒檔，撤回、收回不寫進 `files_deleted`），本來就已經不在的不算。
 4. **發譜結果**：補一列列「發譜結果」（連同清孤兒檔的列），寫不進去時 HuaXia 照樣已經變動，主視窗寫明。發成的群組這次新建的聲部，主視窗記成那些聲部的配對（`PublishOutcome.created_parts` 交給 `Project.remember_huaxia_parts`，專案標成未存檔），下次發譜照它對，網頁上又建了同名的聲部也不必再挑；群組已不在或已改對到別首的略過。
 

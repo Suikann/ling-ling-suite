@@ -250,6 +250,36 @@ class TestPublishing(RunTestCase):
         self.assertEqual(len(self.uploads()), sent)
 
 
+class TestDivisi(RunTestCase):
+    """HuaXia 上的「二胡1」分成「前排」「後排」兩個分部（各 3 人，前排排了一位團員）"""
+
+    def setUp(self):
+        super().setUp()
+        next(row for row in self.huaxia.tables["piece_parts"] if row["id"] == self.erhu)["section"] = "吹管"
+        self.front = self.huaxia.add_part(self.fenghuo, "前排", needed="3", needed_min=3, sort=3, parent_id=self.erhu)
+        self.back = self.huaxia.add_part(self.fenghuo, "後排", needed="3", needed_min=3, sort=4, parent_id=self.erhu)
+        self.member = self.huaxia.add_account("member_bo", roles=("member",))
+        self.huaxia.assign(self.front, self.member)
+
+    def part(self, part_id: str):
+        """HuaXia 上這個聲部現在的（人數記法，最少人數，聲部組）"""
+        row = next(row for row in self.huaxia.tables["piece_parts"] if row["id"] == part_id)
+        return row["needed"], row["needed_min"], row["section"]
+
+    def test_only_the_voice_gets_the_headcount_and_section_and_divisi_keep_theirs(self):
+        outcome = self.run_publish(self.press_publish())
+        self.assertEqual(outcome.failed, [])
+        [started] = self.log(PublishAction.START)
+        self.assertEqual([part["id"] for part in started.parts_updated], [self.erhu])
+        self.assertEqual(self.part(self.erhu), ("6-8", 6, "拉弦"))
+        self.assertEqual([self.part(self.front)[:2], self.part(self.back)[:2]], [("3", 3), ("3", 3)])
+        self.assertEqual(
+            [row["user_id"] for row in self.huaxia.tables["part_assignments"] if row["part_id"] == self.front],
+            [self.member],
+        )
+        self.assertIn((self.erhu, self.stored(self.group, "二胡 I")), self.scores(self.fenghuo))
+
+
 class TestNewPiece(RunTestCase):
     """新建曲目的編號在按下「發譜」時產生並寫進專案，重發沿用，不重複建曲目、聲部與樂譜"""
 

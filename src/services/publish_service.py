@@ -194,6 +194,17 @@ class PartCreate(NamedTuple):
     sort: int
 
 
+class DivisiMatch(NamedTuple):
+    """泠靈聲部的名稱以「同一聲部」規則對到的 HuaXia 分部：樂譜上獨立的聲部在 HuaXia 上是某個聲部的分部，不配對
+
+    Attributes:
+        divisi: 名稱對到的分部
+        voice: 它所屬的聲部
+    """
+    divisi: HuaXiaPart
+    voice: HuaXiaPart
+
+
 class PartUpdate(NamedTuple):
     """要覆寫的 HuaXia 現有聲部；名稱沿用 HuaXia 的，不改
 
@@ -223,13 +234,14 @@ class VoiceRow:
         section: 泠靈的聲部組
         match: 怎麼對到的
         part: 對到的 HuaXia 聲部；沒對上時為 None
-        options: 可以改選的 HuaXia 聲部，依 HuaXia 的排序：名稱規則對到多個時只有那幾個，否則是還沒配給
-            其他聲部的（記住的手動配對與名稱規則都算）
+        options: 可以改選的 HuaXia 聲部（不含分部），依 HuaXia 的排序：名稱規則對到多個時只有那幾個，否則是
+            還沒配給其他聲部的（記住的手動配對與名稱規則都算）
         can_create: 可以選新建（名稱規則對到多個時不行）
         headcount_differs: 對到的 HuaXia 聲部人數與泠靈不同（本專案有的列才比）
         section_differs: 對到的 HuaXia 聲部的聲部組與泠靈不同（泠靈是「其他」時不比）
         overwrite: 有差異且要以泠靈的值覆寫
         create: 要在 HuaXia 新建
+        divisi_match: 沒對上、名稱卻對到 HuaXia 上某個分部時是那個分部與它所屬的聲部（提示不一致，不配對）
     """
 
     index: int
@@ -245,6 +257,7 @@ class VoiceRow:
     section_differs: bool = False
     overwrite: bool = False
     create: bool = False
+    divisi_match: Optional[DivisiMatch] = None
 
 
 @dataclass(frozen=True)
@@ -253,12 +266,13 @@ class VoicePlan:
 
     Attributes:
         rows: 樂器表每一列，依樂器表順序
-        huaxia_only: 這首曲目在 HuaXia 上沒被配對的聲部（不動）
+        huaxia_only: 這首曲目在 HuaXia 上沒被配對的聲部（不動；不含分部）
         conflicts: 被兩個以上泠靈聲部指到的 HuaXia 聲部與那些聲部
         undecided: 名稱規則對到多個、還沒挑的聲部
         unfilled: 本專案沒有、要建卻沒填最少人數的聲部
         creates: 要新建的聲部
         updates: 要覆寫的聲部
+        divisi: HuaXia 聲部的編號對應它的分部（依 HuaXia 的排序），供列在聲部底下對照；分部不配對、不寫
     """
 
     rows: List[VoiceRow]
@@ -268,6 +282,7 @@ class VoicePlan:
     unfilled: List[str]
     creates: List[PartCreate]
     updates: List[PartUpdate]
+    divisi: Dict[str, List[HuaXiaPart]] = field(default_factory=dict)
 
     @property
     def blocked(self) -> bool:
@@ -284,6 +299,8 @@ def plan_voices(
     對到多個時不自動選）→ 都沒有就是沒對上，本專案有的預設新建，本專案沒有的照 decisions 才建。
     這次要發的聲部（本專案有，或要在 HuaXia 建的）先配，這次不發的只在剩下的 HuaXia 聲部裡配、只供顯示：
     不占要發的聲部可以挑的，也不算衝突。
+    配對只在沒有所屬聲部的 HuaXia 聲部之間（記住的配對指到現在是分部的也跳過）；分部列在所屬聲部底下，
+    不算沒對到的聲部。沒對上的泠靈聲部名稱對到某個分部時標出（divisi_match），不配對。
 
     Args:
         project: 專案（聲部組以它的對照為準）
@@ -296,6 +313,12 @@ def plan_voices(
     """
     decisions = decisions or VoiceDecisions()
     link = group.huaxia_link
+    divisi: Dict[str, List[HuaXiaPart]] = {}
+    for part in parts:
+        if part.parent_id is not None:
+            divisi.setdefault(part.parent_id, []).append(part)
+    next_sort = max((part.sort for part in parts), default=0)
+    parts = [part for part in parts if part.parent_id is None]
     by_id = {part.id: part for part in parts}
     rows = list(zip(group.instruments, group.present, group.headcounts))
     # 這次要發的聲部（本專案有，或本專案沒有、要在 HuaXia 建的）先配；這次不發的只在剩下的聲部裡配（顯示用），
@@ -331,7 +354,6 @@ def plan_voices(
     unpaired = [part for part in parts if part.id not in taken]
     paired = {index: matches[index][1].id for index in active if matches[index][1] is not None}
     assigned = list(paired.values())
-    next_sort = max((part.sort for part in parts), default=0)
     voice_rows, creates, updates, undecided, unfilled = [], [], [], [], []
     for index, (voice, present, headcount) in enumerate(rows):
         match, part = matches[index]
@@ -341,6 +363,11 @@ def plan_voices(
             option for option in parts if all(i == index or found != option.id for i, found in paired.items())
         ]
         row = VoiceRow(index, voice, present, headcount, section, match, part, options, can_create=not several)
+        if part is None:
+            row = replace(row, divisi_match=next((
+                DivisiMatch(child, by_id[parent_id]) for parent_id, children in divisi.items() if parent_id in by_id
+                for child in children if same_voice(child.name, voice)
+            ), None))
         if part is not None and present:
             headcount_differs = part.needed.strip() != headcount.text() or part.needed_min != headcount.minimum
             section_differs = section != OTHER_SECTION and part.section != section
@@ -370,7 +397,7 @@ def plan_voices(
         (part, [row.voice for row in voice_rows if row.part is not None and row.part.id == part.id])
         for part in parts if assigned.count(part.id) > 1
     ]
-    return VoicePlan(voice_rows, unpaired, conflicts, undecided, unfilled, creates, updates)
+    return VoicePlan(voice_rows, unpaired, conflicts, undecided, unfilled, creates, updates, divisi)
 
 
 def storage_slot(voice: str) -> str:
