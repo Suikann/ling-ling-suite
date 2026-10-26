@@ -27,8 +27,8 @@
   「再壓縮」壓還沒壓到的；每份顯示壓縮狀態與「開啟」「比較」（共用的比較畫面）「不發這份」。
 - 「公演」：複選本學期、還沒結束的公演（PublishReadiness.concerts），逐場說明掛上後的影響；可以不掛。
   群組的曲目已掛著的公演寫出是哪些群組，全部群組都已掛著的勾著、不能取消（泠靈不把曲目從場次移除）。
-- 「確認」：每個群組列出曲目、要新掛的公演（已掛著的不算）、要新建（與收成它的分部）與覆寫的聲部、要傳的檔數與大小、要取代的份數、
-  不重傳與不發的檔，加上合計。
+- 「確認」：每個群組列出曲目、要新掛的公演（已掛著的不算）、要新建（與收成它的分部）與覆寫的聲部、要傳的檔數與大小、要取代的份數
+  （其中收成分部撤掉的寫出是哪幾份）、不重傳與不發的檔，加上合計。
   每個群組要寫進 HuaXia 的全部內容由 publish_plan() 交出（publish_service.group_publish），確認步的文字也由它算。
   超過上限的檔都壓縮好（或選了不發）、壓縮做完，「發譜」才按得下去。
 
@@ -1078,6 +1078,10 @@ class PublishPreviewDialog(QDialog):
         layout.addWidget(_named_label("confirm_files", t(
             "publish.confirm.files", count=len(plan.uploads), size=size_text(plan.size), replaced=len(plan.replaces),
         )))
+        if plan.voices.absorb_replaces:
+            layout.addWidget(_named_label("confirm_absorb_replaced", t(
+                "publish.confirm.absorb_replaced", scores=_score_titles(plan.voices.absorb_replaces),
+            )))
         if plan.unchanged:
             unchanged = "、".join(os.path.basename(f.path) for f in plan.unchanged)
             layout.addWidget(_named_label("confirm_unchanged", t("publish.confirm.unchanged", files=unchanged)))

@@ -30,7 +30,7 @@ from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.file_service import FileService
 from services.huaxia_auth_service import AccountStanding, HuaXiaAuthService, NotOfficer
-from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaClient
+from services.huaxia_client import PUBLISH_INTERFACE_VERSION, HuaXiaClient, lingling_storage_path
 from services.secure_storage import SecureStorage
 from test_catalog_service import empty_catalog
 from tests.fake_browser import CallbackBrowser
@@ -566,6 +566,21 @@ class TestVoicesStep(PublishWindowTestCase):
             self.assertIn(
                 t("publish.confirm.absorbs", voice="琵琶", parts="琵琶I、琵琶II"),
                 dialog.findChild(QLabel, "confirm_voices").text(),
+            )
+        self.publish(operate=operate)
+
+    def test_the_confirm_step_names_the_lingling_copies_that_absorbing_removes(self):
+        part = self.huaxia.add_part(self.fenghuo, "琵琶I", sort=1)
+        self.huaxia.add_score(self.fenghuo, part, lingling_storage_path(self.fenghuo, "a" * 64, "pipa"), title="舊琵琶I")
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            tick_absorb(dialog, "烽火操", "琵琶", "琵琶I")
+            for _step in ("files", "events", "confirm"):
+                button(dialog, "publish.next").click()
+            self.assertEqual(
+                dialog.findChild(QLabel, "confirm_absorb_replaced").text(),
+                t("publish.confirm.absorb_replaced", scores="舊琵琶I"),
             )
         self.publish(operate=operate)
 
