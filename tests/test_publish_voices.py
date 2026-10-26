@@ -40,6 +40,14 @@ class TestPrepareReadsParts(PrepareTestCase):
             ],
         })
 
+    def test_divisi_carry_the_voice_they_belong_to(self):
+        percussion = self.huaxia.add_part(self.fenghuo, "擊樂2", needed="4", needed_min=4, section="打擊", sort=1)
+        shaker = self.huaxia.add_part(self.fenghuo, "沙球", sort=2, parent_id=percussion)
+        self.assertEqual(self.service.prepare().parts[self.fenghuo], [
+            HuaXiaPart(percussion, self.fenghuo, "擊樂2", "4", 4, "打擊", 1),
+            HuaXiaPart(shaker, self.fenghuo, "沙球", "1", 1, "打擊", 2, parent_id=percussion),
+        ])
+
 
 class TestChosenPartsAreSaved(unittest.TestCase):
     """手動挑的配對以 HuaXia 的聲部編號記在群組對到的曲目，存進專案檔"""

@@ -146,6 +146,7 @@ class HuaXiaPart(NamedTuple):
         needed_min: 最少人數
         section: 聲部組；沒有時為空字串
         sort: 排序
+        parent_id: 所屬聲部的編號：有值的是那個聲部的分部；聲部為 None
     """
     id: str
     piece_id: str
@@ -154,6 +155,7 @@ class HuaXiaPart(NamedTuple):
     needed_min: int
     section: str
     sort: int
+    parent_id: Optional[str] = None
 
 
 class HuaXiaScore(NamedTuple):
@@ -471,14 +473,14 @@ class HuaXiaClient:
             HuaXiaError: 連不上或讀取失敗
         """
         rows = self.select_all(
-            "piece_parts", access_token, "id,piece_id,name,needed,needed_min,section,sort",
+            "piece_parts", access_token, "id,piece_id,name,needed,needed_min,section,sort,parent_id",
             within=("piece_id", list(piece_ids)),
         )
         try:
             parts = [
                 HuaXiaPart(
                     row["id"], row["piece_id"], row["name"], row.get("needed") or "", int(row.get("needed_min") or 0),
-                    row.get("section") or "", int(row.get("sort") or 0),
+                    row.get("section") or "", int(row.get("sort") or 0), row.get("parent_id") or None,
                 )
                 for row in rows
             ]

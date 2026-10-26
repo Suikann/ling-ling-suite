@@ -19,6 +19,8 @@
   新增被 RLS 擋下、修改與刪除找不到可以動的列），匿名不能呼叫；任何一步不成就丟出文件裡的錯誤代碼，資料表回到呼叫前。
 - 曲目（pieces）與聲部（piece_parts）：以 add_piece、add_part 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider
   （不實作 in_piece 的排人判斷）；聲部組沒給時照 HuaXia 的觸發器以 guess_section 依名稱補上。
+- 分部（piece_parts.parent_id）：add_part 給 parent_id 加入。照 HuaXia 的觸發器，任何寫入（加入的輔助函式與發譜函式）
+  都擋下只分兩層、同一首曲目、樂譜不登記到分部、有分部的聲部不排人以外的寫法（23514），分部的聲部組跟著所屬聲部。
 - 樂譜（scores）、學期（semesters）與場次（events）：以 add_score、add_semester、add_event 加入，曲目掛上場次
   （event_pieces）以 attach_piece 加入；樂譜的讀取權限
   簡化成 is_staff（幹部或老師，不實作排到聲部的人），場次照 can_see_event 簡化成幹部全看得到、其他社內成員看得到
@@ -192,21 +194,25 @@ class FakeHuaXia:
 
     def add_part(
         self, piece_id: str, name: str, needed: str = "1", needed_min: int = 1, section: Optional[str] = None,
-        sort: int = 0,
+        sort: int = 0, parent_id: Optional[str] = None,
     ) -> str:
-        """在曲目上加入一個聲部（piece_parts 的一列），回傳聲部編號；聲部組沒給時照觸發器以 guess_section 補上"""
+        """在曲目上加入一個聲部（piece_parts 的一列），回傳聲部編號；聲部組沒給時照觸發器以 guess_section 補上。
+        給了 parent_id 是那個聲部的分部，聲部組跟著所屬聲部；違反分部的規則時不加，丟 _FunctionError（23514）"""
         with self._lock:
             part_id = str(uuid.uuid4())
-            self.tables["piece_parts"].append({
+            self._insert("piece_parts", {
                 "id": part_id, "piece_id": piece_id, "name": name, "needed": needed, "needed_min": needed_min,
                 "sort": sort, "tutor_id": None, "note": "", "section": section or guess_section(name),
+                "parent_id": parent_id,
             })
             return part_id
 
     def remove_part(self, part_id: str) -> None:
-        """刪掉一個聲部（幹部在網頁上刪了它）"""
+        """刪掉一個聲部（幹部在網頁上刪了它），連它的分部一起刪（on delete cascade）"""
         with self._lock:
-            self.tables["piece_parts"] = [row for row in self.tables["piece_parts"] if row["id"] != part_id]
+            self.tables["piece_parts"] = [
+                row for row in self.tables["piece_parts"] if part_id not in (row["id"], row.get("parent_id"))
+            ]
 
     def configure_part(self, part_id: str, tutor_id: Optional[str] = None, note: Optional[str] = None) -> None:
         """在網頁上設定一個聲部的小老師（tutor_id）或備註（note）；沒給的不改"""
@@ -239,10 +245,11 @@ class FakeHuaXia:
         self, piece_id: str, part_id: Optional[str], file_path: str, title: str = "",
         section: Optional[str] = None, created_by: Optional[str] = None,
     ) -> str:
-        """在曲目上登記一份樂譜（scores 的一列），回傳樂譜編號；part_id 為 None 是總譜（section 不為 None 是舊的分組樂譜）"""
+        """在曲目上登記一份樂譜（scores 的一列），回傳樂譜編號；part_id 為 None 是總譜（section 不為 None 是舊的分組樂譜）。
+        登記到分部時不加，丟 _FunctionError（23514）"""
         with self._lock:
             score_id = str(uuid.uuid4())
-            self.tables["scores"].append({
+            self._insert("scores", {
                 "id": score_id, "piece_id": piece_id, "part_id": part_id, "title": title, "file_path": file_path,
                 "audio_url": "", "section": section, "created_by": created_by, "created_at": _now().isoformat(),
             })
@@ -290,11 +297,12 @@ class FakeHuaXia:
             self.tables["event_pieces"].append({"event_id": event_id, "piece_id": piece_id})
 
     def assign(self, part_id: str, user_id: Optional[str] = None, ringer_id: Optional[str] = None) -> str:
-        """把一位團員（或槍手）排進聲部（part_assignments 的一列，幹部在網頁上排的），回傳排人的編號"""
+        """把一位團員（或槍手）排進聲部（part_assignments 的一列，幹部在網頁上排的），回傳排人的編號；
+        排進有分部的聲部時不加，丟 _FunctionError（23514）"""
         assert user_id or ringer_id, "part_assignments 要有 user_id 或 ringer_id"
         with self._lock:
             assignment_id = str(uuid.uuid4())
-            self.tables["part_assignments"].append({
+            self._insert("part_assignments", {
                 "id": assignment_id, "part_id": part_id, "user_id": user_id, "ringer_id": ringer_id,
             })
             return assignment_id
@@ -685,6 +693,38 @@ class FakeHuaXia:
         if user_id is None:
             raise _FunctionError(401, "42501", f"permission denied for function {function}")
         return True
+
+    def _insert(self, table: str, row: Dict[str, Any]) -> None:
+        """新增一列；違反分部的規則時不加，丟 _FunctionError（同 HuaXia 的觸發器，23514）"""
+        self.tables[table].append(row)
+        try:
+            self._settle_divisi()
+        except _FunctionError:
+            self.tables[table].remove(row)
+            raise
+
+    def _settle_divisi(self) -> None:
+        """HuaXia 的觸發器 piece_parts_tree、scores_divisi、part_assignments_divisi：分部的聲部組改成所屬聲部的；
+        違反分部的規則時丟 _FunctionError（PostgREST 回 400、23514）"""
+        parts = {row["id"]: row for row in self.tables["piece_parts"]}
+        parents = {row.get("parent_id") for row in parts.values()} - {None}
+        for row in parts.values():
+            parent = parts.get(row.get("parent_id"))
+            if row.get("parent_id") is None:
+                continue
+            if parent is None or parent is row or parent.get("parent_id") is not None:
+                raise _FunctionError(400, "23514", f"分部只分兩層：{row['name']}")
+            if parent["piece_id"] != row["piece_id"]:
+                raise _FunctionError(400, "23514", f"分部與所屬聲部要在同一首曲目：{row['name']}")
+            if row["id"] in parents:
+                raise _FunctionError(400, "23514", f"有分部的聲部不能再是分部：{row['name']}")
+            row["section"] = parent["section"]
+        for score in self.tables["scores"]:
+            if parts.get(score["part_id"], {}).get("parent_id") is not None:
+                raise _FunctionError(400, "23514", f"樂譜不能登記到分部：{score['file_path']}")
+        for assignment in self.tables["part_assignments"]:
+            if assignment["part_id"] in parents:
+                raise _FunctionError(400, "23514", f"有分部的聲部不能排人：{assignment['part_id']}")
 
     def _piece_part(self, piece_id: str, part_id: Optional[str]) -> Optional[Dict[str, Any]]:
         """這首曲目上編號為 part_id 的聲部；沒有時為 None"""
