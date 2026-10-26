@@ -171,7 +171,7 @@ class GroupSnapshot:
             "version": PUBLISH_INTERFACE_VERSION,
             "piece_id": self.piece_id,
             "new_piece": self.new_piece,
-            "create_parts": [create._asdict() for create in self.creates],
+            "create_parts": [create.entry() for create in self.creates],
             "update_parts": [
                 {"id": update["id"], **{name: update[name][1] for name in HUAXIA_PART_FIELDS if name in update}}
                 for update in self.updates
@@ -186,7 +186,7 @@ class GroupSnapshot:
         return PublishRecord(
             PublishAction.START, group_id=self.group_id, group=self.name, piece_id=self.piece_id,
             piece_title=self.piece_title, new_piece=self.new_piece,
-            parts_created=[create._asdict() for create in self.creates], parts_updated=list(self.updates),
+            parts_created=[create.entry() for create in self.creates], parts_updated=list(self.updates),
             files_uploaded=sorted(self.paths), scores_added=[file.score() for file in self.files],
             scores_removed=[score_entry(score) for score in self.removes], files_deleted=list(self.deletes),
             events=[event_entry(event) for event in self.events],

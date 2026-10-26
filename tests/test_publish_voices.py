@@ -6,7 +6,8 @@
 泠靈的「同一聲部」規則對到 HuaXia 聲部，對不上的預設新建；名稱規則對出多個時不自動選；
 兩個泠靈聲部指到同一個時擋下；手動挑的配對記進專案；算出要寫的內容（人數記法、聲部組、覆寫、
 「本專案沒有」的聲部預設不建），永遠不刪 HuaXia 的聲部。HuaXia 上分好分部的聲部：配對只在聲部之間，分部列在
-所屬聲部底下、不算沒對到的聲部，泠靈聲部的名稱對到分部時提示、不配對，人數與聲部組只寫聲部。
+所屬聲部底下、不算沒對到的聲部，泠靈聲部的名稱對到分部時提示、不配對，人數與聲部組只寫聲部。要新建的聲部
+可以勾選 HuaXia 聲部收成分部：只列可以收的，被收的聲部上泠靈發的樂譜一起撤掉，別人放的擋下群組。
 """
 import os
 import shutil
@@ -19,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.models import Headcount, HuaXiaLink, NewHuaXiaPiece, Project
 from core.constants import HuaXiaEnsemble
-from services.huaxia_client import HuaXiaPart
+from services.huaxia_client import HuaXiaPart, HuaXiaScore, lingling_storage_path
 from services.project_service import ProjectService
 from services.publish_service import PartCreate, PartMatch, PartUpdate, VoiceDecisions, plan_voices
 from test_publish_preflight import PrepareTestCase
@@ -108,9 +109,9 @@ class PlanTestCase(unittest.TestCase):
             if len(row) > 2:
                 self.project.set_present(self.group, index, row[2])
 
-    def plan(self, parts, decisions=None):
-        """這個群組對 parts 的配對結果"""
-        return plan_voices(self.project, self.group, parts, decisions or VoiceDecisions())
+    def plan(self, parts, decisions=None, scores=()):
+        """這個群組對 parts（曲目上登記著 scores）的配對結果"""
+        return plan_voices(self.project, self.group, parts, decisions or VoiceDecisions(), list(scores))
 
     def row(self, plan, voice):
         """配對結果裡這個聲部那一列"""
@@ -387,6 +388,76 @@ class TestAbsentVoicesDoNotTakeParts(PlanTestCase):
         plan = self.plan([self.erhu], VoiceDecisions(create_absent={0}))
         self.assertEqual(self.row(plan, "二胡").part, self.erhu)
         self.assertNotIn(self.erhu, self.row(plan, "二胡 I").options)
+
+
+class TestAbsorbing(PlanTestCase):
+    """收成分部：沒對上的泠靈聲部「擊樂2」勾選 HuaXia 上的「風鈴」「鈴鼓」，發譜時新建「擊樂2」把它們收成分部
+
+    HuaXia 上有「風鈴」「鈴鼓」「琵琶」，以及分好分部的「二胡」（分部「二胡1」）。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.voices(("擊樂2", Headcount(3)), ("琵琶", Headcount(2)))
+        self.chimes, self.tambourine = part("p1", "風鈴", sort=1), part("p2", "鈴鼓", sort=2)
+        self.pipa, self.erhu = part("p3", "琵琶", "2", 2, sort=3), part("p4", "二胡", sort=4)
+        self.erhu_one = HuaXiaPart("p5", "hx-1", "二胡1", "1", 1, "", 5, parent_id="p4")
+        self.parts = [self.chimes, self.tambourine, self.pipa, self.erhu, self.erhu_one]
+
+    def test_the_new_voice_absorbs_the_ticked_parts(self):
+        plan = self.plan(self.parts, VoiceDecisions(absorb={0: {"p2", "p1"}}))
+        row = self.row(plan, "擊樂2")
+        self.assertTrue(row.create)
+        self.assertEqual(row.absorbs, [self.chimes, self.tambourine])
+        [create] = plan.creates
+        self.assertEqual((create.name, create.needed, create.needed_min, create.absorb), ("擊樂2", "3", 3, ("p1", "p2")))
+        self.assertEqual(plan.huaxia_only, [self.erhu])
+        self.assertNotIn(self.chimes, self.row(plan, "琵琶").options)
+
+    def test_only_parentless_parts_without_divisi_not_paired_by_another_voice_can_be_absorbed(self):
+        row = self.row(self.plan(self.parts), "擊樂2")
+        self.assertEqual(row.absorb_options, [self.chimes, self.tambourine])
+        self.assertEqual(row.absorbs, [])
+        self.assertEqual(self.plan(self.parts).creates[0].absorb, ())
+
+    def test_a_part_paired_by_another_voice_is_not_absorbed(self):
+        plan = self.plan(self.parts, VoiceDecisions(absorb={0: {"p3"}}))
+        self.assertEqual(self.row(plan, "擊樂2").absorbs, [])
+        self.assertEqual(self.row(plan, "琵琶").part, self.pipa)
+
+    def test_a_voice_paired_with_an_existing_part_absorbs_nothing(self):
+        self.project.choose_huaxia_part(self.group, "擊樂2", "p4")
+        plan = self.plan(self.parts, VoiceDecisions(absorb={0: {"p1"}}))
+        self.assertEqual(self.row(plan, "擊樂2").absorbs, [])
+        self.assertEqual(plan.creates, [])
+        self.assertIn(self.chimes, plan.huaxia_only)
+
+    def test_a_part_absorbed_by_one_voice_is_not_offered_to_another(self):
+        self.voices(("擊樂2", Headcount(3)), ("擊樂3", Headcount(2)))
+        plan = self.plan(self.parts, VoiceDecisions(absorb={0: {"p1"}, 1: {"p1", "p2"}}))
+        self.assertEqual(self.row(plan, "擊樂2").absorbs, [self.chimes])
+        self.assertEqual(self.row(plan, "擊樂3").absorbs, [self.tambourine])
+        self.assertNotIn(self.chimes, self.row(plan, "擊樂3").absorb_options)
+        self.assertNotIn(self.chimes, self.row(plan, "擊樂3").options)
+
+    def test_lingling_copies_on_absorbed_parts_are_removed_in_the_same_publish(self):
+        copy = HuaXiaScore("s1", "hx-1", "p1", "風鈴", lingling_storage_path("hx-1", "a" * 64, "chimes"), "")
+        elsewhere = HuaXiaScore("s2", "hx-1", "p3", "琵琶", lingling_storage_path("hx-1", "b" * 64, "pipa"), "")
+        plan = self.plan(self.parts, VoiceDecisions(absorb={0: {"p1"}}), [copy, elsewhere])
+        self.assertEqual(plan.absorb_replaces, [copy])
+        self.assertFalse(plan.blocked)
+
+    def test_scores_put_there_by_others_block_the_group_and_are_listed(self):
+        bowing = HuaXiaScore("s1", "hx-1", "p2", "鈴鼓弓法", "hx-1/p2/1700000000_bowing.pdf", "")
+        plan = self.plan(self.parts, VoiceDecisions(absorb={0: {"p1", "p2"}}), [bowing])
+        self.assertEqual(plan.absorb_others, [(self.tambourine, [bowing])])
+        self.assertTrue(plan.blocked)
+
+    def test_an_absent_voice_does_not_take_an_absorbed_part(self):
+        self.voices(("擊樂2", Headcount(3)), ("風鈴", Headcount(), False))
+        plan = self.plan(self.parts, VoiceDecisions(absorb={0: {"p1"}}))
+        self.assertIsNone(self.row(plan, "風鈴").part)
+        self.assertEqual(self.row(plan, "擊樂2").absorbs, [self.chimes])
 
 
 class TestDivisi(PrepareTestCase):

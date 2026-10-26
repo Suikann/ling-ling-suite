@@ -17,14 +17,15 @@
 讀回時還原（PublishRecord.from_cells）；各欄的內容：
 
 - 開始發譜：要做的。new_piece 是要新建的曲目欄位（title、composer、duration_min、ensemble）；parts_created 是要新建的聲部
-  （name、needed、needed_min、section、sort）；parts_updated 是要覆寫的聲部（id、name，改的欄位各是［原值，新值］）；
-  files_uploaded 是要傳的 Storage 路徑；scores_added 是要登記的（發譜函式 add_scores 的一項：title、part_id 或
-  new_part、file_path；那次沒有結果時撤回依它的 file_path 認）；
+  （name、needed、needed_min、section、sort，以及 absorb：要收成它的分部的 HuaXia 聲部編號）；parts_updated 是要覆寫的
+  聲部（id、name，改的欄位各是［原值，新值］）；files_uploaded 是要傳的 Storage 路徑；scores_added 是要登記的（發譜函式
+  add_scores 的一項：title、part_id 或 new_part、file_path；那次沒有結果時撤回依它的 file_path 認）；
   scores_removed 是要撤掉登記的（id、part_id、file_path）；files_deleted 是清舊檔要刪的；events 是要掛的場次（id、title、ends_at）。
 - 發譜結果：做到的。new_piece 只在這次真的新建了曲目時有；parts_created、scores_added、scores_removed 是 HuaXia 發譜函式
-  回報的（帶 HuaXia 的編號，撤回只動這些）；parts_updated 是切換成功時寫進去的；files_uploaded 是這次真的傳上去的；
+  回報的（帶 HuaXia 的編號，撤回只動這些；parts_created 是 id、name 與 absorbed：實際收成它的分部的聲部編號）；
+  parts_updated 是切換成功時寫進去的；files_uploaded 是這次真的傳上去的；
   files_deleted 是真的刪掉的；events 是這次新掛上的。沒發成時 failure 寫出在哪一段（stage）與原因（code、detail），
-  其他欄只有 files_uploaded（傳上去了、沒登記的檔）。
+  其他欄只有 files_uploaded（傳上去了、沒登記的檔）。介面版本 2 之前寫的列沒有 absorb、absorbed，當作空的。
 - 清孤兒檔：piece_id、piece_title 與 files_deleted（刪掉的孤兒檔）；沒清成時 failure 寫出原因（code、detail）。群組欄空白。
 - 撤回：做到的。scores_removed 是撤掉的登記（id、part_id、file_path），parts_deleted 是刪掉的聲部（id、name），
   files_deleted 是刪掉的 Storage 檔；中途停下時 failure 寫出原因（code、detail），其他欄是停下之前做到的。

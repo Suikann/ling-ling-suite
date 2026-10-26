@@ -19,7 +19,8 @@
   新增被 RLS 擋下、修改與刪除找不到可以動的列），匿名不能呼叫；任何一步不成就丟出文件裡的錯誤代碼，資料表回到呼叫前。
 - 曲目（pieces）與聲部（piece_parts）：以 add_piece、add_part 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider
   （不實作 in_piece 的排人判斷）；聲部組沒給時照 HuaXia 的觸發器以 guess_section 依名稱補上。
-- 分部（piece_parts.parent_id）：add_part 給 parent_id 加入，或由發譜函式（介面版本 2）的 absorb 收成分部。
+- 分部（piece_parts.parent_id）：add_part 給 parent_id 加入，或由發譜函式（介面版本 2）的 absorb 收成分部；
+  set_parent 扮演幹部在網頁的聲部表單設定所屬聲部（替排了人的聲部加第一個分部時把人移到那個分部）。
   照 HuaXia 的觸發器，任何寫入（加入的輔助函式與發譜函式）都擋下只分兩層、同一首曲目、樂譜不登記到分部、
   有分部的聲部不排人以外的寫法（23514），分部的聲部組跟著所屬聲部；刪聲部（REST 與 remove_part）連分部一起刪。
 - 樂譜（scores）、學期（semesters）與場次（events）：以 add_score、add_semester、add_event 加入，曲目掛上場次
@@ -214,6 +215,24 @@ class FakeHuaXia:
             self.tables["piece_parts"] = [
                 row for row in self.tables["piece_parts"] if part_id not in (row["id"], row.get("parent_id"))
             ]
+
+    def set_parent(self, part_id: str, parent_id: Optional[str]) -> None:
+        """幹部在網頁的聲部表單設定所屬聲部（parent_id 為 None 是移出來、變回獨立聲部）。替排了人的聲部加第一個分部時，
+        照網頁的確認把人移到那個分部；違反分部的規則時不改，丟 _FunctionError（23514）"""
+        with self._lock:
+            before = copy.deepcopy(self.tables)
+            if parent_id is not None and not any(row.get("parent_id") == parent_id for row in self.tables["piece_parts"]):
+                for assignment in self.tables["part_assignments"]:
+                    if assignment["part_id"] == parent_id:
+                        assignment["part_id"] = part_id
+            for row in self.tables["piece_parts"]:
+                if row["id"] == part_id:
+                    row["parent_id"] = parent_id
+            try:
+                self._settle_divisi()
+            except _FunctionError:
+                self.tables = before
+                raise
 
     def configure_part(self, part_id: str, tutor_id: Optional[str] = None, note: Optional[str] = None) -> None:
         """在網頁上設定一個聲部的小老師（tutor_id）或備註（note）；沒給的不改"""
