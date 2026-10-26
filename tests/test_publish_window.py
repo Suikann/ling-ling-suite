@@ -18,8 +18,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QGroupBox, QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QTableWidget,
-    QTabWidget, QWidget,
+    QCheckBox, QComboBox, QDialog, QGroupBox, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QRadioButton,
+    QTableWidget, QTabWidget, QToolButton, QWidget,
 )
 
 from core.constants import CATALOG_ROOT_FOLDER_ID_KEY, CATALOG_SPREADSHEET_ID_KEY, CLUB_PUBLISHING_PLATFORM_KEY, HuaXiaEnsemble, OrchestraType
@@ -139,6 +139,16 @@ def choose_part(dialog: PublishPreviewDialog, group: str, voice: str, text: str)
     """這個聲部在選單裡挑寫著 text 的那一項"""
     combo = voice_cell(dialog, group, voice).findChild(QComboBox, "part_choice")
     combo.setCurrentIndex(combo.findText(text))
+
+
+def absorb_menu(dialog: PublishPreviewDialog, group: str, voice: str) -> QMenu:
+    """這個聲部勾選要收成分部的 HuaXia 聲部的選單"""
+    return voice_cell(dialog, group, voice).findChild(QToolButton, "absorb").menu()
+
+
+def tick_absorb(dialog: PublishPreviewDialog, group: str, voice: str, part: str):
+    """這個聲部勾選把寫著 part 的 HuaXia 聲部收成分部"""
+    next(action for action in absorb_menu(dialog, group, voice).actions() if action.text() == part).trigger()
 
 
 def voices_problem(dialog: PublishPreviewDialog, group: str) -> str:
@@ -529,6 +539,45 @@ class TestVoicesStep(PublishWindowTestCase):
             ])
             self.assertEqual(table.item(2, 2).text(), t("publish.voices.divisi_match", divisi="琵琶", voice="彈撥"))
             self.assertTrue(button(dialog, "publish.next").isEnabled())
+        self.publish(operate=operate)
+
+    def test_an_unmatched_voice_ticks_huaxia_voices_to_absorb_from_the_eligible_ones(self):
+        self.huaxia.add_part(self.fenghuo, "二胡1", sort=1)
+        self.huaxia.add_part(self.fenghuo, "琵琶I", sort=2)
+        self.huaxia.add_part(self.fenghuo, "琵琶II", sort=3)
+        plucked = self.huaxia.add_part(self.fenghuo, "彈撥", sort=4)
+        self.huaxia.add_part(self.fenghuo, "柳琴", sort=5, parent_id=plucked)
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            self.assertEqual([a.text() for a in absorb_menu(dialog, "烽火操", "琵琶").actions()], ["琵琶I", "琵琶II"])
+            self.assertIsNone(voice_cell(dialog, "烽火操", "二胡 I").findChild(QToolButton, "absorb"))
+            tick_absorb(dialog, "烽火操", "琵琶", "琵琶I")
+            tick_absorb(dialog, "烽火操", "琵琶", "琵琶II")
+            table = voices_group(dialog, "烽火操").findChild(QTableWidget, "voices_table")
+            self.assertEqual([table.item(r, 0).text() for r in range(table.rowCount())], [
+                "二胡 I", "琵琶", t("publish.voices.divisi_name", name="琵琶I"),
+                t("publish.voices.divisi_name", name="琵琶II"), "彈撥", t("publish.voices.divisi_name", name="柳琴"),
+            ])
+            self.assertEqual(table.item(2, 2).text(), t("publish.voices.absorb"))
+            self.assertTrue(all(a.isChecked() for a in absorb_menu(dialog, "烽火操", "琵琶").actions()))
+            for _step in ("files", "events", "confirm"):
+                button(dialog, "publish.next").click()
+            self.assertIn(
+                t("publish.confirm.absorbs", voice="琵琶", parts="琵琶I、琵琶II"),
+                dialog.findChild(QLabel, "confirm_voices").text(),
+            )
+        self.publish(operate=operate)
+
+    def test_scores_put_there_by_others_on_a_voice_to_absorb_block_the_group(self):
+        part = self.huaxia.add_part(self.fenghuo, "琵琶I", sort=1)
+        self.huaxia.add_score(self.fenghuo, part, f"{self.fenghuo}/{part}/1700000000_bowing.pdf", title="弓法")
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            tick_absorb(dialog, "烽火操", "琵琶", "琵琶I")
+            self.assertIn(t("publish.voices.absorb_others", part="琵琶I", scores="弓法"), voices_problem(dialog, "烽火操"))
+            self.assertFalse(button(dialog, "publish.next").isEnabled())
         self.publish(operate=operate)
 
     def test_a_blocked_group_shows_its_reason(self):
