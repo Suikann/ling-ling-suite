@@ -48,7 +48,7 @@ HUAXIA_PUBLISHABLE_KEY = "sb_publishable_CK-Xpp2OOiaUVh3b1dmgGg_ktahQV_8"
 # HuaXia 的發譜函式、回報它介面版本的資料庫函式，以及這版泠靈要的介面版本（docs/huaxia/LINGLING.md）
 PUBLISH_FUNCTION = "lingling_publish"
 PUBLISH_VERSION_FUNCTION = "lingling_publish_version"
-PUBLISH_INTERFACE_VERSION = 1
+PUBLISH_INTERFACE_VERSION = 2
 # 泠靈發的檔在 Storage bucket scores 裡的路徑前綴（docs/huaxia/LINGLING.md）
 LINGLING_STORAGE_PREFIX = "lingling/"
 _LINGLING_PATH = re.compile(re.escape(LINGLING_STORAGE_PREFIX) + r"[^/]+/[0-9a-f]{64}-[0-9a-z]{1,32}\.pdf")
