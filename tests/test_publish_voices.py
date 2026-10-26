@@ -531,6 +531,30 @@ class TestDivisi(PrepareTestCase):
         self.assertEqual((row.divisi_match.divisi.id, row.divisi_match.voice.id), (self.chimes, self.percussion))
         self.assertEqual(plan.updates, [])
 
+    def test_a_voice_whose_name_matches_a_divisi_blocks_the_group_until_a_voice_is_picked(self):
+        self.voices(("風鈴", Headcount(1)),)
+        plan = self.plan()
+        self.assertTrue(plan.blocked)
+        self.assertEqual([(voice, match.divisi.id) for voice, match in plan.divisi_named], [("風鈴", self.chimes)])
+        self.project.choose_huaxia_part(self.group, "風鈴", self.percussion)
+        plan = self.plan()
+        self.assertEqual(plan.divisi_named, [])
+        self.assertFalse(plan.blocked)
+
+    def test_ticking_voices_to_absorb_does_not_clear_the_divisi_block(self):
+        self.voices(("風鈴", Headcount(1)),)
+        plan = self.plan(VoiceDecisions(absorb={0: {self.pipa}}))
+        self.assertEqual([voice for voice, _match in plan.divisi_named], ["風鈴"])
+        self.assertTrue(plan.blocked)
+
+    def test_an_absent_voice_whose_name_matches_a_divisi_does_not_block(self):
+        self.voices(("二胡", Headcount(8)), ("風鈴", Headcount(1)))
+        self.project.set_present(self.group, 1, False)
+        plan = self.plan()
+        self.assertIsNotNone(self.row(plan, "風鈴").divisi_match)
+        self.assertEqual(plan.divisi_named, [])
+        self.assertFalse(plan.blocked)
+
     def test_a_remembered_part_since_made_a_divisi_is_not_paired(self):
         self.voices(("擊樂2 風鈴", Headcount(2)),)
         self.project.choose_huaxia_part(self.group, "擊樂2 風鈴", self.chimes)

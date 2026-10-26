@@ -538,6 +538,21 @@ class TestVoicesStep(PublishWindowTestCase):
                 t("publish.voices.divisi_name", name="琵琶"),
             ])
             self.assertEqual(table.item(2, 2).text(), t("publish.voices.divisi_match", divisi="琵琶", voice="彈撥"))
+        self.publish(operate=operate)
+
+    def test_a_voice_named_like_a_divisi_blocks_the_group_until_a_voice_is_picked(self):
+        plucked = self.huaxia.add_part(self.fenghuo, "彈撥", sort=1)
+        self.huaxia.add_part(self.fenghuo, "琵琶", sort=2, parent_id=plucked)
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            self.assertIn(
+                t("publish.voices.divisi_named", voice="琵琶", divisi="琵琶", parent="彈撥"),
+                voices_problem(dialog, "烽火操"),
+            )
+            self.assertFalse(button(dialog, "publish.next").isEnabled())
+            choose_part(dialog, "烽火操", "琵琶", "彈撥")
+            self.assertEqual(voices_problem(dialog, "烽火操"), "")
             self.assertTrue(button(dialog, "publish.next").isEnabled())
         self.publish(operate=operate)
 

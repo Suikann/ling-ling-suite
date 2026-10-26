@@ -250,7 +250,7 @@ class VoiceRow:
         section_differs: 對到的 HuaXia 聲部的聲部組與泠靈不同（泠靈是「其他」時不比）
         overwrite: 有差異且要以泠靈的值覆寫
         create: 要在 HuaXia 新建
-        divisi_match: 沒對上、名稱卻對到 HuaXia 上某個分部時是那個分部與它所屬的聲部（提示不一致，不配對）
+        divisi_match: 沒對上、名稱卻對到 HuaXia 上某個分部時是那個分部與它所屬的聲部（不配對；本專案有的列擋下群組）
         absorb_options: 要新建的列可以勾選收成分部的 HuaXia 聲部，依 HuaXia 的排序：沒有所屬聲部、本身沒有分部、
             沒配給其他聲部，也沒被其他列勾走的
         absorbs: 要新建的列這次要收成分部的 HuaXia 聲部，依 HuaXia 的排序
@@ -289,6 +289,8 @@ class VoicePlan:
         divisi: HuaXia 聲部的編號對應它的分部（依 HuaXia 的排序），供列在聲部底下對照；分部不配對、不寫
         absorb_replaces: 要收成分部的聲部上泠靈發的樂譜（同一次撤掉登記，GroupPublish.replaces）
         absorb_others: 要收成分部的聲部與它上面別人放的樂譜（有的話這個群組還不能發，要先到網頁上處理）
+        divisi_named: 本專案有、沒對上、名稱卻對到 HuaXia 上某個分部的聲部與那個分部（有的話這個群組還不能發：
+            要到網頁上把分部移出，或替它挑一個聲部）
     """
 
     rows: List[VoiceRow]
@@ -301,11 +303,12 @@ class VoicePlan:
     divisi: Dict[str, List[HuaXiaPart]] = field(default_factory=dict)
     absorb_replaces: List[HuaXiaScore] = field(default_factory=list)
     absorb_others: List[Tuple[HuaXiaPart, List[HuaXiaScore]]] = field(default_factory=list)
+    divisi_named: List[Tuple[str, DivisiMatch]] = field(default_factory=list)
 
     @property
     def blocked(self) -> bool:
-        """這個群組還不能發：有衝突、沒挑、要建的聲部沒填最少人數，或要收成分部的聲部上有別人放的樂譜"""
-        return bool(self.conflicts or self.undecided or self.unfilled or self.absorb_others)
+        """這個群組還不能發：有衝突、沒挑、要建的聲部沒填最少人數、要收成分部的聲部上有別人放的樂譜，或聲部名稱對到分部"""
+        return bool(self.conflicts or self.undecided or self.unfilled or self.absorb_others or self.divisi_named)
 
 
 def plan_voices(
@@ -319,7 +322,8 @@ def plan_voices(
     這次要發的聲部（本專案有，或要在 HuaXia 建的）先配，這次不發的只在剩下的 HuaXia 聲部裡配、只供顯示：
     不占要發的聲部可以挑的，也不算衝突。
     配對只在沒有所屬聲部的 HuaXia 聲部之間（記住的配對指到現在是分部的也跳過）；分部列在所屬聲部底下，
-    不算沒對到的聲部。沒對上的泠靈聲部名稱對到某個分部時標出（divisi_match），不配對。
+    不算沒對到的聲部。沒對上的泠靈聲部名稱對到某個分部時標出（divisi_match），不配對；本專案有的這種聲部擋下群組
+    （divisi_named），要手動挑一個聲部，或到網頁上把分部移出之後照常配對（勾收成分部、選新建都不解除）。
     要新建的聲部可以把勾選的 HuaXia 聲部收成分部（decisions.absorb）：只收沒有所屬聲部、本身沒有分部、沒配給要發的
     聲部的；收了的不算沒對到的聲部，這次不發的聲部也不配它們。被收的聲部上泠靈發的樂譜同一次撤掉，有別人放的
     樂譜時這個群組還不能發。
@@ -383,7 +387,7 @@ def plan_voices(
     paired = {index: matches[index][1].id for index in active if matches[index][1] is not None}
     assigned = list(paired.values())
     absorbed = {part.id: index for index, chosen_parts in absorbs.items() for part in chosen_parts}
-    voice_rows, creates, updates, undecided, unfilled = [], [], [], [], []
+    voice_rows, creates, updates, undecided, unfilled, divisi_named = [], [], [], [], [], []
     for index, (voice, present, headcount) in enumerate(rows):
         match, part = matches[index]
         section = project.section_of(voice)
@@ -403,6 +407,8 @@ def plan_voices(
                 DivisiMatch(child, by_id[parent_id]) for parent_id, children in divisi.items() if parent_id in by_id
                 for child in children if same_voice(child.name, voice)
             ), None))
+            if present and match is PartMatch.NONE and row.divisi_match is not None:
+                divisi_named.append((voice, row.divisi_match))
         if part is not None and present:
             headcount_differs = part.needed.strip() != headcount.text() or part.needed_min != headcount.minimum
             section_differs = section != OTHER_SECTION and part.section != section
@@ -441,6 +447,7 @@ def plan_voices(
             absorb_others.append((part, [score for score in part_scores if not score.lingling]))
     return VoicePlan(
         voice_rows, unpaired, conflicts, undecided, unfilled, creates, updates, divisi, absorb_replaces, absorb_others,
+        divisi_named,
     )
 
 

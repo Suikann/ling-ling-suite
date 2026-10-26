@@ -18,8 +18,8 @@
   （名稱規則對到多個時只列那幾個），挑了就經 Project.choose_huaxia_part 記進專案；人數或聲部組不同時「覆寫」
   預設勾選；本專案沒有、HuaXia 也沒有的聲部預設不建，可以勾「在 HuaXia 建」。要新建的聲部有可以收的 HuaXia 聲部時
   多一個「收成分部」選單（只列 VoiceRow.absorb_options），勾了的列在那一列底下。有衝突、還沒挑、要建的聲部
-  沒填最少人數，或要收的聲部上有別人放的樂譜時寫出原因，「下一步」按不下去。覆寫、建立與收成分部的勾選只在這次預覽，
-  不記在專案。
+  沒填最少人數、要收的聲部上有別人放的樂譜，或本專案有的聲部名稱對到分部時寫出原因，「下一步」按不下去。
+  覆寫、建立與收成分部的勾選只在這次預覽，不記在專案。
 - 「檔案」：每個群組列出要發的分譜與總譜、會被取代的那份（同一個聲部底下、泠靈發的，publish_service.plan_files）
   與同聲部別人放的檔（不動）；HuaXia 上已有內容相同那份的標成不重傳。本機找不到的檔跳過並寫出來，只在譜庫的旁邊放「從譜庫下載回來」（關掉預覽，
   交給主視窗下載回原位）。超過大小上限的檔第一次進這一步時在背景逐份壓縮（壓縮檔在壓縮服務的暫存資料夾，
@@ -113,6 +113,10 @@ def voices_problem_text(plan: VoicePlan) -> str:
         reasons.append(t("publish.voices.unfilled", voices="、".join(plan.unfilled)))
     reasons += [
         t("publish.voices.absorb_others", part=part.name, scores=_score_titles(scores)) for part, scores in plan.absorb_others
+    ]
+    reasons += [
+        t("publish.voices.divisi_named", voice=voice, divisi=match.divisi.name, parent=match.voice.name)
+        for voice, match in plan.divisi_named
     ]
     return "\n".join(reasons)
 
