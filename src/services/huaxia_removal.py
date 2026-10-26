@@ -3,7 +3,8 @@
 撤回與收回共用的步驟
 
 撤回（services/retract_service.py）與收回（services/recall_service.py）照同一個骨架，以幹部身分經 REST 拿掉 HuaXia
-上的東西：重查幹部身分（不是幹部就什麼都不做）→ 撤掉樂譜的登記、刪聲部（分成幾個請求，中途失敗時已經拿掉的照樣交回）
+上的東西：重查幹部身分（不是幹部就什麼都不做）→ 撤掉樂譜的登記、把分部改回獨立聲部、刪聲部（分成幾個請求，中途失敗時
+已經做到的照樣交回）
 → 刪 Storage 的檔（orphan_cleanup.delete_unregistered）→ 把做到的寫進發譜紀錄（寫不進去不丟出，交回錯誤）並更新
 收回提醒的摘要 → 寫紀錄檔。這裡是那些共用的步驟；要拿掉哪些、紀錄寫哪幾列由各自決定。
 網路請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
@@ -16,7 +17,7 @@
         removal.remove_scores(score_ids, removed)   # 失敗時丟出 HuaXiaError，removed 是失敗前撤掉的
         log_error = removal.write_log(catalog, lambda operator: catalog.begin_publish(records, operator))
 """
-from typing import Any, Callable, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from core.catalog_errors import CatalogError
 from core.locale import t
@@ -24,7 +25,7 @@ from core.log_entry import LogEntry
 from services.activity_log import ActivityLog
 from services.catalog_service import CatalogService
 from services.huaxia_auth_service import HuaXiaAuthService, NotOfficer
-from services.huaxia_client import HuaXiaError
+from services.huaxia_client import HuaXiaError, HuaXiaPart
 from services.orphan_cleanup import StorageDeletion, delete_unregistered
 from services.recall_reminder import RecallReminder
 
@@ -35,7 +36,7 @@ def error_message(error: HuaXiaError) -> str:
 
 
 class HuaXiaRemoval:
-    """撤回與收回共用的步驟：重查、撤登記、刪聲部、刪檔、寫發譜紀錄並更新收回提醒、寫紀錄檔"""
+    """撤回與收回共用的步驟：重查、撤登記、改回獨立聲部、刪聲部、刪檔、寫發譜紀錄並更新收回提醒、寫紀錄檔"""
 
     def __init__(
         self, auth: HuaXiaAuthService, log: Optional[ActivityLog] = None, reminder: Optional[RecallReminder] = None,
@@ -67,8 +68,25 @@ class HuaXiaRemoval:
         """
         self._remove(self._client.delete_scores, score_ids, removed)
 
+    def detach_divisi(self, divisi: List[HuaXiaPart], detached: List[str]) -> None:
+        """把這些分部改回獨立聲部（只動現在還屬於它的 parent_id 的），真的改回的編號接在 detached 後面
+
+        Raises:
+            HuaXiaError: 連不上或修改失敗
+        """
+        parents: Dict[str, List[str]] = {}
+        for part in divisi:
+            parents.setdefault(part.parent_id, []).append(part.id)
+        for parent_id, part_ids in parents.items():
+            self._remove(
+                lambda token, ids, parent_id=parent_id: self._client.detach_divisi(token, parent_id, ids),
+                part_ids, detached,
+            )
+
     def remove_parts(self, part_ids: List[str], removed: List[str]) -> None:
-        """刪掉這些聲部（HuaXia 會連帶刪掉排人與樂譜，呼叫前先確認），真的刪掉的編號接在 removed 後面
+        """刪掉這些聲部，真的刪掉的編號接在 removed 後面
+
+        HuaXia 會連帶刪掉它們的分部、排人與樂譜，呼叫前先確認。
 
         Raises:
             HuaXiaError: 連不上或刪除失敗
@@ -121,10 +139,10 @@ class HuaXiaRemoval:
         else:
             self._log.record(LogEntry(t(stopped_key), message=error_message(error), **fields))
 
-    def _remove(self, delete: Callable[[str, List[str]], List[str]], ids: List[str], removed: List[str]) -> None:
-        """經 delete 分批刪掉，真的刪掉的接在 removed 後面；中途失敗時接上失敗前刪掉的再丟出"""
+    def _remove(self, write: Callable[[str, List[str]], List[str]], ids: List[str], done: List[str]) -> None:
+        """經 write 分批刪掉或修改，真的動到的接在 done 後面；中途失敗時接上失敗前動到的再丟出"""
         try:
-            removed.extend(delete(self._auth.access_token(), ids))
+            done.extend(write(self._auth.access_token(), ids))
         except HuaXiaError as e:
-            removed.extend(e.done)
+            done.extend(e.done)
             raise

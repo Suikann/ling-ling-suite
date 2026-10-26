@@ -578,7 +578,7 @@ class HuaXiaClient:
         Raises:
             HuaXiaError: 連不上或刪除失敗
         """
-        return self._delete_ids("scores", access_token, score_ids)
+        return self._write_ids("DELETE", "scores", access_token, score_ids)
 
     def delete_parts(self, access_token: str, part_ids: List[str]) -> List[str]:
         """以使用者身分刪掉這些聲部；HuaXia 會連帶刪掉它們的排人與樂譜（on delete cascade），呼叫前先確認沒排人
@@ -589,11 +589,17 @@ class HuaXiaClient:
         Raises:
             HuaXiaError: 連不上或刪除失敗
         """
-        return self._delete_ids("piece_parts", access_token, part_ids)
+        return self._write_ids("DELETE", "piece_parts", access_token, part_ids)
 
     def detach_divisi(self, access_token: str, parent_id: str, part_ids: List[str]) -> List[str]:
-        """以使用者身分把這些分部改回獨立聲部（parent_id 設成 null），只動現在還屬於 parent_id 的（之後在網頁上移走
-        或已經改回的不動）；排人與人數不動
+        """以使用者身分把這些分部改回獨立聲部（parent_id 設成 null）
+
+        只動現在還屬於 parent_id 的（之後在網頁上移走或已經改回的不動）；排人與人數不動。
+
+        Args:
+            access_token: 使用者的 access token
+            parent_id: 這些分部原本所屬的聲部編號
+            part_ids: 要改回獨立聲部的分部編號
 
         Returns:
             真的改回的聲部編號（不是幹部時 HuaXia 一列都不改、不報錯，回傳空的）
@@ -617,21 +623,27 @@ class HuaXiaClient:
         except (KeyError, TypeError) as e:
             raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected divisi: {e}") from e
 
-    def _delete_ids(self, table: str, access_token: str, ids: List[str]) -> List[str]:
-        """刪掉資料表裡編號是其中之一的列（照 RLS，看不到或不能刪的不刪），回傳真的刪掉的編號
-
-        分成幾個請求；某個請求失敗時丟出的 HuaXiaError 的 done 是之前的請求已經刪掉的編號。
-        """
-        return self._write_ids("DELETE", table, access_token, ids)
-
     def _write_ids(
         self, method: str, table: str, access_token: str, ids: List[str], filters: Optional[Dict[str, str]] = None,
         body: Any = None,
     ) -> List[str]:
-        """對資料表裡編號是其中之一、又符合 filters 的列送出 method（DELETE 或帶 body 的 PATCH；照 RLS，看不到或
-        不能動的不動），回傳真的動到的編號
+        """對資料表裡編號是其中之一、又符合 filters 的列送出 method，回傳真的動到的編號
 
-        分成幾個請求；某個請求失敗時丟出的 HuaXiaError 的 done 是之前的請求已經動到的編號。
+        照 RLS，看不到或不能動的不動。分成幾個請求；某個請求失敗時丟出的 HuaXiaError 的 done 是之前的請求已經動到的編號。
+
+        Args:
+            method: DELETE，或帶 body 的 PATCH
+            table: 資料表名稱
+            access_token: 使用者的 access token
+            ids: 要動的列的編號
+            filters: 另外要符合的條件（PostgREST 的查詢參數）；省略時只看編號
+            body: PATCH 要寫的欄位；DELETE 為 None
+
+        Returns:
+            真的動到的編號
+
+        Raises:
+            HuaXiaError: 連不上或請求失敗；done 是之前的請求已經動到的編號
         """
         done: List[str] = []
         for chunk in _in_chunks(ids):

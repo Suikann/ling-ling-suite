@@ -225,7 +225,7 @@ class RetractResult:
         return [group.piece_title for group in self.groups if group.new_piece]
 
 
-class _Done(NamedTuple):
+class _Retracted(NamedTuple):
     """撤回真的做到的：撤掉的登記、變回獨立聲部的分部、刪掉的聲部（編號）與刪掉的檔（Storage 路徑）"""
     removed: Set[str]
     detached: Set[str]
@@ -302,14 +302,14 @@ class RetractService:
         try:
             self._removal.remove_scores([score.id for group in groups for score in group.scores], removed)
             # 先取消歸分部再刪聲部：刪聲部會連它的分部與分部的排人一起刪
-            self._detach([part for group in groups for part in group.detach], detached)
+            self._removal.detach_divisi([part for group in groups for part in group.detach], detached)
             parts = self._without_divisi([part.id for group in groups for part in group.parts])
             self._removal.remove_parts(parts, deleted)
             files = self._removal.remove_files(path for group in groups for path in group.files).deleted
         except HuaXiaError as e:
             error = e
-        done = _Done(set(removed), set(detached), set(deleted), set(files))
-        records = [_retract_record(group, done, error) for group in groups]
+        retracted = _Retracted(set(removed), set(detached), set(deleted), set(files))
+        records = [_retract_record(group, retracted, error) for group in groups]
         if error is not None and not (removed or detached or deleted or files):
             records = []
         log_error = None
@@ -324,25 +324,11 @@ class RetractService:
             )
         return RetractResult(groups, records, error, log_error)
 
-    def _detach(self, divisi: List[HuaXiaPart], detached: List[str]) -> None:
-        """把這些分部改回獨立聲部（只動現在還屬於記下的那個聲部的），真的改回的編號接在 detached 後面
-
-        Raises:
-            HuaXiaError: 連不上或修改失敗（detached 接上失敗前改回的）
-        """
-        parents: Dict[str, List[str]] = {}
-        for part in divisi:
-            parents.setdefault(part.parent_id, []).append(part.id)
-        for parent_id, part_ids in parents.items():
-            try:
-                detached.extend(self._client.detach_divisi(self._auth.access_token(), parent_id, part_ids))
-            except HuaXiaError as e:
-                detached.extend(e.done)
-                raise
-
     def _without_divisi(self, part_ids: List[str]) -> List[str]:
-        """這些要刪的聲部裡現在沒有分部的：取消歸分部沒改回全部（例如不是幹部，或之後在網頁上又加了分部）時，
-        刪了會連分部與排人一起刪"""
+        """這些要刪的聲部裡現在沒有分部的
+
+        取消歸分部沒改回全部（例如不是幹部，或之後在網頁上又加了分部）時，刪了會連分部與排人一起刪。
+        """
         if not part_ids:
             return []
         parents = self._client.parts_with_divisi(self._auth.access_token(), part_ids)
@@ -403,12 +389,12 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
         divisi: part["id"] for part in record.parts_created if record.action is PublishAction.RESULT
         for divisi in part.get("absorbed") or []
     }
-    pieces = [part for part in state.parts if part.piece_id == record.piece_id]
-    names = {part.id: part.name for part in pieces}
-    detaching = [part for part in pieces if part.parent_id is not None and absorbed.get(part.id) == part.parent_id]
+    piece_parts = [part for part in state.parts if part.piece_id == record.piece_id]
+    names = {part.id: part.name for part in piece_parts}
+    detaching = [part for part in piece_parts if part.parent_id is not None and absorbed.get(part.id) == part.parent_id]
     leaving = {part.id for part in detaching}
     # 撤回後還有分部的聲部（網頁上又加的）：刪了會連分部一起刪
-    with_divisi = {part.parent_id for part in pieces if part.parent_id is not None and part.id not in leaving}
+    with_divisi = {part.parent_id for part in piece_parts if part.parent_id is not None and part.id not in leaving}
     replaced = {score.get("part_id") for score in record.scores_removed}
     updated = {update["id"]: update for update in record.parts_updated}
     touched = {score.get("part_id") for score in record.scores_added} | {
@@ -417,7 +403,7 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
     rows: List[RetractRow] = []
     removing: List[HuaXiaScore] = []
     deleting: List[HuaXiaPart] = []
-    slots = [(part.name, part) for part in pieces]
+    slots = [(part.name, part) for part in piece_parts]
     for name, part in slots + [("", None)]:
         part_id = part.id if part is not None else None
         parent = names.get(part.parent_id, "") if part is not None else ""
@@ -471,7 +457,7 @@ def _with_files(group: RetractGroup, state: _HuaXiaState) -> RetractGroup:
     return replace(group, files=[path for path in paths if is_lingling_path(path) and path in state.stored])
 
 
-def _retract_record(group: RetractGroup, done: _Done, error: Optional[HuaXiaError]) -> PublishRecord:
+def _retract_record(group: RetractGroup, retracted: _Retracted, error: Optional[HuaXiaError]) -> PublishRecord:
     """發譜紀錄裡這個群組的「撤回」：做到的（撤掉的登記、變回獨立聲部的分部、刪掉的聲部與檔）與中途停下的原因"""
     record = group.record
     return PublishRecord(
@@ -479,10 +465,10 @@ def _retract_record(group: RetractGroup, done: _Done, error: Optional[HuaXiaErro
         piece_title=record.piece_title,
         parts_updated=[
             {"id": p.id, "name": p.name, "parent_id": [p.parent_id, None]} for p in group.detach
-            if p.id in done.detached
+            if p.id in retracted.detached
         ],
-        scores_removed=[score_entry(score) for score in group.scores if score.id in done.removed],
-        parts_deleted=[{"id": p.id, "name": p.name} for p in group.parts if p.id in done.deleted],
-        files_deleted=[path for path in group.files if path in done.files],
+        scores_removed=[score_entry(score) for score in group.scores if score.id in retracted.removed],
+        parts_deleted=[{"id": p.id, "name": p.name} for p in group.parts if p.id in retracted.deleted],
+        files_deleted=[path for path in group.files if path in retracted.files],
         failure=None if error is None else failure_entry(error.code, error.detail or str(error)),
     )
