@@ -394,9 +394,9 @@ def plan_voices(
         ]
         row = VoiceRow(index, voice, present, headcount, section, match, part, options, can_create=not several)
         if index in absorbs:
+            others = {part_id for part_id, owner in absorbed.items() if owner != index}
             row = replace(row, absorbs=absorbs[index], absorb_options=[
-                option for option in parts
-                if option.id not in divisi and option.id not in paired.values() and absorbed.get(option.id, index) == index
+                option for option in parts if _absorbable(option, divisi, assigned, others)
             ])
         if part is None:
             row = replace(row, divisi_match=next((
@@ -435,10 +435,10 @@ def plan_voices(
     ]
     absorb_replaces, absorb_others = [], []
     for part in (part for chosen_parts in absorbs.values() for part in chosen_parts):
-        under = [score for score in scores or [] if score.part_id == part.id]
-        absorb_replaces += [score for score in under if score.lingling]
-        if any(not score.lingling for score in under):
-            absorb_others.append((part, [score for score in under if not score.lingling]))
+        part_scores = [score for score in scores or [] if score.part_id == part.id]
+        absorb_replaces += [score for score in part_scores if score.lingling]
+        if any(not score.lingling for score in part_scores):
+            absorb_others.append((part, [score for score in part_scores if not score.lingling]))
     return VoicePlan(
         voice_rows, unpaired, conflicts, undecided, unfilled, creates, updates, divisi, absorb_replaces, absorb_others,
     )
@@ -448,10 +448,20 @@ def _absorbs(
     active: List[int], matches: Dict[int, Tuple[PartMatch, Optional[HuaXiaPart]]], parts: List[HuaXiaPart],
     divisi: Dict[str, List[HuaXiaPart]], taken: Set[str], decisions: VoiceDecisions,
 ) -> Dict[int, List[HuaXiaPart]]:
-    """這次要新建的列（沒對上的要發的聲部）各自要收成分部的 HuaXia 聲部，依 HuaXia 的排序；每一列都有（沒勾為空）
+    """這次要新建的列（沒對上的要發的聲部）各自要收成分部的 HuaXia 聲部，依 HuaXia 的排序
 
-    只收沒有所屬聲部（parts 已只剩這些）、本身沒有分部、沒配給任何要發的聲部（taken）的；同一個聲部被兩列勾選時
-    歸樂器表裡前面那一列。
+    只收 _absorbable 的；同一個聲部被兩列勾選時歸樂器表裡前面那一列。
+
+    Args:
+        active: 這次要發的列（樂器表的列，從 0 起算）
+        matches: 每一列怎麼對到、對到哪個 HuaXia 聲部
+        parts: 曲目上沒有所屬聲部的 HuaXia 聲部，依 HuaXia 的排序
+        divisi: HuaXia 聲部的編號對應它的分部
+        taken: 配給要發的聲部的 HuaXia 聲部編號
+        decisions: 譜務這次的決定（absorb 是各列勾選的）
+
+    Returns:
+        要新建的列對應它要收成分部的 HuaXia 聲部；每一列都有（沒勾為空）
     """
     absorbs: Dict[int, List[HuaXiaPart]] = {}
     claimed: Set[str] = set()
@@ -459,12 +469,26 @@ def _absorbs(
         if matches[index] != (PartMatch.NONE, None):
             continue
         ticked = decisions.absorb.get(index, set())
-        absorbs[index] = [
-            part for part in parts
-            if part.id in ticked and part.id not in divisi and part.id not in taken and part.id not in claimed
-        ]
+        absorbs[index] = [part for part in parts if part.id in ticked and _absorbable(part, divisi, taken, claimed)]
         claimed |= {part.id for part in absorbs[index]}
     return absorbs
+
+
+def _absorbable(
+    part: HuaXiaPart, divisi: Dict[str, List[HuaXiaPart]], paired: Collection[str], claimed: Collection[str],
+) -> bool:
+    """HuaXia 聲部可以收成新建聲部的分部：沒有所屬聲部、本身沒有分部、沒配給要發的聲部，也沒被其他列收走
+
+    Args:
+        part: 要看的 HuaXia 聲部
+        divisi: HuaXia 聲部的編號對應它的分部
+        paired: 配給要發的聲部的 HuaXia 聲部編號
+        claimed: 被其他列收走的 HuaXia 聲部編號
+
+    Returns:
+        可以收
+    """
+    return part.parent_id is None and part.id not in divisi and part.id not in paired and part.id not in claimed
 
 
 def storage_slot(voice: str) -> str:
@@ -689,8 +713,10 @@ class GroupPublish:
 
     @property
     def replaces(self) -> List[HuaXiaScore]:
-        """要撤掉登記的樂譜：被這次的檔取代的、泠靈發的舊檔，加上要收成分部的聲部上泠靈發的；檔案本體要不要刪看
-        deletes"""
+        """要撤掉登記的樂譜：被這次的檔取代的與要收成分部的聲部上的，都是泠靈發的
+
+        檔案本體要不要刪看 deletes。
+        """
         return [score for file in self.sent for score in file.replaces] + list(self.voices.absorb_replaces)
 
     @property
@@ -900,8 +926,10 @@ class PublishPreview:
         return self._decisions.setdefault(group.id, VoiceDecisions())
 
     def choose_part(self, group: Group, row: "VoiceRow", part_id: Optional[str]) -> None:
-        """一個聲部改選了新建（part_id 為 None）或某個 HuaXia 聲部：記進專案；新建是忘掉記過的配對、這次不套名稱規則，
-        挑了現有的聲部就清掉這一列勾選要收成分部的"""
+        """一個聲部改選了新建（part_id 為 None）或某個 HuaXia 聲部，記進專案
+
+        新建是忘掉記過的配對、這次不套名稱規則；挑了現有的聲部就清掉這一列勾選要收成分部的。
+        """
         decisions = self.decisions(group)
         if part_id is None:
             decisions.new.add(row.index)

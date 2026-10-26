@@ -169,11 +169,22 @@ def _voice_texts(row: VoiceRow) -> List[str]:
     return [row.voice, now, change, after]
 
 
-def _note_row(table: QTableWidget, index: int, texts: Sequence[str]) -> None:
-    """表格第 index 列的前幾欄放灰色的說明文字（只在 HuaXia、不動的聲部與分部）"""
+def _note_row(
+    table: QTableWidget, index: int, texts: Sequence[str], colors: Optional[Dict[int, str]] = None,
+) -> None:
+    """表格第 index 列的前幾欄放說明文字
+
+    Args:
+        table: 表格
+        index: 第幾列
+        texts: 從第 0 欄起各欄的文字
+        colors: 欄位對應字色；省略時整列灰色（只在 HuaXia、不動的聲部與分部）
+    """
+    colors = {column: _NOTE_COLOR for column in range(len(texts))} if colors is None else colors
     for column, text in enumerate(texts):
         item = QTableWidgetItem(text)
-        item.setForeground(QColor(_NOTE_COLOR))
+        if column in colors:
+            item.setForeground(QColor(colors[column]))
         table.setItem(index, column, item)
 
 
@@ -196,9 +207,7 @@ def _absorbed_rows(table: QTableWidget, index: int, parts: List[HuaXiaPart]) -> 
             t("publish.voices.divisi_name", name=part.name), _part_text(part), t("publish.voices.absorb"),
             t("publish.voices.divisi"),
         )
-        for column, text in enumerate(texts):
-            table.setItem(index, column, QTableWidgetItem(text))
-        table.item(index, 2).setForeground(QColor(_NEW_COLOR))
+        _note_row(table, index, texts, {2: _NEW_COLOR})
         index += 1
     return index
 
@@ -620,9 +629,11 @@ class PublishPreviewDialog(QDialog):
         return box
 
     def _voices_table(self, check: GroupCheck, plan: VoicePlan) -> QTableWidget:
-        """聲部對照表：樂器表每一列，接著只在 HuaXia 的聲部（灰色、不動）；對到或只在 HuaXia 的聲部有分部時，
-        分部（灰色）列在它底下，要新建的聲部要收成分部的列在它底下；名稱對到分部的列以未同步的顏色標出。
-        表格高度剛好放下所有列"""
+        """聲部對照表：樂器表每一列，接著只在 HuaXia 的聲部（灰色、不動）
+
+        對到或只在 HuaXia 的聲部有分部時，分部（灰色）列在它底下，要新建的聲部要收成分部的列在它底下；名稱對到分部的列
+        以未同步的顏色標出。表格高度剛好放下所有列。
+        """
         under = [part.id for part in plan.huaxia_only] + [row.part.id for row in plan.rows if row.part is not None]
         divisi_rows = sum(len(plan.divisi.get(part_id, [])) for part_id in under)
         absorbed_rows = sum(len(row.absorbs) for row in plan.rows)
