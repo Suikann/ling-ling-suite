@@ -19,8 +19,9 @@
   新增被 RLS 擋下、修改與刪除找不到可以動的列），匿名不能呼叫；任何一步不成就丟出文件裡的錯誤代碼，資料表回到呼叫前。
 - 曲目（pieces）與聲部（piece_parts）：以 add_piece、add_part 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider
   （不實作 in_piece 的排人判斷）；聲部組沒給時照 HuaXia 的觸發器以 guess_section 依名稱補上。
-- 分部（piece_parts.parent_id）：add_part 給 parent_id 加入。照 HuaXia 的觸發器，任何寫入（加入的輔助函式與發譜函式）
-  都擋下只分兩層、同一首曲目、樂譜不登記到分部、有分部的聲部不排人以外的寫法（23514），分部的聲部組跟著所屬聲部。
+- 分部（piece_parts.parent_id）：add_part 給 parent_id 加入，或由發譜函式（介面版本 2）的 absorb 收成分部。
+  照 HuaXia 的觸發器，任何寫入（加入的輔助函式與發譜函式）都擋下只分兩層、同一首曲目、樂譜不登記到分部、
+  有分部的聲部不排人以外的寫法（23514），分部的聲部組跟著所屬聲部；刪聲部（REST 與 remove_part）連分部一起刪。
 - 樂譜（scores）、學期（semesters）與場次（events）：以 add_score、add_semester、add_event 加入，曲目掛上場次
   （event_pieces）以 attach_piece 加入；樂譜的讀取權限
   簡化成 is_staff（幹部或老師，不實作排到聲部的人），場次照 can_see_event 簡化成幹部全看得到、其他社內成員看得到
@@ -627,7 +628,7 @@ class FakeHuaXia:
                 part.get("section") or None, _given(part, "sort", 0),
             )
             new_parts[part["name"]] = part_id
-            created.append({"id": part_id, "name": part["name"]})
+            created.append({"id": part_id, "name": part["name"], "absorbed": []})
         for change in payload.get("update_parts") or []:
             row = self._piece_part(piece_id, change.get("id")) if officer else None
             if row is None:
@@ -638,6 +639,7 @@ class FakeHuaXia:
                 row["needed_min"] = change["needed_min"]
             if change.get("section") is not None:
                 row["section"] = change["section"] or guess_section(row["name"])
+            self._settle_divisi()
         own_path = f"lingling/{re.escape(piece_id)}/[0-9a-f]{{64}}-[0-9a-z]{{1,32}}\\.pdf"
         requested = set(payload.get("remove_scores") or [])
         # 只撤這首曲目泠靈發的；指到別人放的或別首曲目的就整個不做，已經不在的略過
@@ -654,6 +656,19 @@ class FakeHuaXia:
         ]
         gone = {row["id"] for row in removed}
         self.tables["scores"] = [row for row in self.tables["scores"] if row["id"] not in gone]
+        # 收分部排在撤掉登記之後：被收的聲部上泠靈發的舊登記放進同一次的 remove_scores 就能先撤掉
+        for part, made in zip(payload.get("create_parts") or [], created):
+            for absorbed_id in part.get("absorb") or []:
+                row = self._piece_part(piece_id, absorbed_id) if officer else None
+                if row is None:
+                    raise _FunctionError(404, "PT404", f"找不到這首曲目的聲部 {absorbed_id}（可能已被刪除，或沒有權限）")
+                if row.get("parent_id") is not None:
+                    raise _FunctionError(400, "23514", f"已經是分部，不能再收：{row['name']}")
+                if any(score["part_id"] == absorbed_id for score in self.tables["scores"]):
+                    raise _FunctionError(400, "23514", f"還有樂譜登記的聲部不能收成分部：{row['name']}")
+                row["parent_id"] = made["id"]
+                self._settle_divisi()
+                made["absorbed"].append(absorbed_id)
         added = []
         for score in payload.get("add_scores") or []:
             if score.get("new_part") is not None and score.get("part_id") is not None:
@@ -663,6 +678,8 @@ class FakeHuaXia:
             part_id = new_parts[score["new_part"]] if score.get("new_part") is not None else score.get("part_id")
             if part_id is not None and self._piece_part(piece_id, part_id) is None:
                 raise _FunctionError(404, "PT404", f"找不到這首曲目的聲部 {part_id}")
+            if part_id is not None and self._piece_part(piece_id, part_id).get("parent_id") is not None:
+                raise _FunctionError(400, "23514", f"樂譜不能登記到分部：{part_id}")
             path = score.get("file_path") or ""
             if not re.fullmatch(own_path, path):
                 raise _FunctionError(400, "22023", f"不是泠靈的樂譜路徑：{path}")
@@ -771,7 +788,8 @@ class FakeHuaXia:
     def _delete(self, table: str, record: Dict[str, Any]) -> _Response:
         """DELETE /rest/v1/<table>：刪掉符合篩選的列，照 HuaXia 的 RLS 只有幹部刪得到 scores 與 piece_parts
         （score_write、part_write；其他人刪不到任何列，不算錯）；沒有篩選時同 Supabase 的 safeupdate 拒絕。
-        刪聲部連帶刪掉它的排人與樂譜（on delete cascade）。帶 Prefer: return=representation 時回傳刪掉的列"""
+        刪聲部連帶刪掉它的分部、兩者的排人與樂譜（on delete cascade）。帶 Prefer: return=representation 時回傳
+        直接刪掉的列"""
         params = dict(record["params"])
         columns = [c.strip() for c in params.pop("select", "*").split(",")]
         if not params:
@@ -780,10 +798,13 @@ class FakeHuaXia:
         doomed = [
             row for row in self.tables[table] if allowed and all(_matches(row, k, v) for k, v in params.items())
         ]
-        gone = {id(row) for row in doomed}
+        # 刪聲部連它的分部一起刪（on delete cascade，回傳的只有直接刪掉的列）
+        doomed_ids = {row["id"] for row in doomed} if table == "piece_parts" else set()
+        cascaded = [row for row in self.tables[table] if row.get("parent_id") in doomed_ids]
+        gone = {id(row) for row in doomed + cascaded}
         self.tables[table] = [row for row in self.tables[table] if id(row) not in gone]
         if table == "piece_parts":
-            parts = {row["id"] for row in doomed}
+            parts = {row["id"] for row in doomed + cascaded}
             for child in ("part_assignments", "scores"):
                 self.tables[child] = [row for row in self.tables[child] if row.get("part_id") not in parts]
             for report in self.tables["practice_reports"]:

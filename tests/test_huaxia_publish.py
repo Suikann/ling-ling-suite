@@ -4,7 +4,8 @@ HuaXia 發譜函式的介面測試
 
 經 HuaXiaClient.publish 對假 HuaXia 測：假 HuaXia 的發譜函式照 docs/huaxia/LINGLING.md（HuaXia 依賴說明文件的複本）
 實作，這裡釘住它與文件一致的行為，讓發譜（#122）可以照文件對它寫：一首曲目的寫入全成或全不成、重跑不重複建、
-只撤這首曲目泠靈發的登記並回傳實際撤掉的（要撤別人放的整個不做）、不是幹部寫不進去、版本不符整個不做。
+只撤這首曲目泠靈發的登記並回傳實際撤掉的（要撤別人放的整個不做）、不是幹部寫不進去、版本不符整個不做；
+新建的聲部收現有的聲部成分部（排人不動，違反分部的規則整個不做），刪聲部連分部一起刪。
 """
 import datetime
 import os
@@ -140,6 +141,51 @@ class TestExistingPiece(PublishTestCase):
         self.assertEqual(self.rows("piece_parts", id=self.erhu)[0]["section"], "拉弦")
 
 
+class TestDivisi(PublishTestCase):
+    """分部：新建的聲部可以把現有的聲部收成分部，排的人留在原處；刪聲部連分部一起刪"""
+
+    def setUp(self):
+        super().setUp()
+        self.member = self.huaxia.add_account("member_bo", roles=("member",))
+        self.chimes = self.huaxia.add_part(self.fenghuo, "風鈴", sort=1)
+        self.tambourine = self.huaxia.add_part(self.fenghuo, "鈴鼓", section="吹管", sort=2)
+        self.huaxia.assign(self.chimes, self.member)
+        self.copy = self.huaxia.add_score(self.fenghuo, self.tambourine, stored(self.fenghuo, 1), "鈴鼓")
+        self.huaxia.put_object(stored(self.fenghuo, 2))
+
+    def test_absorbed_parts_become_divisi_of_the_new_voice_and_keep_their_people(self):
+        out = self.publish(
+            piece_id=self.fenghuo,
+            create_parts=[
+                {"name": "擊樂2", "needed": "4", "needed_min": 4, "section": "打擊", "sort": 3,
+                 "absorb": [self.chimes, self.tambourine]},
+                {"name": "定音鼓", "needed": "1", "needed_min": 1, "section": "", "sort": 4},
+            ],
+            remove_scores=[self.copy],
+            add_scores=[{"new_part": "擊樂2", "title": "擊樂2", "file_path": stored(self.fenghuo, 2)}],
+        )
+        percussion = out["created_parts"][0]["id"]
+        self.assertEqual(
+            [(p["name"], p["absorbed"]) for p in out["created_parts"]],
+            [("擊樂2", [self.chimes, self.tambourine]), ("定音鼓", [])],
+        )
+        self.assertEqual(
+            [(p["name"], p["parent_id"], p["section"]) for p in self.rows("piece_parts", piece_id=self.fenghuo)],
+            [("風鈴", percussion, "打擊"), ("鈴鼓", percussion, "打擊"), ("擊樂2", None, "打擊"), ("定音鼓", None, "打擊")],
+        )
+        self.assertEqual([a["user_id"] for a in self.rows("part_assignments", part_id=self.chimes)], [self.member])
+        self.assertEqual([s["file_path"] for s in self.rows("scores", piece_id=self.fenghuo)], [stored(self.fenghuo, 2)])
+
+    def test_deleting_a_voice_deletes_its_divisi_and_their_people(self):
+        percussion = self.huaxia.add_part(self.fenghuo, "擊樂2", section="打擊", sort=3)
+        shaker = self.huaxia.add_part(self.fenghuo, "沙球", sort=4, parent_id=percussion)
+        self.huaxia.assign(shaker, self.member)
+        deleted = self.client.delete_parts(self.auth.access_token(), [percussion])
+        self.assertEqual(deleted, [percussion])
+        self.assertEqual([p["name"] for p in self.rows("piece_parts", piece_id=self.fenghuo)], ["風鈴", "鈴鼓"])
+        self.assertEqual(self.rows("part_assignments", part_id=shaker), [])
+
+
 class RejectionTestCase(PublishTestCase):
     """要被拒的切換內容的底稿：新建「將軍令」與它的嗩吶聲部、登記一份已傳到 Storage 的檔、掛上公演"""
 
@@ -198,6 +244,34 @@ class TestAllOrNothing(RejectionTestCase):
         self.assert_rejected("22023", 400, add_scores=[
             {"new_part": "嗩吶", "part_id": self.moli_part, "file_path": stored(NEW_PIECE, 1)},
         ])
+
+    def absorbing(self, *part_ids, **change):
+        """在現有曲目「茉莉花」新建「笛」並把 part_ids 收成它的分部的切換內容"""
+        return {
+            "piece_id": self.moli, "new_piece": None, "add_scores": [], "attach_events": [],
+            "create_parts": [{"name": "笛", "needed": "2", "needed_min": 2, "absorb": list(part_ids)}], **change,
+        }
+
+    def test_absorbing_a_part_that_is_not_on_this_piece(self):
+        fenghuo_part = self.huaxia.add_part(self.fenghuo, "梆笛")
+        self.assert_rejected("PT404", 404, **self.absorbing(fenghuo_part))
+        self.assert_rejected("PT404", 404, **self.absorbing("99999999-9999-9999-9999-999999999999"))
+
+    def test_absorbing_against_the_divisi_rules(self):
+        bangdi = self.huaxia.add_part(self.moli, "梆笛", sort=2)
+        bangdi_one = self.huaxia.add_part(self.moli, "梆笛1", sort=3, parent_id=bangdi)
+        web = self.huaxia.add_part(self.moli, "曲笛", sort=4)
+        self.huaxia.add_score(self.moli, web, f"{self.moli}/{web}/1760000000000_qudi.pdf")
+        self.assert_rejected("23514", 400, **self.absorbing(bangdi_one))
+        self.assert_rejected("23514", 400, **self.absorbing(bangdi))
+        self.assert_rejected("23514", 400, **self.absorbing(web))
+        self.assert_rejected("23514", 400, **self.absorbing(self.moli_part, self.moli_part))
+
+    def test_a_score_on_a_part_absorbed_this_time(self):
+        self.huaxia.put_object(stored(self.moli, 1))
+        self.assert_rejected("23514", 400, **self.absorbing(
+            self.moli_part, add_scores=[{"part_id": self.moli_part, "file_path": stored(self.moli, 1)}],
+        ))
 
     def test_an_existing_piece_that_is_gone(self):
         self.assert_rejected("PT404", 404, new_piece=None)
