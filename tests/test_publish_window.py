@@ -514,6 +514,23 @@ class TestVoicesStep(PublishWindowTestCase):
             self.assertTrue(voice_cell(dialog, "烽火操", "二胡 I").findChild(QCheckBox, "overwrite").isChecked())
         self.publish(operate=operate)
 
+    def test_divisi_are_listed_under_their_voice_and_a_voice_named_like_a_divisi_is_hinted(self):
+        erhu = self.huaxia.add_part(self.fenghuo, "二胡1", sort=1)
+        self.huaxia.add_part(self.fenghuo, "前排", sort=2, parent_id=erhu)
+        plucked = self.huaxia.add_part(self.fenghuo, "彈撥", sort=3)
+        self.huaxia.add_part(self.fenghuo, "琵琶", sort=4, parent_id=plucked)
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            table = voices_group(dialog, "烽火操").findChild(QTableWidget, "voices_table")
+            self.assertEqual([table.item(r, 0).text() for r in range(table.rowCount())], [
+                "二胡 I", t("publish.voices.divisi_name", name="前排"), "琵琶", "彈撥",
+                t("publish.voices.divisi_name", name="琵琶"),
+            ])
+            self.assertEqual(table.item(2, 2).text(), t("publish.voices.divisi_match", divisi="琵琶", voice="彈撥"))
+            self.assertTrue(button(dialog, "publish.next").isEnabled())
+        self.publish(operate=operate)
+
     def test_a_blocked_group_shows_its_reason(self):
         def operate(dialog):
             self.to_voices(dialog)

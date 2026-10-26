@@ -13,7 +13,8 @@
   有未同步值的群組標出哪些值還沒進譜庫。每個沒擋下的群組都對到曲目（新建的要有曲名）才能按「下一步」；
   全部群組都擋下時頂端寫一行沒有可以發譜的群組，「下一步」按不下去。
 - 「聲部」：每個群組列出樂器表每一列對到 HuaXia 的哪個聲部（publish_service.plan_voices）、HuaXia 現在的值、
-  變動與發譜後的值，以及只在 HuaXia 的聲部（不動）。本專案有的聲部可以改選新建或還沒被配對的 HuaXia 聲部
+  變動與發譜後的值，以及只在 HuaXia 的聲部（不動）；HuaXia 上的分部列在所屬聲部底下（不動），名稱對到分部、
+  沒有配對的聲部在「變動」標出那個分部屬於哪個聲部。本專案有的聲部可以改選新建或還沒被配對的 HuaXia 聲部
   （名稱規則對到多個時只列那幾個），挑了就經 Project.choose_huaxia_part 記進專案；人數或聲部組不同時「覆寫」
   預設勾選；本專案沒有、HuaXia 也沒有的聲部預設不建，可以勾「在 HuaXia 建」。有衝突、還沒挑或要建的聲部
   沒填最少人數時寫出原因，「下一步」按不下去。覆寫與建立的勾選只在這次預覽，不記在專案。
@@ -135,6 +136,8 @@ def _voice_texts(row: VoiceRow) -> List[str]:
         change = t("publish.voices.absent")
     elif row.match is PartMatch.AMBIGUOUS and row.part is None:
         change = t("publish.voices.several")
+    elif row.divisi_match is not None:
+        change = t("publish.voices.divisi_match", divisi=row.divisi_match.divisi.name, voice=row.divisi_match.voice.name)
     elif row.part is None:
         change = t("publish.voices.missing")
     elif row.headcount_differs and row.section_differs:
@@ -159,6 +162,26 @@ def _voice_texts(row: VoiceRow) -> List[str]:
     else:
         after = t("publish.voices.unchanged")
     return [row.voice, now, change, after]
+
+
+def _note_row(table: QTableWidget, index: int, texts: Sequence[str]) -> None:
+    """表格第 index 列的前幾欄放灰色的說明文字（只在 HuaXia、不動的聲部與分部）"""
+    for column, text in enumerate(texts):
+        item = QTableWidgetItem(text)
+        item.setForeground(QColor(_NOTE_COLOR))
+        table.setItem(index, column, item)
+
+
+def _divisi_rows(table: QTableWidget, index: int, divisi: List[HuaXiaPart]) -> int:
+    """聲部對照表從第 index 列起放一個聲部的分部（灰色、不動），回傳下一列"""
+    for part in divisi:
+        texts = (
+            t("publish.voices.divisi_name", name=part.name), _part_text(part), t("publish.voices.divisi"),
+            t("publish.voices.untouched"),
+        )
+        _note_row(table, index, texts)
+        index += 1
+    return index
 
 
 def _score_titles(scores: List[HuaXiaScore]) -> str:
@@ -578,8 +601,11 @@ class PublishPreviewDialog(QDialog):
         return box
 
     def _voices_table(self, check: GroupCheck, plan: VoicePlan) -> QTableWidget:
-        """聲部對照表：樂器表每一列，接著只在 HuaXia 的聲部（灰色、不動）；表格高度剛好放下所有列"""
-        table = QTableWidget(len(plan.rows) + len(plan.huaxia_only), 5)
+        """聲部對照表：樂器表每一列，接著只在 HuaXia 的聲部（灰色、不動）；對到或只在 HuaXia 的聲部有分部時，
+        分部（灰色）列在它底下；名稱對到分部的列以未同步的顏色標出。表格高度剛好放下所有列"""
+        under = [part.id for part in plan.huaxia_only] + [row.part.id for row in plan.rows if row.part is not None]
+        divisi_rows = sum(len(plan.divisi.get(part_id, [])) for part_id in under)
+        table = QTableWidget(len(plan.rows) + len(plan.huaxia_only) + divisi_rows, 5)
         table.setObjectName("voices_table")
         table.setHorizontalHeaderLabels([
             t("publish.voices.voice"), t("publish.voices.now"), t("publish.voices.change"),
@@ -589,18 +615,20 @@ class PublishPreviewDialog(QDialog):
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         table.horizontalHeader().setStretchLastSection(True)
-        for index, row in enumerate(plan.rows):
+        index = 0
+        for row in plan.rows:
             for column, text in enumerate(_voice_texts(row)):
                 table.setItem(index, column, QTableWidgetItem(text))
+            if row.present and row.divisi_match is not None:
+                table.item(index, 2).setForeground(QColor(UNSYNCED_COLOR))
             decision = self._decision_cell(check, row)
             if decision is not None:
                 table.setCellWidget(index, 4, decision)
-        for index, part in enumerate(plan.huaxia_only, start=len(plan.rows)):
+            index = _divisi_rows(table, index + 1, plan.divisi.get(row.part.id, []) if row.part else [])
+        for part in plan.huaxia_only:
             texts = (part.name, _part_text(part), t("publish.voices.huaxia_only"), t("publish.voices.untouched"))
-            for column, text in enumerate(texts):
-                item = QTableWidgetItem(text)
-                item.setForeground(QColor(_NOTE_COLOR))
-                table.setItem(index, column, item)
+            _note_row(table, index, texts)
+            index = _divisi_rows(table, index + 1, plan.divisi.get(part.id, []))
         table.resizeRowsToContents()
         table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         height = table.horizontalHeader().sizeHint().height() + 2 * table.frameWidth()
