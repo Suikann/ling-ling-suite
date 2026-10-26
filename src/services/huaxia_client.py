@@ -20,7 +20,8 @@ HuaXia 用戶端
   哪份是泠靈發的。發譜的第 1 段以 upload 傳檔（不覆寫，路徑已有檔就是同一份內容）、第 3 段以 delete_files 刪掉
   被取代的檔。
 - 撤回與收回不經發譜函式，以使用者身分經 REST 刪除（delete_scores、delete_parts，HuaXia 的 RLS 照常生效）；
-  刪聲部會連帶刪掉它的排人與樂譜，所以先以 assigned_parts 確認沒排人、以 configured_parts 確認沒人在網頁上設定過。收回刪檔前以 registered_paths 確認
+  刪聲部會連帶刪掉它的分部、排人與樂譜，所以先以 assigned_parts 確認沒排人、以 configured_parts 確認沒人在網頁上設定過；
+  撤回先以 detach_divisi 把那次收進的分部改回獨立聲部，再以 parts_with_divisi 確認沒有分部才刪。收回刪檔前以 registered_paths 確認
   沒有任何樂譜登記還指著，曲目掛的公演以 piece_events、events_by_id 讀。
 請求會卡住呼叫的執行緒，要在背景執行緒呼叫。
 
@@ -590,27 +591,64 @@ class HuaXiaClient:
         """
         return self._delete_ids("piece_parts", access_token, part_ids)
 
+    def detach_divisi(self, access_token: str, parent_id: str, part_ids: List[str]) -> List[str]:
+        """以使用者身分把這些分部改回獨立聲部（parent_id 設成 null），只動現在還屬於 parent_id 的（之後在網頁上移走
+        或已經改回的不動）；排人與人數不動
+
+        Returns:
+            真的改回的聲部編號（不是幹部時 HuaXia 一列都不改、不報錯，回傳空的）
+
+        Raises:
+            HuaXiaError: 連不上或修改失敗；done 是之前的請求已經改回的編號
+        """
+        return self._write_ids(
+            "PATCH", "piece_parts", access_token, part_ids, {"parent_id": f"eq.{parent_id}"}, {"parent_id": None},
+        )
+
+    def parts_with_divisi(self, access_token: str, part_ids: List[str]) -> Set[str]:
+        """這幾個聲部裡現在有分部的（有 piece_parts 的 parent_id 指著它）
+
+        Raises:
+            HuaXiaError: 連不上或讀取失敗
+        """
+        rows = self.select_all("piece_parts", access_token, "id,parent_id", within=("parent_id", list(part_ids)))
+        try:
+            return {row["parent_id"] for row in rows}
+        except (KeyError, TypeError) as e:
+            raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected divisi: {e}") from e
+
     def _delete_ids(self, table: str, access_token: str, ids: List[str]) -> List[str]:
         """刪掉資料表裡編號是其中之一的列（照 RLS，看不到或不能刪的不刪），回傳真的刪掉的編號
 
         分成幾個請求；某個請求失敗時丟出的 HuaXiaError 的 done 是之前的請求已經刪掉的編號。
         """
-        deleted: List[str] = []
+        return self._write_ids("DELETE", table, access_token, ids)
+
+    def _write_ids(
+        self, method: str, table: str, access_token: str, ids: List[str], filters: Optional[Dict[str, str]] = None,
+        body: Any = None,
+    ) -> List[str]:
+        """對資料表裡編號是其中之一、又符合 filters 的列送出 method（DELETE 或帶 body 的 PATCH；照 RLS，看不到或
+        不能動的不動），回傳真的動到的編號
+
+        分成幾個請求；某個請求失敗時丟出的 HuaXiaError 的 done 是之前的請求已經動到的編號。
+        """
+        done: List[str] = []
         for chunk in _in_chunks(ids):
             try:
                 rows = self._call(
-                    "DELETE", f"/rest/v1/{table}", access_token,
-                    params={"id": f"in.({','.join(chunk)})", "select": "id"},
+                    method, f"/rest/v1/{table}", access_token,
+                    params={"id": f"in.({','.join(chunk)})", **(filters or {}), "select": "id"}, json=body,
                     headers={"Prefer": "return=representation"},
                 )
                 try:
-                    deleted.extend(row["id"] for row in rows or [])
+                    done.extend(row["id"] for row in rows or [])
                 except (KeyError, TypeError) as e:
-                    raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected {table} deletion: {e}") from e
+                    raise HuaXiaError(HuaXiaErrorKind.REJECTED, f"unexpected {table} {method}: {e}") from e
             except HuaXiaError as e:
-                e.done = list(deleted)
+                e.done = list(done)
                 raise
-        return deleted
+        return done
 
     def event_pieces(self, access_token: str, event_ids: List[str]) -> List[Tuple[str, str]]:
         """這幾個場次掛著的曲目（event_pieces，全部讀完）：（場次編號，曲目編號）

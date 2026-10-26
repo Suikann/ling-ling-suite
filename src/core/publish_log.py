@@ -27,8 +27,9 @@
   files_deleted 是真的刪掉的；events 是這次新掛上的。沒發成時 failure 寫出在哪一段（stage）與原因（code、detail），
   其他欄只有 files_uploaded（傳上去了、沒登記的檔）。介面版本 2 之前寫的列沒有 absorb、absorbed，當作空的。
 - 清孤兒檔：piece_id、piece_title 與 files_deleted（刪掉的孤兒檔）；沒清成時 failure 寫出原因（code、detail）。群組欄空白。
-- 撤回：做到的。scores_removed 是撤掉的登記（id、part_id、file_path），parts_deleted 是刪掉的聲部（id、name），
-  files_deleted 是刪掉的 Storage 檔；中途停下時 failure 寫出原因（code、detail），其他欄是停下之前做到的。
+- 撤回：做到的。scores_removed 是撤掉的登記（id、part_id、file_path），parts_updated 是變回獨立聲部的分部（id、name，
+  parent_id 是［原本所屬的聲部編號，None］），parts_deleted 是刪掉的聲部（id、name），files_deleted 是刪掉的 Storage 檔；
+  中途停下時 failure 寫出原因（code、detail），其他欄是停下之前做到的。
 - 收回：做到的。piece_id、piece_title；scores_removed 是撤掉的登記（id、part_id、file_path，包括別人放的），
   files_deleted 是刪掉的 Storage 檔；events 是那一刻曲目掛著的公演（id、title、ends_at）；中途停下時 failure 寫出原因
   （code、detail）。群組欄空白。

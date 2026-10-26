@@ -5,7 +5,8 @@
 對假 HuaXia、假 Google 與臨時目錄裡的檔，先照常發一次譜（PublishRunner），再從譜庫的發譜紀錄撤回那次發譜選定的群組
 （services/retract_service.py 的 RetractService）：只撤那次登記的分譜與總譜，連同那次新建、還沒排人的聲部；
 被取代的舊檔不會回來，人數與聲部組不改回，場次不動；撤回後沒有譜的聲部由預覽推算出來；中斷後重做會收斂；
-撤回寫一列「撤回」到發譜紀錄。
+撤回寫一列「撤回」到發譜紀錄。那次收進新建聲部的分部先變回獨立聲部、排人不動，再照原規則刪新建的聲部
+（假 HuaXia 刪聲部會連分部與排人一起刪，順序反了測得出來）。
 """
 import os
 import sys
@@ -322,6 +323,183 @@ class TestOtherGroups(TwoPiecesTestCase):
         self.huaxia.add_score(self.moli, None, web)
         self.retracter.retract(entry, [self.molihua.id], self.catalog)
         self.assertEqual(self.scores(self.moli), [("", web)])
+
+
+class DivisiTestCase(RunTestCase):
+    """另有「茉莉花」（總譜、擊樂2）對到 HuaXia 上的「茉莉花」，那首有「風鈴」「鈴鼓」兩個聲部，各排了一位團員。
+    譜務在「聲部」步替「擊樂2」勾選兩者，發譜時新建「擊樂2」把它們收成分部（publish 發這一次）"""
+
+    def setUp(self):
+        super().setUp()
+        self.molihua = self.add_group("茉莉花", ["擊樂2"], b"molihua")
+        self.project.set_huaxia_link(self.molihua, HuaXiaLink(piece_id=self.moli, piece_title="茉莉花"))
+        self.chimes = self.huaxia.add_part(self.moli, "風鈴", sort=1)
+        self.tambourine = self.huaxia.add_part(self.moli, "鈴鼓", sort=2)
+        self.huaxia.assign(self.chimes, self.huaxia.add_account("member_bo", roles=("member",)))
+        self.huaxia.assign(self.tambourine, self.huaxia.add_account("member_cy", roles=("member",)))
+        self.retracter = RetractService(self.auth)
+
+    def absorb(self, preview):
+        """「聲部」步替「擊樂2」勾選「風鈴」「鈴鼓」"""
+        for part_id in (self.chimes, self.tambourine):
+            preview.set_absorb(self.molihua, 0, part_id, True)
+
+    def publish(self):
+        """發一次譜（「擊樂2」收「風鈴」「鈴鼓」），記下新建的「擊樂2」（self.voice）"""
+        self.outcome = self.run_publish(self.press_publish(decide=self.absorb))
+        self.assertEqual(self.outcome.failed, [])
+        self.voice = self.parent_of(self.chimes)
+
+    def entry(self, publish_id: str = ""):
+        """發譜紀錄裡這次發譜的那一項"""
+        return next(
+            entry for entry in publish_entries(self.catalog.publish_log())
+            if entry.publish_id == (publish_id or self.outcome.publish_id) and entry.action is PublishAction.START
+        )
+
+    def preview(self, entry=None):
+        """撤回的預覽裡「茉莉花」那個群組"""
+        groups = self.retracter.preview(entry or self.entry()).groups
+        return next(group for group in groups if group.group_id == self.molihua.id)
+
+    def retract(self, entry=None):
+        """撤回「茉莉花」"""
+        return self.retracter.retract(entry or self.entry(), [self.molihua.id], self.catalog)
+
+    def parent_of(self, part_id: str):
+        """這個聲部所屬聲部的編號（沒有時為 None）；聲部已經不在時丟 StopIteration"""
+        return next(row for row in self.huaxia.tables["piece_parts"] if row["id"] == part_id)["parent_id"]
+
+    def parts(self):
+        """「茉莉花」現在的聲部編號"""
+        return {row["id"] for row in self.huaxia.tables["piece_parts"] if row["piece_id"] == self.moli}
+
+    def assignments(self):
+        """「茉莉花」的排人：（聲部編號，團員）"""
+        parts = self.parts()
+        rows = self.huaxia.tables["part_assignments"]
+        return sorted((row["part_id"], row["user_id"]) for row in rows if row["part_id"] in parts)
+
+
+class TestDivisi(DivisiTestCase):
+    """撤回時那次收進新建聲部的分部變回獨立聲部、排人不動，新建的聲部再照原規則刪"""
+
+    def test_absorbed_divisi_become_voices_again_and_the_new_voice_is_deleted(self):
+        self.publish()
+        result = self.retract()
+        self.assertIsNone(result.error)
+        self.assertEqual((self.parent_of(self.chimes), self.parent_of(self.tambourine)), (None, None))
+        self.assertNotIn(self.voice, self.parts())
+        self.assertEqual(self.scores(self.moli), [])
+
+    def test_divisi_are_detached_before_the_new_voice_is_deleted_so_their_assignments_stay(self):
+        before = self.assignments()
+        self.publish()
+        self.retract()
+        # 先刪聲部的話，HuaXia 會連分部與分部的排人一起刪
+        self.assertEqual(self.assignments(), before)
+        self.assertEqual(len(before), 2)
+        writes = [r["method"] for r in self.huaxia.requests if r["path"] == "/rest/v1/piece_parts"]
+        self.assertEqual([method for method in writes if method != "GET"], ["PATCH", "DELETE"])
+
+    def test_a_divisi_moved_away_on_the_website_is_left_alone(self):
+        self.publish()
+        percussion = self.huaxia.add_part(self.moli, "打擊", sort=3)
+        self.huaxia.set_parent(self.chimes, percussion)
+        self.assertEqual([part.id for part in self.preview().detach], [self.tambourine])
+        self.retract()
+        self.assertEqual((self.parent_of(self.chimes), self.parent_of(self.tambourine)), (percussion, None))
+        self.assertNotIn(self.voice, self.parts())
+        [row] = self.log(PublishAction.RETRACT)
+        self.assertEqual(row.parts_updated, [{"id": self.tambourine, "name": "鈴鼓", "parent_id": [self.voice, None]}])
+
+    def test_a_new_voice_given_another_divisi_on_the_website_is_kept(self):
+        self.publish()
+        bell = self.huaxia.add_part(self.moli, "碰鈴", sort=3)
+        self.huaxia.set_parent(bell, self.voice)
+        group = self.preview()
+        voice = next(row for row in group.rows if row.name == "擊樂2")
+        self.assertEqual((voice.effect, voice.reason), (RetractEffect.KEEP_PART, RetractReason.NEW_WITH_DIVISI))
+        self.assertEqual(group.parts, [])
+        self.retract()
+        self.assertEqual((self.parent_of(self.chimes), self.parent_of(self.tambourine)), (None, None))
+        self.assertEqual(self.parent_of(bell), self.voice)
+        self.assertEqual([r.parts_deleted for r in self.log(PublishAction.RETRACT)], [[]])
+
+    def test_a_divisi_added_while_retracting_keeps_the_new_voice(self):
+        self.publish()
+        bell = self.huaxia.add_part(self.moli, "碰鈴", sort=3)
+        member = self.huaxia.add_account("member_di", roles=("member",))
+        self.huaxia.assign(bell, member)
+        receive = self.huaxia.request
+
+        def request(method, url, **kwargs):
+            # 撤回重讀之後、取消歸分部那一刻，幹部在網頁上把「碰鈴」收進「擊樂2」
+            if method == "PATCH":
+                self.huaxia.request = receive
+                self.huaxia.set_parent(bell, self.voice)
+            return receive(method, url, **kwargs)
+
+        self.huaxia.request = request
+        self.retract()
+        self.assertEqual(self.parent_of(bell), self.voice)
+        self.assertIn((bell, member), self.assignments())
+
+    def test_the_preview_lists_the_divisi_that_become_voices_again(self):
+        self.publish()
+        group = self.preview()
+        effects = {row.name: (row.effect, row.reason, row.parent) for row in group.rows}
+        self.assertEqual(effects, {
+            "擊樂2": (RetractEffect.DELETE_PART, RetractReason.NEW_UNASSIGNED, ""),
+            "風鈴": (RetractEffect.DETACH, RetractReason.ABSORBED, "擊樂2"),
+            "鈴鼓": (RetractEffect.DETACH, RetractReason.ABSORBED, "擊樂2"),
+            "": (RetractEffect.NO_SCORE, RetractReason.ONLY_THIS, ""),
+        })
+        self.assertEqual(group.counts()[RetractEffect.DETACH], 2)
+        # 變回獨立聲部的分部沒有自己的譜：撤回後沒有譜的是總譜與兩個分部
+        self.assertEqual(group.missing, 3)
+        self.assertEqual([part.id for part in group.detach], [self.chimes, self.tambourine])
+
+    def test_the_retract_row_lists_the_divisi_that_became_voices_again(self):
+        self.publish()
+        self.retract()
+        [row] = self.log(PublishAction.RETRACT)
+        self.assertEqual(row.parts_updated, [
+            {"id": self.chimes, "name": "風鈴", "parent_id": [self.voice, None]},
+            {"id": self.tambourine, "name": "鈴鼓", "parent_id": [self.voice, None]},
+        ])
+        self.assertEqual(row.parts_deleted, [{"id": self.voice, "name": "擊樂2"}])
+
+    def test_stopping_before_the_divisi_are_detached_deletes_nothing_and_retrying_converges(self):
+        self.publish()
+        before = self.assignments()
+        self.huaxia.drop_requests("PATCH", "/rest/v1/piece_parts")
+        first = self.retract()
+        self.assertIsNotNone(first.error)
+        self.assertEqual((self.parent_of(self.chimes), self.parent_of(self.tambourine)), (self.voice, self.voice))
+        self.assertEqual(self.assignments(), before)
+        self.retract()
+        self.assertEqual((self.parent_of(self.chimes), self.parent_of(self.tambourine)), (None, None))
+        self.assertNotIn(self.voice, self.parts())
+        self.assertEqual(self.assignments(), before)
+
+    def test_a_publish_without_a_result_leaves_divisi_and_voices_alone(self):
+        snapshot = self.press_publish(decide=self.absorb)
+        self.google.fail_at(self.google.requests + 6, CatalogErrorKind.OFFLINE)
+        outcome = self.run_publish(snapshot)
+        self.assertIsNotNone(outcome.log_error)
+        entry = self.entry(outcome.publish_id)
+        self.assertFalse(entry.finished)
+        voice = self.parent_of(self.chimes)
+        self.assertIsNotNone(voice)
+        group = self.preview(entry)
+        self.assertTrue(group.unfinished and group.actionable)
+        self.assertEqual((group.detach, group.counts()[RetractEffect.DETACH]), ([], 0))
+        result = self.retract(entry)
+        self.assertIsNone(result.error)
+        self.assertEqual(self.scores(self.moli), [])
+        self.assertEqual((self.parent_of(self.chimes), self.parent_of(self.tambourine)), (voice, voice))
+        self.assertIn(voice, self.parts())
 
 
 class TestNewPiece(RunTestCase):

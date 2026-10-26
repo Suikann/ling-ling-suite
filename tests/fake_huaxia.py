@@ -11,6 +11,7 @@
 - PostgREST：資料表的讀取（select 欄位、eq 與 in 篩選、order、limit 與 offset），各表的讀取權限照 HuaXia 的 RLS
   寫在 _READ_POLICIES。一次最多回傳 max_rows 列（同 Supabase 的 max_rows，預設 1000），多的要分頁讀。
   撤回與收回用的刪除（DELETE，要有篩選）只有幹部刪得到 scores 與 piece_parts，刪聲部連帶刪掉它的排人與樂譜。
+  撤回取消歸分部用的修改（PATCH，要有篩選）只有幹部改得到 piece_parts，其他人改不到任何列、不報錯。
 - 排人（part_assignments，欄位照 HuaXia 的 schema：id、part_id、user_id 或 ringer_id）：以 assign 加入，
   讀取權限簡化成 is_insider（不實作 in_part）。聲部的小老師與備註以 configure_part 設定；練習回報（practice_reports）
   以 add_practice_report 加入，讀取權限照 can_see_report 簡化成自己的與 is_staff，刪聲部時它的 part_id 設成 null。
@@ -779,11 +780,13 @@ class FakeHuaXia:
 
     def _rest(self, table: str, record: Dict[str, Any]) -> _Response:
         """/rest/v1/<table>：讀取（GET）照 RLS 只回呼叫者看得到的列，依 order 排序、照 offset 與 limit
-        取一段，一次最多 max_rows 列；刪除（DELETE）見 _delete"""
+        取一段，一次最多 max_rows 列；修改（PATCH）見 _patch，刪除（DELETE）見 _delete"""
         if table not in self.tables:
             return _Response(404, {"code": "PGRST205", "message": f"Could not find the table public.{table}"})
         if record["method"] == "DELETE":
             return self._delete(table, record)
+        if record["method"] == "PATCH":
+            return self._patch(table, record)
         if record["method"] != "GET":
             return _Response(405, {"message": "Method not supported by the fake"})
         caller = self._caller(record)
@@ -803,6 +806,30 @@ class FakeHuaXia:
         if columns != ["*"]:
             rows = [{c: row.get(c) for c in columns} for row in rows]
         return _Response(200, rows)
+
+    def _patch(self, table: str, record: Dict[str, Any]) -> _Response:
+        """PATCH /rest/v1/<table>：把符合篩選的列改成本體的值，照 HuaXia 的 RLS 只有幹部改得到 piece_parts
+        （part_write；其他人改不到任何列，不算錯）；沒有篩選時同 Supabase 的 safeupdate 拒絕。改完違反分部的規則時
+        整個不改（23514）。帶 Prefer: return=representation 時回傳改到的列"""
+        params = dict(record["params"])
+        columns = [c.strip() for c in params.pop("select", "*").split(",")]
+        if not params:
+            return _Response(400, {"code": "21000", "message": "UPDATE requires a WHERE clause"})
+        allowed = table in _UPDATE_TABLES and self._is_officer(self._caller(record), {})
+        changed = [
+            row for row in self.tables[table] if allowed and all(_matches(row, k, v) for k, v in params.items())
+        ]
+        before = copy.deepcopy(self.tables)
+        for row in changed:
+            row.update(record["json"] or {})
+        try:
+            self._settle_divisi()
+        except _FunctionError as e:
+            self.tables = before
+            return _Response(e.status, {"code": e.code, "message": str(e)})
+        if "return=representation" not in record["headers"].get("Prefer", ""):
+            return _Response(204)
+        return _Response(200, [row if columns == ["*"] else {c: row.get(c) for c in columns} for row in changed])
 
     def _delete(self, table: str, record: Dict[str, Any]) -> _Response:
         """DELETE /rest/v1/<table>：刪掉符合篩選的列，照 HuaXia 的 RLS 只有幹部刪得到 scores 與 piece_parts
@@ -975,6 +1002,8 @@ def guess_section(name: str) -> Optional[str]:
 
 # 撤回與收回經 REST 刪除的資料表（HuaXia 的 RLS 讓幹部刪得到的：score_write、part_write）
 _DELETE_TABLES = frozenset({"scores", "piece_parts"})
+# 撤回經 REST 修改的資料表（取消歸分部；HuaXia 的 RLS 讓幹部改得到的：part_write）
+_UPDATE_TABLES = frozenset({"piece_parts"})
 
 
 # HuaXia 的 is_insider() 認的身分組
