@@ -11,6 +11,7 @@
 - PostgREST：資料表的讀取（select 欄位、eq 與 in 篩選、order、limit 與 offset），各表的讀取權限照 HuaXia 的 RLS
   寫在 _READ_POLICIES。一次最多回傳 max_rows 列（同 Supabase 的 max_rows，預設 1000），多的要分頁讀。
   撤回與收回用的刪除（DELETE，要有篩選）只有幹部刪得到 scores 與 piece_parts，刪聲部連帶刪掉它的排人與樂譜。
+  撤回取消歸分部用的修改（PATCH，要有篩選）只有幹部改得到 piece_parts，其他人改不到任何列、不報錯。
 - 排人（part_assignments，欄位照 HuaXia 的 schema：id、part_id、user_id 或 ringer_id）：以 assign 加入，
   讀取權限簡化成 is_insider（不實作 in_part）。聲部的小老師與備註以 configure_part 設定；練習回報（practice_reports）
   以 add_practice_report 加入，讀取權限照 can_see_report 簡化成自己的與 is_staff，刪聲部時它的 part_id 設成 null。
@@ -19,6 +20,10 @@
   新增被 RLS 擋下、修改與刪除找不到可以動的列），匿名不能呼叫；任何一步不成就丟出文件裡的錯誤代碼，資料表回到呼叫前。
 - 曲目（pieces）與聲部（piece_parts）：以 add_piece、add_part 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider
   （不實作 in_piece 的排人判斷）；聲部組沒給時照 HuaXia 的觸發器以 guess_section 依名稱補上。
+- 分部（piece_parts.parent_id）：add_part 給 parent_id 加入，或由發譜函式（介面版本 2）的 absorb 收成分部；
+  set_parent 扮演幹部在網頁的聲部表單設定所屬聲部（替排了人的聲部加第一個分部時把人移到那個分部）。
+  照 HuaXia 的觸發器，任何寫入（加入的輔助函式與發譜函式）都擋下只分兩層、同一首曲目、樂譜不登記到分部、
+  有分部的聲部不排人以外的寫法（23514），分部的聲部組跟著所屬聲部；刪聲部（REST 與 remove_part）連分部一起刪。
 - 樂譜（scores）、學期（semesters）與場次（events）：以 add_score、add_semester、add_event 加入，曲目掛上場次
   （event_pieces）以 attach_piece 加入；樂譜的讀取權限
   簡化成 is_staff（幹部或老師，不實作排到聲部的人），場次照 can_see_event 簡化成幹部全看得到、其他社內成員看得到
@@ -192,21 +197,43 @@ class FakeHuaXia:
 
     def add_part(
         self, piece_id: str, name: str, needed: str = "1", needed_min: int = 1, section: Optional[str] = None,
-        sort: int = 0,
+        sort: int = 0, parent_id: Optional[str] = None,
     ) -> str:
-        """在曲目上加入一個聲部（piece_parts 的一列），回傳聲部編號；聲部組沒給時照觸發器以 guess_section 補上"""
+        """在曲目上加入一個聲部（piece_parts 的一列），回傳聲部編號；聲部組沒給時照觸發器以 guess_section 補上。
+        給了 parent_id 是那個聲部的分部，聲部組跟著所屬聲部；違反分部的規則時不加，丟 _FunctionError（23514）"""
         with self._lock:
             part_id = str(uuid.uuid4())
-            self.tables["piece_parts"].append({
+            self._insert("piece_parts", {
                 "id": part_id, "piece_id": piece_id, "name": name, "needed": needed, "needed_min": needed_min,
                 "sort": sort, "tutor_id": None, "note": "", "section": section or guess_section(name),
+                "parent_id": parent_id,
             })
             return part_id
 
     def remove_part(self, part_id: str) -> None:
-        """刪掉一個聲部（幹部在網頁上刪了它）"""
+        """刪掉一個聲部（幹部在網頁上刪了它），連它的分部一起刪（on delete cascade）"""
         with self._lock:
-            self.tables["piece_parts"] = [row for row in self.tables["piece_parts"] if row["id"] != part_id]
+            self.tables["piece_parts"] = [
+                row for row in self.tables["piece_parts"] if part_id not in (row["id"], row.get("parent_id"))
+            ]
+
+    def set_parent(self, part_id: str, parent_id: Optional[str]) -> None:
+        """幹部在網頁的聲部表單設定所屬聲部（parent_id 為 None 是移出來、變回獨立聲部）。替排了人的聲部加第一個分部時，
+        照網頁的確認把人移到那個分部；違反分部的規則時不改，丟 _FunctionError（23514）"""
+        with self._lock:
+            before = copy.deepcopy(self.tables)
+            if parent_id is not None and not any(row.get("parent_id") == parent_id for row in self.tables["piece_parts"]):
+                for assignment in self.tables["part_assignments"]:
+                    if assignment["part_id"] == parent_id:
+                        assignment["part_id"] = part_id
+            for row in self.tables["piece_parts"]:
+                if row["id"] == part_id:
+                    row["parent_id"] = parent_id
+            try:
+                self._settle_divisi()
+            except _FunctionError:
+                self.tables = before
+                raise
 
     def configure_part(self, part_id: str, tutor_id: Optional[str] = None, note: Optional[str] = None) -> None:
         """在網頁上設定一個聲部的小老師（tutor_id）或備註（note）；沒給的不改"""
@@ -239,10 +266,11 @@ class FakeHuaXia:
         self, piece_id: str, part_id: Optional[str], file_path: str, title: str = "",
         section: Optional[str] = None, created_by: Optional[str] = None,
     ) -> str:
-        """在曲目上登記一份樂譜（scores 的一列），回傳樂譜編號；part_id 為 None 是總譜（section 不為 None 是舊的分組樂譜）"""
+        """在曲目上登記一份樂譜（scores 的一列），回傳樂譜編號；part_id 為 None 是總譜（section 不為 None 是舊的分組樂譜）。
+        登記到分部時不加，丟 _FunctionError（23514）"""
         with self._lock:
             score_id = str(uuid.uuid4())
-            self.tables["scores"].append({
+            self._insert("scores", {
                 "id": score_id, "piece_id": piece_id, "part_id": part_id, "title": title, "file_path": file_path,
                 "audio_url": "", "section": section, "created_by": created_by, "created_at": _now().isoformat(),
             })
@@ -290,11 +318,12 @@ class FakeHuaXia:
             self.tables["event_pieces"].append({"event_id": event_id, "piece_id": piece_id})
 
     def assign(self, part_id: str, user_id: Optional[str] = None, ringer_id: Optional[str] = None) -> str:
-        """把一位團員（或槍手）排進聲部（part_assignments 的一列，幹部在網頁上排的），回傳排人的編號"""
+        """把一位團員（或槍手）排進聲部（part_assignments 的一列，幹部在網頁上排的），回傳排人的編號；
+        排進有分部的聲部時不加，丟 _FunctionError（23514）"""
         assert user_id or ringer_id, "part_assignments 要有 user_id 或 ringer_id"
         with self._lock:
             assignment_id = str(uuid.uuid4())
-            self.tables["part_assignments"].append({
+            self._insert("part_assignments", {
                 "id": assignment_id, "part_id": part_id, "user_id": user_id, "ringer_id": ringer_id,
             })
             return assignment_id
@@ -619,7 +648,7 @@ class FakeHuaXia:
                 part.get("section") or None, _given(part, "sort", 0),
             )
             new_parts[part["name"]] = part_id
-            created.append({"id": part_id, "name": part["name"]})
+            created.append({"id": part_id, "name": part["name"], "absorbed": []})
         for change in payload.get("update_parts") or []:
             row = self._piece_part(piece_id, change.get("id")) if officer else None
             if row is None:
@@ -630,6 +659,7 @@ class FakeHuaXia:
                 row["needed_min"] = change["needed_min"]
             if change.get("section") is not None:
                 row["section"] = change["section"] or guess_section(row["name"])
+            self._settle_divisi()
         own_path = f"lingling/{re.escape(piece_id)}/[0-9a-f]{{64}}-[0-9a-z]{{1,32}}\\.pdf"
         requested = set(payload.get("remove_scores") or [])
         # 只撤這首曲目泠靈發的；指到別人放的或別首曲目的就整個不做，已經不在的略過
@@ -646,6 +676,19 @@ class FakeHuaXia:
         ]
         gone = {row["id"] for row in removed}
         self.tables["scores"] = [row for row in self.tables["scores"] if row["id"] not in gone]
+        # 收分部排在撤掉登記之後：被收的聲部上泠靈發的舊登記放進同一次的 remove_scores 就能先撤掉
+        for part, made in zip(payload.get("create_parts") or [], created):
+            for absorbed_id in part.get("absorb") or []:
+                row = self._piece_part(piece_id, absorbed_id) if officer else None
+                if row is None:
+                    raise _FunctionError(404, "PT404", f"找不到這首曲目的聲部 {absorbed_id}（可能已被刪除，或沒有權限）")
+                if row.get("parent_id") is not None:
+                    raise _FunctionError(400, "23514", f"已經是分部，不能再收：{row['name']}")
+                if any(score["part_id"] == absorbed_id for score in self.tables["scores"]):
+                    raise _FunctionError(400, "23514", f"還有樂譜登記的聲部不能收成分部：{row['name']}")
+                row["parent_id"] = made["id"]
+                self._settle_divisi()
+                made["absorbed"].append(absorbed_id)
         added = []
         for score in payload.get("add_scores") or []:
             if score.get("new_part") is not None and score.get("part_id") is not None:
@@ -655,6 +698,8 @@ class FakeHuaXia:
             part_id = new_parts[score["new_part"]] if score.get("new_part") is not None else score.get("part_id")
             if part_id is not None and self._piece_part(piece_id, part_id) is None:
                 raise _FunctionError(404, "PT404", f"找不到這首曲目的聲部 {part_id}")
+            if part_id is not None and self._piece_part(piece_id, part_id).get("parent_id") is not None:
+                raise _FunctionError(400, "23514", f"樂譜不能登記到分部：{part_id}")
             path = score.get("file_path") or ""
             if not re.fullmatch(own_path, path):
                 raise _FunctionError(400, "22023", f"不是泠靈的樂譜路徑：{path}")
@@ -686,6 +731,38 @@ class FakeHuaXia:
             raise _FunctionError(401, "42501", f"permission denied for function {function}")
         return True
 
+    def _insert(self, table: str, row: Dict[str, Any]) -> None:
+        """新增一列；違反分部的規則時不加，丟 _FunctionError（同 HuaXia 的觸發器，23514）"""
+        self.tables[table].append(row)
+        try:
+            self._settle_divisi()
+        except _FunctionError:
+            self.tables[table].remove(row)
+            raise
+
+    def _settle_divisi(self) -> None:
+        """HuaXia 的觸發器 piece_parts_tree、scores_divisi、part_assignments_divisi：分部的聲部組改成所屬聲部的；
+        違反分部的規則時丟 _FunctionError（PostgREST 回 400、23514）"""
+        parts = {row["id"]: row for row in self.tables["piece_parts"]}
+        parents = {row.get("parent_id") for row in parts.values()} - {None}
+        for row in parts.values():
+            parent = parts.get(row.get("parent_id"))
+            if row.get("parent_id") is None:
+                continue
+            if parent is None or parent is row or parent.get("parent_id") is not None:
+                raise _FunctionError(400, "23514", f"分部只分兩層：{row['name']}")
+            if parent["piece_id"] != row["piece_id"]:
+                raise _FunctionError(400, "23514", f"分部與所屬聲部要在同一首曲目：{row['name']}")
+            if row["id"] in parents:
+                raise _FunctionError(400, "23514", f"有分部的聲部不能再是分部：{row['name']}")
+            row["section"] = parent["section"]
+        for score in self.tables["scores"]:
+            if parts.get(score["part_id"], {}).get("parent_id") is not None:
+                raise _FunctionError(400, "23514", f"樂譜不能登記到分部：{score['file_path']}")
+        for assignment in self.tables["part_assignments"]:
+            if assignment["part_id"] in parents:
+                raise _FunctionError(400, "23514", f"有分部的聲部不能排人：{assignment['part_id']}")
+
     def _piece_part(self, piece_id: str, part_id: Optional[str]) -> Optional[Dict[str, Any]]:
         """這首曲目上編號為 part_id 的聲部；沒有時為 None"""
         return next((
@@ -703,11 +780,13 @@ class FakeHuaXia:
 
     def _rest(self, table: str, record: Dict[str, Any]) -> _Response:
         """/rest/v1/<table>：讀取（GET）照 RLS 只回呼叫者看得到的列，依 order 排序、照 offset 與 limit
-        取一段，一次最多 max_rows 列；刪除（DELETE）見 _delete"""
+        取一段，一次最多 max_rows 列；修改（PATCH）見 _patch，刪除（DELETE）見 _delete"""
         if table not in self.tables:
             return _Response(404, {"code": "PGRST205", "message": f"Could not find the table public.{table}"})
         if record["method"] == "DELETE":
             return self._delete(table, record)
+        if record["method"] == "PATCH":
+            return self._patch(table, record)
         if record["method"] != "GET":
             return _Response(405, {"message": "Method not supported by the fake"})
         caller = self._caller(record)
@@ -728,10 +807,35 @@ class FakeHuaXia:
             rows = [{c: row.get(c) for c in columns} for row in rows]
         return _Response(200, rows)
 
+    def _patch(self, table: str, record: Dict[str, Any]) -> _Response:
+        """PATCH /rest/v1/<table>：把符合篩選的列改成本體的值，照 HuaXia 的 RLS 只有幹部改得到 piece_parts
+        （part_write；其他人改不到任何列，不算錯）；沒有篩選時同 Supabase 的 safeupdate 拒絕。改完違反分部的規則時
+        整個不改（23514）。帶 Prefer: return=representation 時回傳改到的列"""
+        params = dict(record["params"])
+        columns = [c.strip() for c in params.pop("select", "*").split(",")]
+        if not params:
+            return _Response(400, {"code": "21000", "message": "UPDATE requires a WHERE clause"})
+        allowed = table in _UPDATE_TABLES and self._is_officer(self._caller(record), {})
+        changed = [
+            row for row in self.tables[table] if allowed and all(_matches(row, k, v) for k, v in params.items())
+        ]
+        before = copy.deepcopy(self.tables)
+        for row in changed:
+            row.update(record["json"] or {})
+        try:
+            self._settle_divisi()
+        except _FunctionError as e:
+            self.tables = before
+            return _Response(e.status, {"code": e.code, "message": str(e)})
+        if "return=representation" not in record["headers"].get("Prefer", ""):
+            return _Response(204)
+        return _Response(200, [row if columns == ["*"] else {c: row.get(c) for c in columns} for row in changed])
+
     def _delete(self, table: str, record: Dict[str, Any]) -> _Response:
         """DELETE /rest/v1/<table>：刪掉符合篩選的列，照 HuaXia 的 RLS 只有幹部刪得到 scores 與 piece_parts
         （score_write、part_write；其他人刪不到任何列，不算錯）；沒有篩選時同 Supabase 的 safeupdate 拒絕。
-        刪聲部連帶刪掉它的排人與樂譜（on delete cascade）。帶 Prefer: return=representation 時回傳刪掉的列"""
+        刪聲部連帶刪掉它的分部、兩者的排人與樂譜（on delete cascade）。帶 Prefer: return=representation 時回傳
+        直接刪掉的列"""
         params = dict(record["params"])
         columns = [c.strip() for c in params.pop("select", "*").split(",")]
         if not params:
@@ -740,10 +844,13 @@ class FakeHuaXia:
         doomed = [
             row for row in self.tables[table] if allowed and all(_matches(row, k, v) for k, v in params.items())
         ]
-        gone = {id(row) for row in doomed}
+        # 刪聲部連它的分部一起刪（on delete cascade，回傳的只有直接刪掉的列）
+        doomed_ids = {row["id"] for row in doomed} if table == "piece_parts" else set()
+        cascaded = [row for row in self.tables[table] if row.get("parent_id") in doomed_ids]
+        gone = {id(row) for row in doomed + cascaded}
         self.tables[table] = [row for row in self.tables[table] if id(row) not in gone]
         if table == "piece_parts":
-            parts = {row["id"] for row in doomed}
+            parts = {row["id"] for row in doomed + cascaded}
             for child in ("part_assignments", "scores"):
                 self.tables[child] = [row for row in self.tables[child] if row.get("part_id") not in parts]
             for report in self.tables["practice_reports"]:
@@ -895,6 +1002,8 @@ def guess_section(name: str) -> Optional[str]:
 
 # 撤回與收回經 REST 刪除的資料表（HuaXia 的 RLS 讓幹部刪得到的：score_write、part_write）
 _DELETE_TABLES = frozenset({"scores", "piece_parts"})
+# 撤回經 REST 修改的資料表（取消歸分部；HuaXia 的 RLS 讓幹部改得到的：part_write）
+_UPDATE_TABLES = frozenset({"piece_parts"})
 
 
 # HuaXia 的 is_insider() 認的身分組

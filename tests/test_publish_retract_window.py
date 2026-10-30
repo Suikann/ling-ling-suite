@@ -2,8 +2,8 @@
 """
 撤回的接線測試（offscreen）
 
-撤回對話框照服務算出的預覽顯示：只能勾群組（逐聲部的對照表不能改），上方各類的數量與對照表一致，底部寫出撤回後
-沒有譜的聲部數。譜庫視窗工具列的「發譜紀錄」列出每次發譜與撤回，選一次發譜按「撤回…」開預覽，按「撤回」後
+撤回對話框照服務算出的預覽顯示：只能勾群組（逐聲部的對照表不能改），上方各類的數量與對照表一致（含分部變回獨立
+聲部），底部寫出撤回後沒有譜的聲部數。譜庫視窗工具列的「發譜紀錄」列出每次發譜與撤回，選一次發譜按「撤回…」開預覽，按「撤回」後
 撤掉 HuaXia 上的東西、寫一列「撤回」、寫出結果。不測畫面。
 """
 import os
@@ -26,7 +26,7 @@ from services.google_auth_service import GoogleAuthService
 from services.preferences_service import PreferencesService
 from services.retract_service import RetractEffect, RetractReason
 from services.secure_storage import SecureStorage
-from test_publish_retract import RetractTestCase
+from test_publish_retract import DivisiTestCase, RetractTestCase
 from test_publish_run import TwoPiecesTestCase
 from tests.fake_browser import CallbackBrowser
 from tests.fake_google import FakeTokenEndpoint, write_client_secrets
@@ -90,6 +90,29 @@ class TestRetractDialog(DialogTestCase):
         self.assertFalse(self.dialog.confirm.isEnabled())
         self.assertTrue(self.dialog.missing.isHidden())
         self.assertEqual(self.dialog.chosen(), [])
+
+
+class TestDivisiInDialog(DivisiTestCase):
+    """那次收成分部的：對照表把它們列成「分部變回獨立聲部」，上方寫出這類的數量"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_divisi_that_become_voices_again_are_listed_and_counted(self):
+        self.publish()
+        preview = self.retracter.preview(self.entry())
+        dialog = RetractDialog(preview)
+        self.addCleanup(dialog.deleteLater)
+        page = dialog.pages[[group.group_id for group in preview.groups].index(self.molihua.id)]
+        detach = t("retract.count", kind=t("retract.effect.detach"), count=2)
+        self.assertIn(detach, [label.text() for label in page.counts])
+        rows = {
+            page.table.item(row, 0).text(): (page.table.item(row, 1).text(), page.table.item(row, 2).text())
+            for row in range(page.table.rowCount())
+        }
+        divisi = (t("retract.now.divisi", voice="擊樂2"), t("retract.after.detach"))
+        self.assertEqual((rows["風鈴"], rows["鈴鼓"]), (divisi, divisi))
 
 
 class TestGroupsNotPublished(TwoPiecesTestCase):

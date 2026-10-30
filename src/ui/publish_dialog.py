@@ -13,10 +13,13 @@
   有未同步值的群組標出哪些值還沒進譜庫。每個沒擋下的群組都對到曲目（新建的要有曲名）才能按「下一步」；
   全部群組都擋下時頂端寫一行沒有可以發譜的群組，「下一步」按不下去。
 - 「聲部」：每個群組列出樂器表每一列對到 HuaXia 的哪個聲部（publish_service.plan_voices）、HuaXia 現在的值、
-  變動與發譜後的值，以及只在 HuaXia 的聲部（不動）。本專案有的聲部可以改選新建或還沒被配對的 HuaXia 聲部
+  變動與發譜後的值，以及只在 HuaXia 的聲部（不動）；HuaXia 上的分部列在所屬聲部底下（不動），名稱對到分部、
+  沒有配對的聲部在「變動」標出那個分部屬於哪個聲部。本專案有的聲部可以改選新建或還沒被配對的 HuaXia 聲部
   （名稱規則對到多個時只列那幾個），挑了就經 Project.choose_huaxia_part 記進專案；人數或聲部組不同時「覆寫」
-  預設勾選；本專案沒有、HuaXia 也沒有的聲部預設不建，可以勾「在 HuaXia 建」。有衝突、還沒挑或要建的聲部
-  沒填最少人數時寫出原因，「下一步」按不下去。覆寫與建立的勾選只在這次預覽，不記在專案。
+  預設勾選；本專案沒有、HuaXia 也沒有的聲部預設不建，可以勾「在 HuaXia 建」。要新建的聲部有可以收的 HuaXia 聲部時
+  多一個「收成分部」選單（只列 VoiceRow.absorb_options），勾了的列在那一列底下。有衝突、還沒挑、要建的聲部
+  沒填最少人數、要收的聲部上有別人放的樂譜，或本專案有的聲部名稱對到分部時寫出原因，「下一步」按不下去。
+  覆寫、建立與收成分部的勾選只在這次預覽，不記在專案。
 - 「檔案」：每個群組列出要發的分譜與總譜、會被取代的那份（同一個聲部底下、泠靈發的，publish_service.plan_files）
   與同聲部別人放的檔（不動）；HuaXia 上已有內容相同那份的標成不重傳。本機找不到的檔跳過並寫出來，只在譜庫的旁邊放「從譜庫下載回來」（關掉預覽，
   交給主視窗下載回原位）。超過大小上限的檔第一次進這一步時在背景逐份壓縮（壓縮檔在壓縮服務的暫存資料夾，
@@ -24,8 +27,8 @@
   「再壓縮」壓還沒壓到的；每份顯示壓縮狀態與「開啟」「比較」（共用的比較畫面）「不發這份」。
 - 「公演」：複選本學期、還沒結束的公演（PublishReadiness.concerts），逐場說明掛上後的影響；可以不掛。
   群組的曲目已掛著的公演寫出是哪些群組，全部群組都已掛著的勾著、不能取消（泠靈不把曲目從場次移除）。
-- 「確認」：每個群組列出曲目、要新掛的公演（已掛著的不算）、要新建與覆寫的聲部、要傳的檔數與大小、要取代的份數、
-  不重傳與不發的檔，加上合計。
+- 「確認」：每個群組列出曲目、要新掛的公演（已掛著的不算）、要新建（與收成它的分部）與覆寫的聲部、要傳的檔數與大小、要取代的份數
+  （其中收成分部撤掉的寫出是哪幾份）、不重傳與不發的檔，加上合計。
   每個群組要寫進 HuaXia 的全部內容由 publish_plan() 交出（publish_service.group_publish），確認步的文字也由它算。
   超過上限的檔都壓縮好（或選了不發）、壓縮做完，「發譜」才按得下去。
 
@@ -44,8 +47,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QLineEdit, QMenu, QMessageBox, QPushButton, QRadioButton, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from core.constants import (
@@ -108,6 +111,13 @@ def voices_problem_text(plan: VoicePlan) -> str:
         reasons.append(t("publish.voices.undecided", voices="、".join(plan.undecided)))
     if plan.unfilled:
         reasons.append(t("publish.voices.unfilled", voices="、".join(plan.unfilled)))
+    reasons += [
+        t("publish.voices.absorb_others", part=part.name, scores=_score_titles(scores)) for part, scores in plan.absorb_others
+    ]
+    reasons += [
+        t("publish.voices.divisi_named", voice=voice, divisi=match.divisi.name, parent=match.voice.name)
+        for voice, match in plan.divisi_named
+    ]
     return "\n".join(reasons)
 
 
@@ -135,6 +145,8 @@ def _voice_texts(row: VoiceRow) -> List[str]:
         change = t("publish.voices.absent")
     elif row.match is PartMatch.AMBIGUOUS and row.part is None:
         change = t("publish.voices.several")
+    elif row.divisi_match is not None:
+        change = t("publish.voices.divisi_match", divisi=row.divisi_match.divisi.name, voice=row.divisi_match.voice.name)
     elif row.part is None:
         change = t("publish.voices.missing")
     elif row.headcount_differs and row.section_differs:
@@ -159,6 +171,49 @@ def _voice_texts(row: VoiceRow) -> List[str]:
     else:
         after = t("publish.voices.unchanged")
     return [row.voice, now, change, after]
+
+
+def _note_row(
+    table: QTableWidget, index: int, texts: Sequence[str], colors: Optional[Dict[int, str]] = None,
+) -> None:
+    """表格第 index 列的前幾欄放說明文字
+
+    Args:
+        table: 表格
+        index: 第幾列
+        texts: 從第 0 欄起各欄的文字
+        colors: 欄位對應字色；省略時整列灰色（只在 HuaXia、不動的聲部與分部）
+    """
+    colors = {column: _NOTE_COLOR for column in range(len(texts))} if colors is None else colors
+    for column, text in enumerate(texts):
+        item = QTableWidgetItem(text)
+        if column in colors:
+            item.setForeground(QColor(colors[column]))
+        table.setItem(index, column, item)
+
+
+def _divisi_rows(table: QTableWidget, index: int, divisi: List[HuaXiaPart]) -> int:
+    """聲部對照表從第 index 列起放一個聲部的分部（灰色、不動），回傳下一列"""
+    for part in divisi:
+        texts = (
+            t("publish.voices.divisi_name", name=part.name), _part_text(part), t("publish.voices.divisi"),
+            t("publish.voices.untouched"),
+        )
+        _note_row(table, index, texts)
+        index += 1
+    return index
+
+
+def _absorbed_rows(table: QTableWidget, index: int, parts: List[HuaXiaPart]) -> int:
+    """聲部對照表從第 index 列起放一個要新建的聲部要收成分部的 HuaXia 聲部，回傳下一列"""
+    for part in parts:
+        texts = (
+            t("publish.voices.divisi_name", name=part.name), _part_text(part), t("publish.voices.absorb"),
+            t("publish.voices.divisi"),
+        )
+        _note_row(table, index, texts, {2: _NEW_COLOR})
+        index += 1
+    return index
 
 
 def _score_titles(scores: List[HuaXiaScore]) -> str:
@@ -578,8 +633,15 @@ class PublishPreviewDialog(QDialog):
         return box
 
     def _voices_table(self, check: GroupCheck, plan: VoicePlan) -> QTableWidget:
-        """聲部對照表：樂器表每一列，接著只在 HuaXia 的聲部（灰色、不動）；表格高度剛好放下所有列"""
-        table = QTableWidget(len(plan.rows) + len(plan.huaxia_only), 5)
+        """聲部對照表：樂器表每一列，接著只在 HuaXia 的聲部（灰色、不動）
+
+        對到或只在 HuaXia 的聲部有分部時，分部（灰色）列在它底下，要新建的聲部要收成分部的列在它底下；名稱對到分部的列
+        以未同步的顏色標出。表格高度剛好放下所有列。
+        """
+        under = [part.id for part in plan.huaxia_only] + [row.part.id for row in plan.rows if row.part is not None]
+        divisi_rows = sum(len(plan.divisi.get(part_id, [])) for part_id in under)
+        absorbed_rows = sum(len(row.absorbs) for row in plan.rows)
+        table = QTableWidget(len(plan.rows) + len(plan.huaxia_only) + divisi_rows + absorbed_rows, 5)
         table.setObjectName("voices_table")
         table.setHorizontalHeaderLabels([
             t("publish.voices.voice"), t("publish.voices.now"), t("publish.voices.change"),
@@ -589,18 +651,21 @@ class PublishPreviewDialog(QDialog):
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         table.horizontalHeader().setStretchLastSection(True)
-        for index, row in enumerate(plan.rows):
+        index = 0
+        for row in plan.rows:
             for column, text in enumerate(_voice_texts(row)):
                 table.setItem(index, column, QTableWidgetItem(text))
+            if row.present and row.divisi_match is not None:
+                table.item(index, 2).setForeground(QColor(UNSYNCED_COLOR))
             decision = self._decision_cell(check, row)
             if decision is not None:
                 table.setCellWidget(index, 4, decision)
-        for index, part in enumerate(plan.huaxia_only, start=len(plan.rows)):
+            index = _absorbed_rows(table, index + 1, row.absorbs)
+            index = _divisi_rows(table, index, plan.divisi.get(row.part.id, []) if row.part else [])
+        for part in plan.huaxia_only:
             texts = (part.name, _part_text(part), t("publish.voices.huaxia_only"), t("publish.voices.untouched"))
-            for column, text in enumerate(texts):
-                item = QTableWidgetItem(text)
-                item.setForeground(QColor(_NOTE_COLOR))
-                table.setItem(index, column, item)
+            _note_row(table, index, texts)
+            index = _divisi_rows(table, index + 1, plan.divisi.get(part.id, []))
         table.resizeRowsToContents()
         table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         height = table.horizontalHeader().sizeHint().height() + 2 * table.frameWidth()
@@ -608,7 +673,8 @@ class PublishPreviewDialog(QDialog):
         return table
 
     def _decision_cell(self, check: GroupCheck, row: VoiceRow) -> Optional[QWidget]:
-        """一列的「決定」欄：本專案有的挑對到哪個聲部（有差異時加「覆寫」），本專案沒有、HuaXia 也沒有的問要不要建"""
+        """一列的「決定」欄：本專案有的挑對到哪個聲部（有差異時加「覆寫」），本專案沒有、HuaXia 也沒有的問要不要建；
+        要新建、有可以收的 HuaXia 聲部時加「收成分部」選單"""
         cell = QWidget()
         layout = QHBoxLayout(cell)
         layout.setContentsMargins(2, 0, 2, 0)
@@ -643,8 +709,28 @@ class PublishPreviewDialog(QDialog):
             layout.addWidget(create)
         else:
             return None
+        if row.create and row.absorb_options:
+            layout.addWidget(self._absorb_button(check, row))
         layout.addStretch()
         return cell
+
+    def _absorb_button(self, check: GroupCheck, row: VoiceRow) -> QToolButton:
+        """「收成分部」：勾選要收成這個新建聲部的分部的 HuaXia 聲部（只列可以收的）"""
+        absorbed = {part.id for part in row.absorbs}
+        button = QToolButton()
+        button.setObjectName("absorb")
+        button.setText(
+            t("publish.voices.absorb_count", count=len(absorbed)) if absorbed else t("publish.voices.absorb"),
+        )
+        button.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(button)
+        for part in row.absorb_options:
+            action = menu.addAction(part.name)
+            action.setCheckable(True)
+            action.setChecked(part.id in absorbed)
+            action.toggled.connect(lambda on, part_id=part.id: self._set_absorb(check, row.index, part_id, on))
+        button.setMenu(menu)
+        return button
 
     def _choose_part(self, check: GroupCheck, row: VoiceRow, part_id: Optional[str]):
         """一個聲部改選了新建或某個 HuaXia 聲部：交給 PublishPreview.choose_part，重排那一塊"""
@@ -659,6 +745,11 @@ class PublishPreviewDialog(QDialog):
     def _set_create_absent(self, check: GroupCheck, index: int, create: bool):
         """「在 HuaXia 建」勾選改了：重排那一塊"""
         self._preview.set_create_absent(check.group, index, create)
+        self._refresh_voices(check)
+
+    def _set_absorb(self, check: GroupCheck, index: int, part_id: str, absorb: bool):
+        """「收成分部」的勾選改了：重排那一塊"""
+        self._preview.set_absorb(check.group, index, part_id, absorb)
         self._refresh_voices(check)
 
 
@@ -988,6 +1079,10 @@ class PublishPreviewDialog(QDialog):
         voices = []
         if plan.voices.creates:
             voices.append(t("publish.confirm.creates", voices="、".join(c.name for c in plan.voices.creates)))
+        voices += [
+            t("publish.confirm.absorbs", voice=row.voice, parts="、".join(part.name for part in row.absorbs))
+            for row in plan.voices.rows if row.create and row.absorbs
+        ]
         if plan.voices.updates:
             voices.append(t("publish.confirm.updates", voices="、".join(u.name for u in plan.voices.updates)))
         layout.addWidget(_named_label("confirm_voices", "\n".join(voices) or t("publish.confirm.voices_unchanged")))
@@ -998,6 +1093,10 @@ class PublishPreviewDialog(QDialog):
         layout.addWidget(_named_label("confirm_files", t(
             "publish.confirm.files", count=len(plan.uploads), size=size_text(plan.size), replaced=len(plan.replaces),
         )))
+        if plan.voices.absorb_replaces:
+            layout.addWidget(_named_label("confirm_absorb_replaced", t(
+                "publish.confirm.absorb_replaced", scores=_score_titles(plan.voices.absorb_replaces),
+            )))
         if plan.unchanged:
             unchanged = "、".join(os.path.basename(f.path) for f in plan.unchanged)
             layout.addWidget(_named_label("confirm_unchanged", t("publish.confirm.unchanged", files=unchanged)))

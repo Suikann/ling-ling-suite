@@ -5,6 +5,7 @@
 對假 HuaXia、假 Google 與臨時目錄裡的檔測 PublishRunner：按下「發譜」時重查幹部身分與發譜函式、把要傳的檔複製成快照；
 之後先寫「開始發譜」到譜庫的發譜紀錄（寫不進去就不發），再傳檔（先不登記）、每個群組呼叫一次發譜函式切換、
 刪掉被取代的舊檔，最後補一列「發譜結果」，快照與壓縮檔在結束時刪掉。各段的中斷、失敗與重跑都收斂到同一個結果。
+收成分部：新建的聲部把勾選的 HuaXia 聲部收成分部，紀錄寫下要收與實際收進去的，預覽之後網頁改了就整個群組不發。
 """
 import copy
 import datetime
@@ -32,7 +33,7 @@ from services.huaxia_client import PUBLISH_INTERFACE_VERSION, lingling_storage_p
 from services.publish_runner import GroupFailure, PublishEvent, PublishRunner
 from services.orphan_cleanup import clear_orphans
 from services.publish_service import (
-    FunctionProblem, PartMatch, PublishPreview, check_groups, plan_voices, storage_slot,
+    FunctionProblem, PartMatch, PublishPreview, PublishStep, check_groups, plan_voices, storage_slot,
 )
 from ui.publish_run import progress_line
 from test_catalog_service import empty_catalog
@@ -104,11 +105,13 @@ class RunTestCase(PrepareTestCase):
         with open(self.path(group, voice), "rb") as f:
             return lingling_storage_path(piece_id or group.huaxia_link.piece_id, sha(f.read()), storage_slot(voice))
 
-    def press_publish(self, events=(), group_ids=None):
-        """重新按下發譜（group_ids 時只發這幾個群組）、走完預覽（勾 events 這幾場公演）後按「發譜」：交回這次的快照"""
+    def press_publish(self, events=(), group_ids=None, decide=lambda preview: None):
+        """重新按下發譜（group_ids 時只發這幾個群組）、走完預覽（「聲部」步由 decide 決定，勾 events 這幾場公演）後
+        按「發譜」：交回這次的快照"""
         readiness = self.service.prepare()
         checks = check_groups(self.project, group_ids)
         preview = PublishPreview(self.project, checks, readiness, FileService(), 10 ** 9)
+        decide(preview)
         for event in events:
             preview.choose_event(event, True)
         preview.assign_piece_ids()
@@ -248,6 +251,141 @@ class TestPublishing(RunTestCase):
         outcome = self.run_publish(self.press_publish())
         self.assertEqual(outcome.failed, [])
         self.assertEqual(len(self.uploads()), sent)
+
+
+class TestDivisi(RunTestCase):
+    """HuaXia 上的「二胡1」分成「前排」「後排」兩個分部（各 3 人，前排排了一位團員）"""
+
+    def setUp(self):
+        super().setUp()
+        next(row for row in self.huaxia.tables["piece_parts"] if row["id"] == self.erhu)["section"] = "吹管"
+        self.front = self.huaxia.add_part(self.fenghuo, "前排", needed="3", needed_min=3, sort=3, parent_id=self.erhu)
+        self.back = self.huaxia.add_part(self.fenghuo, "後排", needed="3", needed_min=3, sort=4, parent_id=self.erhu)
+        self.member = self.huaxia.add_account("member_bo", roles=("member",))
+        self.huaxia.assign(self.front, self.member)
+
+    def part(self, part_id: str):
+        """HuaXia 上這個聲部現在的（人數記法，最少人數，聲部組）"""
+        row = next(row for row in self.huaxia.tables["piece_parts"] if row["id"] == part_id)
+        return row["needed"], row["needed_min"], row["section"]
+
+    def test_only_the_voice_gets_the_headcount_and_section_and_divisi_keep_theirs(self):
+        outcome = self.run_publish(self.press_publish())
+        self.assertEqual(outcome.failed, [])
+        [started] = self.log(PublishAction.START)
+        self.assertEqual([part["id"] for part in started.parts_updated], [self.erhu])
+        self.assertEqual(self.part(self.erhu), ("6-8", 6, "拉弦"))
+        self.assertEqual([self.part(self.front)[:2], self.part(self.back)[:2]], [("3", 3), ("3", 3)])
+        self.assertEqual(
+            [row["user_id"] for row in self.huaxia.tables["part_assignments"] if row["part_id"] == self.front],
+            [self.member],
+        )
+        self.assertIn((self.erhu, self.stored(self.group, "二胡 I")), self.scores(self.fenghuo))
+
+
+class TestAbsorbing(RunTestCase):
+    """收成分部：「茉莉花」的「擊樂2」在 HuaXia 上沒有，HuaXia 上那首有 115-1 各傳一份的「風鈴」「鈴鼓」（各排了一位
+    團員，「鈴鼓」底下登記著泠靈上次替它傳的複本）；譜務勾選兩者，發譜時新建「擊樂2」把它們收成分部"""
+
+    def setUp(self):
+        super().setUp()
+        self.molihua = self.add_group("茉莉花", ["擊樂2"], b"molihua")
+        self.project.set_huaxia_link(self.molihua, HuaXiaLink(piece_id=self.moli, piece_title="茉莉花"))
+        self.chimes = self.huaxia.add_part(self.moli, "風鈴", sort=1)
+        self.tambourine = self.huaxia.add_part(self.moli, "鈴鼓", sort=2)
+        self.huaxia.assign(self.chimes, self.huaxia.add_account("member_bo", roles=("member",)))
+        self.huaxia.assign(self.tambourine, self.huaxia.add_account("member_cy", roles=("member",)))
+        self.copy = lingling_storage_path(self.moli, sha(b"tambourine copy"), storage_slot("鈴鼓"))
+        self.huaxia.put_object(self.copy, b"tambourine copy")
+        self.copy_score = self.huaxia.add_score(self.moli, self.tambourine, self.copy, title="鈴鼓")
+
+    def absorb(self, preview):
+        """「聲部」步替「擊樂2」勾選「風鈴」「鈴鼓」"""
+        for part_id in (self.chimes, self.tambourine):
+            preview.set_absorb(self.molihua, 0, part_id, True)
+
+    def parts(self):
+        """「茉莉花」在 HuaXia 上的聲部：名稱對應（人數記法，最少人數，聲部組，所屬聲部的名稱）"""
+        rows = [row for row in self.huaxia.tables["piece_parts"] if row["piece_id"] == self.moli]
+        names = {row["id"]: row["name"] for row in rows}
+        return {
+            row["name"]: (row["needed"], row["needed_min"], row["section"], names.get(row["parent_id"]))
+            for row in rows
+        }
+
+    def new_voice(self) -> str:
+        """HuaXia 上新建的「擊樂2」的編號"""
+        return next(
+            row["id"] for row in self.huaxia.tables["piece_parts"] if row["piece_id"] == self.moli and row["name"] == "擊樂2"
+        )
+
+    def test_the_new_voice_takes_the_ticked_parts_as_divisi_and_alone_carries_the_score(self):
+        self.project.set_section("擊樂2", "打擊")
+        assignments = copy.deepcopy(self.huaxia.tables["part_assignments"])
+        outcome = self.run_publish(self.press_publish(decide=self.absorb))
+        self.assertEqual(outcome.failed, [])
+        self.assertEqual(self.parts(), {
+            "擊樂2": ("6-8", 6, "打擊", None), "風鈴": ("1", 1, "打擊", "擊樂2"), "鈴鼓": ("1", 1, "打擊", "擊樂2"),
+        })
+        self.assertEqual(self.huaxia.tables["part_assignments"], assignments)
+        self.assertEqual(self.scores(self.moli), sorted([
+            (self.new_voice(), self.stored(self.molihua, "擊樂2")), ("", self.stored(self.molihua, "")),
+        ]))
+
+    def test_lingling_copies_on_absorbed_parts_are_removed_in_the_same_publish(self):
+        outcome = self.run_publish(self.press_publish(decide=self.absorb))
+        self.assertEqual(outcome.failed, [])
+        self.assertNotIn(self.copy_score, {row["id"] for row in self.huaxia.tables["scores"]})
+        self.assertNotIn(self.copy, self.huaxia.objects)
+
+    def test_the_publish_log_keeps_the_parts_to_absorb_and_those_absorbed(self):
+        self.run_publish(self.press_publish(decide=self.absorb))
+        [started] = [r for r in self.log(PublishAction.START) if r.group_id == self.molihua.id]
+        [result] = [r for r in self.log(PublishAction.RESULT) if r.group_id == self.molihua.id]
+        self.assertEqual([part["absorb"] for part in started.parts_created], [[self.chimes, self.tambourine]])
+        self.assertEqual([s["id"] for s in started.scores_removed], [self.copy_score])
+        self.assertEqual(result.parts_created, [
+            {"id": self.new_voice(), "name": "擊樂2", "absorbed": [self.chimes, self.tambourine]},
+        ])
+        self.assertEqual([s["id"] for s in result.scores_removed], [self.copy_score])
+        self.assertEqual(result.files_deleted, [self.copy])
+
+    def test_the_next_publish_pairs_with_the_new_voice_through_the_remembered_pairing(self):
+        outcome = self.run_publish(self.press_publish(decide=self.absorb))
+        self.project.remember_huaxia_parts(outcome.created_parts())
+        self.assertEqual(self.molihua.huaxia_link.part_ids, {"擊樂2": self.new_voice()})
+        plan = plan_voices(self.project, self.molihua, self.service.prepare().parts[self.moli])
+        [row] = plan.rows
+        self.assertEqual((row.match, row.part.id), (PartMatch.CHOSEN, self.new_voice()))
+        self.assertEqual([part.id for part in plan.divisi[self.new_voice()]], [self.chimes, self.tambourine])
+        self.assertEqual(plan.creates, [])
+
+    def test_scores_put_there_by_others_block_the_group_and_huaxia_is_left_alone(self):
+        bowing = self.huaxia.add_score(self.moli, self.chimes, f"{self.moli}/{self.chimes}/1700000000_bowing.pdf", "弓法")
+        before = self.tables()
+        readiness = self.service.prepare()
+        preview = PublishPreview(self.project, check_groups(self.project), readiness, FileService(), 10 ** 9)
+        self.absorb(preview)
+        plan = preview.voice_plan(self.molihua)
+        self.assertEqual([(part.id, [s.id for s in scores]) for part, scores in plan.absorb_others], [
+            (self.chimes, [bowing]),
+        ])
+        self.assertFalse(preview.step_ready(PublishStep.VOICES))
+        self.assertFalse(preview.can_publish(False))
+        self.assertEqual(self.tables(), before)
+
+    def test_a_part_put_under_another_voice_meanwhile_fails_the_whole_switch_of_that_group(self):
+        snapshot = self.press_publish(decide=self.absorb)
+        percussion = self.huaxia.add_part(self.moli, "打擊", sort=3)
+        self.huaxia.set_parent(self.chimes, percussion)
+        before = self.parts(), self.scores(self.moli)
+        outcome = self.run_publish(snapshot)
+        [failed] = outcome.failed
+        self.assertEqual((failed.snapshot.name, failed.failure, failed.code), ("茉莉花", GroupFailure.SWITCH, "23514"))
+        self.assertEqual((self.parts(), self.scores(self.moli)), before)
+        self.assertIn(self.copy, self.huaxia.objects)
+        [result] = [r for r in self.log(PublishAction.RESULT) if r.group_id == self.molihua.id]
+        self.assertEqual(result.parts_created, [])
 
 
 class TestNewPiece(RunTestCase):

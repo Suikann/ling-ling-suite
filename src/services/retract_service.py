@@ -2,18 +2,21 @@
 """
 撤回
 
-從譜庫的發譜紀錄撤回某次發譜選定的群組（spec #82）：撤掉那次登記的分譜與總譜，連同那次新建、現在還沒排人的聲部。
+從譜庫的發譜紀錄撤回某次發譜選定的群組（spec #82）：撤掉那次登記的分譜與總譜，連同那次新建、現在還沒排人的聲部；
+那次收進新建聲部的分部變回獨立聲部（spec #140），排人不動。
 被那次取代的舊檔不會回來，人數與聲部組不改回，場次不動。只動那次發譜結果記下的 HuaXia 編號
-（core/publish_log.py 的 PublishRecord：scores_added、parts_created）與那次登記過的 Storage 檔。那次沒有發譜結果
+（core/publish_log.py 的 PublishRecord：scores_added、parts_created 與它的 absorbed）與那次登記過的 Storage 檔。那次沒有發譜結果
 （中途停下或結果寫不進譜庫）時，依開始發譜記下要登記的 Storage 路徑撤掉那首曲目現在登記著的泠靈樂譜；不知道那次
-新建了哪些聲部，聲部一律留著。
+新建了哪些聲部、收了哪些分部，聲部一律留著，分部不動。
 
 - 預覽（preview）：向 HuaXia 查那次放的檔還在不在、那次新建的聲部有沒有排人或有人在網頁上設定過（小老師、備註、
   練習回報、改名）、這首曲目所有的檔，把每個聲部歸類
-  （RetractEffect）：撤回後沒有譜、刪掉聲部、聲部留著但沒有譜、只撤這次的、不動。「撤回後沒有譜」是推算的：
-  撤掉這次的檔之後，那個聲部在 HuaXia 上已經沒有任何樂譜。那次新建的聲部有人放了別的檔時不刪（刪聲部會連帶刪掉
-  它的樂譜），只撤這次的；排了人或有人設定過的也不刪，聲部留著但沒有譜。沒發成的群組沒有可撤的登記。
-- 撤回（retract）：重查幹部身分，重讀 HuaXia 再算一次，以使用者身分經 REST 依序撤掉樂譜的登記、刪掉聲部、
+  （RetractEffect）：撤回後沒有譜、刪掉聲部、聲部留著但沒有譜、分部變回獨立聲部、只撤這次的、不動。「撤回後沒有譜」
+  是推算的：撤掉這次的檔之後，那個聲部在 HuaXia 上已經沒有任何樂譜。那次新建的聲部有人放了別的檔時不刪（刪聲部會
+  連帶刪掉它的樂譜），只撤這次的；排了人、有人設定過，或之後在網頁上又加了別的分部的也不刪，聲部留著但沒有譜。
+  那次收進新建聲部、現在還屬於它的分部變回獨立聲部，之後在網頁上移走的不動。沒發成的群組沒有可撤的登記。
+- 撤回（retract）：重查幹部身分，重讀 HuaXia 再算一次，以使用者身分經 REST 依序撤掉樂譜的登記、取消歸分部
+  （一定在刪聲部之前：刪聲部會連分部與分部的排人一起刪；之後再查一次，還有分部的聲部不刪）、刪掉聲部、
   刪 Storage 的檔（經 orphan_cleanup.delete_unregistered，只刪那一刻沒有任何登記還指著的），最後寫一列列「撤回」到發譜紀錄（沿用那次的發譜編號）、
   各群組寫一筆紀錄檔。中途中斷時剩下的檔成為孤兒，重做一次撤回會收斂（已撤掉的略過，沒刪的檔再刪一次）。
 連錯的那次新建了曲目時，撤回後留下一首空曲目，由幹部在網頁刪除（RetractGroup.new_piece）。
@@ -48,9 +51,14 @@ class RetractEffect(Enum):
 
     NO_SCORE = "no_score"        # 撤回後沒有譜
     DELETE_PART = "delete_part"  # 刪掉聲部（這次新建、還沒排人）
-    KEEP_PART = "keep_part"      # 聲部留著但沒有譜（這次新建、已經排人或有人在網頁上設定過）
+    KEEP_PART = "keep_part"      # 聲部留著但沒有譜（這次新建、已經排人、有人在網頁上設定過或又加了分部）
+    DETACH = "detach"            # 分部變回獨立聲部（這次收進新建的聲部）
     PARTIAL = "partial"          # 只撤這次的，別人放的留著
     UNTOUCHED = "untouched"      # 不動
+
+
+# 撤回後沒有譜的類（RetractGroup.missing）
+_MISSING = frozenset({RetractEffect.NO_SCORE, RetractEffect.KEEP_PART, RetractEffect.DETACH})
 
 
 class RetractBlock(Enum):
@@ -68,6 +76,8 @@ class RetractReason(Enum):
     NEW_UNASSIGNED = "new_unassigned"    # 這次新建、還沒排人
     ASSIGNED = "assigned"                # 這次新建，但已經排人
     CONFIGURED = "configured"            # 這次新建，但有人在網頁上設定過（小老師、備註、練習回報、改名）
+    NEW_WITH_DIVISI = "new_with_divisi"  # 這次新建，但網頁上又加了分部，聲部留著
+    ABSORBED = "absorbed"                # 這次收成分部的，排人不動
     OTHERS_KEPT = "others_kept"          # 別人放的檔不動
     NEW_WITH_OTHERS = "new_with_others"  # 這次新建，但別人放了檔，聲部留著
     GONE = "gone"                        # 這次放的檔已不在
@@ -85,6 +95,7 @@ class RetractRow:
         ours: 這次登記、現在還在的樂譜（會撤掉）
         others: 撤回後還留著的樂譜
         kept: 這次覆寫、撤回不改回的欄位：欄位名稱對應［原值，新值］
+        parent: 分部所屬聲部的名稱（撤回前）；聲部與總譜為空字串
     """
     name: str
     effect: RetractEffect
@@ -92,6 +103,7 @@ class RetractRow:
     ours: List[HuaXiaScore] = field(default_factory=list)
     others: List[HuaXiaScore] = field(default_factory=list)
     kept: Dict[str, List[Any]] = field(default_factory=dict)
+    parent: str = ""
 
 
 @dataclass(frozen=True)
@@ -102,14 +114,16 @@ class RetractGroup:
         record: 那次的發譜結果（沒發成的 failure 不為空）；那次沒有結果時是開始發譜（unfinished）
         rows: 逐聲部（依 HuaXia 的排序）加總譜；沒發成時為空
         scores: 要撤掉登記的樂譜（這次登記、現在還在的）
-        parts: 要刪的聲部（這次新建、還沒排人、沒有別人的樂譜、沒人在網頁上設定過）
+        parts: 要刪的聲部（這次新建、還沒排人、沒有別人的樂譜、沒人在網頁上設定過、撤回後沒有分部）
         files: 要刪的 Storage 檔（這次登記過、泠靈路徑格式、還在 Storage；刪之前再確認沒有任何登記指著）
+        detach: 要變回獨立聲部的分部（這次收進新建的聲部、現在還屬於它；parent_id 是那個新建的聲部）
     """
     record: PublishRecord
     rows: List[RetractRow] = field(default_factory=list)
     scores: List[HuaXiaScore] = field(default_factory=list)
     parts: List[HuaXiaPart] = field(default_factory=list)
     files: List[str] = field(default_factory=list)
+    detach: List[HuaXiaPart] = field(default_factory=list)
 
     @property
     def group_id(self) -> str:
@@ -159,12 +173,12 @@ class RetractGroup:
     @property
     def actionable(self) -> bool:
         """有東西可撤"""
-        return bool(self.scores or self.parts or self.files)
+        return bool(self.scores or self.parts or self.files or self.detach)
 
     @property
     def missing(self) -> int:
-        """撤回後沒有譜的聲部數（含總譜；沒有譜、聲部留著但沒有譜）"""
-        return sum(1 for row in self.rows if row.effect in (RetractEffect.NO_SCORE, RetractEffect.KEEP_PART))
+        """撤回後沒有譜的聲部數（含總譜；沒有譜、聲部留著但沒有譜，以及變回獨立聲部的分部：它沒有自己的譜）"""
+        return sum(1 for row in self.rows if row.effect in _MISSING)
 
     def counts(self) -> Dict[RetractEffect, int]:
         """各類的聲部數（含總譜），依 RetractEffect 的順序，沒有的為 0"""
@@ -209,6 +223,14 @@ class RetractResult:
     def left_pieces(self) -> List[str]:
         """撤回後留下的空曲目（那次新建的）"""
         return [group.piece_title for group in self.groups if group.new_piece]
+
+
+class _Retracted(NamedTuple):
+    """撤回真的做到的：撤掉的登記、變回獨立聲部的分部、刪掉的聲部（編號）與刪掉的檔（Storage 路徑）"""
+    removed: Set[str]
+    detached: Set[str]
+    deleted: Set[str]
+    files: Set[str]
 
 
 class _HuaXiaState(NamedTuple):
@@ -273,17 +295,22 @@ class RetractService:
         state = self._read(chosen)
         groups = [_with_files(_plan(record, state), state) for record in chosen]
         removed: List[str] = []
+        detached: List[str] = []
         deleted: List[str] = []
         files: List[str] = []
         error: Optional[HuaXiaError] = None
         try:
             self._removal.remove_scores([score.id for group in groups for score in group.scores], removed)
-            self._removal.remove_parts([part.id for group in groups for part in group.parts], deleted)
+            # 先取消歸分部再刪聲部：刪聲部會連它的分部與分部的排人一起刪
+            self._removal.detach_divisi([part for group in groups for part in group.detach], detached)
+            parts = self._without_divisi([part.id for group in groups for part in group.parts])
+            self._removal.remove_parts(parts, deleted)
             files = self._removal.remove_files(path for group in groups for path in group.files).deleted
         except HuaXiaError as e:
             error = e
-        records = [_retract_record(group, set(removed), set(deleted), set(files), error) for group in groups]
-        if error is not None and not (removed or deleted or files):
+        retracted = _Retracted(set(removed), set(detached), set(deleted), set(files))
+        records = [_retract_record(group, retracted, error) for group in groups]
+        if error is not None and not (removed or detached or deleted or files):
             records = []
         log_error = None
         if records:
@@ -296,6 +323,16 @@ class RetractService:
                 file_name=group.name,
             )
         return RetractResult(groups, records, error, log_error)
+
+    def _without_divisi(self, part_ids: List[str]) -> List[str]:
+        """這些要刪的聲部裡現在沒有分部的
+
+        取消歸分部沒改回全部（例如不是幹部，或之後在網頁上又加了分部）時，刪了會連分部與排人一起刪。
+        """
+        if not part_ids:
+            return []
+        parents = self._client.parts_with_divisi(self._auth.access_token(), part_ids)
+        return [part_id for part_id in part_ids if part_id not in parents]
 
     def _read(self, records: Sequence[PublishRecord]) -> _HuaXiaState:
         """讀這幾個群組的曲目現在的聲部、樂譜、Storage 裡泠靈的檔，以及那次新建的聲部有沒有排人"""
@@ -347,6 +384,17 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
     else:
         ours = {score["id"] for score in record.scores_added}
         created = {part["id"]: part.get("name") for part in record.parts_created}
+    # 這次收進新建聲部、現在還屬於它的分部（介面版本 2 之前的紀錄沒有 absorbed；沒有結果的那次不知道，不動）
+    absorbed = {
+        divisi: part["id"] for part in record.parts_created if record.action is PublishAction.RESULT
+        for divisi in part.get("absorbed") or []
+    }
+    piece_parts = [part for part in state.parts if part.piece_id == record.piece_id]
+    names = {part.id: part.name for part in piece_parts}
+    detaching = [part for part in piece_parts if part.parent_id is not None and absorbed.get(part.id) == part.parent_id]
+    leaving = {part.id for part in detaching}
+    # 撤回後還有分部的聲部（網頁上又加的）：刪了會連分部一起刪
+    with_divisi = {part.parent_id for part in piece_parts if part.parent_id is not None and part.id not in leaving}
     replaced = {score.get("part_id") for score in record.scores_removed}
     updated = {update["id"]: update for update in record.parts_updated}
     touched = {score.get("part_id") for score in record.scores_added} | {
@@ -355,9 +403,13 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
     rows: List[RetractRow] = []
     removing: List[HuaXiaScore] = []
     deleting: List[HuaXiaPart] = []
-    slots = [(part.name, part) for part in state.parts if part.piece_id == record.piece_id]
+    slots = [(part.name, part) for part in piece_parts]
     for name, part in slots + [("", None)]:
         part_id = part.id if part is not None else None
+        parent = names.get(part.parent_id, "") if part is not None else ""
+        if part_id in leaving:
+            rows.append(RetractRow(name, RetractEffect.DETACH, RetractReason.ABSORBED, parent=parent))
+            continue
         here = [s for s in scores if s.part_id == part_id and (part is not None or not s.section)]
         mine = [s for s in here if s.id in ours]
         others = [s for s in here if s.id not in ours]
@@ -370,7 +422,7 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
         new = part is not None and part.id in created
         # 有人在網頁上設定過的不刪：刪聲部會丟掉小老師、備註，練習回報也對不回聲部
         configured = new and (part.id in state.configured or part.name != created[part.id])
-        if new and part.id not in state.assigned and not others and not configured:
+        if new and part.id not in state.assigned and not others and not configured and part.id not in with_divisi:
             effect, reason = RetractEffect.DELETE_PART, RetractReason.NEW_UNASSIGNED
             deleting.append(part)
         elif not mine:
@@ -380,15 +432,20 @@ def _plan(record: PublishRecord, state: _HuaXiaState) -> RetractGroup:
             effect = RetractEffect.PARTIAL
             reason = RetractReason.NEW_WITH_OTHERS if new and part.id not in state.assigned else RetractReason.OTHERS_KEPT
         elif new:
-            reason = RetractReason.ASSIGNED if part.id in state.assigned else RetractReason.CONFIGURED
+            if part.id in state.assigned:
+                reason = RetractReason.ASSIGNED
+            elif configured:
+                reason = RetractReason.CONFIGURED
+            else:
+                reason = RetractReason.NEW_WITH_DIVISI
             effect = RetractEffect.KEEP_PART
         else:
             effect = RetractEffect.NO_SCORE
             reason = RetractReason.REPLACED if part_id in replaced else RetractReason.ONLY_THIS
         removing.extend(mine)
-        rows.append(RetractRow(name, effect, reason, mine, others, kept))
+        rows.append(RetractRow(name, effect, reason, mine, others, kept, parent))
     rows.sort(key=lambda row: list(RetractEffect).index(row.effect))
-    return RetractGroup(record, rows, removing, deleting)
+    return RetractGroup(record, rows, removing, deleting, detach=detaching)
 
 
 def _with_files(group: RetractGroup, state: _HuaXiaState) -> RetractGroup:
@@ -400,16 +457,18 @@ def _with_files(group: RetractGroup, state: _HuaXiaState) -> RetractGroup:
     return replace(group, files=[path for path in paths if is_lingling_path(path) and path in state.stored])
 
 
-def _retract_record(
-    group: RetractGroup, removed: Set[str], deleted: Set[str], files: Set[str], error: Optional[HuaXiaError],
-) -> PublishRecord:
-    """發譜紀錄裡這個群組的「撤回」：做到的（撤掉的登記、刪掉的聲部與檔）與中途停下的原因"""
+def _retract_record(group: RetractGroup, retracted: _Retracted, error: Optional[HuaXiaError]) -> PublishRecord:
+    """發譜紀錄裡這個群組的「撤回」：做到的（撤掉的登記、變回獨立聲部的分部、刪掉的聲部與檔）與中途停下的原因"""
     record = group.record
     return PublishRecord(
         PublishAction.RETRACT, group_id=record.group_id, group=record.group, piece_id=record.piece_id,
         piece_title=record.piece_title,
-        scores_removed=[score_entry(score) for score in group.scores if score.id in removed],
-        parts_deleted=[{"id": p.id, "name": p.name} for p in group.parts if p.id in deleted],
-        files_deleted=[path for path in group.files if path in files],
+        parts_updated=[
+            {"id": p.id, "name": p.name, "parent_id": [p.parent_id, None]} for p in group.detach
+            if p.id in retracted.detached
+        ],
+        scores_removed=[score_entry(score) for score in group.scores if score.id in retracted.removed],
+        parts_deleted=[{"id": p.id, "name": p.name} for p in group.parts if p.id in retracted.deleted],
+        files_deleted=[path for path in group.files if path in retracted.files],
         failure=None if error is None else failure_entry(error.code, error.detail or str(error)),
     )

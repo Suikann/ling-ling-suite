@@ -277,6 +277,13 @@ class TestPrepare(PrepareTestCase):
         self.assertEqual(readiness.function_version, PUBLISH_INTERFACE_VERSION + 1)
         self.assertFalse(readiness.ready)
 
+    def test_huaxia_before_divisi_is_unavailable(self):
+        self.huaxia.install_publish_function(1)
+        readiness = self.service.prepare()
+        self.assertIs(readiness.function_problem, FunctionProblem.VERSION_MISMATCH)
+        self.assertEqual(readiness.function_version, 1)
+        self.assertFalse(readiness.ready)
+
     def test_not_signed_in_raises(self):
         self.auth.logout()
         with self.assertRaises(HuaXiaError) as raised:

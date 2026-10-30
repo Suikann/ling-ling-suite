@@ -5,7 +5,8 @@
 PublishLogPanel 是譜庫視窗右側的發譜紀錄列表：每次發譜、撤回、收回與不收回一列（新的在前），選一次發譜按「撤回…」；
 「收回…」不必選，挑曲目在收回對話框裡（ui/publish_recall_dialog.py）。
 RetractDialog 是撤回的預覽：左邊勾要撤回的群組（只選到群組；沒發成或沒有東西可撤的不能勾；那次沒有結果的寫出聲部一律留著），
-右邊是所選群組逐聲部的「現在 HuaXia 上 → 撤回後 → 原因」對照表（依結果分類上色、上方列出各類數量，最後一列是場次），
+右邊是所選群組逐聲部的「現在 HuaXia 上 → 撤回後 → 原因」對照表（依結果分類上色、上方列出各類數量，分部寫出所屬聲部，
+最後一列是場次），
 那次新建了曲目時一列提示撤回後留下空曲目；底部提示勾選的群組撤回後有幾個聲部沒有譜、要重新發譜。
 只顯示預覽（services/retract_service.py 的 RetractPreview），按「撤回」關閉對話框，撤回由譜庫視窗執行。
 
@@ -37,11 +38,12 @@ from services.retract_service import (
     RetractEffect, RetractGroup, RetractPreview, RetractReason, RetractResult, RetractRow, retractable,
 )
 
-# 各類的（字色，底色），同原型：沒有譜與刪掉聲部紅、聲部留著但沒有譜黃、只撤這次的藍、不動灰
+# 各類的（字色，底色），同原型：沒有譜與刪掉聲部紅、聲部留著但沒有譜黃、分部變回獨立聲部與只撤這次的藍、不動灰
 _EFFECT_COLORS = {
     RetractEffect.NO_SCORE: ALERT_COLORS,
     RetractEffect.DELETE_PART: ALERT_COLORS,
     RetractEffect.KEEP_PART: WARNING_COLORS,
+    RetractEffect.DETACH: INFO_COLORS,
     RetractEffect.PARTIAL: INFO_COLORS,
     RetractEffect.UNTOUCHED: MUTED_COLORS,
 }
@@ -162,6 +164,8 @@ def row_cells(row: RetractRow) -> Tuple[str, str, str, str]:
         now_parts.insert(0, t("retract.now.new_unassigned"))
     elif row.reason is RetractReason.ASSIGNED:
         now_parts.insert(0, t("retract.now.new_assigned"))
+    if row.parent:
+        now_parts.insert(0, t("retract.now.divisi", voice=row.parent))
     now = "；".join(now_parts) or t("retract.now.empty")
     if row.effect is RetractEffect.PARTIAL:
         after = t("retract.after.partial", names=_score_names(row.others))
