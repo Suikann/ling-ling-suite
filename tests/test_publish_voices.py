@@ -272,8 +272,8 @@ class TestWrites(PlanTestCase):
 
     def test_differences_are_overwritten_by_default_keeping_the_huaxia_name(self):
         self.voices(("二胡 I", Headcount(5, 8)), ("大提琴", Headcount(4)))
-        erhu = part("p1", "二胡1", "6-8", 6, "拉弦")
-        cello = part("p2", "大提琴", "4", 4, "拉弦")
+        erhu = part("p1", "二胡1", "6-8", 6, "拉弦", sort=1)
+        cello = part("p2", "大提琴", "4", 4, "拉弦", sort=2)
         plan = self.plan([erhu, cello])
         self.assertTrue(self.row(plan, "二胡 I").headcount_differs)
         self.assertTrue(self.row(plan, "大提琴").section_differs)
@@ -316,7 +316,7 @@ class TestWrites(PlanTestCase):
 
     def test_parts_only_on_huaxia_are_never_deleted(self):
         self.voices(("二胡 I", Headcount(6, 8)))
-        erhu, yunluo = part("p1", "二胡1", "6-8", 6, "拉弦"), part("p2", "雲鑼", section="打擊")
+        erhu, yunluo = part("p1", "二胡1", "6-8", 6, "拉弦", sort=1), part("p2", "雲鑼", section="打擊", sort=2)
         plan = self.plan([erhu, yunluo])
         self.assertEqual(plan.huaxia_only, [yunluo])
         self.assertEqual(plan.updates, [])
@@ -571,7 +571,7 @@ class TestDivisi(PrepareTestCase):
 
 
 class TestOrder(PlanTestCase):
-    """照樂器表重排這首曲目在 HuaXia 上的頂層聲部：泠靈的聲部照樂器表，只在 HuaXia 的跟著它前一個聲部；預設重排
+    """照樂器表重排這首曲目在 HuaXia 上的聲部（不含分部）：泠靈的聲部照樂器表，只在 HuaXia 的跟著它前一個聲部；預設重排
 
     HuaXia 上的聲部人數與聲部組都和泠靈一致，要寫的只有順序。
     """
@@ -654,6 +654,14 @@ class TestOrder(PlanTestCase):
         self.assertFalse(plan.reorder)
         self.assertEqual(plan.updates, [])
         self.assertEqual(plan.creates, [PartCreate("琵琶", "2", 2, "彈撥", 8)])
+
+    def test_parts_sharing_a_sort_are_reordered_even_when_read_in_instrument_list_order(self):
+        # HuaXia 網頁只依 sort 排，同值的先後不固定；泠靈讀到的依名稱排，碰巧和樂器表一樣也照樣重排
+        self.voices(("二胡", Headcount(1)), ("笛子", Headcount(1)))
+        plan = self.plan([self.erhu(0), self.flute(0)])
+        self.assertTrue(plan.reorderable)
+        self.assertEqual(plan.order, ["二胡", "笛子"])
+        self.assertEqual(self.sorts(plan), {"p-erhu": 1, "p-flute": 2})
 
     def test_the_order_rides_along_with_an_overwrite(self):
         self.voices(("二胡", Headcount(4)), ("笛子", Headcount(1)))

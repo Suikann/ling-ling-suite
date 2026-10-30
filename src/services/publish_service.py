@@ -31,7 +31,7 @@ import itertools
 import uuid
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Collection, Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Collection, Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple, Union
 
 from core.constants import CONCERT_KIND, OTHER_SECTION, CompressionStatus, OrchestraType
 from core.models import CatalogChange, Group, Headcount, HuaXiaLink, Project
@@ -240,6 +240,10 @@ class PartUpdate(NamedTuple):
         return self.needed is not None or self.section is not None
 
 
+# 發譜後 HuaXia 曲目上的一個聲部（不含分部）：現有的（HuaXiaPart）或這次新建的（PartCreate），照樂器表重排時用
+OrderedPart = Union[HuaXiaPart, PartCreate]
+
+
 @dataclass(frozen=True)
 class VoiceRow:
     """樂器表的一列對到 HuaXia 的結果
@@ -300,7 +304,7 @@ class VoicePlan:
         absorb_others: 要收成分部的聲部與它上面別人放的樂譜（有的話這個群組還不能發，要先到網頁上處理）
         divisi_named: 本專案有、沒對上、名稱卻對到 HuaXia 上某個分部的聲部與那個分部（有的話這個群組還不能發：
             要到網頁上把分部移出，或替它挑一個聲部）
-        order: 發譜後這首曲目頂層聲部（不含分部與這次收成分部的）的名稱，依 HuaXia 上的順序
+        order: 發譜後這首曲目的聲部（不含分部與這次收成分部的）的名稱，依 HuaXia 上的順序
         reorderable: 照樂器表重排的順序和不重排（現有聲部不動、新建的接在最後）的不同（「聲部」步顯示「照樂器表重排」）
         reorder: 這次照樂器表重排（reorderable、譜務也沒取消）：creates 與 updates 帶重排後的 sort
     """
@@ -342,9 +346,10 @@ def plan_voices(
     要新建的聲部可以把勾選的 HuaXia 聲部收成分部（decisions.absorb）：只收沒有所屬聲部、本身沒有分部、沒配給要發的
     聲部的；收了的不算沒對到的聲部，這次不發的聲部也不配它們。被收的聲部上泠靈發的樂譜同一次撤掉，有別人放的
     樂譜時這個群組還不能發。
-    發譜後的頂層聲部（扣掉這次收成分部的）照樂器表重排（_instrument_order）；和不重排（現有聲部的順序不動、新建的
-    接在全部聲部最大的 sort 之後）的不同、譜務也沒取消（decisions.keep_order）時，依重排後的位置排 sort
-    （_resorted），只送有變的現有聲部；分部的 sort 一律不寫。
+    發譜後的聲部（不含分部，扣掉這次收成分部的）照樂器表重排（_instrument_order）；和不重排（現有聲部的順序不動、
+    新建的接在全部聲部最大的 sort 之後）的不同，或有現有聲部的 sort 同值（HuaXia 網頁上同值的先後不固定），
+    譜務也沒取消（decisions.keep_order）時，依重排後的位置排 sort（_resorted），只送有變的現有聲部；分部的 sort
+    一律不寫。
 
     Args:
         project: 專案（聲部組以它的對照為準）
@@ -463,9 +468,10 @@ def plan_voices(
         absorb_replaces += [score for score in part_scores if score.lingling]
         if any(not score.lingling for score in part_scores):
             absorb_others.append((part, [score for score in part_scores if not score.lingling]))
-    unordered = [part for part in parts if part.id not in absorbed] + creates
-    arranged = _instrument_order(unordered, voice_rows, creates)
-    reorderable = arranged != unordered
+    existing = [part for part in parts if part.id not in absorbed]
+    unordered: List[OrderedPart] = existing + creates
+    arranged = _instrument_order(unordered, voice_rows)
+    reorderable = arranged != unordered or len({part.sort for part in existing}) < len(existing)
     reorder = reorderable and not decisions.keep_order
     if reorder:
         creates, updates = _resorted(arranged, updates)
@@ -475,23 +481,21 @@ def plan_voices(
     )
 
 
-def _instrument_order(unordered: List[Any], rows: List[VoiceRow], creates: List[PartCreate]) -> List[Any]:
-    """照樂器表重排後這首曲目的頂層聲部
+def _instrument_order(unordered: List[OrderedPart], rows: List[VoiceRow]) -> List[OrderedPart]:
+    """照樂器表重排後這首曲目的聲部（不含分部）
 
     配到 HuaXia 聲部的列（含這次不發的）與這次新建的照樂器表的順序；只在 HuaXia 的聲部緊接在它在 HuaXia 上的前一個
     聲部後面，連續幾個維持成一串，排在最前面的留在最前面。
 
     Args:
-        unordered: 不重排的順序：HuaXia 上的頂層聲部（HuaXiaPart，扣掉這次收成分部的）依 HuaXia 的排序，接著這次新建的
-            （PartCreate）
+        unordered: 不重排的順序：HuaXia 上的聲部（不含分部，扣掉這次收成分部的）依 HuaXia 的排序，接著這次新建的
         rows: 樂器表每一列對到的結果
-        creates: 這次新建的聲部
 
     Returns:
-        重排後的頂層聲部（HuaXiaPart 與 PartCreate）
+        重排後的聲部
     """
-    created = {create.name: create for create in creates}
-    ours: List[Any] = []
+    created = {item.name: item for item in unordered if isinstance(item, PartCreate)}
+    ours: List[OrderedPart] = []
     paired: Set[str] = set()
     for row in rows:
         if row.part is not None and row.part.id not in paired:
@@ -507,7 +511,7 @@ def _instrument_order(unordered: List[Any], rows: List[VoiceRow], creates: List[
             before = part.id
         else:
             (following.setdefault(before, []) if before is not None else leading).append(part)
-    arranged: List[Any] = list(leading)
+    arranged: List[OrderedPart] = list(leading)
     for item in ours:
         arranged.append(item)
         if isinstance(item, HuaXiaPart):
@@ -515,11 +519,11 @@ def _instrument_order(unordered: List[Any], rows: List[VoiceRow], creates: List[
     return arranged
 
 
-def _resorted(arranged: List[Any], updates: List[PartUpdate]) -> Tuple[List[PartCreate], List[PartUpdate]]:
+def _resorted(arranged: List[OrderedPart], updates: List[PartUpdate]) -> Tuple[List[PartCreate], List[PartUpdate]]:
     """依重排後的位置（從 1 起算）排 sort：新建的聲部帶它的位置，sort 有變的現有聲部併進要覆寫的（沒有就加一項）
 
     Args:
-        arranged: 重排後的頂層聲部（_instrument_order）
+        arranged: 重排後的聲部（_instrument_order）
         updates: 要覆寫人數與聲部組的聲部
 
     Returns:
