@@ -19,8 +19,9 @@
   以 install_publish_function 裝上指定的版本。發譜函式照 docs/huaxia/LINGLING.md：以呼叫者身分執行（不是幹部時
   新增被 RLS 擋下、修改與刪除找不到可以動的列），匿名不能呼叫；任何一步不成就丟出文件裡的錯誤代碼，資料表回到呼叫前。
 - 曲目（pieces）與聲部（piece_parts）：以 add_piece、add_part 加入，讀取權限照 HuaXia 的 RLS 簡化成 is_insider
-  （不實作 in_piece 的排人判斷）；聲部組沒給時照 HuaXia 的觸發器以 guess_section 依名稱補上。
-- 分部（piece_parts.parent_id）：add_part 給 parent_id 加入，或由發譜函式（介面版本 2）的 absorb 收成分部；
+  （不實作 in_piece 的排人判斷）；聲部組沒給時照 HuaXia 的觸發器以 guess_section 依名稱補上。發譜函式（介面版本 3 起）的
+  update_parts 給了 sort 才改現有聲部的順序。
+- 分部（piece_parts.parent_id）：add_part 給 parent_id 加入，或由發譜函式（介面版本 2 起）的 absorb 收成分部；
   set_parent 扮演幹部在網頁的聲部表單設定所屬聲部（替排了人的聲部加第一個分部時把人移到那個分部）。
   照 HuaXia 的觸發器，任何寫入（加入的輔助函式與發譜函式）都擋下只分兩層、同一首曲目、樂譜不登記到分部、
   有分部的聲部不排人以外的寫法（23514），分部的聲部組跟著所屬聲部；刪聲部（REST 與 remove_part）連分部一起刪。
@@ -659,6 +660,8 @@ class FakeHuaXia:
                 row["needed_min"] = change["needed_min"]
             if change.get("section") is not None:
                 row["section"] = change["section"] or guess_section(row["name"])
+            if change.get("sort") is not None:
+                row["sort"] = change["sort"]
             self._settle_divisi()
         own_path = f"lingling/{re.escape(piece_id)}/[0-9a-f]{{64}}-[0-9a-z]{{1,32}}\\.pdf"
         requested = set(payload.get("remove_scores") or [])

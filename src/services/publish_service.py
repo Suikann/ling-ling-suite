@@ -13,7 +13,7 @@
   樂譜，以及可以掛的公演（本學期、還沒結束、類型含公演，upcoming_concerts）。
 
 發譜預覽各步的規則也在這裡：「聲部」步的配對與要寫的內容（plan_voices，含把勾選的 HuaXia 聲部收成新建聲部的
-分部，被收的聲部上泠靈發的樂譜一起撤掉、別人放的擋下群組），「檔案」步每份檔要取代的
+分部，被收的聲部上泠靈發的樂譜一起撤掉、別人放的擋下群組，以及照樂器表重排 HuaXia 上的聲部順序），「檔案」步每份檔要取代的
 與別人放的（plan_files）；「只在譜庫」與本機找不到的檔在 plan_files 跳過。各步的結果由 group_publish 合成
 一個群組這次發譜要寫進 HuaXia 的全部內容（GroupPublish）。預覽這次的選擇（對到的曲目、聲部的決定、不發的檔、
 壓縮結果、要掛的公演）與「下一步」「發譜」按不按得下去由 PublishPreview 持有與判斷，步驟是 PublishStep。
@@ -172,12 +172,14 @@ class VoiceDecisions:
         keep: 取消「覆寫」、保留 HuaXia 的值的列
         create_absent: 本專案沒有、要在 HuaXia 建的列（預設不建）
         absorb: 要新建的列勾選要收成它的分部的 HuaXia 聲部編號（只在那一列要新建時生效）
+        keep_order: 取消「照樂器表重排」：現有聲部的順序不動，新建的接在最後
     """
 
     new: Set[int] = field(default_factory=set)
     keep: Set[int] = field(default_factory=set)
     create_absent: Set[int] = field(default_factory=set)
     absorb: Dict[int, Set[str]] = field(default_factory=dict)
+    keep_order: bool = False
 
 
 class PartCreate(NamedTuple):
@@ -188,7 +190,7 @@ class PartCreate(NamedTuple):
         needed: 人數的 HuaXia 記法（「6」「6-8」「2↑」）
         needed_min: 最少人數
         section: 聲部組；「其他」寫成空字串，交給 HuaXia 的觸發器 guess_section
-        sort: 排序：接在曲目現有聲部之後，依樂器表順序
+        sort: 排序：照樂器表重排時是重排後的位置，否則接在曲目現有聲部之後、依樂器表順序
         absorb: 要收成它的分部的現有 HuaXia 聲部編號，依 HuaXia 的排序（發譜函式 create_parts 的 absorb）
     """
     name: str
@@ -223,12 +225,19 @@ class PartUpdate(NamedTuple):
         needed: 新的人數記法；不改人數時為 None
         needed_min: 新的最少人數；不改人數時為 None
         section: 新的聲部組；不改時為 None
+        sort: 照樂器表重排後的排序；不改順序時為 None
     """
     part_id: str
     name: str
     needed: Optional[str]
     needed_min: Optional[int]
     section: Optional[str]
+    sort: Optional[int] = None
+
+    @property
+    def overwrites(self) -> bool:
+        """以泠靈的值覆寫人數或聲部組（不只改順序）"""
+        return self.needed is not None or self.section is not None
 
 
 @dataclass(frozen=True)
@@ -291,6 +300,9 @@ class VoicePlan:
         absorb_others: 要收成分部的聲部與它上面別人放的樂譜（有的話這個群組還不能發，要先到網頁上處理）
         divisi_named: 本專案有、沒對上、名稱卻對到 HuaXia 上某個分部的聲部與那個分部（有的話這個群組還不能發：
             要到網頁上把分部移出，或替它挑一個聲部）
+        order: 發譜後這首曲目頂層聲部（不含分部與這次收成分部的）的名稱，依 HuaXia 上的順序
+        reorderable: 照樂器表重排的順序和不重排（現有聲部不動、新建的接在最後）的不同（「聲部」步顯示「照樂器表重排」）
+        reorder: 這次照樂器表重排（reorderable、譜務也沒取消）：creates 與 updates 帶重排後的 sort
     """
 
     rows: List[VoiceRow]
@@ -304,6 +316,9 @@ class VoicePlan:
     absorb_replaces: List[HuaXiaScore] = field(default_factory=list)
     absorb_others: List[Tuple[HuaXiaPart, List[HuaXiaScore]]] = field(default_factory=list)
     divisi_named: List[Tuple[str, DivisiMatch]] = field(default_factory=list)
+    order: List[str] = field(default_factory=list)
+    reorderable: bool = False
+    reorder: bool = False
 
     @property
     def blocked(self) -> bool:
@@ -327,6 +342,9 @@ def plan_voices(
     要新建的聲部可以把勾選的 HuaXia 聲部收成分部（decisions.absorb）：只收沒有所屬聲部、本身沒有分部、沒配給要發的
     聲部的；收了的不算沒對到的聲部，這次不發的聲部也不配它們。被收的聲部上泠靈發的樂譜同一次撤掉，有別人放的
     樂譜時這個群組還不能發。
+    發譜後的頂層聲部（扣掉這次收成分部的）照樂器表重排（_instrument_order）；和不重排（現有聲部的順序不動、新建的
+    接在全部聲部最大的 sort 之後）的不同、譜務也沒取消（decisions.keep_order）時，依重排後的位置排 sort
+    （_resorted），只送有變的現有聲部；分部的 sort 一律不寫。
 
     Args:
         project: 專案（聲部組以它的對照為準）
@@ -445,10 +463,80 @@ def plan_voices(
         absorb_replaces += [score for score in part_scores if score.lingling]
         if any(not score.lingling for score in part_scores):
             absorb_others.append((part, [score for score in part_scores if not score.lingling]))
+    unordered = [part for part in parts if part.id not in absorbed] + creates
+    arranged = _instrument_order(unordered, voice_rows, creates)
+    reorderable = arranged != unordered
+    reorder = reorderable and not decisions.keep_order
+    if reorder:
+        creates, updates = _resorted(arranged, updates)
     return VoicePlan(
         voice_rows, unpaired, conflicts, undecided, unfilled, creates, updates, divisi, absorb_replaces, absorb_others,
-        divisi_named,
+        divisi_named, [item.name for item in (arranged if reorder else unordered)], reorderable, reorder,
     )
+
+
+def _instrument_order(unordered: List[Any], rows: List[VoiceRow], creates: List[PartCreate]) -> List[Any]:
+    """照樂器表重排後這首曲目的頂層聲部
+
+    配到 HuaXia 聲部的列（含這次不發的）與這次新建的照樂器表的順序；只在 HuaXia 的聲部緊接在它在 HuaXia 上的前一個
+    聲部後面，連續幾個維持成一串，排在最前面的留在最前面。
+
+    Args:
+        unordered: 不重排的順序：HuaXia 上的頂層聲部（HuaXiaPart，扣掉這次收成分部的）依 HuaXia 的排序，接著這次新建的
+            （PartCreate）
+        rows: 樂器表每一列對到的結果
+        creates: 這次新建的聲部
+
+    Returns:
+        重排後的頂層聲部（HuaXiaPart 與 PartCreate）
+    """
+    created = {create.name: create for create in creates}
+    ours: List[Any] = []
+    paired: Set[str] = set()
+    for row in rows:
+        if row.part is not None and row.part.id not in paired:
+            paired.add(row.part.id)
+            ours.append(row.part)
+        elif row.create and row.voice in created:
+            ours.append(created[row.voice])
+    leading: List[HuaXiaPart] = []
+    following: Dict[str, List[HuaXiaPart]] = {}
+    before: Optional[str] = None
+    for part in (item for item in unordered if isinstance(item, HuaXiaPart)):
+        if part.id in paired:
+            before = part.id
+        else:
+            (following.setdefault(before, []) if before is not None else leading).append(part)
+    arranged: List[Any] = list(leading)
+    for item in ours:
+        arranged.append(item)
+        if isinstance(item, HuaXiaPart):
+            arranged += following.get(item.id, [])
+    return arranged
+
+
+def _resorted(arranged: List[Any], updates: List[PartUpdate]) -> Tuple[List[PartCreate], List[PartUpdate]]:
+    """依重排後的位置（從 1 起算）排 sort：新建的聲部帶它的位置，sort 有變的現有聲部併進要覆寫的（沒有就加一項）
+
+    Args:
+        arranged: 重排後的頂層聲部（_instrument_order）
+        updates: 要覆寫人數與聲部組的聲部
+
+    Returns:
+        帶 sort 的要新建的聲部（依樂器表順序）與要覆寫的聲部（原有的在前、依樂器表順序，只改順序的接在後面）
+    """
+    updates = list(updates)
+    by_part = {update.part_id: index for index, update in enumerate(updates)}
+    creates = []
+    for position, item in enumerate(arranged, 1):
+        if isinstance(item, PartCreate):
+            creates.append(item._replace(sort=position))
+        elif item.sort != position:
+            if item.id in by_part:
+                updates[by_part[item.id]] = updates[by_part[item.id]]._replace(sort=position)
+            else:
+                updates.append(PartUpdate(item.id, item.name, None, None, None, position))
+    return creates, updates
 
 
 def _absorbs(
@@ -956,6 +1044,10 @@ class PublishPreview:
     def set_absorb(self, group: Group, index: int, part_id: str, absorb: bool) -> None:
         """樂器表第 index 列（要新建的聲部）勾選或取消把 HuaXia 聲部 part_id 收成它的分部"""
         _toggle(self.decisions(group).absorb.setdefault(index, set()), part_id, absorb)
+
+    def set_reorder(self, group: Group, reorder: bool) -> None:
+        """群組要不要照樂器表重排 HuaXia 上的聲部順序（預設重排；只在重排後和不重排的不同時有得選）"""
+        self.decisions(group).keep_order = not reorder
 
     def drop(self, path: str, dropped: bool) -> None:
         """「不發這份」：dropped 為不發這份本機檔"""
