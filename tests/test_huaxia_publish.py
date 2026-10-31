@@ -5,7 +5,7 @@ HuaXia 發譜函式的介面測試
 經 HuaXiaClient.publish 對假 HuaXia 測：假 HuaXia 的發譜函式照 docs/huaxia/LINGLING.md（HuaXia 依賴說明文件的複本）
 實作，這裡釘住它與文件一致的行為，讓發譜（#122）可以照文件對它寫：一首曲目的寫入全成或全不成、重跑不重複建、
 只撤這首曲目泠靈發的登記並回傳實際撤掉的（要撤別人放的整個不做）、不是幹部寫不進去、版本不符整個不做；
-新建的聲部收現有的聲部成分部（排人不動，違反分部的規則整個不做），刪聲部連分部一起刪。
+新建的聲部收現有的聲部成分部（排人不動，違反分部的規則整個不做），刪聲部連分部一起刪；現有聲部給了 sort 才改順序。
 """
 import datetime
 import os
@@ -139,6 +139,14 @@ class TestExistingPiece(PublishTestCase):
         self.huaxia.tables["piece_parts"][0]["section"] = "吹管"
         self.publish(piece_id=self.fenghuo, update_parts=[{"id": self.erhu, "section": ""}])
         self.assertEqual(self.rows("piece_parts", id=self.erhu)[0]["section"], "拉弦")
+
+    def test_the_sort_changes_only_when_given(self):
+        before = self.rows("piece_parts", id=self.erhu)[0]["sort"]
+        self.publish(piece_id=self.fenghuo, update_parts=[{"id": self.erhu, "needed": "4"}])
+        self.assertEqual(self.rows("piece_parts", id=self.erhu)[0]["sort"], before)
+        self.publish(piece_id=self.fenghuo, update_parts=[{"id": self.erhu, "sort": before + 5}])
+        part = self.rows("piece_parts", id=self.erhu)[0]
+        self.assertEqual((part["needed"], part["sort"]), ("4", before + 5))
 
 
 class TestDivisi(PublishTestCase):

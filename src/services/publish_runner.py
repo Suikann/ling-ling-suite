@@ -628,8 +628,12 @@ def _new_piece(plan: GroupPublish) -> Optional[Dict[str, Any]]:
 
 
 def _updates(plan: GroupPublish) -> List[Dict[str, Any]]:
-    """要覆寫的聲部：id、HuaXia 的名稱與改的欄位各自的［原值，新值］（原值取自預覽讀到的 HuaXia 聲部）"""
+    """要覆寫的聲部：id、HuaXia 的名稱與改的欄位各自的［原值，新值］
+
+    原值取自預覽讀到的 HuaXia 聲部；只改順序的也可能是只在 HuaXia 的聲部。
+    """
     parts = {row.part.id: row.part for row in plan.voices.rows if row.part is not None}
+    parts.update((part.id, part) for part in plan.voices.huaxia_only)
     updates = []
     for update in plan.voices.updates:
         entry: Dict[str, Any] = {"id": update.part_id, "name": update.name}

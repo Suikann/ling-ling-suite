@@ -610,6 +610,39 @@ class TestVoicesStep(PublishWindowTestCase):
             self.assertFalse(button(dialog, "publish.next").isEnabled())
         self.publish(operate=operate)
 
+    def test_an_order_unlike_the_instrument_list_is_reordered_by_default_and_can_be_kept(self):
+        self.huaxia.add_part(self.fenghuo, "琵琶", needed="2", needed_min=2, section="彈撥", sort=1)
+        self.huaxia.add_part(self.fenghuo, "二胡1", needed="6-8", needed_min=6, section="拉弦", sort=2)
+
+        def reorder(dialog) -> QCheckBox:
+            return voices_group(dialog, "烽火操").findChild(QCheckBox, "reorder")
+
+        def confirmed(dialog) -> str:
+            for _step in ("files", "events", "confirm"):
+                button(dialog, "publish.next").click()
+            text = dialog.findChild(QLabel, "confirm_voices").text()
+            for _step in ("events", "files", "voices"):
+                button(dialog, "publish.back").click()
+            return text
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            self.assertTrue(reorder(dialog).isChecked())
+            self.assertEqual(confirmed(dialog), t("publish.confirm.reorder"))
+            reorder(dialog).setChecked(False)
+            self.assertFalse(reorder(dialog).isChecked())
+            self.assertEqual(confirmed(dialog), t("publish.confirm.voices_unchanged"))
+        self.publish(operate=operate)
+
+    def test_an_order_already_like_the_instrument_list_offers_no_reordering(self):
+        self.huaxia.add_part(self.fenghuo, "二胡1", needed="6-8", needed_min=6, section="拉弦", sort=1)
+        self.huaxia.add_part(self.fenghuo, "琵琶", needed="2", needed_min=2, section="彈撥", sort=2)
+
+        def operate(dialog):
+            self.to_voices(dialog)
+            self.assertIsNone(voices_group(dialog, "烽火操").findChild(QCheckBox, "reorder"))
+        self.publish(operate=operate)
+
     def test_a_blocked_group_shows_its_reason(self):
         def operate(dialog):
             self.to_voices(dialog)

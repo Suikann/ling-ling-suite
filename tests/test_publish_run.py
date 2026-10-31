@@ -253,6 +253,46 @@ class TestPublishing(RunTestCase):
         self.assertEqual(len(self.uploads()), sent)
 
 
+class TestOrder(RunTestCase):
+    """照樂器表重排：HuaXia 上那首的順序是「琵琶」「二胡1」，樂器表是「二胡 I」「琵琶」"""
+
+    def setUp(self):
+        super().setUp()
+        for part_id, sort in ((self.pipa, 1), (self.erhu, 2)):
+            next(row for row in self.huaxia.tables["piece_parts"] if row["id"] == part_id)["sort"] = sort
+
+    def huaxia_order(self):
+        """HuaXia 上那首的聲部名稱，依 sort"""
+        rows = [row for row in self.huaxia.tables["piece_parts"] if row["piece_id"] == self.fenghuo]
+        return [row["name"] for row in sorted(rows, key=lambda row: row["sort"])]
+
+    def update_parts(self):
+        """各次切換送出的 update_parts"""
+        return [
+            r["json"]["payload"]["update_parts"] for r in self.huaxia.requests
+            if r["path"] == "/rest/v1/rpc/lingling_publish"
+        ]
+
+    def test_by_default_huaxia_follows_the_instrument_list(self):
+        outcome = self.run_publish(self.press_publish())
+        self.assertEqual(outcome.failed, [])
+        self.assertEqual(self.huaxia_order(), ["二胡1", "琵琶"])
+        [started] = self.log(PublishAction.START)
+        self.assertEqual(started.parts_updated, [
+            {"id": self.erhu, "name": "二胡1", "needed": ["6", "6-8"], "needed_min": [6, 6], "sort": [2, 1]},
+            {"id": self.pipa, "name": "琵琶", "sort": [1, 2]},
+        ])
+
+    def test_unticking_reorder_sends_what_it_did_before(self):
+        def keep_order(preview):
+            preview.set_reorder(self.group, False)
+
+        outcome = self.run_publish(self.press_publish(decide=keep_order))
+        self.assertEqual(outcome.failed, [])
+        self.assertEqual(self.huaxia_order(), ["琵琶", "二胡1"])
+        self.assertEqual(self.update_parts(), [[{"id": self.erhu, "needed": "6-8", "needed_min": 6}]])
+
+
 class TestDivisi(RunTestCase):
     """HuaXia 上的「二胡1」分成「前排」「後排」兩個分部（各 3 人，前排排了一位團員）"""
 

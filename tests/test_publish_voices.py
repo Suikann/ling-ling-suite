@@ -272,8 +272,8 @@ class TestWrites(PlanTestCase):
 
     def test_differences_are_overwritten_by_default_keeping_the_huaxia_name(self):
         self.voices(("二胡 I", Headcount(5, 8)), ("大提琴", Headcount(4)))
-        erhu = part("p1", "二胡1", "6-8", 6, "拉弦")
-        cello = part("p2", "大提琴", "4", 4, "拉弦")
+        erhu = part("p1", "二胡1", "6-8", 6, "拉弦", sort=1)
+        cello = part("p2", "大提琴", "4", 4, "拉弦", sort=2)
         plan = self.plan([erhu, cello])
         self.assertTrue(self.row(plan, "二胡 I").headcount_differs)
         self.assertTrue(self.row(plan, "大提琴").section_differs)
@@ -316,7 +316,7 @@ class TestWrites(PlanTestCase):
 
     def test_parts_only_on_huaxia_are_never_deleted(self):
         self.voices(("二胡 I", Headcount(6, 8)))
-        erhu, yunluo = part("p1", "二胡1", "6-8", 6, "拉弦"), part("p2", "雲鑼", section="打擊")
+        erhu, yunluo = part("p1", "二胡1", "6-8", 6, "拉弦", sort=1), part("p2", "雲鑼", section="打擊", sort=2)
         plan = self.plan([erhu, yunluo])
         self.assertEqual(plan.huaxia_only, [yunluo])
         self.assertEqual(plan.updates, [])
@@ -359,7 +359,7 @@ class TestAbsentVoices(PlanTestCase):
         harp = part("p1", "豎琴", "2", 2)
         plan = self.plan([harp])
         self.assertEqual(self.row(plan, "豎琴").part, harp)
-        self.assertEqual(plan.updates, [])
+        self.assertEqual([update for update in plan.updates if update.overwrites], [])
         self.assertEqual(plan.huaxia_only, [])
 
 
@@ -568,6 +568,107 @@ class TestDivisi(PrepareTestCase):
         self.voices(("二胡", Headcount(6, 8)),)
         plan = self.plan()
         self.assertEqual([update.part_id for update in plan.updates], [self.erhu])
+
+
+class TestOrder(PlanTestCase):
+    """照樂器表重排這首曲目在 HuaXia 上的聲部（不含分部）：泠靈的聲部照樂器表，只在 HuaXia 的跟著它前一個聲部；預設重排
+
+    HuaXia 上的聲部人數與聲部組都和泠靈一致，要寫的只有順序。
+    """
+
+    def flute(self, sort):
+        """HuaXia 上的「笛子」"""
+        return part("p-flute", "笛子", section="吹管", sort=sort)
+
+    def erhu(self, sort):
+        """HuaXia 上的「二胡」"""
+        return part("p-erhu", "二胡", section="拉弦", sort=sort)
+
+    def sorts(self, plan):
+        """要寫的順序：聲部編號對應新的 sort（只列要改的現有聲部）"""
+        return {update.part_id: update.sort for update in plan.updates if update.sort is not None}
+
+    def test_existing_parts_are_put_in_instrument_list_order(self):
+        self.voices(("二胡", Headcount(1)), ("笛子", Headcount(1)))
+        plan = self.plan([self.flute(1), self.erhu(2)])
+        self.assertEqual(plan.order, ["二胡", "笛子"])
+        self.assertTrue(plan.reorderable)
+        self.assertTrue(plan.reorder)
+        self.assertEqual(plan.updates, [
+            PartUpdate("p-erhu", "二胡", None, None, None, 1), PartUpdate("p-flute", "笛子", None, None, None, 2),
+        ])
+
+    def test_a_part_only_on_huaxia_follows_the_part_before_it(self):
+        self.voices(("二胡", Headcount(1)), ("笛子", Headcount(1)))
+        misc = part("p-misc", "打擊雜項", section="打擊", sort=2)
+        plan = self.plan([self.flute(1), misc, self.erhu(3)])
+        self.assertEqual(plan.order, ["二胡", "笛子", "打擊雜項"])
+        self.assertEqual(self.sorts(plan), {"p-erhu": 1, "p-flute": 2, "p-misc": 3})
+
+    def test_parts_only_on_huaxia_stay_in_a_run_and_the_first_stays_first(self):
+        self.voices(("二胡", Headcount(1)), ("笛子", Headcount(1)))
+        plan = self.plan([
+            part("p-yunluo", "雲鑼", sort=1), self.flute(2), part("p-chimes", "風鈴", sort=3),
+            part("p-tambourine", "鈴鼓", sort=4), self.erhu(5),
+        ])
+        self.assertEqual(plan.order, ["雲鑼", "二胡", "笛子", "風鈴", "鈴鼓"])
+
+    def test_new_parts_are_placed_by_the_instrument_list(self):
+        self.voices(("笛子", Headcount(1)), ("琵琶", Headcount(2)), ("二胡", Headcount(1)))
+        plan = self.plan([self.flute(1), self.erhu(2)])
+        self.assertEqual(plan.order, ["笛子", "琵琶", "二胡"])
+        self.assertEqual(plan.creates, [PartCreate("琵琶", "2", 2, "彈撥", 2)])
+        self.assertEqual(self.sorts(plan), {"p-erhu": 3})
+
+    def test_a_voice_not_published_this_time_keeps_its_place(self):
+        self.voices(("二胡", Headcount(1)), ("笛子", Headcount(), False))
+        plan = self.plan([self.flute(1), self.erhu(2)])
+        self.assertEqual(plan.order, ["二胡", "笛子"])
+        self.assertEqual(self.sorts(plan), {"p-erhu": 1, "p-flute": 2})
+
+    def test_parts_absorbed_this_time_are_left_out_and_divisi_are_never_sorted(self):
+        self.voices(("二胡", Headcount(1)), ("笛子", Headcount(1)), ("擊樂2", Headcount(2)))
+        chimes, tambourine = part("p-chimes", "風鈴", sort=2), part("p-tambourine", "鈴鼓", sort=3)
+        erhu_one = HuaXiaPart("p-erhu-1", "hx-1", "二胡1", "1", 1, "拉弦", 9, parent_id="p-erhu")
+        plan = self.plan(
+            [self.flute(1), chimes, tambourine, self.erhu(4), erhu_one], VoiceDecisions(absorb={2: {"p-chimes"}}),
+        )
+        # 「鈴鼓」的前一個「風鈴」這次被收成分部，改跟「笛子」
+        self.assertEqual(plan.order, ["二胡", "笛子", "鈴鼓", "擊樂2"])
+        self.assertEqual(self.sorts(plan), {"p-erhu": 1, "p-flute": 2})
+        self.assertEqual(plan.creates, [PartCreate("擊樂2", "2", 2, "", 4, ("p-chimes",))])
+
+    def test_unticking_reorder_keeps_existing_sorts_and_appends_new_parts(self):
+        self.voices(("二胡", Headcount(1)), ("琵琶", Headcount(2)), ("笛子", Headcount(1)))
+        plan = self.plan([self.flute(1), self.erhu(2)], VoiceDecisions(keep_order=True))
+        self.assertTrue(plan.reorderable)
+        self.assertFalse(plan.reorder)
+        self.assertEqual(plan.order, ["笛子", "二胡", "琵琶"])
+        self.assertEqual(plan.updates, [])
+        self.assertEqual(plan.creates, [PartCreate("琵琶", "2", 2, "彈撥", 3)])
+
+    def test_an_order_already_like_the_instrument_list_writes_no_sort(self):
+        self.voices(("笛子", Headcount(1)), ("二胡", Headcount(1)), ("琵琶", Headcount(2)))
+        plan = self.plan([self.flute(3), self.erhu(7)])
+        self.assertFalse(plan.reorderable)
+        self.assertFalse(plan.reorder)
+        self.assertEqual(plan.updates, [])
+        self.assertEqual(plan.creates, [PartCreate("琵琶", "2", 2, "彈撥", 8)])
+
+    def test_parts_sharing_a_sort_are_reordered_even_when_read_in_instrument_list_order(self):
+        # HuaXia 網頁只依 sort 排，同值的先後不固定；泠靈讀到的依名稱排，碰巧和樂器表一樣也照樣重排
+        self.voices(("二胡", Headcount(1)), ("笛子", Headcount(1)))
+        plan = self.plan([self.erhu(0), self.flute(0)])
+        self.assertTrue(plan.reorderable)
+        self.assertEqual(plan.order, ["二胡", "笛子"])
+        self.assertEqual(self.sorts(plan), {"p-erhu": 1, "p-flute": 2})
+
+    def test_the_order_rides_along_with_an_overwrite(self):
+        self.voices(("二胡", Headcount(4)), ("笛子", Headcount(1)))
+        plan = self.plan([self.flute(1), self.erhu(2)])
+        self.assertEqual(plan.updates[0], PartUpdate("p-erhu", "二胡", "4", 4, None, 1))
+        self.assertTrue(plan.updates[0].overwrites)
+        self.assertFalse(plan.updates[1].overwrites)
 
 
 if __name__ == "__main__":

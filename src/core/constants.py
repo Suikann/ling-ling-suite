@@ -135,8 +135,9 @@ INFO_BANNER_STYLE = f"background-color: {INFO_COLORS[1]}; color: {INFO_COLORS[0]
 WARNING_BANNER_STYLE = (
     f"background-color: {WARNING_COLORS[1]}; color: {WARNING_COLORS[0]}; border-radius: 5px; padding: 6px 10px;"
 )
-# 發譜時覆寫 HuaXia 聲部可能改的欄位（piece_parts 的欄位；發譜紀錄 parts_updated 記它們的［原值，新值］，撤回不改回）
-HUAXIA_PART_FIELDS = ("needed", "needed_min", "section")
+# 發譜時覆寫 HuaXia 聲部可能改的欄位（piece_parts 的欄位；發譜紀錄 parts_updated 記它們的［原值，新值］，撤回不改回）：
+# 人數、聲部組與照樂器表重排的順序
+HUAXIA_PART_FIELDS = ("needed", "needed_min", "section", "sort")
 # 關閉視窗時選了取消背景工作，最多等它停下幾秒（停在檔與檔、頁與頁之間，通常不到一秒）；
 # 逾時就放棄它（之後不再送回任何結果）再關閉，暫存檔留待下次啟動清掉。主視窗與譜庫視窗共用
 CLOSE_WAIT_SECONDS = 10
