@@ -20,7 +20,7 @@
   多一個「收成分部」選單（只列 VoiceRow.absorb_options），勾了的列在那一列底下。有衝突、還沒挑、要建的聲部
   沒填最少人數、要收的聲部上有別人放的樂譜，或本專案有的聲部名稱對到分部時寫出原因，「下一步」按不下去。
   照樂器表重排 HuaXia 上的聲部順序和不重排的不同時（VoicePlan.reorderable），表格底下多一個「照樂器表重排」
-  （預設勾選）與發譜後的順序。覆寫、建立、收成分部與重排的勾選只在這次預覽，不記在專案。
+  （預設勾選）。覆寫、建立、收成分部與重排的勾選只在這次預覽，不記在專案。
 - 「檔案」：每個群組列出要發的分譜與總譜、會被取代的那份（同一個聲部底下、泠靈發的，publish_service.plan_files）
   與同聲部別人放的檔（不動）；HuaXia 上已有內容相同那份的標成不重傳。本機找不到的檔跳過並寫出來，只在譜庫的旁邊放「從譜庫下載回來」（關掉預覽，
   交給主視窗下載回原位）。超過大小上限的檔第一次進這一步時在背景逐份壓縮（壓縮檔在壓縮服務的暫存資料夾，
@@ -28,8 +28,8 @@
   「再壓縮」壓還沒壓到的；每份顯示壓縮狀態與「開啟」「比較」（共用的比較畫面）「不發這份」。
 - 「公演」：複選本學期、還沒結束的公演（PublishReadiness.concerts），逐場說明掛上後的影響；可以不掛。
   群組的曲目已掛著的公演寫出是哪些群組，全部群組都已掛著的勾著、不能取消（泠靈不把曲目從場次移除）。
-- 「確認」：每個群組列出曲目、要新掛的公演（已掛著的不算）、要新建（與收成它的分部）與覆寫的聲部、照樂器表重排的
-  聲部順序、要傳的檔數與大小、要取代的份數
+- 「確認」：每個群組列出曲目、要新掛的公演（已掛著的不算）、要新建（與收成它的分部）與覆寫的聲部、會不會照樂器表
+  重排聲部順序、要傳的檔數與大小、要取代的份數
   （其中收成分部撤掉的寫出是哪幾份）、不重傳與不發的檔，加上合計。
   每個群組要寫進 HuaXia 的全部內容由 publish_plan() 交出（publish_service.group_publish），確認步的文字也由它算。
   超過上限的檔都壓縮好（或選了不發）、壓縮做完，「發譜」才按得下去。
@@ -633,23 +633,12 @@ class PublishPreviewDialog(QDialog):
         layout.addWidget(problem)
         layout.addWidget(self._voices_table(check, plan))
         if plan.reorderable:
-            layout.addLayout(self._reorder_row(check, plan))
+            reorder = QCheckBox(t("publish.voices.reorder"))
+            reorder.setObjectName("reorder")
+            reorder.setChecked(plan.reorder)
+            reorder.toggled.connect(lambda on: self._set_reorder(check, on))
+            layout.addWidget(reorder)
         return box
-
-    def _reorder_row(self, check: GroupCheck, plan: VoicePlan) -> QHBoxLayout:
-        """「照樂器表重排」與發譜後 HuaXia 上的聲部順序（重排後和不重排的不同時才有）"""
-        row = QHBoxLayout()
-        reorder = QCheckBox(t("publish.voices.reorder"))
-        reorder.setObjectName("reorder")
-        reorder.setChecked(plan.reorder)
-        reorder.toggled.connect(lambda on: self._set_reorder(check, on))
-        row.addWidget(reorder)
-        order = QLabel(t("publish.voices.order", voices="、".join(plan.order)))
-        order.setObjectName("voices_order")
-        order.setStyleSheet(f"color: {_NOTE_COLOR};")
-        order.setWordWrap(True)
-        row.addWidget(order, 1)
-        return row
 
     def _voices_table(self, check: GroupCheck, plan: VoicePlan) -> QTableWidget:
         """聲部對照表：樂器表每一列，接著只在 HuaXia 的聲部（灰色、不動）
@@ -1111,7 +1100,7 @@ class PublishPreviewDialog(QDialog):
         if overwrites:
             voices.append(t("publish.confirm.updates", voices="、".join(overwrites)))
         if plan.voices.reorder:
-            voices.append(t("publish.confirm.reorder", voices="、".join(plan.voices.order)))
+            voices.append(t("publish.confirm.reorder"))
         layout.addWidget(_named_label("confirm_voices", "\n".join(voices) or t("publish.confirm.voices_unchanged")))
         events = "、".join(event.title for event in plan.events)
         layout.addWidget(_named_label(

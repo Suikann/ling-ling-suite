@@ -617,9 +617,6 @@ class TestVoicesStep(PublishWindowTestCase):
         def reorder(dialog) -> QCheckBox:
             return voices_group(dialog, "烽火操").findChild(QCheckBox, "reorder")
 
-        def order(dialog) -> str:
-            return voices_group(dialog, "烽火操").findChild(QLabel, "voices_order").text()
-
         def confirmed(dialog) -> str:
             for _step in ("files", "events", "confirm"):
                 button(dialog, "publish.next").click()
@@ -631,11 +628,9 @@ class TestVoicesStep(PublishWindowTestCase):
         def operate(dialog):
             self.to_voices(dialog)
             self.assertTrue(reorder(dialog).isChecked())
-            self.assertEqual(order(dialog), t("publish.voices.order", voices="二胡1、琵琶"))
-            self.assertEqual(confirmed(dialog), t("publish.confirm.reorder", voices="二胡1、琵琶"))
+            self.assertEqual(confirmed(dialog), t("publish.confirm.reorder"))
             reorder(dialog).setChecked(False)
             self.assertFalse(reorder(dialog).isChecked())
-            self.assertEqual(order(dialog), t("publish.voices.order", voices="琵琶、二胡1"))
             self.assertEqual(confirmed(dialog), t("publish.confirm.voices_unchanged"))
         self.publish(operate=operate)
 
